@@ -1,0 +1,44 @@
+name: CI
+
+# 快速门禁（零 token）：typecheck + 单测 + 构建。
+# 对应 README「Testing」的本地命令，搬到 PR/push 自动跑。
+# 真实会话 / 烧 token 的黑盒回归不在此 —— 那由独立测试床流水线负责。
+
+on:
+  push:
+    branches: [development, main]
+  pull_request:
+    branches: [development, main]
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      # 注：当前 lockfile 与 package.json 不同步（见 issue：CLI 改名后未重生成），
+      # `npm ci` 会失败。修复并提交 package-lock.json 后此步转绿。
+      - name: Install
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests (non-web, deterministic mock)
+        env:
+          BP_MOCK: "1"
+        run: npm test
+
+      - name: Web tests + build
+        working-directory: packages/web
+        run: |
+          npm test
+          npm run build
+
+      - name: Build all packages
+        run: npm run build
