@@ -57,6 +57,40 @@ describe("Hono app — REST forwarding", () => {
     expect(res.status).toBe(202);
   });
 
+  // Regression (BPCASE-0004): /metrics is a RUNTIME_ROUTES entry implemented by
+  // the runtime (server.ts) but was missing from the backend's /api table, so
+  // /api/metrics fell through to the SPA static fallback and returned index.html
+  // (200 text/html) instead of proxying the runtime's metrics JSON.
+  it("GET /api/metrics forwards to the runtime (not the SPA fallback)", async () => {
+    const metricsBody = '{"activeSessions":3,"runningAgents":0,"lastActivityAt":null,"memRss":120520704}';
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/metrics");
+      return new Response(metricsBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    // serveWeb defaults on + a real index.html: if /metrics weren't routed it
+    // would hit the fallback and return HTML, which this asserts against.
+    const root = await mkdtemp(path.join(tmpdir(), "bp-web-metrics-"));
+    await writeFile(path.join(root, "index.html"), "<!doctype html><title>BP</title>");
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      webRoot: root,
+    });
+    const res = await app.request("/api/metrics");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({
+      activeSessions: 3,
+      runningAgents: 0,
+      lastActivityAt: null,
+      memRss: 120520704,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it("GET /api/health returns ok without touching the runtime", async () => {
     const fetchFn = vi.fn();
     const app = createApp({

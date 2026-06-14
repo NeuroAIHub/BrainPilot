@@ -71,6 +71,9 @@ export function createApp(options: CreateAppOptions): Hono {
 
   api.get("/version", (c) => c.json({ name: "@brainpilot/backend-core", version: "0.1.0" }));
 
+  // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
+  api.get("/metrics", forward("metrics"));
+
   // ---- Sessions (proxied to runtime) -----------------------------------
   api.get("/sessions", forward("listSessions"));
   api.post("/sessions", forward("createSession", { withBody: true }));
