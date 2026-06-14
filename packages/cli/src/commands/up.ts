@@ -16,6 +16,7 @@
  */
 import { resolveProvider } from "@brainpilot/backend-core";
 import type { StartServerOptions, RunningServer } from "@brainpilot/backend-core";
+import { isMockMode } from "@brainpilot/runtime";
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
 import { scaffold, isScaffolded, DEFAULT_PORT } from "../scaffold.js";
@@ -153,9 +154,10 @@ export async function up(
     await scaffold(dataDir, { port });
   }
 
-  // 3. Resolve provider key.
+  // 3. Resolve provider key. Skipped under BP_MOCK=1 — the mock agent replaces
+  //    the whole Pi layer and never makes a real LLM call, so no key is needed.
   const provider = await resolveProvider({ dataDir, env });
-  if (!provider.apiKey) {
+  if (!isMockMode(env) && !provider.apiKey) {
     throw new ProviderKeyError(dataDir);
   }
 

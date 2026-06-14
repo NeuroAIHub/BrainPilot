@@ -90,6 +90,26 @@ describe("up — provider key resolution", () => {
     );
     expect(cfg.port).toBeGreaterThan(0);
   });
+
+  it("skips the key check under BP_MOCK=1 (no key needed)", async () => {
+    const root = join(dir, "brainpilot");
+    let started = false;
+    const result = await up(
+      { dir: root, port: 9800, foreground: true, open: false },
+      {
+        env: { BP_MOCK: "1" }, // no ANTHROPIC_API_KEY
+        startServer: async () => {
+          started = true;
+          return { stop: async () => {} } as unknown as RunningServer;
+        },
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: () => {},
+      },
+    );
+    expect(started).toBe(true);
+    expect(result.url).toBe("http://127.0.0.1:9800");
+  });
 });
 
 describe("up — foreground start", () => {
