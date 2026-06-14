@@ -1,0 +1,161 @@
+/* ============================================================================
+   Design tokens — single source of truth for color, type, elevation, motion.
+   Monochrome-dominant (black / white / neutral gray) with ONE restrained accent.
+   Light is the default theme; dark is a full, independently-tuned override.
+   ============================================================================ */
+
+:root {
+  color-scheme: light;
+
+  /* — Typography ----------------------------------------------------------- */
+  --font-sans:
+    "Geist Variable", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont,
+    "Segoe UI", sans-serif;
+  --font-mono:
+    "Geist Mono Variable", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas,
+    monospace;
+
+  /* Type scale (px) — keep the UI on a consistent rhythm */
+  --fs-11: 11px;
+  --fs-12: 12px;
+  --fs-13: 13px;
+  --fs-14: 14px;
+  --fs-16: 16px;
+  --fs-20: 20px;
+  --fs-28: 28px;
+
+  /* — Neutral surfaces ----------------------------------------------------- */
+  --color-canvas: #ffffff;
+  --color-sidebar: #f6f7f8;
+  --color-surface: #ffffff;
+  --color-surface-soft: #f6f7f8;
+  --color-surface-raised: #ffffff;
+  --color-surface-elevated: #ffffff;
+  --color-code-bg: #f4f5f7;
+
+  /* — Text ----------------------------------------------------------------- */
+  --color-text: #141618;
+  --color-text-muted: #686c73;
+  --color-text-subtle: #9aa0a6;
+
+  /* — Borders & states ----------------------------------------------------- */
+  --color-border: #e6e7e9;
+  --color-border-strong: #d4d6d9;
+  --color-hover: #f0f1f2;
+  --color-active: #e8eaec;
+
+  /* — Single accent (the only chromatic identity color) -------------------- */
+  --color-accent: #4f46e5;
+  --color-accent-strong: #4338ca;
+  --color-accent-soft: #eef0fe;
+  --color-accent-contrast: #ffffff;
+  --color-accent-ring: rgb(79 70 229 / 0.32);
+
+  /* info is the historical name for the accent role — keep it pointed at accent
+     so existing var(--color-info) usages inherit the single-accent identity. */
+  --color-info: var(--color-accent);
+  --color-info-soft: var(--color-accent-soft);
+
+  /* — Functional semantic colors (kept, lightly desaturated) --------------- */
+  --color-danger: #c0362c;
+  --color-danger-soft: #fbeceb;
+  --color-success: #15924b;
+  --color-success-soft: #e8f5ed;
+  --color-warning: #c77d11;
+  --color-warning-soft: #fbf1e0;
+
+  /* — Overlays & scrims ---------------------------------------------------- */
+  --color-overlay: rgb(255 255 255 / 0.72);
+  --color-overlay-soft: rgb(250 250 250 / 0.58);
+  --color-overlay-strong: rgb(15 18 24 / 0.42);
+  --color-inset-highlight: rgb(255 255 255 / 0.72);
+
+  /* — Code syntax ---------------------------------------------------------- */
+  --color-code-keyword: #7c3aed;
+  --color-code-string: #047857;
+  --color-code-function: #2563eb;
+  --color-code-number: #d97706;
+
+  /* — Elevation (layered shadow scale) ------------------------------------- */
+  --color-shadow: rgb(15 23 42 / 0.08);
+  --color-shadow-strong: rgb(15 23 42 / 0.14);
+  --shadow-sm: 0 1px 2px rgb(15 23 42 / 0.06);
+  --shadow-md: 0 4px 12px rgb(15 23 42 / 0.08);
+  --shadow-lg: 0 12px 32px rgb(15 23 42 / 0.1);
+  --shadow-xl: 0 24px 60px rgb(15 23 42 / 0.14);
+
+  /* — Layout --------------------------------------------------------------- */
+  --sidebar-width: 268px;
+  --file-sidebar-width: 420px;
+  --toolbar-height: 52px;
+  --composer-width: 720px;
+
+  /* — Radii ---------------------------------------------------------------- */
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-xl: 18px;
+  --radius-pill: 999px;
+
+  /* — Motion --------------------------------------------------------------- */
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --ease-standard: 160ms ease;
+  --ease-layout: 260ms cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-emphasized: 320ms cubic-bezier(0.2, 0, 0, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --color-canvas: #0c0d10;
+  --color-sidebar: #121317;
+  --color-surface: #16181d;
+  --color-surface-soft: #1b1d23;
+  --color-surface-raised: #1f222a;
+  --color-surface-elevated: #23262f;
+  --color-code-bg: #14161b;
+
+  --color-text: #f2f3f5;
+  --color-text-muted: #a4aab4;
+  --color-text-subtle: #6f7682;
+
+  --color-border: #2a2e37;
+  --color-border-strong: #3a3f4a;
+  --color-hover: #22262e;
+  --color-active: #2c313b;
+
+  --color-accent: #818cf8;
+  --color-accent-strong: #a5b4fc;
+  --color-accent-soft: rgb(99 102 241 / 0.18);
+  --color-accent-contrast: #0c0d10;
+  --color-accent-ring: rgb(129 140 248 / 0.45);
+
+  --color-info: var(--color-accent);
+  --color-info-soft: var(--color-accent-soft);
+
+  --color-danger: #ff8a80;
+  --color-danger-soft: rgb(255 138 128 / 0.16);
+  --color-success: #4ade80;
+  --color-success-soft: rgb(74 222 128 / 0.16);
+  --color-warning: #fbbf24;
+  --color-warning-soft: rgb(251 191 36 / 0.16);
+
+  --color-overlay: rgb(10 12 16 / 0.72);
+  --color-overlay-soft: rgb(10 12 16 / 0.6);
+  --color-overlay-strong: rgb(0 0 0 / 0.55);
+  --color-inset-highlight: rgb(255 255 255 / 0.06);
+
+  --color-code-keyword: #c4b5fd;
+  --color-code-string: #86efac;
+  --color-code-function: #60a5fa;
+  --color-code-number: #fbbf24;
+
+  --color-shadow: rgb(0 0 0 / 0.26);
+  --color-shadow-strong: rgb(0 0 0 / 0.42);
+  --shadow-sm: 0 1px 2px rgb(0 0 0 / 0.4);
+  --shadow-md: 0 4px 14px rgb(0 0 0 / 0.45);
+  --shadow-lg: 0 14px 36px rgb(0 0 0 / 0.5);
+  --shadow-xl: 0 26px 64px rgb(0 0 0 / 0.62);
+}

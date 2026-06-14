@@ -1,0 +1,12 @@
+# Host-network override. Use with:
+#   docker compose -f docker-compose.yml -f docker-compose.host.yml up
+# Both containers share the host network; main reaches the runtime on loopback.
+services:
+  sandbox:
+    network_mode: host
+    ports: []
+  main:
+    network_mode: host
+    ports: []
+    environment:
+      - BP_RUNTIME_URL=http://127.0.0.1:${BP_SANDBOX_PORT:-8081}

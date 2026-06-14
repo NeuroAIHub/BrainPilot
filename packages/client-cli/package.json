@@ -1,0 +1,21 @@
+{
+  "name": "@brainpilot/client-cli",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "description": "BrainPilot headless verification client (dev/CI) — drive a session without the web UI",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bp-client": "./dist/bin.js"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@brainpilot/protocol": "*",
+    "commander": "^12.1.0"
+  }
+}

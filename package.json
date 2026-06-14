@@ -1,0 +1,41 @@
+{
+  "name": "brainpilot",
+  "version": "0.0.3",
+  "private": true,
+  "type": "module",
+  "description": "BrainPilot — multi-agent research collaboration platform (TS + Pi SDK)",
+  "license": "Apache-2.0",
+  "workspaces": [
+    "packages/protocol",
+    "packages/runtime",
+    "packages/backend-core",
+    "packages/cli",
+    "packages/client-cli",
+    "packages/web"
+  ],
+  "scripts": {
+    "build": "npm run build --workspaces --if-present",
+    "typecheck": "tsc -b packages/protocol packages/runtime packages/backend-core packages/cli packages/client-cli",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "bp": "node packages/cli/dist/bin.js",
+    "version:sync": "node scripts/sync-versions.js",
+    "version:check": "node scripts/sync-versions.js --check",
+    "release:build": "npm run build",
+    "release:dry": "npm publish --workspaces --if-present --dry-run --access public",
+    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "dockerode": "^4.0.0",
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0",
+    "vitest": "^3.0.0"
+  },
+  "overrides": {
+    "vite": "^6.0.0"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

@@ -1,0 +1,79 @@
+# Claude config (user-specific, contains API keys)
+
+.claude/
+claude/settings.json
+claude/settings.local.json
+# Documentation (auto-generated, user-specific)
+docs/
+plans/
+MULTI_USER.md
+
+# Local development overrides
+config.local.yaml
+local.yaml
+
+# User data (managed by backend/shared/user_data.py)
+users/
+user_data/
+workspaces/
+
+# Python
+__pycache__/
+*.py[cod]
+*.so
+.pytest_cache/
+
+# IDE
+.idea/
+.vscode/
+
+# SQLite database and WAL sidecars (runtime-generated)
+backend/data/*.db
+backend/data/*.db-wal
+backend/data/*.db-shm
+
+# Build artifacts
+*.egg-info/
+dist/
+build/
+.vite/
+
+# Local env files
+.env
+.env.local
+.env.*.local
+
+# Benchmark data (mounted externally, never committed)
+benchmark_tasks/
+benchmark_results/
+frontend/web/.env.local
+frontend/web/.env.*.local
+frontend/web/mock-data/
+frontend/web/.mock-data/
+
+# Node
+node_modules/
+
+# Non-core frontends (third-party / experimental)
+frontend/claudecodeui/
+frontend/test-client/
+.worktrees/
+
+# Archived legacy Python implementation + pre-rewrite design/analysis docs
+# (kept on disk under legacy/ for reference, never tracked)
+legacy/
+
+# Local agent guidance (user-specific, not part of the open-source tree)
+AGENTS.md
+CLAUDE.md
+
+# System
+.DS_Store
+claude/provider_profiles.json
+
+# TS build info
+*.tsbuildinfo
+packages/*/dist/
+
+# BrainPilot runtime data dir (default BP_DATA_DIR=./brainpilot, created by CLI/compose)
+brainpilot/

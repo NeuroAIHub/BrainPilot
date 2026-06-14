@@ -1,0 +1,186 @@
+import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, existsSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { createOrchestrator } from "../src/create-orchestrator.js";
+import { resolveOrchestratorMode } from "../src/orchestrator.js";
+import { LocalProcessOrchestrator } from "../src/local-orchestrator.js";
+import { DockerOrchestrator } from "../src/docker-orchestrator.js";
+import { StaticRuntimeOrchestrator } from "../src/static-orchestrator.js";
+
+describe("resolveOrchestratorMode", () => {
+  it("defaults to local", () => {
+    expect(resolveOrchestratorMode({})).toBe("local");
+  });
+  it("honors BP_ORCHESTRATOR=docker", () => {
+    expect(resolveOrchestratorMode({ BP_ORCHESTRATOR: "docker" })).toBe("docker");
+  });
+  it("honors BP_MODE=docker", () => {
+    expect(resolveOrchestratorMode({ BP_MODE: "docker" })).toBe("docker");
+  });
+  it("BP_ORCHESTRATOR wins over BP_MODE", () => {
+    expect(
+      resolveOrchestratorMode({ BP_ORCHESTRATOR: "local", BP_MODE: "docker" }),
+    ).toBe("local");
+  });
+  it("returns static when BP_RUNTIME_URL is set", () => {
+    expect(
+      resolveOrchestratorMode({ BP_RUNTIME_URL: "http://sandbox:8081" }),
+    ).toBe("static");
+  });
+  it("BP_RUNTIME_URL wins over BP_MODE=docker", () => {
+    expect(
+      resolveOrchestratorMode({
+        BP_RUNTIME_URL: "http://sandbox:8081",
+        BP_MODE: "docker",
+      }),
+    ).toBe("static");
+  });
+  it("explicit BP_ORCHESTRATOR=docker wins over BP_RUNTIME_URL", () => {
+    expect(
+      resolveOrchestratorMode({
+        BP_ORCHESTRATOR: "docker",
+        BP_RUNTIME_URL: "http://sandbox:8081",
+      }),
+    ).toBe("docker");
+  });
+});
+
+describe("createOrchestrator factory", () => {
+  it("creates a LocalProcessOrchestrator by default", () => {
+    expect(createOrchestrator({ env: {} })).toBeInstanceOf(LocalProcessOrchestrator);
+  });
+  it("creates a DockerOrchestrator when mode=docker", () => {
+    const fakeDocker = {} as never;
+    const orch = createOrchestrator({ mode: "docker", docker: { docker: fakeDocker } });
+    expect(orch).toBeInstanceOf(DockerOrchestrator);
+  });
+  it("respects an explicit mode override", () => {
+    expect(createOrchestrator({ mode: "local" })).toBeInstanceOf(LocalProcessOrchestrator);
+  });
+  it("creates a StaticRuntimeOrchestrator when mode=static", () => {
+    const orch = createOrchestrator({
+      mode: "static",
+      static: { baseUrl: "http://sandbox:8081" },
+    });
+    expect(orch).toBeInstanceOf(StaticRuntimeOrchestrator);
+  });
+  it("creates a StaticRuntimeOrchestrator from BP_RUNTIME_URL env", () => {
+    const orch = createOrchestrator({
+      env: { BP_RUNTIME_URL: "http://sandbox:8081" },
+    });
+    expect(orch).toBeInstanceOf(StaticRuntimeOrchestrator);
+  });
+});
+
+describe("DockerOrchestrator (stubbed dockerode)", () => {
+  it("creates + starts a container and waits for health", async () => {
+    const started = { value: false };
+    const container = {
+      start: vi.fn(async () => {
+        started.value = true;
+      }),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const docker = {
+      createContainer: vi.fn(async () => container),
+    } as never;
+    const orch = new DockerOrchestrator({
+      docker,
+      image: "brainpilot-sandbox:test",
+      containerPort: 8081,
+      hostPort: 18081,
+      dataDir: "/host/bp",
+      healthProbe: async () => started.value,
+      sleep: async () => {},
+    });
+    const handle = await orch.ensureRuntime();
+    expect(handle.baseUrl).toBe("http://127.0.0.1:18081");
+    expect(container.start).toHaveBeenCalledTimes(1);
+    const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
+      .createContainer.mock.calls[0]![0] as Record<string, unknown>;
+    expect(createArg.Image).toBe("brainpilot-sandbox:test");
+    expect((createArg.Env as string[]).some((e) => e.startsWith("BP_DATA_DIR="))).toBe(true);
+
+    await orch.stopRuntime();
+    expect(container.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it("auto-pulls the image when createContainer reports it is missing", async () => {
+    const container = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    let attempts = 0;
+    const createContainer = vi.fn(async () => {
+      attempts++;
+      if (attempts === 1) {
+        const err = Object.assign(new Error("no such image: brainpilot-sandbox:test"), {
+          statusCode: 404,
+        });
+        throw err;
+      }
+      return container;
+    });
+    const pull = vi.fn((_image: string, cb: (e: Error | null, s: unknown) => void) => {
+      cb(null, { fake: "stream" });
+    });
+    const docker = {
+      createContainer,
+      pull,
+      modem: { followProgress: (_s: unknown, done: (e: Error | null) => void) => done(null) },
+    } as never;
+
+    const orch = new DockerOrchestrator({
+      docker,
+      image: "brainpilot-sandbox:test",
+      healthProbe: async () => true,
+      sleep: async () => {},
+    });
+    const handle = await orch.ensureRuntime();
+    expect(handle.baseUrl).toContain("http://");
+    expect(pull).toHaveBeenCalledTimes(1);
+    expect(createContainer).toHaveBeenCalledTimes(2); // 404, pull, retry
+    expect(container.start).toHaveBeenCalledTimes(1);
+  });
+
+  it("throws a clear error when dockerode cannot be loaded and none injected", async () => {
+    const orch = new DockerOrchestrator({
+      dockerLoader: async () => {
+        throw new Error("Cannot find module 'dockerode'");
+      },
+      healthProbe: async () => true,
+      sleep: async () => {},
+    });
+    await expect(orch.ensureRuntime()).rejects.toThrow(/requires 'dockerode'/);
+  });
+});
+
+describe("createOrchestrator local artifact wiring", () => {
+  it("derives runtime pid path from BP_DATA_DIR and the local orchestrator writes it", async () => {
+    const dir = mkdtempSync(join(tmpdir(), "bp-co-"));
+    const proc = {
+      pid: 5555,
+      on() {
+        return this;
+      },
+      kill() {
+        return true;
+      },
+    };
+    const orch = createOrchestrator({
+      mode: "local",
+      env: { BP_DATA_DIR: dir },
+      local: {
+        runtimeServerPath: "/s.js",
+        spawnFn: () => proc as never,
+        healthProbe: async () => true,
+        sleep: async () => {},
+      },
+    });
+    await orch.ensureRuntime();
+    expect(existsSync(join(dir, ".runtime", "runtime.pid"))).toBe(true);
+  });
+});

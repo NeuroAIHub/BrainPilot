@@ -1,0 +1,67 @@
+# BrainPilot — single-user deployment: 1 main + 1 fixed sandbox (static), bridge net.
+# Override the network with: docker compose -f docker-compose.yml -f docker-compose.host.yml up
+services:
+  sandbox:
+    build:
+      context: .
+      dockerfile: docker/sandbox/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+        APT_MIRROR: ${APT_MIRROR:-}
+    image: brainpilot-sandbox:latest
+    environment:
+      - PORT=${BP_SANDBOX_PORT:-8081}
+      - AGENT_RUNTIME_PORT=${BP_SANDBOX_PORT:-8081}
+      - BP_DATA_DIR=/root/.bp-root
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_CONTEXT_WINDOW=${ANTHROPIC_CONTEXT_WINDOW:-}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-}
+      - BP_MODELS_JSON=${BP_MODELS_JSON:-}
+      - BP_MODEL_PROVIDER=${BP_MODEL_PROVIDER:-}
+      - BP_MOCK=${BP_MOCK:-}
+    volumes:
+      - ${BP_DATA_DIR:-./brainpilot}:/root/.bp-root:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${BP_SANDBOX_PORT:-8081}/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+  main:
+    build:
+      context: .
+      dockerfile: docker/main/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+        APT_MIRROR: ${APT_MIRROR:-}
+    image: brainpilot-main:latest
+    depends_on:
+      sandbox:
+        condition: service_healthy
+    ports:
+      - "${BP_MAIN_PORT:-9001}:${BP_MAIN_PORT:-9001}"
+    environment:
+      - PORT=${BP_MAIN_PORT:-9001}
+      # static mode is selected by BP_RUNTIME_URL being set (points main at the fixed sandbox runtime)
+      - BP_RUNTIME_URL=http://sandbox:${BP_SANDBOX_PORT:-8081}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_CONTEXT_WINDOW=${ANTHROPIC_CONTEXT_WINDOW:-}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-}
+      - BP_MODELS_JSON=${BP_MODELS_JSON:-}
+      - BP_MODEL_PROVIDER=${BP_MODEL_PROVIDER:-}
+      - BP_MOCK=${BP_MOCK:-}
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${BP_MAIN_PORT:-9001}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s

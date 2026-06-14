@@ -1,0 +1,278 @@
+import { FormEvent, useEffect, useRef, useState } from "react";
+import { Bot, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
+import { useAuth } from "../../contexts/AuthContext";
+import { useSandbox } from "../../contexts/SandboxContext";
+import { useSessions } from "../../contexts/SessionContext";
+import { useT } from "../../i18n/useT";
+import { PromptComposer } from "../chat/PromptComposer";
+import { DemoView } from "../demo/DemoView";
+import { FileSidebar } from "../files/FileSidebar";
+import { IconButton } from "../primitives/IconButton";
+import { SearchDialog } from "../search/SearchDialog";
+import { SettingsDialog } from "../settings/SettingsDialog";
+import { AgentsPanel, TracePanel } from "../session/AgentTraceViews";
+import { SandboxBuildingOverlay } from "./SandboxBuildingOverlay";
+import { SandboxStatus } from "./SandboxStatus";
+import { Sidebar } from "../sidebar/Sidebar";
+import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
+import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
+
+const MIN_SIDEBAR_WIDTH = 220;
+const MAX_SIDEBAR_WIDTH = 420;
+
+export function DesktopShell() {
+  const { user, isBootstrapping } = useAuth();
+  const { currentSandbox, operation, error, stats } = useSandbox();
+  const { currentSession, currentView, messages, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
+  const t = useT();
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  const [activePage, setActivePage] = useState<"workspace" | "demo">("workspace");
+  const [sidebarWidth, setSidebarWidth] = useState(268);
+  const [isSidebarResizing, setIsSidebarResizing] = useState(false);
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
+  const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  const [isFilesOpen, setIsFilesOpen] = useState(false);
+  const [fileSidebarWidth, setFileSidebarWidth] = useState(420);
+  const [isFileSidebarResizing, setIsFileSidebarResizing] = useState(false);
+  const [sandboxOverlayDismissed, setSandboxOverlayDismissed] = useState(false);
+  const [isWarningOpen, setIsWarningOpen] = useState(false);
+  const hasWarnedRef = useRef(false);
+  const sidebarResizeRef = useRef<{ pointerX: number; width: number } | null>(null);
+
+  useEffect(() => {
+    if (operation === "creating" || operation === "rebuilding") {
+      setSandboxOverlayDismissed(false);
+    }
+  }, [operation]);
+
+  // Show warning dialog once per page session when disk usage is >= 90% but < 100%
+  useEffect(() => {
+    const percent = stats?.disk.percentOfQuota ?? 0;
+    if (percent >= 90 && percent < 100 && !hasWarnedRef.current) {
+      hasWarnedRef.current = true;
+      setIsWarningOpen(true);
+    }
+  }, [stats]);
+
+  const isCriticalOpen = stats ? stats.disk.percentOfQuota >= 100 : false;
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!sidebarResizeRef.current) {
+        return;
+      }
+
+      const delta = event.clientX - sidebarResizeRef.current.pointerX;
+      const nextWidth = Math.max(
+        MIN_SIDEBAR_WIDTH,
+        Math.min(MAX_SIDEBAR_WIDTH, sidebarResizeRef.current.width + delta),
+      );
+      setSidebarWidth(nextWidth);
+    };
+
+    const handlePointerUp = () => {
+      if (!sidebarResizeRef.current) {
+        return;
+      }
+
+      sidebarResizeRef.current = null;
+      setIsSidebarResizing(false);
+    };
+
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, []);
+
+  return (
+    <div
+      className={`desktop-shell ${isSidebarCollapsed ? "desktop-shell--sidebar-collapsed" : ""} ${
+        isSidebarResizing ? "desktop-shell--resizing-sidebar" : ""
+      }`}
+      style={{ "--active-sidebar-width": `${sidebarWidth}px` } as React.CSSProperties}
+    >
+      <Sidebar
+        isCollapsed={isSidebarCollapsed}
+        activePage={activePage}
+        onOpenDemo={() => setActivePage("demo")}
+        onGoWorkspace={() => setActivePage("workspace")}
+        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSearch={() => setIsSearchOpen(true)}
+        onResizeStart={(pointerX) => {
+          if (isSidebarCollapsed) {
+            return;
+          }
+
+          sidebarResizeRef.current = { pointerX, width: sidebarWidth };
+          setIsSidebarResizing(true);
+        }}
+        onToggle={() => setIsSidebarCollapsed((current) => !current)}
+      />
+
+      {activePage === "demo" ? (
+        <DemoView />
+      ) : (
+      <main
+        className={`workspace ${isFilesOpen ? "workspace--files-open" : ""} ${
+          isFileSidebarResizing ? "workspace--resizing-files" : ""
+        }`}
+        style={{ "--active-file-sidebar-width": `${fileSidebarWidth}px` } as React.CSSProperties}
+        aria-label={t("shell.aria.workspace")}
+      >
+        <header className="workspace-toolbar" aria-label={t("shell.aria.toolbarActions")}>
+          <div className="session-title" aria-label={t("shell.aria.activeSession")}>
+            <span className="session-title__label">{t("shell.sessionLabel")}</span>
+            {currentSession?.id ? (
+              <span className="session-title__id">{currentSession.id.slice(0, 8)}</span>
+            ) : null}
+            {messages.length === 0 ? (
+              <span className="session-title__name">
+                {currentSession?.title || t("shell.defaultWorkspace")}
+              </span>
+            ) : null}
+          </div>
+          <div className="workspace-toolbar__actions">
+            <div className="workspace-view-tabs" role="tablist" aria-label={t("shell.aria.viewTabs")}>
+              <button
+                aria-selected={currentView === "chat"}
+                className={currentView === "chat" ? "is-active" : ""}
+                onClick={() => setCurrentView("chat")}
+                role="tab"
+                type="button"
+              >
+                <MessageSquare size={14} />
+                <span>{t("shell.view.chat")}</span>
+              </button>
+              <button
+                aria-selected={currentView === "agents"}
+                className={currentView === "agents" ? "is-active" : ""}
+                onClick={() => setCurrentView("agents")}
+                role="tab"
+                type="button"
+              >
+                <Bot size={14} />
+                <span>{t("shell.view.agents")}</span>
+              </button>
+              <button
+                aria-selected={currentView === "trace"}
+                className={currentView === "trace" ? "is-active" : ""}
+                onClick={() => setCurrentView("trace")}
+                role="tab"
+                type="button"
+              >
+                <GitBranch size={14} />
+                <span>{t("shell.view.trace")}</span>
+              </button>
+            </div>
+            {currentView === "chat" ? (
+              <IconButton
+                className={isRefreshingMessages ? "is-active" : ""}
+                label={t("shell.aria.refreshMessages")}
+                onClick={() => void refreshMessages()}
+              >
+                <RefreshCw size={14} />
+              </IconButton>
+            ) : null}
+            <SandboxStatus />
+            <IconButton
+              aria-pressed={isFilesOpen}
+              className={isFilesOpen ? "is-active" : ""}
+              label={isFilesOpen ? t("shell.files.close") : t("shell.files.open")}
+              onClick={() => setIsFilesOpen((current) => !current)}
+            >
+              <FolderOpen size={16} />
+            </IconButton>
+          </div>
+        </header>
+
+        {currentView === "chat" ? <PromptComposer /> : null}
+        {currentView === "agents" ? <AgentsPanel /> : null}
+        {currentView === "trace" ? <TracePanel /> : null}
+        <FileSidebar
+          isOpen={isFilesOpen}
+          onClose={() => setIsFilesOpen(false)}
+          onResize={setFileSidebarWidth}
+          onResizeEnd={() => setIsFileSidebarResizing(false)}
+          onResizeStart={() => setIsFileSidebarResizing(true)}
+          width={fileSidebarWidth}
+        />
+      </main>
+      )}
+
+      <SearchDialog isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+      <SettingsDialog isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      {!sandboxOverlayDismissed && (operation === "creating" || operation === "rebuilding") ? (
+        <SandboxBuildingOverlay operation={operation} error={error} onDismiss={() => setSandboxOverlayDismissed(true)} />
+      ) : null}
+      <DiskQuotaWarningDialog
+        isOpen={isWarningOpen}
+        onClose={() => setIsWarningOpen(false)}
+        percentOfQuota={stats?.disk.percentOfQuota ?? 0}
+      />
+      <DiskQuotaCriticalDialog
+        isOpen={isCriticalOpen}
+        sandboxId={currentSandbox?.id ?? null}
+        workspaceUsedBytes={stats?.disk.workspaceUsedBytes ?? 0}
+        quotaBytes={stats?.disk.quotaBytes ?? 0}
+        percentOfQuota={stats?.disk.percentOfQuota ?? 0}
+      />
+      {!user || isBootstrapping ? <LoginPanel /> : null}
+    </div>
+  );
+}
+
+function LoginPanel() {
+  const { isBootstrapping, isSubmitting, error, login, register } = useAuth();
+  const t = useT();
+  const [username, setUsername] = useState("");
+  const [password, setPassword] = useState("");
+  const [mode, setMode] = useState<"login" | "register">("login");
+
+  const handleSubmit = async (event: FormEvent) => {
+    event.preventDefault();
+    if (mode === "login") {
+      await login(username, password);
+    } else {
+      await register(username, password);
+    }
+  };
+
+  return (
+    <div className="auth-overlay" role="dialog" aria-label={t("shell.auth.aria.signIn")}>
+      <form className="auth-panel" onSubmit={handleSubmit}>
+        <span className="sandbox-status__eyebrow">BrainPilot</span>
+        <h2>{isBootstrapping ? t("shell.auth.restoring") : mode === "login" ? t("shell.auth.loginTitle") : t("shell.auth.registerTitle")}</h2>
+        <label>
+          <span>{t("shell.auth.username")}</span>
+          <input
+            value={username}
+            onChange={(event) => setUsername(event.target.value)}
+            minLength={3}
+            placeholder={t("shell.auth.usernamePlaceholder")}
+            required
+          />
+        </label>
+        <label>
+          <span>{t("shell.auth.password")}</span>
+          <input
+            value={password}
+            onChange={(event) => setPassword(event.target.value)}
+            minLength={6}
+            required
+            type="password"
+          />
+        </label>
+        {error ? <p className="auth-error">{error}</p> : null}
+        <button disabled={isBootstrapping || isSubmitting} type="submit">
+          {mode === "login" ? t("shell.auth.login") : t("shell.auth.register")}
+        </button>
+        <button className="auth-switch" onClick={() => setMode(mode === "login" ? "register" : "login")} type="button">
+          {mode === "login" ? t("shell.auth.toRegister") : t("shell.auth.toLogin")}
+        </button>
+      </form>
+    </div>
+  );
+}

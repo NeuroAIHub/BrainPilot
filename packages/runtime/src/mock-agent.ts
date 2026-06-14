@@ -1,0 +1,150 @@
+/**
+ * Mock AgentSession (BP_MOCK=1). Deterministic, no API calls.
+ *
+ * Emits a scripted Pi event stream that exercises the SAME translator the real
+ * Pi session feeds (agent_start → message_start → message_update(text_delta)*
+ * → message_end → tool_execution_* (optional) → agent_end). This lets tests +
+ * CI cover the full orchestration path without burning quota.
+ *
+ * Prompt control protocol (so tests can drive behavior):
+ *   - default: streams a short scripted assistant reply.
+ *   - contains "[[tool:NAME {json}]]": invokes system tool NAME with parsed
+ *     args and emits tool_execution_start/end around it.
+ *   - contains "[[error]]": emits an agent-level failure (auto_retry then end).
+ */
+import type { IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
+
+export interface MockSessionConfig {
+  sessionId: string;
+  agentName: string;
+  systemTools: SystemTool[];
+  /** Scripted assistant text (default: deterministic per agent). */
+  scriptText?: string;
+}
+
+const TOOL_RE = /\[\[tool:([a-zA-Z_]+)\s*(\{.*?\})?\]\]/;
+
+export class MockAgentSession implements IAgentSession {
+  readonly sessionId: string;
+  private readonly listeners = new Set<(e: PiAgentEvent) => void>();
+  private readonly toolMap: Map<string, SystemTool>;
+  private aborted = false;
+  private disposed = false;
+
+  constructor(private readonly cfg: MockSessionConfig) {
+    this.sessionId = cfg.sessionId;
+    this.toolMap = new Map(cfg.systemTools.map((t) => [t.name, t]));
+  }
+
+  subscribe(listener: (e: PiAgentEvent) => void): () => void {
+    this.listeners.add(listener);
+    return () => this.listeners.delete(listener);
+  }
+
+  private emit(e: PiAgentEvent): void {
+    for (const l of this.listeners) {
+      try {
+        l(e);
+      } catch {
+        /* isolate */
+      }
+    }
+  }
+
+  async prompt(text: string): Promise<void> {
+    if (this.disposed) return;
+    this.aborted = false;
+    this.emit({ type: "agent_start" });
+    this.emit({ type: "turn_start" });
+
+    if (text.includes("[[error]]")) {
+      this.emit({
+        type: "auto_retry_start",
+        attempt: 1,
+        maxAttempts: 3,
+        delayMs: 0,
+        errorMessage: "mock API error",
+      });
+      this.emit({ type: "auto_retry_end", success: false, attempt: 1, finalError: "mock API error" });
+      this.emit({ type: "agent_end", messages: [], willRetry: false });
+      return;
+    }
+
+    // Stream a short assistant message.
+    const msg = { role: "assistant", content: [] as Array<{ type: string; text?: string }> };
+    this.emit({ type: "message_start", message: { ...msg } });
+    const script = this.cfg.scriptText ?? `mock reply from ${this.cfg.agentName}`;
+    for (const chunk of script.match(/.{1,8}/g) ?? [script]) {
+      if (this.aborted) break;
+      this.emit({
+        type: "message_update",
+        message: { ...msg },
+        assistantMessageEvent: { type: "text_delta", delta: chunk },
+      });
+    }
+    this.emit({
+      type: "message_end",
+      message: { role: "assistant", content: [{ type: "text", text: script }] },
+    });
+
+    // Optional tool invocation driven by the prompt.
+    const m = TOOL_RE.exec(text);
+    if (m && !this.aborted) {
+      const toolName = m[1]!;
+      const args = m[2] ? safeJson(m[2]) : {};
+      const tool = this.toolMap.get(toolName);
+      const toolCallId = `tc_${toolName}_${Date.now()}`;
+      this.emit({ type: "tool_execution_start", toolCallId, toolName, args });
+      if (tool) {
+        try {
+          const res = await tool.execute(args);
+          const textOut = res.content.map((c) => c.text).join("");
+          this.emit({
+            type: "tool_execution_end",
+            toolCallId,
+            toolName,
+            result: textOut,
+            isError: res.isError ?? false,
+          });
+        } catch (err) {
+          this.emit({
+            type: "tool_execution_end",
+            toolCallId,
+            toolName,
+            result: String((err as Error).message),
+            isError: true,
+          });
+        }
+      } else {
+        // Tool not available to this agent (access-controlled away).
+        this.emit({
+          type: "tool_execution_end",
+          toolCallId,
+          toolName,
+          result: `tool ${toolName} not available`,
+          isError: true,
+        });
+      }
+    }
+
+    this.emit({ type: "turn_end" });
+    this.emit({ type: "agent_end", messages: [], willRetry: false });
+  }
+
+  async abort(): Promise<void> {
+    this.aborted = true;
+  }
+
+  dispose(): void {
+    this.disposed = true;
+    this.listeners.clear();
+  }
+}
+
+function safeJson(s: string): Record<string, unknown> {
+  try {
+    return JSON.parse(s) as Record<string, unknown>;
+  } catch {
+    return {};
+  }
+}

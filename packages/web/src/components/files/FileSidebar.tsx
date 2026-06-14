@@ -1,0 +1,639 @@
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChevronRight,
+  Download,
+  File,
+  FileImage,
+  FileText,
+  Folder,
+  Package,
+  Maximize2,
+  Minimize2,
+  RefreshCw,
+  X,
+} from "lucide-react";
+import { FileContent, FileEntry } from "../../contracts/backend";
+import { useSandbox } from "../../contexts/SandboxContext";
+import { useT } from "../../i18n/useT";
+import { api } from "../../utils/api";
+import { downloadBlob } from "../../utils/download";
+import { createZipBlob, type ZipEntry } from "../../utils/zip";
+import { IconButton } from "../primitives/IconButton";
+import { ONE_MB, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
+import { FilePreviewView, PreviewSource } from "./FilePreviewView";
+
+type FileNode = FileEntry & {
+  path: string;
+  children?: FileNode[];
+  loaded?: boolean;
+};
+
+type FileSidebarProps = {
+  isOpen: boolean;
+  onClose: () => void;
+  onResize: (width: number) => void;
+  onResizeEnd: () => void;
+  onResizeStart: () => void;
+  width: number;
+};
+
+const MIN_FILE_SIDEBAR_WIDTH = 320;
+const MAX_FILE_SIDEBAR_WIDTH = 680;
+const MIN_PREVIEW_WIDTH = 360;
+const MAX_PREVIEW_WIDTH = 900;
+const DEFAULT_PREVIEW_WIDTH = 560;
+
+const rootNode: FileNode = {
+  name: "workspace",
+  path: "/workspace",
+  type: "folder",
+  size: 0,
+  modified: 0,
+  permissions: "",
+};
+
+function joinPath(parent: string, name: string) {
+  return `${parent.replace(/\/$/, "")}/${name}`;
+}
+
+function basename(path: string) {
+  return path.split("/").filter(Boolean).pop() || "download";
+}
+
+function workspaceRelativePath(path: string) {
+  if (path === "/workspace") {
+    return "workspace";
+  }
+  return path.startsWith("/workspace/") ? path.slice("/workspace/".length) : path.replace(/^\/+/, "");
+}
+
+function removeNestedSelections(paths: string[]): string[] {
+  return [...paths]
+    .sort((a, b) => a.length - b.length)
+    .filter((path, index, sorted) => !sorted.slice(0, index).some((parent) => path.startsWith(`${parent}/`)));
+}
+
+function FileIcon({ node }: { node: FileNode }) {
+  if (node.type === "folder" || node.type === "symlink") {
+    return <Folder size={16} />;
+  }
+  if (/\.(md|txt|py|yaml|yml|csv|json|ts|tsx|js|jsx)$/i.test(node.name)) {
+    return <FileText size={16} />;
+  }
+  if (/\.(svg|png|jpg|jpeg|gif|webp)$/i.test(node.name)) {
+    return <FileImage size={16} />;
+  }
+  return <File size={16} />;
+}
+
+function sortNodes(nodes: FileNode[]): FileNode[] {
+  return [...nodes].sort((a, b) => {
+    const aIsFolder = a.type === "folder" || a.type === "symlink";
+    const bIsFolder = b.type === "folder" || b.type === "symlink";
+    if (aIsFolder !== bIsFolder) {
+      return aIsFolder ? -1 : 1;
+    }
+    return a.name.localeCompare(b.name);
+  });
+}
+
+function updateNode(root: FileNode, path: string, updater: (node: FileNode) => FileNode): FileNode {
+  if (root.path === path) {
+    return updater(root);
+  }
+  return {
+    ...root,
+    children: root.children?.map((child) => updateNode(child, path, updater)),
+  };
+}
+
+function findNode(root: FileNode, path: string | null): FileNode | null {
+  if (!path) {
+    return null;
+  }
+  if (root.path === path) {
+    return root;
+  }
+  for (const child of root.children ?? []) {
+    const found = findNode(child, path);
+    if (found) {
+      return found;
+    }
+  }
+  return null;
+}
+
+export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeStart, width }: FileSidebarProps) {
+  const { currentSandbox } = useSandbox();
+  const t = useT();
+  const [tree, setTree] = useState<FileNode>(rootNode);
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(["/workspace"]));
+  const [selectedPath, setSelectedPath] = useState<string | null>(null);
+  const [selectedContent, setSelectedContent] = useState<FileContent | null>(null);
+  const [selectedDownloadPaths, setSelectedDownloadPaths] = useState<Set<string>>(() => new Set());
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
+  const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
+
+  const loadDirectory = useCallback(
+    async (path: string) => {
+      if (!currentSandbox || currentSandbox.status !== "running") {
+        setError(t("files.error.notRunning"));
+        return;
+      }
+      setError(null);
+      const entries = await api.sandbox.listFiles(currentSandbox.id, path);
+      const children = entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) }));
+      setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+    },
+    [currentSandbox],
+  );
+
+  useEffect(() => {
+    if (isOpen && currentSandbox?.status === "running") {
+      void loadDirectory("/workspace");
+    }
+    if (!isOpen || currentSandbox?.status !== "running") {
+      setSelectedDownloadPaths(new Set());
+      setSelectedPath(null);
+      setSelectedContent(null);
+      setIsPreviewMaximized(false);
+    }
+  }, [currentSandbox?.status, isOpen, loadDirectory]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!resizeStartRef.current) {
+        return;
+      }
+      const delta = resizeStartRef.current.pointerX - event.clientX;
+      const nextWidth = Math.max(
+        MIN_FILE_SIDEBAR_WIDTH,
+        Math.min(MAX_FILE_SIDEBAR_WIDTH, resizeStartRef.current.width + delta),
+      );
+      onResize(nextWidth);
+    };
+    const handlePointerUp = () => {
+      if (!resizeStartRef.current) {
+        return;
+      }
+      resizeStartRef.current = null;
+      onResizeEnd();
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, [onResize, onResizeEnd]);
+
+  const selectedNode = useMemo(() => findNode(tree, selectedPath), [selectedPath, tree]);
+  const selectedFile = selectedNode?.type === "file" ? selectedNode : null;
+  const selectedDownloadCount = selectedDownloadPaths.size;
+
+  const getNodeForPath = useCallback((path: string) => findNode(tree, path), [tree]);
+
+  const loadDirectoryEntries = useCallback(
+    async (path: string): Promise<FileNode[]> => {
+      if (!currentSandbox) {
+        throw new Error("No active sandbox");
+      }
+      const cached = findNode(tree, path);
+      if (cached?.loaded && cached.children) {
+        return cached.children;
+      }
+      const entries = await api.sandbox.listFiles(currentSandbox.id, path);
+      const children = sortNodes(entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) })));
+      setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+      return children;
+    },
+    [currentSandbox, tree],
+  );
+
+  const collectZipEntries = useCallback(
+    async (node: FileNode, zipEntries: ZipEntry[]) => {
+      if (!currentSandbox) {
+        throw new Error("No active sandbox");
+      }
+      if (node.type === "folder" || node.type === "symlink") {
+        const children = sortNodes(await loadDirectoryEntries(node.path));
+        if (children.length === 0) {
+          zipEntries.push({ path: `${workspaceRelativePath(node.path)}/`, data: new Uint8Array() });
+          return;
+        }
+        for (const child of children) {
+          await collectZipEntries(child, zipEntries);
+        }
+        return;
+      }
+
+      const blob = await api.sandbox.readRawFile(currentSandbox.id, node.path);
+      zipEntries.push({
+        path: workspaceRelativePath(node.path),
+        data: new Uint8Array(await blob.arrayBuffer()),
+      });
+    },
+    [currentSandbox, loadDirectoryEntries],
+  );
+
+  const toggleDownloadSelection = useCallback((path: string) => {
+    setSelectedDownloadPaths((current) => {
+      const next = new Set(current);
+      if (next.has(path)) {
+        next.delete(path);
+      } else {
+        next.add(path);
+      }
+      return next;
+    });
+  }, []);
+
+  const clearDownloadSelection = useCallback(() => {
+    setSelectedDownloadPaths(new Set());
+  }, []);
+
+  const downloadPaths = useCallback(
+    async (paths: string[]) => {
+      if (!currentSandbox || isDownloadingSelection) {
+        return;
+      }
+      const requestedPaths = removeNestedSelections(paths);
+      if (!requestedPaths.length) {
+        return;
+      }
+
+      setIsDownloadingSelection(true);
+      setError(null);
+      try {
+        const nodes = requestedPaths.map((path) => {
+          const node = getNodeForPath(path);
+          if (!node) {
+            throw new Error(`Cannot find ${path}`);
+          }
+          return node;
+        });
+
+        if (nodes.length === 1 && nodes[0].type === "file") {
+          const blob = await api.sandbox.readRawFile(currentSandbox.id, nodes[0].path);
+          downloadBlob(blob, nodes[0].name);
+          return;
+        }
+
+        const zipEntries: ZipEntry[] = [];
+        for (const node of nodes) {
+          await collectZipEntries(node, zipEntries);
+        }
+        const filename = nodes.length === 1 ? `${basename(nodes[0].path)}.zip` : "workspace-files.zip";
+        downloadBlob(createZipBlob(zipEntries), filename);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t("files.error.downloadFailed"));
+      } finally {
+        setIsDownloadingSelection(false);
+      }
+    },
+    [collectZipEntries, currentSandbox, getNodeForPath, isDownloadingSelection],
+  );
+
+  const refreshFiles = async () => {
+    setIsRefreshing(true);
+    try {
+      const paths = Array.from(expandedPaths);
+      for (const path of paths.length ? paths : ["/workspace"]) {
+        await loadDirectory(path);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("files.error.refreshFailed"));
+    } finally {
+      setIsRefreshing(false);
+    }
+  };
+
+  const toggleFolder = async (node: FileNode) => {
+    setExpandedPaths((current) => {
+      const next = new Set(current);
+      if (next.has(node.path)) {
+        next.delete(node.path);
+      } else {
+        next.add(node.path);
+      }
+      return next;
+    });
+    if (!node.loaded) {
+      await loadDirectory(node.path);
+    }
+  };
+
+  const selectFile = async (node: FileNode) => {
+    setSelectedPath(node.path);
+    setSelectedContent(null);
+    if (!currentSandbox) {
+      return;
+    }
+    if (node.size > ONE_MB || getPreviewKind(node.name) !== "text") {
+      return;
+    }
+    try {
+      setSelectedContent(await api.sandbox.readFile(currentSandbox.id, node.path));
+    } catch (err) {
+      setSelectedContent({
+        path: node.path,
+        content: err instanceof Error ? err.message : t("files.error.previewFailed"),
+        size: node.size,
+      });
+    }
+  };
+
+  const renderNode = (node: FileNode, depth = 0) => {
+    const isFolder = node.type === "folder" || node.type === "symlink";
+    const isExpanded = expandedPaths.has(node.path);
+    const isSelected = selectedPath === node.path;
+    const isDownloadSelected = selectedDownloadPaths.has(node.path);
+
+    return (
+      <div className="file-node" key={node.path}>
+        <div className={`file-row ${isSelected ? "is-selected" : ""} ${isDownloadSelected ? "is-download-selected" : ""}`}>
+          <label className="file-row__check" style={{ marginLeft: 10 + depth * 16 }}>
+            <span className="sr-only">{t("files.selectForDownload", { name: node.name })}</span>
+            <input
+              checked={isDownloadSelected}
+              disabled={isDownloadingSelection}
+              onChange={() => toggleDownloadSelection(node.path)}
+              type="checkbox"
+            />
+          </label>
+          <button
+            className="file-row__open"
+            onClick={() => {
+              if (isFolder) {
+                void toggleFolder(node);
+              } else {
+                void selectFile(node);
+              }
+            }}
+            type="button"
+          >
+            <span className={`file-row__chevron ${isFolder && isExpanded ? "is-expanded" : ""}`}>
+              {isFolder ? <ChevronRight size={14} /> : null}
+            </span>
+            <FileIcon node={node} />
+            <span className="file-row__name">{node.name}</span>
+            <span className="file-row__size">{formatBytes(node.size)}</span>
+          </button>
+        </div>
+        {isFolder && isExpanded ? node.children?.map((child) => renderNode(child, depth + 1)) : null}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <aside aria-hidden={!isOpen} aria-label={t("files.aria.sidebar")} className={`file-sidebar ${isOpen ? "is-open" : ""}`}>
+        <div
+          aria-label={t("files.aria.resizeSidebar")}
+          className="file-sidebar__resize-handle"
+          onPointerDown={(event) => {
+            resizeStartRef.current = { pointerX: event.clientX, width };
+            onResizeStart();
+          }}
+          role="separator"
+        />
+        <header className="file-sidebar__header">
+          <div>
+            <span className="file-sidebar__eyebrow">{t("files.eyebrow.workspace")}</span>
+            <h2>{t("files.title")}</h2>
+          </div>
+          <div className="file-sidebar__actions">
+            {selectedDownloadCount > 0 ? (
+              <div className="file-sidebar__selection-actions">
+                <span>{t("files.selectedCount", { count: selectedDownloadCount })}</span>
+                <button
+                  className="file-sidebar__download-selected"
+                  disabled={!currentSandbox || isDownloadingSelection}
+                  onClick={() => void downloadPaths(Array.from(selectedDownloadPaths))}
+                  type="button"
+                >
+                  <Package size={14} />
+                  <span>{isDownloadingSelection ? t("files.packing") : t("files.download")}</span>
+                </button>
+                <IconButton disabled={isDownloadingSelection} label={t("files.aria.clearSelection")} onClick={clearDownloadSelection}>
+                  <X size={14} />
+                </IconButton>
+              </div>
+            ) : null}
+            <IconButton className={isRefreshing ? "is-active" : ""} label={t("files.aria.refresh")} onClick={() => void refreshFiles()}>
+              <RefreshCw size={15} />
+            </IconButton>
+            <IconButton label={t("files.aria.close")} onClick={onClose}>
+              <X size={15} />
+            </IconButton>
+          </div>
+        </header>
+
+        <div className="file-sidebar__path">
+          <span>/workspace</span>
+          <small>{currentSandbox?.status === "running" ? t("files.live") : t("files.offline")}</small>
+        </div>
+
+        {error ? <p className="file-sidebar__empty">{error}</p> : null}
+        <div className="file-sidebar__tree" aria-label={t("files.aria.tree")}>
+          {renderNode(tree)}
+        </div>
+      </aside>
+
+      <FilePreviewPanel
+        content={selectedContent}
+        file={isOpen ? selectedFile : null}
+        isMaximized={isPreviewMaximized}
+        onClose={() => {
+          setSelectedPath(null);
+          setSelectedContent(null);
+          setIsPreviewMaximized(false);
+        }}
+        sandboxId={currentSandbox?.id ?? null}
+        onToggleMaximize={() => setIsPreviewMaximized((current) => !current)}
+      />
+    </>
+  );
+}
+
+function FilePreviewPanel({
+  file,
+  content,
+  isMaximized,
+  onClose,
+  sandboxId,
+  onToggleMaximize,
+}: {
+  file: FileNode | null;
+  content: FileContent | null;
+  isMaximized: boolean;
+  onClose: () => void;
+  sandboxId: string | null;
+  onToggleMaximize: () => void;
+}) {
+  const t = useT();
+  const [previewWidth, setPreviewWidth] = useState(DEFAULT_PREVIEW_WIDTH);
+  const [isResizingPreview, setIsResizingPreview] = useState(false);
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [blobError, setBlobError] = useState<string | null>(null);
+  const [isDownloading, setIsDownloading] = useState(false);
+  const previewResizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
+  const previewKind = file ? getPreviewKind(file.name) : "download";
+
+  useEffect(() => {
+    if (!file || !sandboxId || (previewKind !== "image" && previewKind !== "pdf")) {
+      setBlobUrl(null);
+      setBlobError(null);
+      return;
+    }
+
+    let objectUrl: string | null = null;
+    let isCancelled = false;
+
+    setBlobUrl(null);
+    setBlobError(null);
+    void api.sandbox
+      .readRawFile(sandboxId, file.path)
+      .then((blob) => {
+        if (isCancelled) {
+          return;
+        }
+        objectUrl = URL.createObjectURL(blob);
+        setBlobUrl(objectUrl);
+      })
+      .catch((err) => {
+        if (!isCancelled) {
+          setBlobError(err instanceof Error ? err.message : t("files.error.loadPreviewFailed"));
+        }
+      });
+
+    return () => {
+      isCancelled = true;
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [file?.path, previewKind, sandboxId]);
+
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      if (!previewResizeStartRef.current) {
+        return;
+      }
+      const availableWidth = window.innerWidth - MIN_FILE_SIDEBAR_WIDTH - 80;
+      const maxWidth = Math.max(MIN_PREVIEW_WIDTH, Math.min(MAX_PREVIEW_WIDTH, availableWidth));
+      const delta = previewResizeStartRef.current.pointerX - event.clientX;
+      const nextWidth = Math.max(MIN_PREVIEW_WIDTH, Math.min(maxWidth, previewResizeStartRef.current.width + delta));
+      setPreviewWidth(nextWidth);
+    };
+    const handlePointerUp = () => {
+      previewResizeStartRef.current = null;
+      setIsResizingPreview(false);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, []);
+
+  if (!file) {
+    return null;
+  }
+
+  const previewSource: PreviewSource =
+    file.size > ONE_MB
+      ? { kind: "tooLarge" }
+      : previewKind === "image"
+        ? { kind: "image", blobUrl: blobUrl ?? undefined }
+        : previewKind === "pdf"
+          ? { kind: "pdf", blobUrl: blobUrl ?? undefined }
+          : previewKind === "download"
+            ? { kind: "download" }
+            : { kind: "text", text: content?.content ?? t("files.preview.loading") };
+
+  const downloadFile = async () => {
+    if (!sandboxId) {
+      return;
+    }
+    setIsDownloading(true);
+    try {
+      const blob = await api.sandbox.readRawFile(sandboxId, file.path);
+      downloadBlob(blob, file.name);
+    } finally {
+      setIsDownloading(false);
+    }
+  };
+
+  return (
+    <section
+      aria-label={t("files.preview.aria")}
+      className={`file-preview-panel is-open ${isMaximized ? "is-maximized" : ""} ${
+        isResizingPreview ? "is-resizing" : ""
+      }`}
+      style={{ "--preview-panel-width": `${previewWidth}px` } as React.CSSProperties}
+    >
+      <div
+        aria-label={t("files.preview.ariaResize")}
+        className="file-preview-panel__resize-handle"
+        onPointerDown={(event) => {
+          if (isMaximized) {
+            return;
+          }
+          previewResizeStartRef.current = { pointerX: event.clientX, width: previewWidth };
+          setIsResizingPreview(true);
+        }}
+        role="separator"
+      />
+      <div className="file-preview__header">
+        <div>
+          <span className="file-sidebar__eyebrow">{t("files.preview.eyebrow")}</span>
+          <h3>{file.name}</h3>
+        </div>
+        <div className="file-preview__actions">
+          <button className="file-preview__download" disabled={!sandboxId || isDownloading} onClick={() => void downloadFile()} type="button">
+            <Download size={14} />
+            <span>{isDownloading ? t("files.preview.downloading") : t("files.preview.download")}</span>
+          </button>
+          <IconButton label={isMaximized ? t("files.preview.restore") : t("files.preview.maximize")} onClick={onToggleMaximize}>
+            {isMaximized ? <Minimize2 size={15} /> : <Maximize2 size={15} />}
+          </IconButton>
+          <IconButton label={t("files.preview.close")} onClick={onClose}>
+            <X size={15} />
+          </IconButton>
+        </div>
+      </div>
+
+      <dl className="file-preview__meta">
+        <div>
+          <dt>{t("files.preview.path")}</dt>
+          <dd>{file.path}</dd>
+        </div>
+        <div>
+          <dt>{t("files.preview.size")}</dt>
+          <dd>{formatBytes(file.size)}</dd>
+        </div>
+        <div>
+          <dt>{t("files.preview.modified")}</dt>
+          <dd>{formatModified(file.modified)}</dd>
+        </div>
+        <div>
+          <dt>{t("files.preview.mode")}</dt>
+          <dd>{file.permissions || "-"}</dd>
+        </div>
+      </dl>
+
+      <FilePreviewView
+        name={file.name}
+        source={previewSource}
+        renderMarkdown={isMarkdown(file.name)}
+        error={blobError}
+        t={t}
+      />
+    </section>
+  );
+}

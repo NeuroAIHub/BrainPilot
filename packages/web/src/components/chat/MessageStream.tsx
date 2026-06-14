@@ -1,0 +1,453 @@
+import { Check, ChevronDown, Copy } from "lucide-react";
+import { memo, useEffect, useMemo, useRef, useState } from "react";
+import type { ChatMessage } from "../../contracts/backend";
+import { buildRenderItems } from "../../contexts/messageGroups";
+import { useT } from "../../i18n/useT";
+import { MarkdownMessage } from "./MarkdownMessage";
+import { SystemMessageBubble } from "./SystemMessageBubble";
+import { AskUserCard } from "./AskUserCard";
+import { AutoRetryIndicator } from "./AutoRetryIndicator";
+
+interface MessageStreamProps {
+  /** Already filtered / time-sliced by the host. */
+  messages: ChatMessage[];
+  /** Pin to bottom as new messages arrive (live chat). Default false. */
+  autoScroll?: boolean;
+  /** Show the "N messages" toolbar row. Default true. */
+  showToolbarCount?: boolean;
+  /** Show per-agent elapsed timers + total conversation time. Live chat only. */
+  showTiming?: boolean;
+  className?: string;
+  ariaLabel?: string;
+  /** 修正6 — submit an ask_user answer. Omitted in read-only contexts (demo). */
+  onAskUserSubmit?: (requestId: string, answer: string) => void;
+  /** 修正6 — cancel a pending auto-retry. Omitted in read-only contexts. */
+  onRetryCancel?: () => void;
+}
+
+// Whether this message participates in same-agent avatar merging. User
+// prompts, errors, hooks and status notes always stand on their own; only
+// assistant/system text rows fold under a shared avatar.
+function isMergeable(message: ChatMessage): boolean {
+  if (message.role === "user") return false;
+  if (message.kind === "error" || message.kind === "hook" || message.kind === "status") return false;
+  return true;
+}
+
+function mergeName(message: ChatMessage): string {
+  return message.agent || (message.role === "system" ? "system" : "principal");
+}
+
+// Compact elapsed formatter: "3.2s" under a minute, "1m 05s" above.
+function formatElapsed(ms: number): string {
+  if (ms < 0) ms = 0;
+  const totalSeconds = ms / 1000;
+  if (totalSeconds < 60) {
+    return `${totalSeconds.toFixed(1)}s`;
+  }
+  const minutes = Math.floor(totalSeconds / 60);
+  const seconds = Math.floor(totalSeconds % 60);
+  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
+}
+
+/**
+ * Presentational chat message stack — message bubbles, agent rows, hook notes,
+ * and folded reasoning/tool "activity" blocks. Extracted from PromptComposer so
+ * the live chat and the demo replay render identically. Owns its own copy state
+ * so callers don't have to thread clipboard logic.
+ */
+function MessageStreamImpl({
+  messages,
+  autoScroll = false,
+  showToolbarCount = true,
+  showTiming = false,
+  className,
+  ariaLabel,
+  onAskUserSubmit,
+  onRetryCancel,
+}: MessageStreamProps) {
+  const t = useT();
+  const [copiedId, setCopiedId] = useState<string | null>(null);
+  const stackRef = useRef<HTMLDivElement | null>(null);
+  const isPinnedRef = useRef(true);
+
+  const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
+
+  // Avatar merging: a mergeable assistant/system row whose immediately
+  // preceding render item is a mergeable single from the same agent hides its
+  // repeated avatar + name. Activity blocks, user prompts, errors and hooks
+  // all break the run.
+  const continuationIds = useMemo(() => {
+    const set = new Set<string>();
+    let prevName: string | null = null;
+    for (const item of renderItems) {
+      if (item.type === "single" && isMergeable(item.message)) {
+        const name = mergeName(item.message);
+        if (prevName === name) {
+          set.add(item.message.id);
+        }
+        prevName = name;
+      } else {
+        prevName = null;
+      }
+    }
+    return set;
+  }, [renderItems]);
+
+  // Last assistant/system message that is still streaming — gets the live
+  // left-to-right highlight sweep.
+  const liveStreamingId = useMemo(() => {
+    for (let i = messages.length - 1; i >= 0; i--) {
+      const m = messages[i];
+      if (m.streaming && m.role !== "user") return m.id;
+    }
+    return null;
+  }, [messages]);
+
+  // Per-message timing. start = createdAt; end is stamped the first time a
+  // message is observed no longer streaming. A 1s tick drives live re-render
+  // while anything is streaming so running timers advance.
+  const timingRef = useRef<Map<string, { start: number; end: number | null }>>(new Map());
+  const [, setNow] = useState(0);
+  const anyStreaming = liveStreamingId !== null;
+
+  useEffect(() => {
+    if (!showTiming) return;
+    const map = timingRef.current;
+    for (const m of messages) {
+      if (m.role === "user" || m.kind === "hook") continue;
+      const startMs = m.createdAt ? Date.parse(m.createdAt) : NaN;
+      const existing = map.get(m.id);
+      if (!existing) {
+        map.set(m.id, { start: Number.isNaN(startMs) ? Date.now() : startMs, end: m.streaming ? null : Date.now() });
+      } else if (existing.end === null && !m.streaming) {
+        existing.end = Date.now();
+      }
+    }
+  }, [messages, showTiming]);
+
+  useEffect(() => {
+    if (!showTiming || !anyStreaming) return;
+    const id = window.setInterval(() => setNow((n) => n + 1), 1000);
+    return () => window.clearInterval(id);
+  }, [showTiming, anyStreaming]);
+
+  // Total conversation time: span from the earliest tracked start to the
+  // latest finish, shown only once the turn is idle and at least one message
+  // has completed.
+  const totalElapsed = useMemo(() => {
+    if (!showTiming || anyStreaming) return null;
+    let min = Infinity;
+    let max = -Infinity;
+    for (const m of messages) {
+      const entry = timingRef.current.get(m.id);
+      if (!entry || entry.end === null) continue;
+      if (entry.start < min) min = entry.start;
+      if (entry.end > max) max = entry.end;
+    }
+    if (min === Infinity || max <= min) return null;
+    return max - min;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [messages, showTiming, anyStreaming]);
+
+  const elapsedLabel = (message: ChatMessage): string | null => {
+    if (!showTiming) return null;
+    const entry = timingRef.current.get(message.id);
+    if (!entry) return null;
+    const end = entry.end ?? Date.now();
+    return formatElapsed(end - entry.start);
+  };
+
+  useEffect(() => {
+    if (!autoScroll) {
+      return;
+    }
+    const node = stackRef.current;
+    if (!node || !isPinnedRef.current) {
+      return;
+    }
+    node.scrollTop = node.scrollHeight;
+  }, [messages, autoScroll]);
+
+  const handleScroll = () => {
+    const node = stackRef.current;
+    if (!node) {
+      return;
+    }
+    const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
+    isPinnedRef.current = distanceFromBottom < 24;
+  };
+
+  const handleCopy = async (id: string, text: string) => {
+    const markCopied = () => {
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 2000);
+    };
+
+    // Modern Clipboard API only works in secure contexts (https / localhost).
+    // When the app is served over plain http (e.g. deployed on an IP/domain),
+    // navigator.clipboard is undefined, so we fall back to execCommand('copy').
+    try {
+      if (navigator.clipboard && window.isSecureContext) {
+        await navigator.clipboard.writeText(text);
+        markCopied();
+        return;
+      }
+    } catch {
+      // fall through to legacy fallback below
+    }
+
+    try {
+      const textarea = document.createElement("textarea");
+      textarea.value = text;
+      textarea.style.position = "fixed";
+      textarea.style.top = "0";
+      textarea.style.left = "0";
+      textarea.style.width = "1px";
+      textarea.style.height = "1px";
+      textarea.style.padding = "0";
+      textarea.style.border = "none";
+      textarea.style.outline = "none";
+      textarea.style.boxShadow = "none";
+      textarea.style.background = "transparent";
+      textarea.setAttribute("readonly", "");
+      document.body.appendChild(textarea);
+      textarea.select();
+      textarea.setSelectionRange(0, text.length);
+      const succeeded = document.execCommand("copy");
+      document.body.removeChild(textarea);
+      if (succeeded) {
+        markCopied();
+      }
+    } catch {
+      // ignore — copy is best-effort
+    }
+  };
+
+  const copyButtonFor = (message: ChatMessage) => {
+    const isCopied = copiedId === message.id;
+    return (
+      <button
+        className={`message-card__copy ${isCopied ? "is-copied" : ""}`}
+        onClick={(event) => {
+          event.stopPropagation();
+          void handleCopy(message.id, message.content || "");
+        }}
+        title={isCopied ? t("chat.copied") : t("chat.copy")}
+        aria-label={isCopied ? t("chat.copied") : t("chat.aria.copyMessage")}
+        type="button"
+      >
+        {isCopied ? <Check size={12} /> : <Copy size={12} />}
+      </button>
+    );
+  };
+
+  // Circular monogram avatar for an agent. Scales to any agent name; principal
+  // uses the info accent, expert agents the success/green accent. When
+  // `ghost` is set (a continuation row) the avatar is rendered as an invisible
+  // placeholder so the body stays aligned but the monogram isn't repeated.
+  const renderAvatar = (agent: string | undefined, isExpert: boolean, ghost = false) => {
+    const name = agent || "principal";
+    const initial = name.charAt(0).toUpperCase() || "·";
+    if (ghost) {
+      return <div className="message-avatar message-avatar--ghost" aria-hidden="true" />;
+    }
+    return (
+      <div
+        className={`message-avatar ${isExpert ? "message-avatar--expert" : ""}`}
+        aria-hidden="true"
+        title={name}
+      >
+        {initial}
+      </div>
+    );
+  };
+
+  // A standalone message: user prompts (right-aligned bubble), every assistant
+  // text reply from Principal or Expert agents (borderless row with avatar +
+  // name), errors, and hook diagnostics. Only reasoning and tool calls/results
+  // fold into activity blocks via buildRenderItems().
+  const renderSingle = (message: ChatMessage, isContinuation = false) => {
+    // 修正6 — new-UI kinds render via their dedicated components.
+    if (message.kind === "system_message" && message.systemMessage) {
+      return <SystemMessageBubble key={message.id} view={message.systemMessage} />;
+    }
+    if (message.kind === "ask_user" && message.askUser) {
+      return (
+        <AskUserCard
+          key={message.id}
+          view={message.askUser}
+          onSubmit={(requestId, answer) => onAskUserSubmit?.(requestId, answer)}
+        />
+      );
+    }
+    if (message.kind === "auto_retry" && message.autoRetry) {
+      return (
+        <AutoRetryIndicator
+          key={message.id}
+          view={message.autoRetry}
+          onCancel={() => onRetryCancel?.()}
+        />
+      );
+    }
+
+    if (message.kind === "hook") {
+      const levelIcon =
+        message.hookLevel === "error" ? "❌" :
+        message.hookLevel === "warning" ? "⚠️" :
+        message.hookLevel === "debug" ? "·" :
+        "🪝";
+      return (
+        <div
+          className={`message-hook message-hook--${message.hookLevel ?? "info"}`}
+          key={message.id}
+        >
+          <details>
+            <summary>
+              <span className="message-hook__label">
+                {levelIcon} hook · {message.hookFamily ?? "?"} · {message.hookPhase ?? "?"}
+                {message.agent ? ` · ${message.agent}` : ""}
+              </span>
+              <span className="message-hook__text">{message.content}</span>
+            </summary>
+            {message.hookData && Object.keys(message.hookData).length > 0 ? (
+              <pre>{JSON.stringify(message.hookData, null, 2)}</pre>
+            ) : null}
+          </details>
+        </div>
+      );
+    }
+
+    if (message.role === "user") {
+      return (
+        <div className="message-row message-row--user" key={message.id}>
+          <div className="message-bubble">
+            {message.content || (message.streaming ? t("chat.generating") : "")}
+          </div>
+          <div className="message-row__user-actions">{copyButtonFor(message)}</div>
+        </div>
+      );
+    }
+
+    const isExpert = message.role === "assistant" && !!message.agent && message.agent !== "principal";
+    const displayName = message.agent || (message.role === "system" ? "system" : "principal");
+    const isLive = message.id === liveStreamingId;
+    const timing = elapsedLabel(message);
+    const content = message.kind === "error" ? (
+      <p className="message-card__content--plain message-row__error">{message.content || (message.streaming ? t("chat.generating") : "")}</p>
+    ) : (
+      <MarkdownMessage content={message.content || (message.streaming ? t("chat.generating") : "")} />
+    );
+    return (
+      <div
+        className={`message-row message-row--${message.role} ${isExpert ? "message-row--expert" : ""} ${isContinuation ? "message-row--continuation" : ""} ${isLive ? "message-row--live" : ""}`}
+        key={message.id}
+      >
+        {renderAvatar(displayName, isExpert, isContinuation)}
+        <div className="message-row__body">
+          {isContinuation ? null : (
+            <div className="message-row__head">
+              <span className={`message-row__name ${isExpert ? "message-row__name--expert" : ""}`}>
+                {displayName}
+              </span>
+              {timing ? <span className="message-row__timer">· {timing}</span> : null}
+              {message.streaming ? <span className="message-row__streaming">{t("chat.streaming")}</span> : null}
+              {copyButtonFor(message)}
+            </div>
+          )}
+          {content}
+        </div>
+      </div>
+    );
+  };
+
+  // One folded step inside an activity block (reasoning, tool call/result, or
+  // intermediate assistant text).
+  const renderActivityStep = (step: ChatMessage) => {
+    const isExpert = !!step.agent && step.agent !== "principal";
+    if (step.kind === "tool") {
+      return (
+        <div className="activity-step" key={step.id}>
+          <details>
+            <summary>
+              {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
+              {step.content || t("chat.toolPrefix", { name: step.toolName || "tool" })}
+            </summary>
+            {step.toolInput !== undefined && step.toolInput !== "" ? <pre>{JSON.stringify(step.toolInput, null, 2)}</pre> : null}
+            {step.toolResult !== undefined ? <pre>{JSON.stringify(step.toolResult, null, 2)}</pre> : null}
+          </details>
+        </div>
+      );
+    }
+    if (step.kind === "thinking") {
+      return (
+        <div className="activity-step" key={step.id}>
+          <p className="message-card__content--plain">{step.reasoning || step.content}</p>
+        </div>
+      );
+    }
+    return (
+      <div className="activity-step" key={step.id}>
+        {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
+        <MarkdownMessage content={step.content || (step.streaming ? t("chat.generating") : "")} />
+      </div>
+    );
+  };
+
+  // Collapsed by default; while streaming the summary shows a live one-line
+  // preview of the latest step instead of a step count.
+  const activitySubtitle = (steps: ChatMessage[], streaming: boolean) => {
+    if (!streaming) return t("chat.thinkingSteps", { count: steps.length });
+    const last = steps[steps.length - 1];
+    if (last?.kind === "tool") return t("chat.toolCall", { name: last.toolName || "tool" });
+    const text = (last?.reasoning || last?.content || "").trim();
+    if (text) return text.length > 80 ? `${text.slice(0, 80)}…` : text;
+    return t("chat.thinking");
+  };
+
+  return (
+    <div
+      className={`message-stack ${className ?? ""}`}
+      aria-label={ariaLabel ?? t("chat.aria.messages")}
+      onScroll={handleScroll}
+      ref={stackRef}
+    >
+      {showToolbarCount ? (
+        <div className="message-stack__toolbar">
+          <span>{t("chat.messageCount", { count: messages.length })}</span>
+        </div>
+      ) : null}
+      {renderItems.map((item) =>
+        item.type === "single" ? (
+          renderSingle(item.message, continuationIds.has(item.message.id))
+        ) : (
+          <div className="activity-block" key={item.id}>
+            <details>
+              <summary className="activity-summary" aria-label={t("chat.aria.expandThinking")}>
+                {item.streaming ? <span className="activity-summary__dot" /> : null}
+                <ChevronDown size={14} className="activity-summary__chevron" aria-hidden="true" />
+                <span className="activity-summary__subtitle">
+                  {activitySubtitle(item.steps, item.streaming)}
+                </span>
+              </summary>
+              <div className="activity-steps">
+                {item.steps.map(renderActivityStep)}
+              </div>
+            </details>
+          </div>
+        ),
+      )}
+      {totalElapsed !== null ? (
+        <div className="message-stack__total" role="status">
+          {t("chat.totalTime", { time: formatElapsed(totalElapsed) })}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// Memoized so unrelated parent re-renders (slash menu toggling, model select
+// updates, agent-running toast state) don't traverse the whole message list.
+// Callers pass a `messages` array that's stable across re-renders thanks to
+// useMemo upstream, so default shallow compare is correct.
+export const MessageStream = memo(MessageStreamImpl);

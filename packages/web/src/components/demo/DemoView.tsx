@@ -1,0 +1,668 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { DragEvent } from "react";
+import { FileUp, MessageSquare, Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
+import type { ChatMessage, TraceNode, WebSocketEvent } from "../../contracts/backend";
+import { normalizeWebSocketEvent } from "../../contracts/backend";
+import { DemoBundle, DemoFile } from "../../contracts/demoBundle";
+import { reduceMessagesForEvent } from "../../contexts/messageReducer";
+import { useSandbox } from "../../contexts/SandboxContext";
+import { useSessions } from "../../contexts/SessionContext";
+import { useT } from "../../i18n/useT";
+import { downloadBlob } from "../../utils/download";
+import { MessageStream } from "../chat/MessageStream";
+import { FilePreviewView, PreviewSource } from "../files/FilePreviewView";
+import { getPreviewKind, isMarkdown } from "../files/filePreview";
+import { IconButton } from "../primitives/IconButton";
+import { TraceGraphView } from "../session/TraceGraphView";
+import { buildDemoBundle, parseDemoBundle } from "./demoBundle";
+import { getCachedBundle, setCachedBundle } from "./demoCache";
+import { DemoFileTree } from "./DemoFileTree";
+import { TraceNodeModal } from "./TraceNodeModal";
+
+const TICK_MS = 60;
+/** Full timeline plays in this many ms at 1× regardless of real span. */
+const FULL_PLAY_MS = 8000;
+const SPEEDS = [1, 2, 4, 8];
+
+type DecodedFile = { source: PreviewSource; objectUrl?: string };
+
+function base64ToBlob(b64: string, mime: string): Blob {
+  const binary = atob(b64);
+  const bytes = new Uint8Array(binary.length);
+  for (let i = 0; i < binary.length; i += 1) {
+    bytes[i] = binary.charCodeAt(i);
+  }
+  return new Blob([bytes], { type: mime });
+}
+
+function basename(path: string): string {
+  return path.split("/").pop() || path;
+}
+
+/**
+ * Keep only the user-facing dialogue backbone for the demo's left panel.
+ *
+ * This is a multi-agent system: the live EventRouter
+ * (agent_runtime/event_router.py) forwards only the principal (PI) agent's
+ * messages to the frontend, while worker agents (engineer / trace /
+ * experimentalist) run internally. The demo bundle, however, captures *all*
+ * raw events, so a naive "any assistant text" filter floods the panel with
+ * internal worker narration ("Recorded as T001…", engineer step notes).
+ *
+ * Mirror the live behavior: keep the user's prompts and the principal's
+ * substantive text replies — the seed prompt, the key exchanges, and the final
+ * result — and drop everything else (worker narration, reasoning, tool
+ * calls/results, hook diagnostics, NO-RENDER placeholders, empties). The
+ * reasoning graph on the right tells the internal story.
+ */
+function isConversationalMessage(m: ChatMessage): boolean {
+  if (m.role === "user") {
+    return !!m.content?.trim();
+  }
+  const isPlainText = m.kind === "text" || m.kind === undefined;
+  if (!isPlainText || !m.content?.trim()) {
+    return false;
+  }
+  // Only the principal agent is user-facing. Missing agent → treat as principal
+  // for resilience against older bundles where attribution was not recorded.
+  return m.agent === undefined || m.agent === "principal";
+}
+
+const REPORT_NAME = /report|summary|总结|conclusion|readme/i;
+
+/** Pick a sensible default file to show first: prefer report/summary-type. */
+function pickDefaultFile(files: DemoFile[]): string | null {
+  if (files.length === 0) {
+    return null;
+  }
+  const usable = files.filter((f) => !f.truncated);
+  const pool = usable.length > 0 ? usable : files;
+  const byName = pool.find((f) => REPORT_NAME.test(basename(f.path)));
+  if (byName) {
+    return byName.path;
+  }
+  const md = pool.find((f) => isMarkdown(f.path));
+  if (md) {
+    return md.path;
+  }
+  return pool[0].path;
+}
+
+
+export function DemoView() {
+  const t = useT();
+  const { sessions, currentSession, messages } = useSessions();
+  const { currentSandbox } = useSandbox();
+
+  const [bundle, setBundle] = useState<DemoBundle | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [progress, setProgress] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+
+  const [cursor, setCursor] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [speed, setSpeed] = useState(1);
+  const [zoom, setZoom] = useState(1);
+  const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
+  const [pinnedFile, setPinnedFile] = useState<string | null>(null);
+  const [modalNodeId, setModalNodeId] = useState<string | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const decodedRef = useRef<Map<string, DecodedFile>>(new Map());
+
+  // Decode embedded files into preview sources (lazy blob URLs for binaries).
+  const decoded = useMemo(() => {
+    // Revoke URLs from the previous bundle.
+    decodedRef.current.forEach((d) => d.objectUrl && URL.revokeObjectURL(d.objectUrl));
+    const map = new Map<string, DecodedFile>();
+    for (const file of bundle?.files ?? []) {
+      if (file.truncated || file.data === undefined) {
+        map.set(file.path, {
+          source: file.reason === "unreadable"
+            ? { kind: "unreadable", detail: file.detail }
+            : { kind: "tooLarge" },
+        });
+        continue;
+      }
+      const kind = getPreviewKind(basename(file.path));
+      if (kind === "text") {
+        map.set(file.path, { source: { kind: "text", text: file.data } });
+      } else if (kind === "image" || kind === "pdf") {
+        const url = URL.createObjectURL(base64ToBlob(file.data, file.mime));
+        map.set(file.path, { source: { kind, blobUrl: url }, objectUrl: url });
+      } else {
+        map.set(file.path, { source: { kind: "download" } });
+      }
+    }
+    decodedRef.current = map;
+    return map;
+  }, [bundle]);
+
+  useEffect(() => () => {
+    decodedRef.current.forEach((d) => d.objectUrl && URL.revokeObjectURL(d.objectUrl));
+  }, []);
+
+  const nodes = bundle?.trace.nodes ?? [];
+
+  // Build the master timeline (ms). Timestamped bundles use real event/node
+  // times; ordered (fallback) bundles synthesize an index-based timeline.
+  const timeline = useMemo(() => {
+    if (!bundle) {
+      return { t0: 0, t1: 1, sorted: [] as { ev: WebSocketEvent; ms: number }[], nodeMs: [] as number[], ordered: [] as ChatMessage[] };
+    }
+    if (bundle.timeline === "timestamped") {
+      let last = 0;
+      const sorted = [...(bundle.events ?? [])]
+        .map((ev) => {
+          // Bundles produced by the real backend store raw snake_case events
+          // (agent_name, message_id). The live path camelizes via SSEContext
+          // before reducing; mirror that here so the reducer sees agentName /
+          // messageId and agent attribution survives the replay. camelizeKey is
+          // a no-op on already-camelCase keys (e.g. mock bundles), so this is
+          // safe for both shapes.
+          const normalized = normalizeWebSocketEvent(ev) as WebSocketEvent;
+          const parsed = normalized._ts ? Date.parse(String(normalized._ts)) : NaN;
+          const ms = Number.isFinite(parsed) ? parsed : last;
+          last = ms;
+          return { ev: normalized, ms };
+        })
+        .sort((a, b) => a.ms - b.ms);
+      const all = sorted.map((s) => s.ms).filter(Number.isFinite);
+      const t0 = all.length ? Math.min(...all) : 0;
+      const t1 = all.length ? Math.max(...all) : 1;
+      const span = t1 > t0 ? t1 - t0 : 1;
+      // Reveal trace nodes evenly across the timeline in creation (array) order.
+      // Bundle node timestamps are unreliable — often missing, equal, or
+      // clustered — which previously made the graph pop in all at once or out of
+      // order (filter-≤-cursor count diverged from the array slice). Even
+      // spacing keeps nodeMs monotonic in array order, so nodes stream in one by
+      // one, in order, paced across the replay.
+      const nodeMs = nodes.map((_, j) =>
+        nodes.length <= 1 ? t1 : t0 + (j / (nodes.length - 1)) * span,
+      );
+      return { t0, t1: t1 > t0 ? t1 : t0 + 1, sorted, nodeMs, ordered: [] as ChatMessage[] };
+    }
+    const ordered = bundle.messages ?? [];
+    const t1 = Math.max(1, ordered.length - 1, nodes.length - 1);
+    const nodeMs = nodes.map((_, j) => (nodes.length <= 1 ? 0 : (j / (nodes.length - 1)) * t1));
+    return { t0: 0, t1, sorted: [], nodeMs, ordered };
+  }, [bundle, nodes]);
+
+  // Reset transport on new bundle (start fully revealed, paused, default file).
+  useEffect(() => {
+    if (!bundle) {
+      return;
+    }
+    setCursor(timeline.t1);
+    setIsPlaying(false);
+    setSelectedNodeId(null);
+    setModalNodeId(null);
+    setPinnedFile(pickDefaultFile(bundle.files));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [bundle]);
+
+  // Play loop.
+  useEffect(() => {
+    if (!isPlaying || !bundle) {
+      return;
+    }
+    const span = timeline.t1 - timeline.t0;
+    const perTick = (span * TICK_MS) / FULL_PLAY_MS * speed;
+    const id = window.setInterval(() => {
+      setCursor((current) => {
+        const next = current + perTick;
+        if (next >= timeline.t1) {
+          setIsPlaying(false);
+          return timeline.t1;
+        }
+        return next;
+      });
+    }, TICK_MS);
+    return () => window.clearInterval(id);
+  }, [isPlaying, bundle, timeline, speed]);
+
+  const revealedMessages = useMemo<ChatMessage[]>(() => {
+    if (!bundle) {
+      return [];
+    }
+    if (bundle.timeline === "timestamped") {
+      let acc: ChatMessage[] = [];
+      for (const { ev, ms } of timeline.sorted) {
+        if (ms > cursor) {
+          break;
+        }
+        acc = reduceMessagesForEvent(acc, ev);
+      }
+      return acc;
+    }
+    const count = Math.max(0, Math.min(timeline.ordered.length, Math.floor(cursor) + 1));
+    return timeline.ordered.slice(0, count);
+  }, [bundle, timeline, cursor]);
+
+  // The left panel shows the conversation backbone — the actual dialogue: the
+  // seed prompt and every substantive text reply. Reasoning, tool calls, tool
+  // results, hook notes and empty placeholders are dropped (the reasoning graph
+  // on the right tells that story). This is deliberately a content predicate,
+  // not a pin-to-two-messages filter: the latter relied on exact id-matching
+  // across two independent event folds and silently emptied the panel whenever a
+  // MESSAGES_SNAPSHOT reshuffled ids or no clean seed/summary message existed.
+  const condensedMessages = useMemo<ChatMessage[]>(
+    () => revealedMessages.filter(isConversationalMessage),
+    [revealedMessages],
+  );
+
+  const revealedNodes = useMemo<TraceNode[]>(() => {
+    const count = timeline.nodeMs.filter((ms) => ms <= cursor).length;
+    const slice = nodes.slice(0, count);
+    const visibleIds = new Set(slice.map((n) => n.id));
+    return slice.map((node) => ({
+      ...node,
+      parentIds: node.parentIds.filter((id) => visibleIds.has(id)),
+      parents: node.parents.filter((p) => visibleIds.has(p.id)),
+      childIds: node.childIds.filter((id) => visibleIds.has(id)),
+    }));
+  }, [nodes, timeline, cursor]);
+
+  const selectedNode = useMemo<TraceNode | null>(() => {
+    if (revealedNodes.length === 0) {
+      return null;
+    }
+    return revealedNodes.find((n) => n.id === selectedNodeId) ?? revealedNodes[revealedNodes.length - 1];
+  }, [revealedNodes, selectedNodeId]);
+
+  // Files the currently-selected node produced — highlighted in the file tree.
+  const highlightedPaths = useMemo<Set<string>>(
+    () => new Set((selectedNode?.artifacts ?? []).map((a) => a.path)),
+    [selectedNode],
+  );
+
+  // Which file the middle preview shows: explicit pin > latest produced artifact
+  // up to the cursor > the report/summary default.
+  const currentArtifactPath = useMemo<string | null>(() => {
+    if (pinnedFile) {
+      return pinnedFile;
+    }
+    for (let i = revealedNodes.length - 1; i >= 0; i -= 1) {
+      const artifact = revealedNodes[i].artifacts?.[0];
+      if (artifact?.path) {
+        return artifact.path;
+      }
+    }
+    return pickDefaultFile(bundle?.files ?? []);
+  }, [revealedNodes, pinnedFile, bundle]);
+
+  const previewFile = bundle?.files.find((f) => f.path === currentArtifactPath) ?? null;
+  const previewSource: PreviewSource | null = currentArtifactPath
+    ? decoded.get(currentArtifactPath)?.source ?? { kind: "tooLarge" }
+    : null;
+
+  const modalNode = useMemo<TraceNode | null>(
+    () => (modalNodeId ? nodes.find((n) => n.id === modalNodeId) ?? null : null),
+    [modalNodeId, nodes],
+  );
+
+  // ----- Transport -----
+  const stepIndex = revealedNodes.length; // # nodes revealed at the cursor
+
+  const togglePlay = () => {
+    if (!bundle) {
+      return;
+    }
+    if (cursor >= timeline.t1) {
+      setCursor(timeline.t0);
+    }
+    setPinnedFile(null);
+    setIsPlaying((p) => !p);
+  };
+
+  const restart = () => {
+    setIsPlaying(false);
+    setPinnedFile(null);
+    setCursor(timeline.t0);
+  };
+
+  const stepTo = (nodeIdx: number) => {
+    // Reveal nodes [0..nodeIdx]; cursor lands on that node's time.
+    setIsPlaying(false);
+    setPinnedFile(null);
+    if (nodeIdx < 0) {
+      setCursor(timeline.t0);
+    } else {
+      setCursor(timeline.nodeMs[nodeIdx] ?? timeline.t1);
+    }
+    const node = nodes[Math.max(0, Math.min(nodeIdx, nodes.length - 1))];
+    if (node) {
+      setSelectedNodeId(node.id);
+    }
+  };
+
+  const stepNext = () => {
+    if (stepIndex >= nodes.length) {
+      return;
+    }
+    stepTo(stepIndex); // reveal one more node
+  };
+
+  const stepPrev = () => {
+    if (stepIndex <= 1) {
+      setCursor(timeline.t0);
+      setIsPlaying(false);
+      setPinnedFile(null);
+      return;
+    }
+    stepTo(stepIndex - 2);
+  };
+
+  const scrub = (value: number) => {
+    setIsPlaying(false);
+    setPinnedFile(null);
+    setCursor(value);
+  };
+
+  const selectFile = (path: string) => {
+    setPinnedFile(path);
+  };
+
+  const onNodeClick = (id: string) => {
+    setSelectedNodeId(id);
+    setModalNodeId(id);
+  };
+
+  const handlePackSession = async (sessionId: string, title: string, updatedAt?: string) => {
+    // Page-lifetime cache: re-opening the same (unchanged) session is instant
+    // and issues no requests.
+    const cached = getCachedBundle(sessionId, updatedAt);
+    if (cached) {
+      setError(null);
+      setBundle(cached);
+      return;
+    }
+    // A running sandbox lets us embed produced files; without one we still pack
+    // the conversation, trace and events (all host-persisted) and mark the
+    // files unreadable. So the export is never hard-blocked on the sandbox.
+    const runningSandbox =
+      currentSandbox && currentSandbox.status === "running" ? currentSandbox : null;
+    setBusy(true);
+    setError(null);
+    setProgress(t("demo.packing"));
+    try {
+      const built = await buildDemoBundle({
+        session: {
+          id: sessionId,
+          title,
+          createdAt: currentSession?.id === sessionId ? currentSession.createdAt : undefined,
+          updatedAt: updatedAt ?? (currentSession?.id === sessionId ? currentSession.updatedAt : undefined),
+        },
+        sandboxId: runningSandbox?.id,
+        filesUnavailableDetail: runningSandbox ? undefined : t("demo.files.noSandbox"),
+        fallbackMessages: currentSession?.id === sessionId ? messages : undefined,
+        onProgress: setProgress,
+      });
+      setCachedBundle(sessionId, updatedAt, built);
+      setBundle(built);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("demo.error.build"));
+    } finally {
+      setBusy(false);
+      setProgress("");
+    }
+  };
+
+  const handleImportFile = async (file: File) => {
+    setBusy(true);
+    setError(null);
+    try {
+      const parsed = parseDemoBundle(await file.text());
+      setBundle(parsed);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("demo.error.parse"));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleDrop = (e: DragEvent) => {
+    e.preventDefault();
+    setDragOver(false);
+    if (busy) {
+      return;
+    }
+    const file = e.dataTransfer.files?.[0];
+    if (file) {
+      void handleImportFile(file);
+    }
+  };
+
+  const handleExport = () => {
+    if (!bundle) {
+      return;
+    }
+    const blob = new Blob([JSON.stringify(bundle)], { type: "application/json" });
+    downloadBlob(blob, `${bundle.session.title || "session"}-demo.json`);
+  };
+
+  // ----- Landing -----
+  if (!bundle) {
+    return (
+      <main className="demo-view" aria-label={t("demo.title")}>
+        <div className="demo-landing">
+          <header className="demo-landing__header">
+            <span className="workspace-panel__eyebrow">{t("demo.eyebrow")}</span>
+            <h1>{t("demo.landing.heading")}</h1>
+            <p>{t("demo.landing.subtitle")}</p>
+          </header>
+          {error ? <p className="demo-landing__error">{error}</p> : null}
+          <div className="demo-landing__cards">
+            <section className="demo-card">
+              <div className="demo-card__head">
+                <MessageSquare size={16} />
+                <h2>{t("demo.landing.fromSession.title")}</h2>
+              </div>
+              <p>{t("demo.landing.fromSession.desc")}</p>
+              <div className="demo-card__sessions">
+                {sessions.length === 0 ? (
+                  <p className="demo-card__empty">{t("demo.landing.fromSession.empty")}</p>
+                ) : (
+                  sessions.map((session) => (
+                    <button
+                      key={session.id}
+                      className="demo-session-row"
+                      disabled={busy}
+                      onClick={() => void handlePackSession(session.id, session.title, session.updatedAt)}
+                      type="button"
+                    >
+                      <span>{session.title}</span>
+                      <small>{new Date(session.updatedAt).toLocaleDateString()}</small>
+                    </button>
+                  ))
+                )}
+              </div>
+            </section>
+            <section className="demo-card">
+              <div className="demo-card__head">
+                <FileUp size={16} />
+                <h2>{t("demo.landing.import.title")}</h2>
+              </div>
+              <p>{t("demo.landing.import.desc")}</p>
+              <button
+                className={`demo-dropzone ${dragOver ? "is-dragover" : ""}`}
+                disabled={busy}
+                onClick={() => fileInputRef.current?.click()}
+                onDragOver={(e) => {
+                  e.preventDefault();
+                  if (!busy) {
+                    setDragOver(true);
+                  }
+                }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={handleDrop}
+                type="button"
+              >
+                <Upload size={20} className="demo-dropzone__icon" />
+                <span className="demo-dropzone__primary">{t("demo.landing.import.button")}</span>
+                <span className="demo-dropzone__hint">{t("demo.landing.import.dropHint")}</span>
+              </button>
+              <input
+                ref={fileInputRef}
+                type="file"
+                accept="application/json,.json"
+                style={{ display: "none" }}
+                onChange={(e) => {
+                  const file = e.target.files?.[0];
+                  if (file) {
+                    void handleImportFile(file);
+                  }
+                  e.target.value = "";
+                }}
+              />
+            </section>
+          </div>
+          {busy ? <p className="demo-landing__progress">{progress || t("demo.packing")}</p> : null}
+        </div>
+      </main>
+    );
+  }
+
+  // ----- Player -----
+  return (
+    <main className="demo-view" aria-label={t("demo.title")}>
+      <header className="demo-header">
+        <div className="demo-header__title">
+          <span className="workspace-panel__eyebrow">{t("demo.eyebrow")}</span>
+          <h1>{bundle.session.title}</h1>
+          <span className="demo-header__meta">
+            {t("demo.meta.exported", { time: new Date(bundle.exportedAt).toLocaleString() })}
+          </span>
+        </div>
+        <div className="demo-header__actions">
+          <button className="demo-export" onClick={handleExport} type="button">
+            <Upload size={14} />
+            <span>{t("demo.exportButton")}</span>
+          </button>
+          <button className="demo-reselect" onClick={() => setBundle(null)} type="button">
+            {t("demo.reselect")}
+          </button>
+        </div>
+      </header>
+
+      <div className="demo-layout">
+        <section className="demo-panel demo-panel--chat">
+          <header className="demo-panel__head">
+            <h2>{t("demo.conversation.title")}</h2>
+          </header>
+          {condensedMessages.length === 0 ? (
+            <p className="demo-panel__empty">{t("demo.conversation.empty")}</p>
+          ) : (
+            <MessageStream messages={condensedMessages} showToolbarCount={false} className="demo-message-stream" />
+          )}
+        </section>
+
+        <section className="demo-panel demo-panel--preview">
+          <header className="demo-panel__head demo-preview-head">
+            <h2>{t("demo.files.title")}</h2>
+            {previewFile ? (
+              <span className="demo-preview-name" title={previewFile.path}>
+                {basename(previewFile.path)}
+                {previewFile.truncated ? <small> · {t("demo.files.skipped")}</small> : null}
+              </span>
+            ) : null}
+          </header>
+          <div className="demo-preview-body">
+            {previewSource && previewFile ? (
+              <FilePreviewView
+                name={basename(previewFile.path)}
+                source={previewSource}
+                renderMarkdown={isMarkdown(previewFile.path)}
+                t={t}
+              />
+            ) : (
+              <p className="demo-panel__empty">{bundle.files.length === 0 ? t("demo.files.empty") : t("demo.files.none")}</p>
+            )}
+          </div>
+        </section>
+
+        <div className="demo-right">
+          <section className="demo-panel demo-panel--trace">
+            <header className="demo-panel__head">
+              <h2>{t("demo.trace.title")}</h2>
+            </header>
+            <div className="demo-trace-map">
+              <TraceGraphView
+                nodes={revealedNodes}
+                direction="LR"
+                selectedNodeId={selectedNode?.id ?? null}
+                onSelectNode={onNodeClick}
+                zoom={zoom}
+                onZoomChange={setZoom}
+                fitToken={revealedNodes.length}
+              />
+            </div>
+            <div className="demo-transport">
+              <IconButton label={t("demo.transport.prev")} onClick={stepPrev} disabled={stepIndex <= 1}>
+                <SkipBack size={14} />
+              </IconButton>
+              <IconButton
+                label={isPlaying ? t("demo.transport.pause") : t("demo.transport.play")}
+                onClick={togglePlay}
+              >
+                {isPlaying ? <Pause size={15} /> : <Play size={15} />}
+              </IconButton>
+              <IconButton label={t("demo.transport.next")} onClick={stepNext} disabled={stepIndex >= nodes.length}>
+                <SkipForward size={14} />
+              </IconButton>
+              <IconButton label={t("demo.transport.restart")} onClick={restart}>
+                <RotateCcw size={13} />
+              </IconButton>
+              <input
+                className="demo-transport__slider"
+                type="range"
+                min={timeline.t0}
+                max={timeline.t1}
+                step={(timeline.t1 - timeline.t0) / 1000 || 1}
+                value={cursor}
+                onChange={(e) => scrub(Number(e.target.value))}
+                aria-label={t("demo.transport.play")}
+              />
+              <span className="demo-transport__step">{t("demo.transport.step", { index: stepIndex, total: nodes.length })}</span>
+              <div className="demo-transport__speeds" aria-label={t("demo.transport.speed")}>
+                {SPEEDS.map((s) => (
+                  <button key={s} className={speed === s ? "is-active" : ""} onClick={() => setSpeed(s)} type="button">
+                    {s}×
+                  </button>
+                ))}
+              </div>
+            </div>
+          </section>
+
+          <section className="demo-panel demo-panel--tree">
+            <header className="demo-panel__head">
+              <h2>{t("demo.tree.title")}</h2>
+            </header>
+            <div className="demo-tree-body">
+              <DemoFileTree
+                files={bundle.files}
+                highlightedPaths={highlightedPaths}
+                activePath={currentArtifactPath}
+                onSelect={selectFile}
+                emptyLabel={t("demo.files.empty")}
+                skippedLabel={t("demo.files.skipped")}
+                unreadableLabel={t("demo.files.unreadable")}
+              />
+            </div>
+          </section>
+        </div>
+      </div>
+
+      <TraceNodeModal
+        node={modalNode}
+        onClose={() => setModalNodeId(null)}
+        onSelectNode={(id) => { setSelectedNodeId(id); setModalNodeId(id); }}
+        onSelectArtifact={selectFile}
+        activeArtifactPath={currentArtifactPath}
+        closeLabel={t("demo.node.modalClose")}
+        t={t}
+      />
+    </main>
+  );
+}

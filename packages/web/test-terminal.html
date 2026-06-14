@@ -1,0 +1,154 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Terminal WebSocket Test</title>
+    <style>
+        body { font-family: monospace; padding: 20px; }
+        #output {
+            background: #000;
+            color: #0f0;
+            padding: 10px;
+            height: 400px;
+            overflow-y: auto;
+            white-space: pre-wrap;
+            margin: 10px 0;
+        }
+        input { width: 80%; padding: 5px; }
+        button { padding: 5px 15px; }
+        .status { padding: 5px; margin: 5px 0; }
+        .connected { background: #0f0; color: #000; }
+        .disconnected { background: #f00; color: #fff; }
+        .connecting { background: #ff0; color: #000; }
+    </style>
+</head>
+<body>
+    <h1>Terminal WebSocket Test</h1>
+
+    <div>
+        <label>Sandbox ID: <input type="text" id="sandboxId" value="43062af7-4077-4d14-8a0a-db73c3366b19" style="width: 300px;"></label>
+    </div>
+    <div>
+        <label>Token: <input type="text" id="token" value="" style="width: 500px;"></label>
+    </div>
+    <div>
+        <button onclick="connect()">Connect</button>
+        <button onclick="disconnect()">Disconnect</button>
+        <span id="status" class="status disconnected">Disconnected</span>
+    </div>
+
+    <div id="output"></div>
+
+    <div>
+        <input type="text" id="input" placeholder="Enter command..." onkeypress="if(event.key==='Enter') sendCommand()">
+        <button onclick="sendCommand()">Send</button>
+    </div>
+
+    <div>
+        <h3>Debug Log:</h3>
+        <div id="debug" style="background: #eee; padding: 10px; height: 200px; overflow-y: auto;"></div>
+    </div>
+
+    <script>
+        let ws = null;
+        const output = document.getElementById('output');
+        const debug = document.getElementById('debug');
+        const status = document.getElementById('status');
+
+        function log(msg) {
+            const time = new Date().toISOString().substr(11, 12);
+            debug.innerHTML += `[${time}] ${msg}\n`;
+            debug.scrollTop = debug.scrollHeight;
+            console.log(msg);
+        }
+
+        function updateStatus(state, text) {
+            status.className = `status ${state}`;
+            status.textContent = text;
+        }
+
+        function connect() {
+            const sandboxId = document.getElementById('sandboxId').value;
+            const token = document.getElementById('token').value;
+
+            if (!token) {
+                alert('Please enter token');
+                return;
+            }
+
+            if (ws) {
+                log('Closing existing connection...');
+                ws.close();
+            }
+
+            const cols = 80;
+            const rows = 24;
+            const url = `ws://${window.location.hostname}:8000/api/sandbox/${sandboxId}/terminal?token=${encodeURIComponent(token)}&cols=${cols}&rows=${rows}`;
+
+            log(`Connecting to: ${url}`);
+            updateStatus('connecting', 'Connecting...');
+
+            ws = new WebSocket(url);
+
+            ws.onopen = () => {
+                log('✅ WebSocket connected');
+                updateStatus('connected', 'Connected');
+            };
+
+            ws.onmessage = async (event) => {
+                let text = '';
+                if (event.data instanceof Blob) {
+                    text = await event.data.text();
+                    log(`📥 Received Blob (${event.data.size} bytes): ${text.substring(0, 50)}...`);
+                } else if (typeof event.data === 'string') {
+                    text = event.data;
+                    log(`📥 Received text: ${text.substring(0, 50)}...`);
+                }
+                output.textContent += text;
+                output.scrollTop = output.scrollHeight;
+            };
+
+            ws.onerror = (error) => {
+                log(`❌ WebSocket error: ${error}`);
+                updateStatus('disconnected', 'Error');
+            };
+
+            ws.onclose = (event) => {
+                log(`🔌 WebSocket closed: code=${event.code}, reason=${event.reason}`);
+                updateStatus('disconnected', 'Disconnected');
+                ws = null;
+            };
+        }
+
+        function disconnect() {
+            if (ws) {
+                log('Disconnecting...');
+                ws.close();
+            }
+        }
+
+        function sendCommand() {
+            const input = document.getElementById('input');
+            const cmd = input.value;
+
+            if (!ws || ws.readyState !== WebSocket.OPEN) {
+                log('❌ WebSocket not connected');
+                return;
+            }
+
+            if (!cmd) return;
+
+            log(`📤 Sending: ${cmd}`);
+            ws.send(cmd + '\n');
+            output.textContent += cmd + '\n';
+            input.value = '';
+        }
+
+        // Auto-fill token from localStorage if available
+        const savedToken = localStorage.getItem('mas_access_token') || localStorage.getItem('token');
+        if (savedToken) {
+            document.getElementById('token').value = savedToken;
+            log('Token loaded from localStorage');
+        }
+    </script>
+</body>
+</html>

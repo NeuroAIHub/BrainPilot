@@ -1,0 +1,30 @@
+# =============================================================================
+# DYNAMIC SANDBOX SKELETON — NOT IMPLEMENTED IN THIS REPO.
+# =============================================================================
+# This file documents how a downstream multi-user repo wires Docker when each
+# user needs an isolated sandbox. In `dynamic` mode the single `main` container
+# is shared by all users and starts one sandbox container PER USER on demand,
+# via the mounted docker.sock + DockerOrchestrator.
+#
+# This repo ships only `static` mode (docker-compose.yml): 1 main + 1 fixed
+# sandbox. The per-user runtime logic, auth, and gateway live in the separate
+# downstream repo. The image build (docker/main, docker/sandbox) is reused
+# UNCHANGED — only the compose file and orchestrator selection differ.
+#
+# To switch a downstream repo to dynamic mode:
+#   1. Mount docker.sock into main (so backend can `docker run` sandboxes).
+#   2. Set BP_ORCHESTRATOR=docker (this is the actual switch; and DO NOT set
+#      BP_RUNTIME_URL — a non-empty value forces the `static` orchestrator).
+#   3. Do NOT define a fixed `sandbox` service; the backend creates them per user.
+#
+# services:
+#   main:
+#     build: { context: ., dockerfile: docker/main/Dockerfile }
+#     image: brainpilot-main:latest
+#     ports: ["${BP_MAIN_PORT:-9001}:${BP_MAIN_PORT:-9001}"]
+#     environment:
+#       - PORT=${BP_MAIN_PORT:-9001}
+#       - BP_ORCHESTRATOR=docker
+#       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+#     volumes:
+#       - /var/run/docker.sock:/var/run/docker.sock

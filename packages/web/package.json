@@ -1,0 +1,44 @@
+{
+  "name": "@brainpilot/web",
+  "version": "0.0.3",
+  "license": "Apache-2.0",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/web"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b && vite build",
+    "dev": "vite",
+    "preview": "vite preview",
+    "test": "vitest run --config vitest.config.ts"
+  },
+  "dependencies": {},
+  "devDependencies": {
+    "@brainpilot/protocol": "^0.0.3",
+    "@fontsource-variable/geist": "^5.2.9",
+    "@fontsource-variable/geist-mono": "^5.2.8",
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^5.0.0",
+    "@xterm/addon-fit": "^0.11.0",
+    "@xterm/xterm": "^6.0.0",
+    "highlight.js": "^11.11.1",
+    "html-to-image": "^1.11.13",
+    "lucide-react": "^0.468.0",
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "remark-gfm": "^4.0.1",
+    "typescript": "^5.6.3",
+    "vite": "^6.0.0"
+  }
+}

@@ -1,0 +1,55 @@
+/**
+ * @brainpilot/runtime — Pi SDK multi-agent orchestration + STATE AUTHORITY.
+ *
+ * Public surface: SessionManager, MasAgent, Mailbox, GraphOfTrace, event
+ * helpers, agent factories, server bootstrap.
+ */
+export const RUNTIME_NAME = "@brainpilot/runtime";
+
+export { SessionManager } from "./session-manager.js";
+export type { SessionManagerOptions } from "./session-manager.js";
+
+export { MasAgent } from "./mas-agent.js";
+export type { AgentStatus, MasAgentOpts } from "./mas-agent.js";
+
+export { Mailbox } from "./mailbox.js";
+export type { MailboxMessage, MsgType } from "./mailbox.js";
+
+export { GraphOfTrace } from "./trace.js";
+export { EventBus } from "./event-bus.js";
+export { ev, newMessageId, newRunId } from "./events.js";
+
+export { MockAgentSession } from "./mock-agent.js";
+export {
+  selectFactory,
+  isMockMode,
+  mockAgentFactory,
+  realAgentFactory,
+} from "./agent-factory.js";
+
+export {
+  allSystemTools,
+  systemToolsForRole,
+  systemToolNamesForRole,
+  builtinToolNamesForRole,
+  AGENT_TOOL_CONFIG,
+  BUILTIN_TOOL_CONFIG,
+} from "./tools/system-tools.js";
+export type { ToolDeps } from "./tools/system-tools.js";
+
+export { createServer, startServer } from "./server.js";
+export type { StartServerOptions } from "./server.js";
+
+export { McpBridge, loadMcpServersConfig, defaultMcpConnect } from "./mcp-bridge.js";
+export type { McpServersConfig, McpServerSpec, McpClientLike, McpConnectFn } from "./mcp-bridge.js";
+
+export type {
+  AgentRole,
+  IAgentSession,
+  AgentSessionFactory,
+  PiAgentEvent,
+  PiAssistantMessageEvent,
+  SystemTool,
+  SystemToolResult,
+  EventListener,
+} from "./types.js";

@@ -1,0 +1,175 @@
+import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
+import { runtimeConfig } from "../config";
+import { WebSocketEvent, normalizeWebSocketEvent } from "../contracts/backend";
+import { getSSEUrl } from "../utils/api";
+import { tg } from "../i18n/translate";
+import { useAuth } from "./AuthContext";
+import { useSandbox } from "./SandboxContext";
+
+type ConnectionStatus = "idle" | "connecting" | "open" | "error";
+
+interface SSEContextValue {
+  /** Open (or reuse) an SSE stream for a session. */
+  connectSession: (sessionId: string) => void;
+  /** Close the SSE stream for a session. */
+  disconnectSession: (sessionId: string) => void;
+  /** Pending event queue per session (drained by consumer). */
+  queueRef: React.RefObject<Map<string, WebSocketEvent[]>>;
+  /** Tick counter — increments when new events arrive. */
+  tick: number;
+  /** Connection status per session. */
+  connections: Map<string, ConnectionStatus>;
+}
+
+const SSEContext = createContext<SSEContextValue | null>(null);
+
+const RECONNECT_BASE_MS = 3000;
+const RECONNECT_MAX_MS = 30000;
+
+interface SessionConn {
+  source: EventSource;
+  reconnectAttempt: number;
+  reconnectTimer: number | null;
+  /** Whether disconnectSession was called — disable auto-reconnect. */
+  manuallyClosed: boolean;
+}
+
+export function SSEProvider({ children }: { children: ReactNode }) {
+  const { token } = useAuth();
+  const { currentSandbox } = useSandbox();
+  const connsRef = useRef<Map<string, SessionConn>>(new Map());
+  const queueRef = useRef<Map<string, WebSocketEvent[]>>(new Map());
+  const [tick, setTick] = useState(0);
+  const [connections, setConnections] = useState<Map<string, ConnectionStatus>>(new Map());
+
+  const setStatus = useCallback((sessionId: string, status: ConnectionStatus) => {
+    setConnections((prev) => {
+      const next = new Map(prev);
+      next.set(sessionId, status);
+      return next;
+    });
+  }, []);
+
+  const openConnection = useCallback((sessionId: string, tokenValue: string) => {
+    if (runtimeConfig.useMockBackend) {
+      setStatus(sessionId, "open");
+      return;
+    }
+    const conn = connsRef.current.get(sessionId);
+    if (conn && !conn.manuallyClosed && conn.source.readyState !== EventSource.CLOSED) {
+      // Already connecting/open — nothing to do.
+      return;
+    }
+
+    console.log(`[SSE] openConnection: ${sessionId}`);
+    setStatus(sessionId, "connecting");
+    const source = new EventSource(getSSEUrl(sessionId, tokenValue));
+
+    const entry: SessionConn = {
+      source,
+      reconnectAttempt: 0,
+      reconnectTimer: null,
+      manuallyClosed: false,
+    };
+    connsRef.current.set(sessionId, entry);
+
+    source.onopen = () => {
+      entry.reconnectAttempt = 0;
+      console.log(`[SSE] onopen: ${sessionId}`);
+      setStatus(sessionId, "open");
+    };
+
+    source.onmessage = (ev) => {
+      try {
+        const parsed = JSON.parse(ev.data);
+        const normalized = normalizeWebSocketEvent(parsed);
+        // Drop heartbeats — they exist only to keep the connection alive.
+        if (normalized.type === "PING" || normalized.type === "ping") return;
+        console.log(`[SSE] onmessage: ${sessionId} type=${normalized.type}`, normalized);
+        const queue = queueRef.current.get(sessionId) || [];
+        queue.push(normalized);
+        queueRef.current.set(sessionId, queue);
+        setTick((t) => t + 1);
+      } catch {
+        console.error(`[SSE] onmessage: ${sessionId} 解析失败`, ev.data);
+        // Malformed payload — surface as a synthetic error event for the UI.
+        const queue = queueRef.current.get(sessionId) || [];
+        queue.push({
+          type: "error",
+          sessionId,
+          data: { error: { message: tg("ctx.sse.parseError") } },
+        });
+        queueRef.current.set(sessionId, queue);
+        setTick((t) => t + 1);
+      }
+    };
+
+    source.onerror = () => {
+      console.error(`[SSE] onerror: ${sessionId}, reconnectAttempt=${entry.reconnectAttempt + 1}`);
+      setStatus(sessionId, "error");
+      source.close();
+      if (entry.manuallyClosed) return;
+      // Exponential backoff for auto-reconnect.
+      entry.reconnectAttempt += 1;
+      const delay = Math.min(
+        RECONNECT_BASE_MS * Math.pow(2, entry.reconnectAttempt - 1),
+        RECONNECT_MAX_MS,
+      );
+      console.log(`[SSE] reconnect: ${sessionId} in ${delay}ms`);
+      entry.reconnectTimer = window.setTimeout(() => {
+        entry.reconnectTimer = null;
+        openConnection(sessionId, tokenValue);
+      }, delay);
+    };
+  }, [setStatus]);
+
+  const connectSession = useCallback((sessionId: string) => {
+    console.log(`[SSE] connectSession: ${sessionId}, token=${!!token}, sandbox=${currentSandbox?.status}`);
+    if (!token) return;
+    if (!runtimeConfig.useMockBackend && currentSandbox?.status !== "running") return;
+    openConnection(sessionId, token);
+  }, [token, currentSandbox?.status, openConnection]);
+
+  const disconnectSession = useCallback((sessionId: string) => {
+    console.log(`[SSE] disconnectSession: ${sessionId}`);
+    const entry = connsRef.current.get(sessionId);
+    if (!entry) return;
+    entry.manuallyClosed = true;
+    if (entry.reconnectTimer !== null) {
+      window.clearTimeout(entry.reconnectTimer);
+      entry.reconnectTimer = null;
+    }
+    entry.source.close();
+    connsRef.current.delete(sessionId);
+    setStatus(sessionId, "idle");
+  }, [setStatus]);
+
+  // On unmount or token/sandbox change, tear down every connection.
+  useEffect(() => {
+    return () => {
+      for (const [, entry] of connsRef.current) {
+        entry.manuallyClosed = true;
+        if (entry.reconnectTimer !== null) {
+          window.clearTimeout(entry.reconnectTimer);
+        }
+        entry.source.close();
+      }
+      connsRef.current.clear();
+    };
+  }, [token, currentSandbox?.status]);
+
+  const value = useMemo<SSEContextValue>(
+    () => ({ connectSession, disconnectSession, queueRef, tick, connections }),
+    [connectSession, disconnectSession, tick, connections],
+  );
+
+  return <SSEContext.Provider value={value}>{children}</SSEContext.Provider>;
+}
+
+export function useSSE() {
+  const value = useContext(SSEContext);
+  if (!value) {
+    throw new Error("useSSE must be used within SSEProvider");
+  }
+  return value;
+}

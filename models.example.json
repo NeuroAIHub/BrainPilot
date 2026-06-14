@@ -1,0 +1,46 @@
+{
+  "//": "BrainPilot custom model providers — copy to your data dir and point BP_MODELS_JSON at it.",
+  "//how": "Set in .env:  BP_MODELS_JSON=./brainpilot/models.json  ANTHROPIC_MODEL=<id>  ANTHROPIC_API_KEY=<key>",
+  "//provider": "By default the FIRST provider below is used. Set BP_MODEL_PROVIDER=<name> to pick another.",
+  "//keys": "apiKey supports $ENV interpolation — e.g. \"$ANTHROPIC_API_KEY\" reads the env var at request time. Never inline secrets here if this file is committed.",
+  "//docs": "Full schema (api types, compat flags, headers, cost): https://pi.dev/docs/latest/models",
+
+  "providers": {
+    "my-gateway": {
+      "baseUrl": "https://your-gateway.example.com/api",
+      "api": "anthropic-messages",
+      "apiKey": "$ANTHROPIC_API_KEY",
+      "models": [
+        {
+          "id": "kimi-k2.6",
+          "input": ["text"],
+          "contextWindow": 262144,
+          "maxTokens": 8192
+        }
+      ]
+    },
+
+    "//openai-example": "An OpenAI-compatible endpoint (e.g. Ollama, vLLM, LM Studio). Switch BP_MODEL_PROVIDER to this name to use it.",
+    "openai-compatible": {
+      "baseUrl": "http://localhost:11434/v1",
+      "api": "openai-completions",
+      "apiKey": "ollama",
+      "models": [{ "id": "llama3.1:8b" }]
+    },
+
+    "//compat-example": "Use `compat` flags when the gateway diverges from real Anthropic on tool streaming / thinking signatures.",
+    "strict-gateway": {
+      "baseUrl": "https://another-gateway.example.com/v1",
+      "api": "anthropic-messages",
+      "apiKey": "$ANTHROPIC_API_KEY",
+      "headers": { "x-portkey-api-key": "$PORTKEY_API_KEY" },
+      "compat": {
+        "supportsEagerToolInputStreaming": false,
+        "allowEmptySignature": true
+      },
+      "models": [
+        { "id": "claude-opus-4-7", "reasoning": true, "input": ["text", "image"] }
+      ]
+    }
+  }
+}

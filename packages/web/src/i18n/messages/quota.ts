@@ -1,0 +1,36 @@
+import { defineMessages } from "../types";
+
+export default defineMessages(
+  {
+    "quota.warning.title": "磁盘空间不足",
+    "quota.warning.close": "关闭",
+    "quota.warning.bodyPrefix": "当前沙盒磁盘使用已达 ",
+    "quota.warning.bodySuffix": "，接近配额上限。",
+    "quota.warning.body2": "请及时清理不必要的文件，否则达到 100% 后沙盒将无法正常使用。",
+    "quota.warning.ack": "知道了",
+    "quota.critical.title": "磁盘配额已超限 — 请立即清理文件",
+    "quota.critical.unavailable": "沙盒已不可用",
+    "quota.critical.used": "已用 {used} / 限额 {limit}",
+    "quota.fm.loadFailed": "加载文件列表失败",
+    "quota.fm.confirmDelete": "确认删除 {name} 吗？",
+    "quota.fm.deleteFailed": "删除失败",
+    "quota.fm.delete": "删除",
+    "quota.fm.loading": "加载中…",
+  },
+  {
+    "quota.warning.title": "Low disk space",
+    "quota.warning.close": "Close",
+    "quota.warning.bodyPrefix": "Sandbox disk usage has reached ",
+    "quota.warning.bodySuffix": ", approaching the quota limit.",
+    "quota.warning.body2": "Please clean up unnecessary files promptly, otherwise the sandbox will stop working once it reaches 100%.",
+    "quota.warning.ack": "Got it",
+    "quota.critical.title": "Disk quota exceeded — clean up files now",
+    "quota.critical.unavailable": "Sandbox is no longer available",
+    "quota.critical.used": "Used {used} / Limit {limit}",
+    "quota.fm.loadFailed": "Failed to load file list",
+    "quota.fm.confirmDelete": "Delete {name}?",
+    "quota.fm.deleteFailed": "Delete failed",
+    "quota.fm.delete": "Delete",
+    "quota.fm.loading": "Loading…",
+  },
+);

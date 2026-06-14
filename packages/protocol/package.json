@@ -1,0 +1,34 @@
+{
+  "name": "@brainpilot/protocol",
+  "version": "0.0.3",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "BrainPilot AG-UI events + REST/SSE schemas + Runtime HTTP contract (SSOT, zod-validated)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/protocol"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "zod": "^3.24.0"
+  }
+}

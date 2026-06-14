@@ -1,0 +1,161 @@
+/**
+ * Agent session factories.
+ *
+ *  - `mockAgentFactory`: deterministic, no API. Used when BP_MOCK=1.
+ *  - `realAgentFactory`: wraps `@earendil-works/pi-coding-agent`'s AgentSession.
+ *
+ * `selectFactory()` picks based on env (BP_MOCK).
+ *
+ * Real factory notes (confirmed against installed Pi SDK v0.79):
+ *   - `createAgentSession({ cwd, tools, customTools, sessionManager, ... })`
+ *     returns `{ session }`.
+ *   - `session.subscribe(cb)` streams `AgentSessionEvent`s; `session.prompt()`,
+ *     `session.abort()`, `session.dispose()`.
+ *   - `SystemTool` is adapted to Pi's `defineTool` (params is a plain JSON
+ *     schema, which `defineTool` accepts — verified empirically).
+ */
+import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
+import { MockAgentSession } from "./mock-agent.js";
+import { resolveGatewayModel, type PiProviderSdk } from "./pi-provider.js";
+
+export function isMockMode(): boolean {
+  return process.env.BP_MOCK === "1" || process.env.BP_MOCK === "true";
+}
+
+export const mockAgentFactory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
+  return new MockAgentSession({ sessionId, agentName, systemTools });
+};
+
+/**
+ * Wrap the real Pi SDK. Imported lazily so mock-mode tests never load the SDK
+ * (and never need API credentials).
+ */
+export const realAgentFactory: AgentSessionFactory = async (params) => {
+  const sdk = (await import("@earendil-works/pi-coding-agent")) as unknown as PiSdk;
+  const { createAgentSession, defineTool, SessionManager, DefaultResourceLoader, getAgentDir } = sdk;
+
+  const customTools = params.systemTools.map((t) => adaptTool(defineTool, t));
+
+  const agentDir = getAgentDir();
+
+  // Target a custom Anthropic-compatible gateway when ANTHROPIC_BASE_URL is set
+  // (Pi ignores that env var on its own). Returns {} for the default endpoint.
+  const { model, modelRegistry } = resolveGatewayModel(
+    sdk as unknown as PiProviderSdk,
+    agentDir,
+  );
+
+  // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
+  // per-role persona is injected through a DefaultResourceLoader. We use
+  // `appendSystemPrompt` (NOT `systemPrompt`) so Pi's built-in tool-calling
+  // guidance is preserved and our role persona is appended after it. Custom
+  // loaders are NOT auto-reloaded by the SDK, so we must reload() before use.
+  const resourceLoader = new DefaultResourceLoader({
+    cwd: params.cwd,
+    agentDir,
+    appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
+  });
+  await resourceLoader.reload();
+
+  const { session } = await createAgentSession({
+    cwd: params.cwd,
+    tools: params.allowedToolNames,
+    customTools,
+    resourceLoader,
+    sessionManager: SessionManager.open(params.historyPath),
+    ...(model ? { model } : {}),
+    ...(modelRegistry ? { modelRegistry } : {}),
+  });
+
+  return new RealAgentSession(session);
+};
+
+export function selectFactory(): AgentSessionFactory {
+  return isMockMode() ? mockAgentFactory : realAgentFactory;
+}
+
+/** Adapt a BrainPilot SystemTool to a Pi `defineTool` definition. */
+function adaptTool(defineTool: PiSdk["defineTool"], tool: SystemTool): unknown {
+  return defineTool({
+    name: tool.name,
+    // `label` is a REQUIRED field on Pi's ToolDefinition (UI display name).
+    label: tool.name,
+    description: tool.description,
+    parameters: tool.parameters,
+    execute: async (_toolCallId: string, params: Record<string, unknown>) => {
+      const res = await tool.execute(params ?? {});
+      // Pi's AgentToolResult has NO `isError`; failures are signalled by
+      // THROWING. Surface our SystemToolResult.isError as a thrown error so
+      // the agent sees a failed tool call (→ tool_execution_end isError →
+      // system_message warning in MasAgent).
+      if (res.isError) {
+        const text = res.content.map((c) => c.text).join("\n");
+        throw new Error(text || `${tool.name} failed`);
+      }
+      return { content: res.content, details: {} };
+    },
+  });
+}
+
+/** Thin adapter implementing IAgentSession over the real Pi AgentSession. */
+class RealAgentSession implements IAgentSession {
+  constructor(private readonly s: PiSession) {}
+  get sessionId(): string {
+    return this.s.sessionId;
+  }
+  subscribe(listener: (e: PiAgentEvent) => void): () => void {
+    return this.s.subscribe((e: unknown) => listener(e as PiAgentEvent));
+  }
+  prompt(text: string): Promise<void> {
+    return this.s.prompt(text);
+  }
+  abort(): Promise<void> {
+    return this.s.abort();
+  }
+  dispose(): void {
+    this.s.dispose();
+  }
+}
+
+/* ---- Minimal structural types for the Pi SDK (avoids hard type-coupling) ---- */
+interface PiSession {
+  readonly sessionId: string;
+  subscribe(listener: (e: unknown) => void): () => void;
+  prompt(text: string): Promise<void>;
+  abort(): Promise<void>;
+  dispose(): void;
+}
+interface PiSdk {
+  createAgentSession(opts: {
+    cwd?: string;
+    tools?: string[];
+    customTools?: unknown[];
+    resourceLoader?: unknown;
+    sessionManager?: unknown;
+    model?: unknown;
+    modelRegistry?: unknown;
+  }): Promise<{ session: PiSession }>;
+  defineTool(def: {
+    name: string;
+    label: string;
+    description: string;
+    parameters: Record<string, unknown>;
+    execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
+  }): unknown;
+  SessionManager: { open(path: string): unknown; inMemory(cwd?: string): unknown };
+  DefaultResourceLoader: new (opts: {
+    cwd: string;
+    agentDir: string;
+    appendSystemPrompt?: string[];
+    systemPrompt?: string;
+  }) => { reload(): Promise<void> };
+  getAgentDir(): string;
+  AuthStorage: { create(path: string): unknown };
+  ModelRegistry: {
+    create(authStorage: unknown, modelsJsonPath?: string): {
+      refresh(): void;
+      getError(): string | undefined;
+      find(provider: string, modelId: string): unknown;
+    };
+  };
+}

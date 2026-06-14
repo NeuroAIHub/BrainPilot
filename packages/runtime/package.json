@@ -1,0 +1,44 @@
+{
+  "name": "@brainpilot/runtime",
+  "version": "0.0.3",
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "BrainPilot Runtime — Pi SDK orchestration, SessionManager, Mailbox, GoT, state authority, HTTP server",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "files": [
+    "dist"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/runtime"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./server": {
+      "types": "./dist/server.d.ts",
+      "default": "./dist/server.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "start": "node ./dist/server.js"
+  },
+  "dependencies": {
+    "@brainpilot/protocol": "^0.0.3",
+    "@earendil-works/pi-coding-agent": "^0.79.0",
+    "@hono/node-server": "^1.19.0",
+    "@modelcontextprotocol/sdk": "^1.0.0",
+    "hono": "^4.12.0",
+    "zod": "^3.24.0"
+  }
+}

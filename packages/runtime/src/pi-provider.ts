@@ -1,0 +1,159 @@
+/**
+ * pi-provider.ts — resolve a custom LLM provider for the Pi SDK from env.
+ *
+ * Pi does NOT honour `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` (it only reads
+ * `ANTHROPIC_API_KEY`, and otherwise hits the built-in Anthropic endpoint with
+ * a built-in model). To target a third-party model we register it as a custom
+ * Pi provider via a `models.json` + ModelRegistry and select its model.
+ *
+ * Three configuration tiers (simplest first):
+ *
+ *   1. Nothing set                         → Pi uses its built-in endpoint.
+ *   2. ANTHROPIC_BASE_URL + ANTHROPIC_MODEL → we auto-generate a one-provider
+ *      `bp-gateway-models.json` for an Anthropic-compatible gateway. Optional
+ *      ANTHROPIC_CONTEXT_WINDOW / ANTHROPIC_MAX_TOKENS tune the model limits.
+ *   3. BP_MODELS_JSON + ANTHROPIC_MODEL     → advanced: use the user's own
+ *      hand-written models.json verbatim (multi-provider, custom headers,
+ *      `compat` flags, openai-compatible APIs, …). BP_MODEL_PROVIDER picks the
+ *      provider (defaults to the file's first provider key).
+ *
+ * Returns the resolved `{ model, modelRegistry }` to pass to
+ * `createAgentSession`, or `{}` when nothing custom is configured.
+ */
+import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
+import { join } from "node:path";
+
+/** The synthetic provider id under which the auto-generated gateway lives. */
+export const GATEWAY_PROVIDER = "bp-gateway";
+
+/** Defaults applied to an auto-generated gateway model when env is unset. */
+const DEFAULT_CONTEXT_WINDOW = 200_000;
+const DEFAULT_MAX_TOKENS = 8_192;
+
+/** Minimal structural surface of the Pi SDK bits this module needs. */
+export interface PiProviderSdk {
+  AuthStorage: { create(path: string): unknown };
+  ModelRegistry: {
+    create(authStorage: unknown, modelsJsonPath?: string): {
+      refresh(): void;
+      getError(): string | undefined;
+      find(provider: string, modelId: string): unknown;
+    };
+  };
+}
+
+export interface ResolvedProvider {
+  model?: unknown;
+  modelRegistry?: unknown;
+}
+
+/** Parse a positive integer env var, or `undefined` if unset/invalid. */
+function intEnv(name: string): number | undefined {
+  const raw = process.env[name]?.trim();
+  if (!raw) return undefined;
+  const n = Number(raw);
+  return Number.isInteger(n) && n > 0 ? n : undefined;
+}
+
+/**
+ * Resolve a custom model from env, or return `{}` when none is configured.
+ * `agentDir` is Pi's global config dir (getAgentDir()).
+ */
+export function resolveGatewayModel(sdk: PiProviderSdk, agentDir: string): ResolvedProvider {
+  const modelId = process.env.ANTHROPIC_MODEL?.trim();
+
+  // Tier 3 — advanced: user supplies their own models.json verbatim.
+  const customPath = process.env.BP_MODELS_JSON?.trim();
+  if (customPath) {
+    // A custom file is meaningless without knowing which model to select.
+    if (!modelId) return {};
+    const provider = resolveCustomProvider(customPath);
+    return select(sdk, agentDir, customPath, provider, modelId);
+  }
+
+  // Tier 2 — simple gateway: auto-generate a one-provider models.json.
+  const baseUrl = process.env.ANTHROPIC_BASE_URL?.trim();
+  // Tier 1 — neither set → let Pi use its built-in providers/models.
+  if (!baseUrl || !modelId) return {};
+
+  mkdirSync(agentDir, { recursive: true });
+  const modelsJsonPath = join(agentDir, "bp-gateway-models.json");
+  const desired = JSON.stringify(
+    {
+      providers: {
+        [GATEWAY_PROVIDER]: {
+          baseUrl,
+          api: "anthropic-messages",
+          // Resolved at request time from the same env the gateway key lives in.
+          apiKey: "$ANTHROPIC_API_KEY",
+          models: [
+            {
+              id: modelId,
+              input: ["text"],
+              contextWindow: intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
+              maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
+            },
+          ],
+        },
+      },
+    },
+    null,
+    2,
+  );
+  // Write idempotently (avoid churn when many agents start).
+  let current: string | undefined;
+  try {
+    current = readFileSync(modelsJsonPath, "utf8");
+  } catch {
+    /* not written yet */
+  }
+  if (current !== desired) writeFileSync(modelsJsonPath, desired);
+
+  return select(sdk, agentDir, modelsJsonPath, GATEWAY_PROVIDER, modelId);
+}
+
+/**
+ * Pick the provider for a user-supplied models.json: explicit BP_MODEL_PROVIDER,
+ * else the file's first provider key. Throws if the file is unreadable/empty.
+ */
+function resolveCustomProvider(modelsJsonPath: string): string {
+  const explicit = process.env.BP_MODEL_PROVIDER?.trim();
+  if (explicit) return explicit;
+  let raw: string;
+  try {
+    raw = readFileSync(modelsJsonPath, "utf8");
+  } catch (e) {
+    throw new Error(`BP_MODELS_JSON unreadable (${modelsJsonPath}): ${(e as Error).message}`);
+  }
+  let providers: Record<string, unknown> | undefined;
+  try {
+    providers = (JSON.parse(raw) as { providers?: Record<string, unknown> }).providers;
+  } catch (e) {
+    throw new Error(`BP_MODELS_JSON is not valid JSON (${modelsJsonPath}): ${(e as Error).message}`);
+  }
+  const first = providers && Object.keys(providers)[0];
+  if (!first) {
+    throw new Error(`BP_MODELS_JSON has no "providers" (${modelsJsonPath}); set BP_MODEL_PROVIDER`);
+  }
+  return first;
+}
+
+/** Load the registry against `modelsJsonPath` and resolve `provider/modelId`. */
+function select(
+  sdk: PiProviderSdk,
+  agentDir: string,
+  modelsJsonPath: string,
+  provider: string,
+  modelId: string,
+): ResolvedProvider {
+  const authStorage = sdk.AuthStorage.create(join(agentDir, "auth.json"));
+  const modelRegistry = sdk.ModelRegistry.create(authStorage, modelsJsonPath);
+  modelRegistry.refresh();
+  const err = modelRegistry.getError();
+  if (err) throw new Error(`Pi models.json load error (${modelsJsonPath}): ${err}`);
+  const model = modelRegistry.find(provider, modelId);
+  if (!model) {
+    throw new Error(`model not found in ${modelsJsonPath}: ${provider}/${modelId}`);
+  }
+  return { model, modelRegistry };
+}

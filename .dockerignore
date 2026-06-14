@@ -1,0 +1,18 @@
+# Build context excludes — keep the image build fast and clean.
+node_modules
+**/node_modules
+**/dist
+*.tsbuildinfo
+**/*.tsbuildinfo
+.git
+.gitignore
+.worktrees
+legacy
+docs
+brainpilot
+.bp
+.env
+.env.*
+npm-debug.log
+*.log
+.DS_Store
