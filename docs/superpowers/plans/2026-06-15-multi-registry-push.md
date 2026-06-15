@@ -42,7 +42,7 @@
 - Create: `scripts/release-images.sh`
 - Test: `scripts/_test-release-images.sh`（临时 driver，验证后删除）
 
-- [ ] **Step 1: 写 SSOT 清单脚本**
+- [x] **Step 1: 写 SSOT 清单脚本**
 
 Create `scripts/release-images.sh`：
 
@@ -83,7 +83,7 @@ remote_repo() {
 }
 ```
 
-- [ ] **Step 2: 写临时 driver 测试映射函数**
+- [x] **Step 2: 写临时 driver 测试映射函数**
 
 Create `scripts/_test-release-images.sh`：
 
@@ -112,7 +112,7 @@ check "${RELEASE_REGISTRIES[0]}" "ghcr|ghcr.io/neuroaihub|flat" "ghcr 默认 reg
 exit $fail
 ```
 
-- [ ] **Step 3: 运行 driver，验证全 PASS**
+- [x] **Step 3: 运行 driver，验证全 PASS**
 
 Run: `bash scripts/_test-release-images.sh`
 Expected: 6 行 PASS，退出码 0：
@@ -125,7 +125,7 @@ PASS: 镜像清单 3 条
 PASS: ghcr 默认 registry
 ```
 
-- [ ] **Step 4: 语法检查 + 删除临时 driver**
+- [x] **Step 4: 语法检查 + 删除临时 driver**
 
 ```bash
 bash -n scripts/release-images.sh
@@ -133,7 +133,7 @@ rm scripts/_test-release-images.sh
 ```
 Expected: 无输出（语法 OK），driver 已删。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/release-images.sh
@@ -151,7 +151,7 @@ git commit -m "feat(release): add SSOT image/registry manifest + remote_repo map
 - Create: `scripts/release-mirrors.local.sh`（不提交）
 - Modify: `.gitignore`
 
-- [ ] **Step 1: 写 targets 示范文件（提交版）**
+- [x] **Step 1: 写 targets 示范文件（提交版）**
 
 Create `scripts/release-targets.example.sh`：
 
@@ -162,7 +162,7 @@ RELEASE_REGISTRIES+=( "acr|<实例ID>.cn-<region>.personal.cr.aliyuncs.com/<命�
 RELEASE_REGISTRIES+=( "intranet|<内网IP>:<端口>|flat" )
 ```
 
-- [ ] **Step 2: 写 targets 本地文件（真实地址，不提交）**
+- [x] **Step 2: 写 targets 本地文件（真实地址，不提交）**
 
 Create `scripts/release-targets.local.sh`：
 
@@ -172,7 +172,7 @@ RELEASE_REGISTRIES+=( "acr|crpi-t2q2y3ujes80doq8.cn-beijing.personal.cr.aliyuncs
 RELEASE_REGISTRIES+=( "intranet|10.0.3.125:5000|flat" )
 ```
 
-- [ ] **Step 3: 写 mirrors 示范文件（提交版）**
+- [x] **Step 3: 写 mirrors 示范文件（提交版）**
 
 Create `scripts/release-mirrors.example.sh`：
 
@@ -185,7 +185,7 @@ export APT_MIRROR="http://mirrors.aliyun.com"
 export NPM_REGISTRY="https://registry.npmmirror.com"
 ```
 
-- [ ] **Step 4: 写 mirrors 本地文件（真实源，不提交）**
+- [x] **Step 4: 写 mirrors 本地文件（真实源，不提交）**
 
 Create `scripts/release-mirrors.local.sh`：
 
@@ -197,7 +197,7 @@ export APT_MIRROR="http://mirrors.aliyun.com"
 export NPM_REGISTRY="https://registry.npmmirror.com"
 ```
 
-- [ ] **Step 5: 更新 .gitignore**
+- [x] **Step 5: 更新 .gitignore**
 
 在 `.gitignore` 的 `# Local env files` 段（`.env.*.local` 行之后）追加：
 
@@ -207,7 +207,7 @@ scripts/release-targets.local.sh
 scripts/release-mirrors.local.sh
 ```
 
-- [ ] **Step 6: 验证 local 文件被忽略、example 文件可提交**
+- [x] **Step 6: 验证 local 文件被忽略、example 文件可提交**
 
 Run:
 ```bash
@@ -216,7 +216,7 @@ git status --short scripts/
 ```
 Expected: 第一条命令输出两个 `.local.sh` 路径（确认被忽略）；`git status` 只见 `release-targets.example.sh`、`release-mirrors.example.sh`、`.gitignore` 为待提交（两个 `.local.sh` **不出现**）。
 
-- [ ] **Step 7: 验证清单能正确加载私有目标**
+- [x] **Step 7: 验证清单能正确加载私有目标**
 
 Run:
 ```bash
@@ -224,7 +224,7 @@ bash -c 'cd scripts && source release-images.sh && printf "%s\n" "${RELEASE_REGI
 ```
 Expected: 3 行——ghcr、acr（含 crpi-… 真实地址）、intranet（10.0.3.125:5000）。证明 `release-images.sh` 经 local 文件 append 后有全部 3 个 registry。
 
-- [ ] **Step 8: Commit（只提交 example + gitignore）**
+- [x] **Step 8: Commit（只提交 example + gitignore）**
 
 ```bash
 git add scripts/release-targets.example.sh scripts/release-mirrors.example.sh .gitignore
@@ -238,7 +238,7 @@ git commit -m "feat(release): externalize private registry targets + mirror sour
 **Files:**
 - Modify: `scripts/release-build.sh`（全量重写）
 
-- [ ] **Step 1: 全量重写 build 脚本**
+- [x] **Step 1: 全量重写 build 脚本**
 
 Replace `scripts/release-build.sh` 全部内容为：
 
@@ -301,12 +301,12 @@ echo "==> BUILD DONE: ${built[*]:-(无匹配镜像)}"
 sudo docker images | grep -E 'brainpilot-(main|sandbox)' || true
 ```
 
-- [ ] **Step 2: 语法检查**
+- [x] **Step 2: 语法检查**
 
 Run: `bash -n scripts/release-build.sh`
 Expected: 无输出（语法 OK）。
 
-- [ ] **Step 3: 验证子集匹配逻辑（不实际构建）**
+- [x] **Step 3: 验证子集匹配逻辑（不实际构建）**
 
 把 docker build 行临时替换为 echo 来验证筛选——运行内联测试：
 ```bash
@@ -324,7 +324,7 @@ PASS: main 不匹配 sandbox
 PASS: gpu 精确匹配
 ```
 
-- [ ] **Step 4: Commit**
+- [x] **Step 4: Commit**
 
 ```bash
 git add scripts/release-build.sh
@@ -339,7 +339,7 @@ git commit -m "refactor(release): build script reads manifest, supports subset +
 - Create: `scripts/release-push.sh`
 - Test: `scripts/_test-release-push.sh`（临时 driver）
 
-- [ ] **Step 1: 写 push 脚本**
+- [x] **Step 1: 写 push 脚本**
 
 Create `scripts/release-push.sh`：
 
@@ -410,7 +410,7 @@ if [ "${#FAIL_LIST[@]}" -gt 0 ]; then
 fi
 ```
 
-- [ ] **Step 2: 写临时 driver 测试参数解析 + 筛选（mock docker）**
+- [x] **Step 2: 写临时 driver 测试参数解析 + 筛选（mock docker）**
 
 Create `scripts/_test-release-push.sh`：
 
@@ -464,7 +464,7 @@ rm -rf "$TMPBIN"
 exit $fail
 ```
 
-- [ ] **Step 3: 运行 driver，验证全 PASS**
+- [x] **Step 3: 运行 driver，验证全 PASS**
 
 Run: `bash scripts/_test-release-push.sh`
 Expected: 全 PASS、退出码 0：
@@ -478,7 +478,7 @@ PASS: 未知参数退出 2
 ```
 （前提：Task 2 的 `release-targets.local.sh` 已存在，ACR 条目才会被加载。）
 
-- [ ] **Step 4: 语法检查 + 删除临时 driver**
+- [x] **Step 4: 语法检查 + 删除临时 driver**
 
 ```bash
 bash -n scripts/release-push.sh
@@ -486,7 +486,7 @@ rm scripts/_test-release-push.sh
 ```
 Expected: 无输出，driver 已删。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add scripts/release-push.sh
@@ -500,7 +500,7 @@ git commit -m "feat(release): add multi-registry push script (subset/dry-run/fai
 **Files:**
 - Create: `docker/sandbox/_python-base.sh`
 
-- [ ] **Step 1: 写共享脚本**
+- [x] **Step 1: 写共享脚本**
 
 Create `docker/sandbox/_python-base.sh`：
 
@@ -527,12 +527,12 @@ if [ -n "${PIP_INDEX_URL:-}" ]; then
 fi
 ```
 
-- [ ] **Step 2: 语法检查**
+- [x] **Step 2: 语法检查**
 
 Run: `bash -n docker/sandbox/_python-base.sh`
 Expected: 无输出。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docker/sandbox/_python-base.sh
@@ -546,7 +546,7 @@ git commit -m "feat(sandbox): shared python3+pip+mirror install fragment"
 **Files:**
 - Modify: `docker/sandbox/extra-deps.sh`（全量重写）
 
-- [ ] **Step 1: 全量重写 cpu extra-deps**
+- [x] **Step 1: 全量重写 cpu extra-deps**
 
 Replace `docker/sandbox/extra-deps.sh` 全部内容为：
 
@@ -566,12 +566,12 @@ echo "[extra-deps] cpu baseline: python3 $(python3 --version 2>&1) installed (no
 
 注：Dockerfile 把脚本及其同目录文件 COPY 到 `/tmp/`，故 `$(dirname "$0")/_python-base.sh` 解析为 `/tmp/_python-base.sh`（Task 8 的 Dockerfile 会一并 COPY）。
 
-- [ ] **Step 2: 语法检查**
+- [x] **Step 2: 语法检查**
 
 Run: `bash -n docker/sandbox/extra-deps.sh`
 Expected: 无输出。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docker/sandbox/extra-deps.sh
@@ -585,7 +585,7 @@ git commit -m "feat(sandbox): cpu baseline installs python3 (fixes agent python 
 **Files:**
 - Create: `docker/sandbox/extra-deps.gpu.sh`
 
-- [ ] **Step 1: 写 gpu extra-deps**
+- [x] **Step 1: 写 gpu extra-deps**
 
 Create `docker/sandbox/extra-deps.gpu.sh`：
 
@@ -622,12 +622,12 @@ pip3 install --break-system-packages \
 echo "[extra-deps.gpu] sci stack + torch 2.5.1+cu124 installed"
 ```
 
-- [ ] **Step 2: 语法检查**
+- [x] **Step 2: 语法检查**
 
 Run: `bash -n docker/sandbox/extra-deps.gpu.sh`
 Expected: 无输出。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add docker/sandbox/extra-deps.gpu.sh
@@ -641,12 +641,12 @@ git commit -m "feat(sandbox): gpu variant deps — sci/pdf stack + torch 2.5.1+c
 **Files:**
 - Modify: `docker/sandbox/Dockerfile`（runtime 阶段 extra-deps 段，当前 28-46 行附近）
 
-- [ ] **Step 1: 读现有 Dockerfile runtime 阶段确认上下文**
+- [x] **Step 1: 读现有 Dockerfile runtime 阶段确认上下文**
 
 Run: `sed -n '26,49p' docker/sandbox/Dockerfile`
 Expected: 看到 `ARG APT_MIRROR=""`、`ARG NPM_REGISTRY=""`、`COPY docker/sandbox/extra-deps.sh /tmp/extra-deps.sh`、`RUN chmod +x ... bash /tmp/extra-deps.sh`、`ENV PORT=8081 ...`。
 
-- [ ] **Step 2: 改 runtime 阶段的 ARG 段**
+- [x] **Step 2: 改 runtime 阶段的 ARG 段**
 
 把现有的（runtime 阶段，约 28-29 行）：
 
@@ -667,7 +667,7 @@ ARG PIP_EXTRA_INDEX_URL=""
 ENV APT_MIRROR=${APT_MIRROR} PIP_INDEX_URL=${PIP_INDEX_URL} PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
 ```
 
-- [ ] **Step 3: 改 COPY + RUN 段（按变体选脚本，并带上共享片段）**
+- [x] **Step 3: 改 COPY + RUN 段（按变体选脚本，并带上共享片段）**
 
 把现有的（约 45-46 行）：
 
@@ -686,7 +686,7 @@ COPY docker/sandbox/${SANDBOX_EXTRA_DEPS} /tmp/extra-deps.sh
 RUN chmod +x /tmp/extra-deps.sh /tmp/_python-base.sh && bash /tmp/extra-deps.sh
 ```
 
-- [ ] **Step 4: 验证 Dockerfile 引用一致性**
+- [x] **Step 4: 验证 Dockerfile 引用一致性**
 
 Run:
 ```bash
@@ -694,7 +694,7 @@ grep -n "SANDBOX_EXTRA_DEPS\|_python-base\|extra-deps\|PIP_INDEX_URL" docker/san
 ```
 Expected: 看到 `ARG SANDBOX_EXTRA_DEPS=extra-deps.sh`、`ENV ... PIP_INDEX_URL`、`COPY docker/sandbox/_python-base.sh`、`COPY docker/sandbox/${SANDBOX_EXTRA_DEPS}`、`RUN ... bash /tmp/extra-deps.sh` 各就各位，变量名与 build/push 脚本一致。
 
-- [ ] **Step 5: Commit**
+- [x] **Step 5: Commit**
 
 ```bash
 git add docker/sandbox/Dockerfile
@@ -709,7 +709,7 @@ git commit -m "feat(sandbox): Dockerfile selects cpu/gpu extra-deps + passes pip
 
 > 重型步骤，需 Docker daemon（`sudo`）。构建走 `release-mirrors.local.sh` 的阿里云源 + 宿主代理。
 
-- [ ] **Step 1: 精确构建 cpu sandbox 单镜像**
+- [x] **Step 1: 精确构建 cpu sandbox 单镜像**
 
 > 注：`release-build.sh sandbox` 的子串匹配会同时命中 `brainpilot-sandbox` 和
 > `brainpilot-sandbox-gpu`（gpu 名也含 "sandbox"）。本步要隔离验证 cpu，故直接用精确
@@ -727,7 +727,7 @@ sudo DOCKER_BUILDKIT=0 docker build --network=host \
 ```
 Expected: 构建成功，末尾 `Successfully tagged brainpilot-sandbox:test`。日志中可见 `[extra-deps] cpu baseline: python3 Python 3.x ... installed`。
 
-- [ ] **Step 2: 验证镜像内有 python3 且 runtime 可启动**
+- [x] **Step 2: 验证镜像内有 python3 且 runtime 可启动**
 
 Run:
 ```bash
@@ -736,7 +736,7 @@ sudo docker run --rm brainpilot-sandbox:test node -e "console.log('node ok')"
 ```
 Expected: 打印 `Python 3.x.y` 和 `node ok`（证明 cpu sandbox 同时具备 Python 与 Node，修复了缺口）。
 
-- [ ] **Step 3: 验证现有 compose 默认路径不回归（静态等价验证）**
+- [x] **Step 3: 验证现有 compose 默认路径不回归（静态等价验证）**
 
 > compose build 默认走 BuildKit（会重现 Docker Hub 拉取被墙问题）且 compose.yml 未传
 > `SANDBOX_EXTRA_DEPS`，在本环境真跑不可靠。改为验证"默认路径等价"：Dockerfile 默认
@@ -754,7 +754,7 @@ PASS: 默认变体=cpu extra-deps.sh
 PASS: compose 未覆盖变体，走 Dockerfile 默认
 ```
 
-- [ ] **Step 4: 清理测试镜像（无需 commit，本 Task 仅验证）**
+- [x] **Step 4: 清理测试镜像（无需 commit，本 Task 仅验证）**
 
 Run: `sudo docker rmi brainpilot-sandbox:test || true`
 
@@ -765,7 +765,7 @@ Run: `sudo docker rmi brainpilot-sandbox:test || true`
 **Files:**
 - Modify: `README.md`（在 "📦 Publishing (maintainers)" 小节后新增 "Docker 镜像发布"）
 
-- [ ] **Step 1: dry-run 核对 registry 全路径**
+- [x] **Step 1: dry-run 核对 registry 全路径**
 
 > push 脚本在 `--dry-run` 下**仍会**对每个镜像做 `docker image inspect`（缺镜像检查不跳过）。
 > 为避免依赖"全部三镜像已构建"，用 `--image main` 缩小到上轮已存在的 main 镜像。
@@ -782,7 +782,7 @@ Expected: 仅 main 的 3 registry × 2 tag = 6 行计划，路径与 §1.1 矩�
 ```
 末尾"推送汇总"列出 6 条 `(dry)` 成功项、0 失败。
 
-- [ ] **Step 2: 在 README 增加 Docker 发布小节**
+- [x] **Step 2: 在 README 增加 Docker 发布小节**
 
 在 `README.md` 的 `## 📦 Publishing (maintainers)` 小节（`@brainpilot/client-cli stays private...` 行）之后，`## 🧪 Testing` 之前，插入：
 
@@ -812,12 +812,12 @@ bash scripts/release-push.sh --image sandbox-gpu --registry acr,intranet  # GPU 
 （ACR / 内网，私有）声明。GPU 镜像约 6GB，推公网 ghcr 可能超时，建议 `--registry acr,intranet`。
 ````
 
-- [ ] **Step 2.5: 校验 README 插入处格式**
+- [x] **Step 2.5: 校验 README 插入处格式**
 
 Run: `grep -n "Docker 镜像发布\|release-build.sh\|release-push.sh\|## 🧪 Testing" README.md`
 Expected: "Docker 镜像发布" 行号在 "## 🧪 Testing" 行号之前；build/push 命令均出现。
 
-- [ ] **Step 3: Commit**
+- [x] **Step 3: Commit**
 
 ```bash
 git add README.md
@@ -834,7 +834,7 @@ git commit -m "docs(readme): add Docker image build + multi-registry push sectio
 > 依赖 `--network=host` 借宿主 Clash 代理。若代理对该域不通，此步会失败（与设计已知风险一致）。
 > 非阻塞主线交付；可在有条件时单独执行。
 
-- [ ] **Step 1: 单独构建 gpu 变体**
+- [x] **Step 1: 单独构建 gpu 变体**
 
 ```bash
 source scripts/release-mirrors.local.sh
@@ -847,7 +847,7 @@ sudo DOCKER_BUILDKIT=0 docker build --network=host \
 ```
 Expected: 构建成功，日志末尾 `[extra-deps.gpu] sci stack + torch 2.5.1+cu124 installed`。
 
-- [ ] **Step 2: 验证 torch + 科学库可导入**
+- [x] **Step 2: 验证 torch + 科学库可导入**
 
 Run:
 ```bash
@@ -856,7 +856,7 @@ sudo docker run --rm brainpilot-sandbox-gpu:test python3 -c \
 ```
 Expected: 打印 `torch 2.5.1+cu124`，无 ImportError。
 
-- [ ] **Step 3: 清理测试镜像**
+- [x] **Step 3: 清理测试镜像**
 
 Run: `sudo docker rmi brainpilot-sandbox-gpu:test || true`
 
@@ -869,3 +869,18 @@ Run: `sudo docker rmi brainpilot-sandbox-gpu:test || true`
 - Task 11（可选）：GPU 镜像可构建、torch 可导入。
 - `git status` 干净；两个 `.local.sh` 始终未被跟踪（`git check-ignore` 确认）。
 - 全流程可复现：`build → push --dry-run → push` 三步对三个 registry 产出 §1.1 矩阵中的全部路径。
+
+---
+
+## 执行结果（2026-06-15）
+
+- **Task 1-8 + 10**：✅ 完成并各自提交（commit `cb12548`→`a44392d`，8 个 commit + README）。
+- **Task 9（cpu sandbox 真实构建）**：✅ 通过。`brainpilot-sandbox:test` 构建成功（`DOCKER_BUILDKIT=0`
+  经典构建器 + 阿里云 apt/pip 源），镜像内 `python3 --version`=Python 3.11.2、`node` 正常；
+  Dockerfile 默认变体=cpu、compose 未覆盖 → 无回归。测试镜像已清理。
+- **push 脚本修正**：`OK_LIST/FAIL_LIST` 改为显式 `=()` 空数组初始化，否则全成功路径在 `set -u`
+  下因空 `FAIL_LIST` 触发 `unbound variable`（已验证 + 修复，含在 `c30cbe4`）。
+- **Task 11（GPU 镜像）**：⏭️ 未执行（~6GB、torch 下载耗时，标记为可选）。机制已就位
+  （`extra-deps.gpu.sh` + Dockerfile 变体选择），需要时 `bash scripts/release-build.sh sandbox-gpu` 即可。
+- **版本号注意**：根 `package.json` 现为 `0.0.4`；早前会话构建的本地镜像仍是 `0.0.3` 旧原型，
+  正式发布前需重跑 `release-build.sh` 产出 `0.0.4` 镜像再 push。
