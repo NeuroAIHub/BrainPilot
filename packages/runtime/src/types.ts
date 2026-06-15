@@ -107,6 +107,12 @@ export type AgentSessionFactory = (params: {
   allowedToolNames: string[];
   /** System prompt for the agent. */
   systemPrompt: string;
+  /**
+   * App-controlled skill directories loaded for this agent (template dir shared
+   * by all sessions + this session's own dir). Replaces the host-global skill
+   * discovery — see agent-factory `noSkills: true`.
+   */
+  skillPaths: string[];
 }) => Promise<IAgentSession>;
 
 /**

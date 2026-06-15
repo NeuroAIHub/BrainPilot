@@ -106,6 +106,14 @@ export class SessionManager {
   private historyPath(sid: string, agent: string): string {
     return join(this.bpDir(sid), "history", `${agent}.jsonl`);
   }
+  /** Skills shared by every session (user-editable `bp_template/skills/`). */
+  private templateSkillsDir(): string {
+    return join(this.dataRoot, "bp_template", "skills");
+  }
+  /** This session's own skill dir (`.bp/<sid>/skills/`), overrides/augments the template. */
+  private sessionSkillsDir(sid: string): string {
+    return join(this.bpDir(sid), "skills");
+  }
 
   /* ---------------------------- session CRUD ---------------------------- */
 
@@ -138,6 +146,7 @@ export class SessionManager {
 
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
+      await mkdir(this.sessionSkillsDir(id), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
       await this.writeMeta(entry);
       await mailbox.recover();
@@ -261,6 +270,7 @@ export class SessionManager {
       systemTools: agentTools,
       allowedToolNames,
       systemPrompt: `You are the ${name} agent (${role}).`,
+      skillPaths: [this.templateSkillsDir(), this.sessionSkillsDir(sessionId)],
     });
 
     const agent = new MasAgent({
