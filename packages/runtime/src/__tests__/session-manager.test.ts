@@ -51,6 +51,23 @@ describe("SessionManager (mock mode)", () => {
     const agents = m.listAgents(s.id);
     expect(agents.map((a) => a.name)).toContain("principal");
   });
+
+  it("passes app-controlled skill dirs (template + session) to the factory", async () => {
+    const seen: string[][] = [];
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      seen.push(params.skillPaths);
+      return mockAgentFactory(params);
+    };
+    const sm = new SessionManager({ persist: false, agentFactory: spyFactory });
+    const s = await sm.createSession();
+    await sm.sendMessage(s.id, "hi");
+    await waitFor(() => seen.length > 0);
+
+    expect(seen[0]).toHaveLength(2);
+    // shared template dir + this session's own dir.
+    expect(seen[0][0]).toMatch(/bp_template[/\\]skills$/);
+    expect(seen[0][1]).toMatch(new RegExp(`\\.bp[/\\\\]${s.id}[/\\\\]skills$`));
+  });
 });
 
 async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {

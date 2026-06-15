@@ -33,6 +33,9 @@ describe("scaffold", () => {
     expect(await exists(join(paths.bpTemplateAgents, "principal", "manifest.json"))).toBe(true);
     expect(await exists(paths.bpTemplateSettings)).toBe(true);
     expect(await exists(paths.bpTemplateMcpServers)).toBe(true);
+    expect(await exists(paths.bpTemplateSkills)).toBe(true);
+    expect(await exists(join(paths.bpTemplateSkills, "README.md"))).toBe(true);
+    expect(await exists(join(paths.bpTemplateSkills, "example.md"))).toBe(true);
     expect(await exists(paths.brainpilotConfig)).toBe(true);
     expect(await exists(paths.bp)).toBe(true);
     expect(await exists(paths.workspaces)).toBe(true);

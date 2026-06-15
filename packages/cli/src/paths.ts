@@ -38,6 +38,7 @@ export interface DataPaths {
   bpTemplateAgents: string;
   bpTemplateSettings: string;
   bpTemplateMcpServers: string;
+  bpTemplateSkills: string;
   bp: string;
   workspaces: string;
   brainpilotConfig: string;
@@ -61,6 +62,7 @@ export function dataPaths(dataDir: string): DataPaths {
     bpTemplateAgents: join(bpTemplate, "agents"),
     bpTemplateSettings: join(bpTemplate, "settings.json"),
     bpTemplateMcpServers: join(bpTemplate, "mcp_servers.json"),
+    bpTemplateSkills: join(bpTemplate, "skills"),
     bp: join(dataDir, ".bp"),
     workspaces: join(dataDir, "workspaces"),
     brainpilotConfig: join(dataDir, "brainpilot.config.json"),
