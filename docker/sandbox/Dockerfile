@@ -27,6 +27,11 @@ FROM node:22-slim AS runtime
 
 ARG APT_MIRROR=""
 ARG NPM_REGISTRY=""
+# sandbox 变体选择 + pip 镜像源（build-arg → ENV，供 extra-deps 脚本读取；空则官方源默认）
+ARG SANDBOX_EXTRA_DEPS=extra-deps.sh
+ARG PIP_INDEX_URL=""
+ARG PIP_EXTRA_INDEX_URL=""
+ENV APT_MIRROR=${APT_MIRROR} PIP_INDEX_URL=${PIP_INDEX_URL} PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL}
 
 # curl is needed for the HEALTHCHECK probe.
 RUN if [ -n "$APT_MIRROR" ]; then \
@@ -42,8 +47,11 @@ COPY --from=builder /app/packages ./packages
 COPY --from=builder /app/package.json ./package.json
 
 # User-editable dependency injection point (runs at build time).
-COPY docker/sandbox/extra-deps.sh /tmp/extra-deps.sh
-RUN chmod +x /tmp/extra-deps.sh && bash /tmp/extra-deps.sh
+# 同时 COPY 共享片段 + 选中的变体脚本（cpu: extra-deps.sh / gpu: extra-deps.gpu.sh）。
+# 两个脚本都 source ./_python-base.sh，故 _python-base.sh 必须同目录存在。
+COPY docker/sandbox/_python-base.sh /tmp/_python-base.sh
+COPY docker/sandbox/${SANDBOX_EXTRA_DEPS} /tmp/extra-deps.sh
+RUN chmod +x /tmp/extra-deps.sh /tmp/_python-base.sh && bash /tmp/extra-deps.sh
 
 ENV PORT=8081 AGENT_RUNTIME_PORT=8081 BP_DATA_DIR=/root/.bp-root
 EXPOSE 8081
