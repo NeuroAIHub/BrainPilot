@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   McpBridge,
   loadMcpServersConfig,
+  openTransport,
   type McpClientLike,
 } from "../mcp-bridge.js";
 
@@ -80,5 +81,51 @@ describe("McpBridge", () => {
     await bridge.close();
     expect(close).toHaveBeenCalledTimes(1);
     expect(bridge.tools).toHaveLength(0);
+  });
+
+  it("skips placeholder slots (blank url/command) without connecting", async () => {
+    const connect = vi.fn(async () => fakeClient());
+    const bridge = new McpBridge(connect);
+    const tools = await bridge.connectAll({
+      mcpServers: {
+        unfilledHttp: { type: "http", url: "" },
+        unfilledStdio: { command: "" },
+        real: { command: "y" },
+      },
+    });
+    // Only the real stdio server connects; the two placeholders are skipped.
+    expect(connect).toHaveBeenCalledTimes(1);
+    expect(tools).toHaveLength(1);
+    expect(tools[0]!.name).toBe("mcp__real__search");
+  });
+});
+
+describe("openTransport", () => {
+  it("defaults to a stdio transport when type is omitted", async () => {
+    const t = await openTransport("fs", { command: "npx", args: ["-y", "srv"] });
+    expect(t.constructor.name).toBe("StdioClientTransport");
+  });
+
+  it("selects the streamable-http transport for type 'http'", async () => {
+    const t = await openTransport("api", {
+      type: "http",
+      url: "https://host.example.com/mcp",
+      headers: { Authorization: "Bearer t" },
+    });
+    expect(t.constructor.name).toBe("StreamableHTTPClientTransport");
+  });
+
+  it("selects the SSE transport for type 'sse'", async () => {
+    const t = await openTransport("evt", { type: "sse", url: "https://host.example.com/sse" });
+    expect(t.constructor.name).toBe("SSEClientTransport");
+  });
+
+  it("rejects an http/sse spec with no url", async () => {
+    await expect(openTransport("api", { type: "http" })).rejects.toThrow(/requires a 'url'/);
+    await expect(openTransport("evt", { type: "sse" })).rejects.toThrow(/requires a 'url'/);
+  });
+
+  it("rejects a stdio spec with no command", async () => {
+    await expect(openTransport("fs", { type: "stdio" })).rejects.toThrow(/requires a 'command'/);
   });
 });

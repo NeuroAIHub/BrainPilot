@@ -103,10 +103,59 @@ const TEMPLATE_SETTINGS_EXAMPLE = JSON.stringify(
   2,
 );
 
-/** MCP server config template (§11A.2). */
+/**
+ * Default `mcp_servers.json` written into `bp_template/` (§11A.2).
+ *
+ * Ships BrainPilot's three built-in remote MCP services (knowledge base, skills,
+ * paper search) over streamable-http. Edit or remove these entries to point at
+ * your own deployment; an entry whose `url` is blanked out is treated as an
+ * unconfigured placeholder and skipped at startup.
+ */
+const TEMPLATE_MCP_DEFAULT = JSON.stringify(
+  {
+    mcpServers: {
+      bp_KB: {
+        type: "http",
+        url: "http://8.145.42.208:8005/mcp",
+      },
+      bp_skills: {
+        type: "http",
+        url: "http://8.145.42.208:8006/mcp",
+      },
+      bp_papersearch: {
+        type: "http",
+        url: "http://8.145.42.208:8007/mcp",
+      },
+    },
+  },
+  null,
+  2,
+);
+
+/**
+ * Annotated `mcp_servers.example.json` — shows every supported transport
+ * (stdio / streamable-http / sse) with a filled-in shape to copy from.
+ */
 const TEMPLATE_MCP_EXAMPLE = JSON.stringify(
   {
-    mcpServers: {},
+    mcpServers: {
+      "fs-stdio": {
+        type: "stdio",
+        command: "npx",
+        args: ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+        env: {},
+      },
+      "remote-http": {
+        type: "http",
+        url: "https://your-mcp-host.example.com/mcp",
+        headers: { Authorization: "Bearer <token>" },
+      },
+      "remote-sse": {
+        type: "sse",
+        url: "https://your-mcp-host.example.com/sse",
+        headers: { Authorization: "Bearer <token>" },
+      },
+    },
   },
   null,
   2,
@@ -219,7 +268,7 @@ export async function scaffold(
     // ③ session-level template defaults.
     [p.bpTemplateSettings, TEMPLATE_SETTINGS_EXAMPLE],
     [join(p.bpTemplate, "settings.example.json"), TEMPLATE_SETTINGS_EXAMPLE],
-    [p.bpTemplateMcpServers, TEMPLATE_MCP_EXAMPLE],
+    [p.bpTemplateMcpServers, TEMPLATE_MCP_DEFAULT],
     [join(p.bpTemplate, "mcp_servers.example.json"), TEMPLATE_MCP_EXAMPLE],
     // ③a app-controlled skills (loaded instead of host-global ~/.pi/agent/skills).
     [join(p.bpTemplateSkills, "README.md"), SKILLS_README],
