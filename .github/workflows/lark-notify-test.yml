@@ -1,0 +1,29 @@
+name: Lark Notify Tests
+
+on:
+  pull_request:
+    paths:
+      - '.github/scripts/lark-notify/**'
+      - '.github/workflows/lark-notify*.yml'
+  push:
+    branches: [main]
+    paths:
+      - '.github/scripts/lark-notify/**'
+      - '.github/workflows/lark-notify*.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  bats:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install bats
+        run: sudo apt-get update && sudo apt-get install -y bats jq
+      - name: Run script tests
+        run: bats .github/scripts/lark-notify/test/
+      - name: Validate workflow YAML
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/lark-notify.yml')); print('lark-notify.yml OK')"
+          python3 -c "import yaml; yaml.safe_load(open('.github/workflows/lark-notify-test.yml')); print('lark-notify-test.yml OK')"

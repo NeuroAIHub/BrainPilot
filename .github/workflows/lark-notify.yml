@@ -1,0 +1,97 @@
+name: Lark Notify
+
+# 安全：PR 事件用 pull_request_target（在 base 仓上下文运行、可拿 secret，
+# 使公开后外部 fork PR 也能推群）。严守边界：本 workflow 绝不 checkout/执行 PR
+# 代码，只读 github.event.pull_request.* 元数据；PR 文本只经环境变量+jq 当数据；
+# permissions 收最小。详见 spec §10.2。
+on:
+  issues:
+    types: [opened, closed]
+  issue_comment:
+    types: [created]
+  pull_request_target:
+    types: [opened, closed, ready_for_review, review_requested]
+  pull_request_review:
+    types: [submitted]
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout (base branch scripts only)
+        # pull_request_target 下默认 checkout 的是 base 分支（可信 main）上的脚本，
+        # 不是 PR head。绝不加 ref: PR head —— 那会引入 pwn request 漏洞。
+        uses: actions/checkout@v4
+
+      - name: Decide notification kind
+        id: kind
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          ACTION: ${{ github.event.action }}
+          PR_MERGED: ${{ github.event.pull_request.merged }}
+          REVIEW_STATE: ${{ github.event.review.state }}
+          IS_PR_COMMENT: ${{ github.event.issue.pull_request != null }}
+        run: |
+          KIND=""
+          case "$EVENT_NAME" in
+            issues)
+              [ "$ACTION" = "opened" ] && KIND="issue_opened"
+              [ "$ACTION" = "closed" ] && KIND="issue_closed"
+              ;;
+            issue_comment)
+              if [ "$ACTION" = "created" ]; then
+                if [ "$IS_PR_COMMENT" = "true" ]; then KIND="pr_comment"; else KIND="issue_comment"; fi
+              fi
+              ;;
+            pull_request_target)
+              case "$ACTION" in
+                opened) KIND="pr_opened" ;;
+                ready_for_review) KIND="pr_ready" ;;
+                review_requested) KIND="review_requested" ;;
+                closed) [ "$PR_MERGED" = "true" ] && KIND="pr_merged" || KIND="pr_closed" ;;
+              esac
+              ;;
+            pull_request_review)
+              if [ "$ACTION" = "submitted" ]; then
+                case "$REVIEW_STATE" in
+                  approved) KIND="review_approved" ;;
+                  changes_requested) KIND="review_changes" ;;
+                  commented) KIND="review_commented" ;;
+                esac
+              fi
+              ;;
+          esac
+          echo "kind=$KIND" >> "$GITHUB_OUTPUT"
+          if [ -z "$KIND" ]; then echo "无匹配通知类型，跳过"; fi
+
+      - name: Build & send card
+        if: steps.kind.outputs.kind != ''
+        env:
+          NOTIFY_KIND: ${{ steps.kind.outputs.kind }}
+          REPO: ${{ github.repository }}
+          LARK_WEBHOOK_URL: ${{ secrets.LARK_WEBHOOK_URL }}
+          LARK_WEBHOOK_SECRET: ${{ secrets.LARK_WEBHOOK_SECRET }}
+          # issue
+          ISSUE_NUM: ${{ github.event.issue.number }}
+          ISSUE_TITLE: ${{ github.event.issue.title }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          ISSUE_USER: ${{ github.event.issue.user.login }}
+          # comment
+          COMMENT_BODY: ${{ github.event.comment.body }}
+          COMMENT_URL: ${{ github.event.comment.html_url }}
+          COMMENT_USER: ${{ github.event.comment.user.login }}
+          # pr
+          PR_NUM: ${{ github.event.pull_request.number }}
+          PR_TITLE: ${{ github.event.pull_request.title }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+          PR_USER: ${{ github.event.pull_request.user.login }}
+          PR_BODY: ${{ github.event.pull_request.body }}
+          # review
+          REVIEW_BODY: ${{ github.event.review.body }}
+          REVIEW_URL: ${{ github.event.review.html_url }}
+          REVIEW_USER: ${{ github.event.review.user.login }}
+        run: |
+          bash .github/scripts/lark-notify/dispatch.sh
