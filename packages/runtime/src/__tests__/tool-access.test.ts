@@ -55,4 +55,30 @@ describe("tool access control (§9)", () => {
     expect(builtinToolNamesForRole("expert")).toContain("read");
     expect(builtinToolNamesForRole("trace")).toEqual(["read"]);
   });
+
+  it("authoring experts get write + bash builtins by name", () => {
+    const eng = builtinToolNamesForRole("expert", "engineer");
+    expect(eng).toEqual(expect.arrayContaining(["read", "write", "edit", "bash"]));
+    const exp = builtinToolNamesForRole("expert", "experimentalist");
+    expect(exp).toEqual(expect.arrayContaining(["write", "bash"]));
+  });
+
+  it("writer can write but not run a shell", () => {
+    const w = builtinToolNamesForRole("expert", "writer");
+    expect(w).toContain("write");
+    expect(w).not.toContain("bash");
+  });
+
+  it("librarian stays read-only (no write/bash)", () => {
+    const lib = builtinToolNamesForRole("expert", "librarian");
+    expect(lib).toContain("read");
+    expect(lib).not.toContain("write");
+    expect(lib).not.toContain("bash");
+  });
+
+  it("unknown experts fall back to the lean role default", () => {
+    expect(builtinToolNamesForRole("expert", "statistician").sort()).toEqual(
+      ["find", "grep", "read"].sort(),
+    );
+  });
 });
