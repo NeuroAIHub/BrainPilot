@@ -18,8 +18,8 @@ import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } fro
 import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, type PiProviderSdk } from "./pi-provider.js";
 
-export function isMockMode(): boolean {
-  return process.env.BP_MOCK === "1" || process.env.BP_MOCK === "true";
+export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
+  return env.BP_MOCK === "1" || env.BP_MOCK === "true";
 }
 
 export const mockAgentFactory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
