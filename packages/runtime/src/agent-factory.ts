@@ -48,11 +48,21 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
   // per-role persona is injected through a DefaultResourceLoader. We use
   // `appendSystemPrompt` (NOT `systemPrompt`) so Pi's built-in tool-calling
-  // guidance is preserved and our role persona is appended after it. Custom
-  // loaders are NOT auto-reloaded by the SDK, so we must reload() before use.
+  // guidance is preserved and our role persona is appended after it.
+  //
+  // Skills: Pi's DefaultResourceLoader otherwise auto-discovers skills from the
+  // HOST machine's global dirs (~/.pi/agent/skills, ~/.agents/skills), which
+  // makes agent behaviour depend on whoever runs the runtime — not reproducible.
+  // We set `noSkills: true` to drop that implicit discovery and load skills ONLY
+  // from BrainPilot's own app-controlled dirs (`bp_template/skills/` shared +
+  // `.bp/<sid>/skills/` per-session, passed as `skillPaths`). `additionalSkillPaths`
+  // bypasses Pi's project-trust gate, so this works in our non-interactive runtime.
+  // Custom loaders are NOT auto-reloaded by the SDK, so we must reload() before use.
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
+    noSkills: true,
+    additionalSkillPaths: params.skillPaths,
     appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
   });
   await resourceLoader.reload();
@@ -148,6 +158,10 @@ interface PiSdk {
     agentDir: string;
     appendSystemPrompt?: string[];
     systemPrompt?: string;
+    /** Drop host-global skill auto-discovery (~/.pi/agent/skills, etc.). */
+    noSkills?: boolean;
+    /** Explicit skill dirs/files; loaded even when noSkills is true, and not trust-gated. */
+    additionalSkillPaths?: string[];
   }) => { reload(): Promise<void> };
   getAgentDir(): string;
   AuthStorage: { create(path: string): unknown };
