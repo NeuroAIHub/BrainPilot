@@ -6,9 +6,9 @@ name: CI
 
 on:
   push:
-    branches: [development, main]
+    branches: [development, main, testbed]
   pull_request:
-    branches: [development, main]
+    branches: [development, main, testbed]
 
 jobs:
   build-and-test:
@@ -42,3 +42,48 @@ jobs:
 
       - name: Build all packages
         run: npm run build
+
+  # 黑盒测试可在 GitHub runner 跑的部分（零 token、不需真实 provider/宿主权限）。
+  # 仅 testbed 分支有 testbed/ 目录；development/main 无此目录，job 自动跳过（if 守卫）。
+  # 完整黑盒回归（recovery 需 kill 进程、cases/mcp 需真实 provider）由服务器 run-all.sh 跑。
+  blackbox-fast:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Detect testbed assets
+        id: detect
+        run: |
+          if [ -d testbed/suites ]; then echo "present=true" >> "$GITHUB_OUTPUT"; else echo "present=false" >> "$GITHUB_OUTPUT"; fi
+
+      - name: Install
+        if: steps.detect.outputs.present == 'true'
+        run: npm ci
+
+      - name: Build (cli + runtime + backend for brainpilot up)
+        if: steps.detect.outputs.present == 'true'
+        run: npm run build
+
+      - name: demo-bundle 单测（纯函数，零依赖）
+        if: steps.detect.outputs.present == 'true'
+        run: node testbed/suites/demo-bundle.test.mjs
+
+      - name: 起 mock 实例 + 跑 contract/scenarios（零 token）
+        if: steps.detect.outputs.present == 'true'
+        env:
+          BP_MOCK: "1"
+          ANTHROPIC_API_KEY: sk-mock-dummy
+        run: |
+          set -e
+          DATA="$RUNNER_TEMP/bp-mock"
+          node packages/cli/dist/bin.js up --dir "$DATA" --port 19020 --no-open --detach
+          for i in $(seq 1 20); do curl -sf http://127.0.0.1:19020/api/health >/dev/null && break; sleep 1; done
+          curl -sf http://127.0.0.1:19020/api/health
+          cd testbed/suites
+          node contract.mjs --base-url http://127.0.0.1:19020/api
+          node run-scenarios.mjs --base-url http://127.0.0.1:19020/api --data-dir "$DATA"
+
