@@ -880,7 +880,19 @@ Run: `sudo docker rmi brainpilot-sandbox-gpu:test || true`
   Dockerfile 默认变体=cpu、compose 未覆盖 → 无回归。测试镜像已清理。
 - **push 脚本修正**：`OK_LIST/FAIL_LIST` 改为显式 `=()` 空数组初始化，否则全成功路径在 `set -u`
   下因空 `FAIL_LIST` 触发 `unbound variable`（已验证 + 修复，含在 `c30cbe4`）。
-- **Task 11（GPU 镜像）**：⏭️ 未执行（~6GB、torch 下载耗时，标记为可选）。机制已就位
-  （`extra-deps.gpu.sh` + Dockerfile 变体选择），需要时 `bash scripts/release-build.sh sandbox-gpu` 即可。
-- **版本号注意**：根 `package.json` 现为 `0.0.4`；早前会话构建的本地镜像仍是 `0.0.3` 旧原型，
-  正式发布前需重跑 `release-build.sh` 产出 `0.0.4` 镜像再 push。
+- **Task 11（GPU 镜像）**：✅ 已构建并验证。`brainpilot-sandbox-gpu:0.0.4`（14.5GB 解压）构建成功，
+  `torch 2.5.1+cu124`（cuda build 12.4）+ numpy/pandas/scipy/sklearn/matplotlib/pypdf/pdfplumber/PIL
+  全部可导入。**torch 下载坑（重要）**：官方 download.pytorch.org 把 torch wheel 302 到 Cloudflare R2，
+  该流经 Clash 代理限速崩溃+哈希不匹配（连续两次构建在 908MB torch 处失败）。pip `--index-url` 指交大
+  也无效（交大 simple 索引登记的也是 R2 URL）。**解法**：直接拼交大 wheel 文件 URL（`/cu124/<wheel>`）
+  会 302 到交大自有 S3（s3.jcloud.sjtu.edu.cn，国内 ~13MB/s），故 `extra-deps.gpu.sh` 改为 curl 直下
+  三个 wheel 再 pip 装本地文件，依赖仍走阿里云 PyPI（commit `269b571`）。
+
+### 实际发布状态（2026-06-16）
+| 镜像 | ghcr（公网） | ACR（阿里云） | 内网 10.0.3.125 |
+|------|:---:|:---:|:---:|
+| main | ❌ denied（PAT 缺 write:packages 或 org 无包写权限） | ✅ 0.0.4+latest | ✅ 0.0.4+latest |
+| sandbox (cpu) | 未推 | ✅ 0.0.4+latest | ✅ 0.0.4+latest |
+| sandbox-gpu | 不推（按定） | 🔄 推送中（仅 ACR，14.5GB） | 不推 |
+
+- **ghcr 待修**：需带 `write:packages` 的 PAT 重新 `docker login ghcr.io -u GTC2333`，或 org owner 给包写权限。
