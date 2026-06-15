@@ -236,12 +236,27 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   _default: ["send_message", "record_trace"],
 };
 
-/** Built-in Pi tool allowlist per role. */
+/**
+ * Built-in Pi tool allowlist per role. Valid Pi builtin names:
+ * `bash, edit, find, glob, grep, ls, read, write`.
+ */
 export const BUILTIN_TOOL_CONFIG: Record<string, string[]> = {
   principal: [],
   trace: ["read"],
   expert: ["read", "grep", "find"],
   _default: ["read", "grep", "find"],
+};
+
+/**
+ * Per-agent-name builtin overrides, keyed by name (not role). Authoring agents
+ * need write/edit + a shell; the read-only researcher keeps the lean default.
+ * Falls through to BUILTIN_TOOL_CONFIG by role when a name has no entry.
+ */
+export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
+  engineer: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
+  experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
+  writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
+  librarian: ["read", "grep", "find", "glob"],
 };
 
 export function systemToolNamesForRole(role: AgentRole, agentName: string): string[] {
@@ -252,7 +267,12 @@ export function systemToolNamesForRole(role: AgentRole, agentName: string): stri
   return AGENT_TOOL_CONFIG[agentName] ?? AGENT_TOOL_CONFIG.expert ?? AGENT_TOOL_CONFIG._default!;
 }
 
-export function builtinToolNamesForRole(role: AgentRole): string[] {
+export function builtinToolNamesForRole(role: AgentRole, agentName?: string): string[] {
+  // Principal and trace are role-scoped; experts may carry a per-name override
+  // (e.g. engineer gets write+bash) before falling back to the role default.
+  if (role === "expert" && agentName && BUILTIN_TOOL_CONFIG_BY_NAME[agentName]) {
+    return BUILTIN_TOOL_CONFIG_BY_NAME[agentName]!;
+  }
   return BUILTIN_TOOL_CONFIG[role] ?? BUILTIN_TOOL_CONFIG._default!;
 }
 

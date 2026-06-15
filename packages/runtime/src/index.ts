@@ -34,8 +34,15 @@ export {
   builtinToolNamesForRole,
   AGENT_TOOL_CONFIG,
   BUILTIN_TOOL_CONFIG,
+  BUILTIN_TOOL_CONFIG_BY_NAME,
 } from "./tools/system-tools.js";
 export type { ToolDeps } from "./tools/system-tools.js";
+
+export {
+  PERSONAS,
+  BUILTIN_PERSONA_NAMES,
+  personaFor,
+} from "./personas.js";
 
 export { createServer, startServer } from "./server.js";
 export type { StartServerOptions } from "./server.js";
