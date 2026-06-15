@@ -20,6 +20,7 @@ import { MasAgent } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
+import { personaFor } from "./personas.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool } from "./types.js";
 
@@ -106,6 +107,34 @@ export class SessionManager {
   private historyPath(sid: string, agent: string): string {
     return join(this.bpDir(sid), "history", `${agent}.jsonl`);
   }
+  /** Skills shared by every session (user-editable `bp_template/skills/`). */
+  private templateSkillsDir(): string {
+    return join(this.dataRoot, "bp_template", "skills");
+  }
+  /** This session's own skill dir (`.bp/<sid>/skills/`), overrides/augments the template. */
+  private sessionSkillsDir(sid: string): string {
+    return join(this.bpDir(sid), "skills");
+  }
+  /** User-editable persona override for an agent (`bp_template/agents/<name>/prompt.md`). */
+  private agentPromptPath(name: string): string {
+    return join(this.dataRoot, "bp_template", "agents", name, "prompt.md");
+  }
+
+  /**
+   * Resolve an agent's system persona. Prefers the user-editable on-disk
+   * `bp_template/agents/<name>/prompt.md` (so personas can be tuned without a
+   * rebuild); falls back to the curated built-in persona (`personaFor`) when no
+   * file is present or it's empty.
+   */
+  private async loadPersona(name: string, role: AgentRole): Promise<string> {
+    try {
+      const raw = (await readFile(this.agentPromptPath(name), "utf8")).trim();
+      if (raw) return raw;
+    } catch {
+      // No on-disk override — fall through to the built-in persona.
+    }
+    return personaFor(name, role);
+  }
 
   /* ---------------------------- session CRUD ---------------------------- */
 
@@ -138,6 +167,7 @@ export class SessionManager {
 
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
+      await mkdir(this.sessionSkillsDir(id), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
       await this.writeMeta(entry);
       await mailbox.recover();
@@ -249,7 +279,7 @@ export class SessionManager {
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
     const agentTools = [...systemTools, ...mcpTools];
-    const builtins = builtinToolNamesForRole(role);
+    const builtins = builtinToolNamesForRole(role, name);
     const allowedToolNames = [...builtins, ...agentTools.map((t) => t.name)];
 
     const session = await this.agentFactory({
@@ -260,7 +290,8 @@ export class SessionManager {
       cwd: this.workspaceDir(sessionId),
       systemTools: agentTools,
       allowedToolNames,
-      systemPrompt: `You are the ${name} agent (${role}).`,
+      systemPrompt: await this.loadPersona(name, role),
+      skillPaths: [this.templateSkillsDir(), this.sessionSkillsDir(sessionId)],
     });
 
     const agent = new MasAgent({
