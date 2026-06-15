@@ -155,6 +155,30 @@ npm run release           # version-sync, build, then publish protocol→runtime
 ```
 `@brainpilot/client-cli` stays private and is never published.
 
+### Docker 镜像发布
+
+镜像版本号与 npm 版本一致（根 `package.json` 的 `version`）。三个镜像：`brainpilot-main`、
+`brainpilot-sandbox`（cpu）、`brainpilot-sandbox-gpu`（CUDA torch）。
+
+```bash
+# 一次性：复制示范配置，填入国内镜像源 / 私有 registry 地址（两个 .local 文件均不提交）
+cp scripts/release-mirrors.example.sh scripts/release-mirrors.local.sh   # pip/apt 镜像源
+cp scripts/release-targets.example.sh scripts/release-targets.local.sh   # ACR/内网 registry
+
+# 构建（默认全部；可传子串只建子集）
+bash scripts/release-build.sh                # 全部三个镜像
+bash scripts/release-build.sh main           # 只建 main
+bash scripts/release-build.sh sandbox-gpu    # 只建 GPU 变体（体积大、慢）
+
+# 推送（需先 docker login 各 registry）
+bash scripts/release-push.sh --dry-run                       # 先看计划
+bash scripts/release-push.sh                                 # 全部 → 全部 registry
+bash scripts/release-push.sh --image sandbox-gpu --registry acr,intranet  # GPU 跳过公网 ghcr
+```
+
+推送目标 registry 在 `scripts/release-images.sh`（ghcr，公开）+ `release-targets.local.sh`
+（ACR / 内网，私有）声明。GPU 镜像约 6GB，推公网 ghcr 可能超时，建议 `--registry acr,intranet`。
+
 ## 🧪 Testing
 
 ```bash
