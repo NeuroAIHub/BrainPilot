@@ -1,6 +1,7 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import { User } from "../contracts/backend";
 import { api, clearStoredToken, getStoredToken, storeToken } from "../utils/api";
+import { runtimeConfig } from "../config";
 import { tg } from "../i18n/translate";
 
 interface AuthContextValue {
@@ -16,7 +17,50 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// Single-user bypass identity (auth disabled). Kept stable so `token` —
+// which other contexts use as a "ready to connect" gate — is always truthy
+// and the login overlay (gated on `!user`) never renders.
+const LOCAL_USER: User = {
+  id: "local",
+  username: "local",
+  createdAt: "1970-01-01T00:00:00.000Z",
+};
+const LOCAL_TOKEN = "local";
+
+/**
+ * AuthProvider has two modes, selected at build time by VITE_AUTH_ENABLED:
+ *
+ * - auth DISABLED (default, this single-user repo): a bypass that reports an
+ *   always-signed-in local user with a fixed token. No login screen, no
+ *   network calls; login/register/logout are no-ops.
+ * - auth ENABLED (downstream multi-user deployment, VITE_AUTH_ENABLED=1):
+ *   the real bootstrap/login/register/logout flow in RealAuthProvider.
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
+  if (!runtimeConfig.authEnabled) {
+    return <BypassAuthProvider>{children}</BypassAuthProvider>;
+  }
+  return <RealAuthProvider>{children}</RealAuthProvider>;
+}
+
+function BypassAuthProvider({ children }: { children: ReactNode }) {
+  const value = useMemo<AuthContextValue>(
+    () => ({
+      user: LOCAL_USER,
+      token: LOCAL_TOKEN,
+      isBootstrapping: false,
+      isSubmitting: false,
+      error: null,
+      login: async () => {},
+      register: async () => {},
+      logout: () => {},
+    }),
+    [],
+  );
+  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
+}
+
+function RealAuthProvider({ children }: { children: ReactNode }) {
   const [token, setToken] = useState<string | null>(() => getStoredToken());
   const [user, setUser] = useState<User | null>(null);
   const [isBootstrapping, setIsBootstrapping] = useState(true);
