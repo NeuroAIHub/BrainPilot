@@ -34,20 +34,21 @@ COMMON=(
   --build-arg "APT_MIRROR=${APT_MIRROR:-}"
   --build-arg "PIP_INDEX_URL=${PIP_INDEX_URL:-}"
   --build-arg "PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL:-}"
+  --build-arg "TORCH_WHEEL_BASE=${TORCH_WHEEL_BASE:-}"
 )
 
 echo "==> version=${VERSION} proxy=${PROXY} (mirrors: pip=${PIP_INDEX_URL:-官方} apt=${APT_MIRROR:-官方})"
 
 built=()
 for entry in "${RELEASE_IMAGES[@]}"; do
-  IFS='|' read -r name dockerfile extra_arg <<< "$entry"
+  IFS='|' read -r name dockerfile target <<< "$entry"
   if [ $# -gt 0 ] && ! _matches "$name" "$@"; then
     echo "==> skip $name (不匹配子集)"
     continue
   fi
-  extra=(); [ -n "$extra_arg" ] && extra=( --build-arg "$extra_arg" )
-  echo "==> building $name (tags: latest, $VERSION)"
-  sudo DOCKER_BUILDKIT=0 docker build "${COMMON[@]}" "${extra[@]}" \
+  target_arg=(); [ -n "$target" ] && target_arg=( --target "$target" )
+  echo "==> building $name (tags: latest, $VERSION${target:+, target=$target})"
+  sudo DOCKER_BUILDKIT=0 docker build "${COMMON[@]}" "${target_arg[@]}" \
     -f "$dockerfile" -t "$name:latest" -t "$name:$VERSION" .
   built+=("$name")
 done
