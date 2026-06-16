@@ -43,6 +43,10 @@ build/
 .env.local
 .env.*.local
 
+# Release push private config (registry addresses + mirror sources)
+scripts/release-targets.local.sh
+scripts/release-mirrors.local.sh
+
 # Benchmark data (mounted externally, never committed)
 benchmark_tasks/
 benchmark_results/
