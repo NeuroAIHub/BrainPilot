@@ -23,8 +23,19 @@ brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brain
 ```
 The key is persisted to `brainpilot/bp_template/settings.json`. You can also omit
 `--api-key` and supply the key via the `ANTHROPIC_API_KEY` environment variable
-instead — without a key (and without `BP_MOCK=1`), `brainpilot up` exits with
-"No provider API key found."
+instead. A missing key no longer blocks launch — `brainpilot up` starts anyway
+and you can configure the **provider url / key / model** in the web **Settings
+UI** after it opens (or edit `bp_template/settings.json` directly). Without a key
+(and without `BP_MOCK=1`), agents simply can't make a real LLM call until one is
+set.
+
+To configure a gateway / third-party endpoint in one command, add `--base-url`
+(and optionally `--model`):
+```bash
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+```
+`init` always ends by reporting whether a key is currently resolvable and where
+to set one, so re-running it on an already-initialized dir is safe and informative.
 
 ### 3. Launch
 ```bash

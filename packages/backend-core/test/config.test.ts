@@ -6,6 +6,8 @@ import {
   resolveProvider,
   writeLocalSettings,
   parseDotenv,
+  describeProviderConfig,
+  formatProviderGuidance,
 } from "../src/config.js";
 
 async function tmp(): Promise<string> {
@@ -79,6 +81,83 @@ describe("parseDotenv", () => {
   });
   it("returns {} for a missing file", async () => {
     expect(await parseDotenv("/nope/.env")).toEqual({});
+  });
+});
+
+describe("describeProviderConfig", () => {
+  it("reports hasKey + source when key comes from bp_template", async () => {
+    const dir = await tmp();
+    await mkdir(path.join(dir, "bp_template"), { recursive: true });
+    await writeFile(
+      path.join(dir, "bp_template", "settings.json"),
+      JSON.stringify({ apiKey: "sk-secret", baseUrl: "https://gw", model: "m1" }),
+    );
+    const r = await describeProviderConfig({ dataDir: dir, env: {} });
+    expect(r.hasKey).toBe(true);
+    expect(r.source).toBe("bp_template");
+    expect(r.baseUrl).toBe("https://gw");
+    expect(r.model).toBe("m1");
+    expect(r.settingsPath).toBe(path.join(dir, "bp_template", "settings.json"));
+    expect(r.dotenvPath).toBe(path.join(dir, ".env"));
+  });
+
+  it("reports source 'env' when key comes from the environment", async () => {
+    const dir = await tmp();
+    const r = await describeProviderConfig({
+      dataDir: dir,
+      env: { ANTHROPIC_API_KEY: "envkey" },
+    });
+    expect(r.hasKey).toBe(true);
+    expect(r.source).toBe("env");
+  });
+
+  it("reports hasKey:false when no layer supplies a key", async () => {
+    const dir = await tmp();
+    const r = await describeProviderConfig({ dataDir: dir, env: {} });
+    expect(r.hasKey).toBe(false);
+    expect(r.source).toBeUndefined();
+  });
+
+  it("never leaks the plaintext key in the report", async () => {
+    const dir = await tmp();
+    await mkdir(path.join(dir, "bp_template"), { recursive: true });
+    await writeFile(
+      path.join(dir, "bp_template", "settings.json"),
+      JSON.stringify({ apiKey: "sk-secret" }),
+    );
+    const r = await describeProviderConfig({ dataDir: dir, env: {} });
+    expect(JSON.stringify(r)).not.toContain("sk-secret");
+  });
+});
+
+describe("formatProviderGuidance", () => {
+  it("unconfigured: lists settings file, env, init, settings UI, and BP_MOCK", () => {
+    const lines = formatProviderGuidance({
+      hasKey: false,
+      settingsPath: "/data/bp_template/settings.json",
+      dotenvPath: "/data/.env",
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("/data/bp_template/settings.json");
+    expect(text).toContain("ANTHROPIC_API_KEY");
+    expect(text).toContain("--base-url");
+    expect(text.toLowerCase()).toContain("settings"); // UI hint
+    expect(text).toContain("BP_MOCK=1");
+  });
+
+  it("configured: shows a confirmation with the source", () => {
+    const lines = formatProviderGuidance({
+      hasKey: true,
+      source: "bp_template",
+      baseUrl: "https://gw",
+      model: "m1",
+      settingsPath: "/data/bp_template/settings.json",
+      dotenvPath: "/data/.env",
+    });
+    const text = lines.join("\n");
+    expect(text).toContain("bp_template");
+    expect(text).toContain("m1");
+    expect(text).toContain("https://gw");
   });
 });
 

@@ -14,7 +14,7 @@
  * Everything external (startServer, port probing, browser open, child spawn)
  * is injectable so tests drive it without a real server.
  */
-import { resolveProvider } from "@brainpilot/backend-core";
+import { resolveProvider, describeProviderConfig, formatProviderGuidance } from "@brainpilot/backend-core";
 import type { StartServerOptions, RunningServer } from "@brainpilot/backend-core";
 import { isMockMode } from "@brainpilot/runtime";
 import pc from "picocolors";
@@ -75,17 +75,6 @@ export function buildStartServerOptions(
     ...(cfg.webDist ? { webRoot: cfg.webDist } : {}),
     // The backend creates a LocalProcessOrchestrator from env (BP_MODE=single).
   } satisfies StartServerOptions;
-}
-
-export class ProviderKeyError extends Error {
-  constructor(public readonly dataDir: string) {
-    super(
-      "No provider API key found.\n" +
-        "  Set ANTHROPIC_API_KEY in your environment, or run `brainpilot init`,\n" +
-        `  or add it to ${dataDir}/bp_template/settings.json or ${dataDir}/.env.`,
-    );
-    this.name = "ProviderKeyError";
-  }
 }
 
 export class PortInUseError extends Error {
@@ -156,9 +145,13 @@ export async function up(
 
   // 3. Resolve provider key. Skipped under BP_MOCK=1 — the mock agent replaces
   //    the whole Pi layer and never makes a real LLM call, so no key is needed.
+  //    A missing key no longer blocks launch: the backend/runtime boot lazily
+  //    and the user can configure url/key/model in the web Settings UI (or
+  //    settings.json). We just warn so they know what to do.
   const provider = await resolveProvider({ dataDir, env });
   if (!isMockMode(env) && !provider.apiKey) {
-    throw new ProviderKeyError(dataDir);
+    const report = await describeProviderConfig({ dataDir, env });
+    for (const line of formatProviderGuidance(report)) log(pc.yellow(line));
   }
 
   // 4. Pre-check ports (backend + runtime, §11A.5).
