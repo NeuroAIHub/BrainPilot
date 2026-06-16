@@ -145,6 +145,82 @@ Full `models.json` schema — `api` types, `compat` flags, `$ENV` key
 interpolation, per-model cost/limits — is documented at
 <https://pi.dev/docs/latest/models>.
 
+## 🔌 Connecting MCP servers
+
+Agents can call tools served over the **Model Context Protocol**. The runtime
+bridges every configured MCP server into the agents' toolset: each remote tool
+shows up namespaced as `mcp__<server>__<tool>`. Three transports are supported —
+**stdio** (spawned local process), **streamable-http**, and **sse** (remote).
+
+### What ships by default
+
+`brainpilot init` (and `brainpilot up`, which scaffolds on first launch) writes
+`mcp_servers.json` into your **data dir** — it is generated at runtime, not stored
+in the repo. The data dir is resolved as `--dir` > `$BP_DATA_DIR` > `./brainpilot`
+under the directory you run the command from, so the file lands at
+`<data-dir>/bp_template/mcp_servers.json`. It comes pre-wired to BrainPilot's three
+built-in remote services (streamable-http, no auth):
+
+| Server | Purpose | URL |
+|--------|---------|-----|
+| `bp_KB` | Knowledge base | `http://8.145.42.208:8005/mcp` |
+| `bp_skills` | Skills | `http://8.145.42.208:8006/mcp` |
+| `bp_papersearch` | Paper search | `http://8.145.42.208:8007/mcp` |
+
+These connect automatically on launch — no extra setup. Remove or edit any entry
+to opt out or point at your own deployment. A server is connected lazily and a
+failing one is logged and skipped, so it never blocks the others or aborts launch.
+
+> Scaffolding is idempotent: an existing `mcp_servers.json` is never overwritten.
+> If you initialized before these defaults existed, edit the file in your data dir
+> by hand (or delete it and re-run `brainpilot init`).
+
+### Adding your own server
+
+Edit `<data-dir>/bp_template/mcp_servers.json` (global, shared by every session)
+or `<data-dir>/.bp/<session-id>/mcp_servers.json` (per session) — where
+`<data-dir>` is your generated data dir (e.g. `./brainpilot`), not a path in the
+repo. The format is the standard MCP/Claude `mcpServers` map; pick a transport
+with `type`:
+
+```jsonc
+{
+  "mcpServers": {
+    // Local process over stdio (type defaults to "stdio" if omitted):
+    "fs": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {}
+    },
+    // Remote over streamable-http, with an auth header:
+    "my-api": {
+      "type": "http",
+      "url": "https://your-host.example.com/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    },
+    // Remote over server-sent events:
+    "my-events": {
+      "type": "sse",
+      "url": "https://your-host.example.com/sse",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Field reference:
+- `type` — `"stdio"` | `"http"` | `"sse"`. Omitted ⇒ `"stdio"`.
+- `command` / `args` / `env` — stdio only: the executable to spawn and its env.
+- `url` — http/sse only: the server endpoint.
+- `headers` — http/sse only: extra HTTP headers (e.g. `Authorization`) sent on
+  every request.
+
+An http/sse entry whose `url` is left blank (or a stdio entry with no `command`)
+is treated as an unconfigured placeholder and skipped silently at startup, so you
+can keep a slot in the file before wiring up its address. A ready-to-copy example
+covering all three transports is written to `bp_template/mcp_servers.example.json`.
+
 ## 📦 Publishing (maintainers)
 
 ```bash
