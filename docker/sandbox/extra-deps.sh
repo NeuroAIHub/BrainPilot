@@ -1,11 +1,10 @@
 #!/usr/bin/env bash
-# extra-deps.sh — cpu sandbox 基线依赖（构建期执行，由 Dockerfile RUN 调用）。
-# 装 python3 + pip + venv，让 agent 能通过 Pi SDK 的 bash 工具运行 Python 代码
-# （persona 指示 agent "write/edit 文件 + bash 运行"）。
-# 不预装科学库 —— agent 按需自装（persona 本就要求 agent 管理依赖），保持镜像轻量。
-# GPU 变体见 extra-deps.gpu.sh。镜像源经 ENV 注入（见 _python-base.sh）。
+# extra-deps.sh — cpu sandbox 业务依赖注入点（由 cpu stage RUN 调用）。
+# python3/pip/curl 已在 python-baseline stage 装好（见 _python-base.sh），此处不再重装。
+# 默认空操作，保持 cpu 镜像轻量（agent 按需自装依赖，persona 本就要求 agent 管理依赖）。
+# 如需给 cpu 镜像预装 pip 包，在此追加，例如：
+#   pip3 install --no-cache-dir --break-system-packages <pkg>...
+# GPU 变体的重依赖见 extra-deps.gpu-libs.sh。
 set -euo pipefail
 
-source "$(dirname "$0")/_python-base.sh"
-
-echo "[extra-deps] cpu baseline: python3 $(python3 --version 2>&1) installed (no sci libs)"
+echo "[extra-deps] cpu baseline ready: $(python3 --version 2>&1) (no sci libs)"

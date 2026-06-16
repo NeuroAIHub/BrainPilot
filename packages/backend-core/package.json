@@ -39,6 +39,9 @@
     "@hono/node-server": "^1.13.0",
     "hono": "^4.6.0"
   },
+  "optionalDependencies": {
+    "dockerode": "^4.0.0"
+  },
   "devDependencies": {
     "@types/dockerode": "^3.3.0"
   }

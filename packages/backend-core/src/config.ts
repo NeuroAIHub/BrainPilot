@@ -199,3 +199,64 @@ export async function writeLocalSettings(
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), "utf8");
   await fs.rename(tmp, file); // atomic write (§16.4 fix)
 }
+
+/**
+ * Onboarding-facing view of the resolved provider config. A boolean-only key
+ * presence (never the plaintext key) plus the two files a user would edit, so
+ * `init`/`up` can print accurate, consistent guidance from one source.
+ */
+export interface ProviderConfigReport {
+  hasKey: boolean;
+  source?: ResolvedProvider["source"];
+  baseUrl?: string;
+  model?: string;
+  /** Absolute path of bp_template/settings.json (the highest-authority layer). */
+  settingsPath: string;
+  /** Absolute path of the data dir's .env. */
+  dotenvPath: string;
+}
+
+/**
+ * Resolve the provider config and reduce it to an onboarding report. Reuses the
+ * full priority chain via {@link resolveProvider}; folds apiKey to a boolean so
+ * the key never leaves this module in plaintext.
+ */
+export async function describeProviderConfig(
+  options: ResolveProviderOptions,
+): Promise<ProviderConfigReport> {
+  const resolved = await resolveProvider(options);
+  const paths = configPaths(options.dataDir);
+  return {
+    hasKey: Boolean(resolved.apiKey),
+    source: resolved.source,
+    baseUrl: resolved.baseUrl,
+    model: resolved.model,
+    settingsPath: paths.bpTemplateSettings,
+    dotenvPath: paths.dotenv,
+  };
+}
+
+/**
+ * Turn a {@link ProviderConfigReport} into human guidance lines (uncolored;
+ * callers pick the styling). Shared by `init` and `up` so the onboarding text
+ * never drifts between them.
+ */
+export function formatProviderGuidance(report: ProviderConfigReport): string[] {
+  if (report.hasKey) {
+    const model = report.model || "(default) claude-sonnet-4-6";
+    const baseUrl = report.baseUrl || "(built-in Anthropic endpoint)";
+    return [
+      `✓ Provider key configured (from ${report.source ?? "unknown"}).`,
+      `  model: ${model}   baseUrl: ${baseUrl}`,
+    ];
+  }
+  return [
+    "No provider API key configured yet. Set one of:",
+    `  • settings file:  ${report.settingsPath}`,
+    `      { "apiKey": "<key>", "baseUrl": "<gateway, optional>", "model": "<id, optional>" }`,
+    "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / BP_MODEL)",
+    "  • re-run init:    brainpilot init --api-key <key> [--base-url <url>] [--model <id>]",
+    "  • or just launch and configure url/key/model in the web Settings UI.",
+    "No key needed for a test run:  BP_MOCK=1 brainpilot up",
+  ];
+}

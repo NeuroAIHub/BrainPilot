@@ -96,12 +96,14 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     .option("-d, --dir <path>", "data directory (default ./brainpilot)")
     .option("-p, --port <n>", "default backend port", parsePort)
     .option("--api-key <key>", "provider API key to persist")
+    .option("--base-url <url>", "provider base URL (gateway) to persist")
     .option("--model <id>", "default model id")
     .action(async (opts) => {
       await initFn({
         dir: opts.dir,
         port: opts.port,
         apiKey: opts.apiKey,
+        baseUrl: opts.baseUrl,
         model: opts.model,
       });
     });

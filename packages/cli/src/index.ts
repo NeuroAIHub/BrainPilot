@@ -4,7 +4,7 @@
  * Public surface: the command functions (for programmatic/test use) plus a
  * `run(argv)` that drives the commander program.
  */
-export { up, buildStartServerOptions, ProviderKeyError, PortInUseError } from "./commands/up.js";
+export { up, buildStartServerOptions, PortInUseError } from "./commands/up.js";
 export type { UpOptions, UpDeps, UpResult, ResolvedUpConfig } from "./commands/up.js";
 export { down } from "./commands/down.js";
 export type { DownOptions, DownDeps, DownResult } from "./commands/down.js";

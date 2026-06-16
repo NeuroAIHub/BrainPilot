@@ -5,7 +5,6 @@ import { join } from "node:path";
 import {
   up,
   buildStartServerOptions,
-  ProviderKeyError,
   PortInUseError,
   type ResolvedUpConfig,
 } from "./up.js";
@@ -60,38 +59,51 @@ describe("buildStartServerOptions", () => {
 });
 
 describe("up — provider key resolution", () => {
-  it("throws ProviderKeyError when no key anywhere", async () => {
+  it("warns but still starts when no key anywhere", async () => {
     const root = join(dir, "brainpilot");
-    await expect(
-      up(
-        { dir: root, foreground: true, open: false },
-        {
-          env: {}, // no ANTHROPIC_API_KEY
-          startServer: async () => {
-            throw new Error("should not start");
-          },
-          isPortFree: freePorts(),
-          webDist: () => null,
-          log: () => {},
+    let started = false;
+    const logs: string[] = [];
+    const result = await up(
+      { dir: root, port: 9810, foreground: true, open: false },
+      {
+        env: {}, // no ANTHROPIC_API_KEY
+        startServer: async () => {
+          started = true;
+          return { stop: async () => {} } as unknown as RunningServer;
         },
-      ),
-    ).rejects.toBeInstanceOf(ProviderKeyError);
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    expect(started).toBe(true);
+    expect(result.url).toBe("http://127.0.0.1:9810");
+    // a warning pointing users at how to configure the key
+    const text = logs.join("\n");
+    expect(text).toContain("No provider API key configured");
+    expect(text).toContain("Settings UI");
   });
 
-  it("scaffolds before failing on the missing key", async () => {
+  it("scaffolds the data dir on first launch", async () => {
     const root = join(dir, "brainpilot");
     await up(
-      { dir: root, foreground: true, open: false },
-      { env: {}, isPortFree: freePorts(), webDist: () => null, log: () => {} },
-    ).catch(() => {});
-    // scaffold ran even though provider check failed afterward.
+      { dir: root, port: 9811, foreground: true, open: false },
+      {
+        env: {},
+        startServer: async () =>
+          ({ stop: async () => {} }) as unknown as RunningServer,
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: () => {},
+      },
+    );
     const cfg = JSON.parse(
       await readFile(join(root, "brainpilot.config.json"), "utf8"),
     );
     expect(cfg.port).toBeGreaterThan(0);
   });
 
-  it("skips the key check under BP_MOCK=1 (no key needed)", async () => {
+  it("skips the key warning under BP_MOCK=1 (no key needed)", async () => {
     const root = join(dir, "brainpilot");
     let started = false;
     const result = await up(
