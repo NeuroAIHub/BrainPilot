@@ -11,20 +11,11 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// Where to send the browser when the upstream gateway reports we're not
-// authenticated. Login/register/account live in the hosted shell, not here.
-const HOSTED_LOGIN_PATH = "/account/login";
-
-function redirectToHostedLogin() {
-  const redirect = encodeURIComponent(window.location.pathname + window.location.search);
-  window.location.assign(`${HOSTED_LOGIN_PATH}?redirect=${redirect}`);
-}
-
 /**
  * Trust-front auth: the open-source frontend does NOT authenticate. The hosted
  * gateway owns auth and carries identity via an httpOnly cookie. We only read the
- * resolved identity (GET /api/auth/me) for display; on failure we hand off to the
- * hosted login page. There is no login/register/logout UI here.
+ * resolved identity (GET /api/auth/me) for display. There is no login/register/
+ * logout UI here.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [user, setUser] = useState<User | null>(null);
@@ -42,11 +33,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
       } catch {
         if (cancelled) return;
-        // Not authenticated upstream — defer to the hosted login. We still flip
-        // isAuthReady so the shell stops showing the bootstrapping splash while
-        // the navigation is in flight.
+        // No identity resolved. In self-hosted `bp --up` there is no hosted
+        // gateway/login to hand off to, so redirecting here would loop (#38).
+        // Fall back to a local anonymous identity and let the app render.
+        setUser({ id: "local", username: "local", createdAt: new Date(0).toISOString() });
         setIsAuthReady(true);
-        redirectToHostedLogin();
       }
     }
 

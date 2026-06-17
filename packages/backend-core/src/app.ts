@@ -81,6 +81,16 @@ export function createApp(options: CreateAppOptions): Hono {
 
   api.get("/version", (c) => c.json({ name: "@brainpilot/backend-core", version: "0.1.0" }));
 
+  // ---- Identity (backend-local) ----------------------------------------
+  // Trust-front (#21): hosted deployments resolve identity at the upstream
+  // gateway, which intercepts /api/auth/me before it reaches us. For
+  // self-hosted `bp --up` there is no gateway, so we answer locally with a
+  // single default identity. Without this the SPA's auth bootstrap 404s into a
+  // hosted-login redirect loop (#38). Shape matches the web `User` contract.
+  api.get("/auth/me", (c) =>
+    c.json({ id: "local", username: "local", createdAt: new Date(0).toISOString() }),
+  );
+
   // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
   api.get("/metrics", forward("metrics"));
 
