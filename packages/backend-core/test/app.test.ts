@@ -229,4 +229,40 @@ describe("Hono app — local config routes", () => {
     expect(body.apiKey).not.toContain("abcd1234"); // raw key body never leaks
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  it("provider profiles: create → list → set active → delete (no 404)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-"));
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: vi.fn() as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {},
+    });
+
+    // create (the bug: this used to 404)
+    const created = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Gw", base_url: "https://gw", api_key: "sk-secret", models: ["m1"] }),
+    });
+    expect(created.status).toBe(201);
+    const profile = (await created.json()) as { id: string; api_key_masked: string; is_active: boolean };
+    expect(profile.id).toBeTruthy();
+    expect(profile.is_active).toBe(true); // first profile auto-selected
+    expect(profile.api_key_masked).not.toContain("secret"); // masked on the wire
+
+    // list
+    const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+    expect(list).toHaveLength(1);
+
+    // active
+    const active = await app.request("/api/provider/profiles/active");
+    expect(active.status).toBe(200);
+
+    // delete
+    const del = await app.request(`/api/provider/profiles/${profile.id}`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+    expect((await del.json()) as { deleted: boolean }).toEqual({ deleted: true });
+  });
 });

@@ -59,7 +59,7 @@ export async function init(
       ...(options.model ? { model: options.model } : {}),
     });
     keyPersisted = Boolean(options.apiKey);
-    log(pc.green("Provider settings saved to bp_template/settings.json."));
+    log(pc.green("Provider settings saved to bp_template/providers.json."));
   }
 
   // Always end with an accurate picture of the resolved provider config, so

@@ -306,7 +306,10 @@ export const api = {
       return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);
     },
 
-    async create(title = "New research session"): Promise<Session> {
+    async create(
+      title = "New research session",
+      opts: { providerId?: string; modelId?: string } = {},
+    ): Promise<Session> {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.createSession(title);
       }
@@ -314,7 +317,11 @@ export const api = {
         await fetch(`${API_BASE}/sessions`, {
           method: "POST",
           headers: authHeaders(),
-          body: JSON.stringify({ title }),
+          body: JSON.stringify({
+            title,
+            ...(opts.providerId ? { providerId: opts.providerId } : {}),
+            ...(opts.modelId ? { modelId: opts.modelId } : {}),
+          }),
         }),
       );
       return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);

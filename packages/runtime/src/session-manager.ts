@@ -22,6 +22,7 @@ import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import { personaFor } from "./personas.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool } from "./types.js";
 
 interface SessionEntry {
@@ -38,6 +39,8 @@ interface SessionEntry {
   tasks: Map<string, string>;
   runActive: boolean;
   activeRunId: string | null;
+  /** This session's chosen provider/model (resolved against providers.json). */
+  providerRef: SessionProviderRef;
 }
 
 export interface SessionManagerOptions {
@@ -219,11 +222,22 @@ export class SessionManager {
 
   /* ---------------------------- session CRUD ---------------------------- */
 
-  async createSession(input: { id?: string; title?: string } = {}): Promise<Session> {
+  async createSession(
+    input: { id?: string; title?: string; providerId?: string; modelId?: string } = {},
+  ): Promise<Session> {
     const id = input.id ?? randomUUID();
     if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
     const nowIso = new Date().toISOString();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
+
+    // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
+    // (restore path) so reviving a session never clobbers its chosen model.
+    const explicitRef = input.providerId !== undefined || input.modelId !== undefined;
+    const providerRef: SessionProviderRef = explicitRef
+      ? { providerId: input.providerId, modelId: input.modelId }
+      : this.persist
+        ? await this.readProviderRef(id)
+        : {};
 
     const bus = new EventBus({ persistPath: persistBase ? join(persistBase, "events.jsonl") : undefined });
     const mailbox = new Mailbox(id, persistBase ? join(persistBase, "mailbox") : undefined);
@@ -242,6 +256,7 @@ export class SessionManager {
       tasks: new Map(),
       runActive: false,
       activeRunId: null,
+      providerRef,
     };
     this.sessions.set(id, entry);
     this.touch(entry);
@@ -251,6 +266,9 @@ export class SessionManager {
       await mkdir(this.sessionSkillsDir(id), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
       await this.writeMeta(entry);
+      // Only (re)write the ref when the caller chose one — restore must not
+      // clobber an existing ref with an empty object.
+      if (explicitRef) await this.writeProviderRef(entry);
       await mailbox.recover();
       await this.loadTrace(entry);
     }
@@ -363,6 +381,10 @@ export class SessionManager {
     const builtins = builtinToolNamesForRole(role, name);
     const allowedToolNames = [...builtins, ...agentTools.map((t) => t.name)];
 
+    // Resolve this session's provider against the SSOT (providers.json). When
+    // unset/empty the factory falls back to Pi's env-based default.
+    const providerConfig = await resolveSessionProvider(this.dataRoot, entry.providerRef);
+
     const session = await this.agentFactory({
       sessionId,
       agentName: name,
@@ -373,6 +395,7 @@ export class SessionManager {
       allowedToolNames,
       systemPrompt: await this.loadPersona(name, role),
       skillPaths: [this.templateSkillsDir(), this.sessionSkillsDir(sessionId)],
+      providerConfig,
     });
 
     const agent = new MasAgent({
@@ -487,6 +510,32 @@ export class SessionManager {
     };
     await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
     await writeFile(join(this.bpDir(entry.id), "meta.json"), JSON.stringify(meta, null, 2), "utf8").catch(() => {});
+  }
+
+  private providerRefPath(sid: string): string {
+    return join(this.bpDir(sid), "provider.json");
+  }
+
+  /** Persist this session's `{ providerId, modelId }` reference (no key). */
+  private async writeProviderRef(entry: SessionEntry): Promise<void> {
+    if (!this.persist) return;
+    await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
+    await writeFile(
+      this.providerRefPath(entry.id),
+      JSON.stringify(entry.providerRef, null, 2),
+      "utf8",
+    ).catch(() => {});
+  }
+
+  /** Load a session's stored provider ref from disk (restore path). */
+  private async readProviderRef(sid: string): Promise<SessionProviderRef> {
+    try {
+      const raw = await readFile(this.providerRefPath(sid), "utf8");
+      const ref = JSON.parse(raw) as SessionProviderRef;
+      return { providerId: ref.providerId, modelId: ref.modelId };
+    } catch {
+      return {};
+    }
   }
 
   private async loadTrace(entry: SessionEntry): Promise<void> {

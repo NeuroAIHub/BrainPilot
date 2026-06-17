@@ -67,6 +67,10 @@ export const CreateSessionRequestSchema = z.object({
   title: z.string().optional(),
   /** Optional caller-supplied id; runtime generates a UUID otherwise. */
   id: z.string().optional(),
+  /** Optional provider profile id this session should use (providers.json). */
+  providerId: z.string().optional(),
+  /** Optional model id within that provider. */
+  modelId: z.string().optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 

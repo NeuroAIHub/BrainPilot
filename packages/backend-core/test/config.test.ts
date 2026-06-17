@@ -8,6 +8,12 @@ import {
   parseDotenv,
   describeProviderConfig,
   formatProviderGuidance,
+  createProfile,
+  updateProfile,
+  deleteProfile,
+  setSelectedProfile,
+  selectedProfile,
+  readProviders,
 } from "../src/config.js";
 
 async function tmp(): Promise<string> {
@@ -162,15 +168,61 @@ describe("formatProviderGuidance", () => {
 });
 
 describe("writeLocalSettings", () => {
-  it("atomically merges into bp_template/settings.json", async () => {
+  it("creates then updates the selected profile in providers.json", async () => {
     const dir = await tmp();
     await writeLocalSettings(dir, { model: "m1", apiKey: "sk-1", baseUrl: "u1" });
-    await writeLocalSettings(dir, { model: "m2" }); // merge: keep apiKey/baseUrl
+    await writeLocalSettings(dir, { model: "m2" }); // update: keep apiKey/baseUrl
     const raw = JSON.parse(
-      await readFile(path.join(dir, "bp_template", "settings.json"), "utf8"),
+      await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
     );
-    expect(raw.model).toBe("m2");
-    expect(raw.apiKey).toBe("sk-1");
-    expect(raw.baseUrl).toBe("u1");
+    expect(raw.profiles).toHaveLength(1);
+    const p = raw.profiles[0];
+    expect(p.apiKey).toBe("sk-1");
+    expect(p.baseUrl).toBe("u1");
+    // newest model is the default (front of the model list)
+    expect(p.models[0]).toBe("m2");
+    expect(p.models).toContain("m1");
+    expect(raw.selectedProfileId).toBe(p.id);
+  });
+});
+
+describe("providers registry (CRUD + selection)", () => {
+  it("creates, updates (keeping key when omitted), deletes, and reselects", async () => {
+    const dir = await tmp();
+    const a = await createProfile(dir, { name: "A", baseUrl: "ua", apiKey: "ka", models: ["ma"] });
+    const b = await createProfile(dir, { name: "B", baseUrl: "ub", apiKey: "kb", models: ["mb"] });
+
+    // first profile is auto-selected
+    expect((await readProviders(dir)).selectedProfileId).toBe(a.id);
+
+    // update without apiKey keeps the existing key
+    const updated = await updateProfile(dir, a.id, { name: "A2" });
+    expect(updated?.name).toBe("A2");
+    expect(updated?.apiKey).toBe("ka");
+
+    // switch selection
+    expect(await setSelectedProfile(dir, b.id)).toBe(true);
+    expect((await selectedProfile(dir))?.id).toBe(b.id);
+
+    // delete selected → selection falls back to a remaining profile
+    expect(await deleteProfile(dir, b.id)).toBe(true);
+    const after = await readProviders(dir);
+    expect(after.profiles.map((p) => p.id)).toEqual([a.id]);
+    expect(after.selectedProfileId).toBe(a.id);
+  });
+
+  it("resolveProvider prefers the selected profile over env", async () => {
+    const dir = await tmp();
+    await createProfile(dir, { name: "Gw", baseUrl: "https://gw", apiKey: "sk-profile", models: ["m1"] });
+    const resolved = await resolveProvider({ dataDir: dir, env: { ANTHROPIC_API_KEY: "sk-env" } });
+    expect(resolved.apiKey).toBe("sk-profile");
+    expect(resolved.baseUrl).toBe("https://gw");
+    expect(resolved.model).toBe("m1");
+  });
+
+  it("resolveProvider falls back to env when no profile has a key", async () => {
+    const dir = await tmp();
+    const resolved = await resolveProvider({ dataDir: dir, env: { ANTHROPIC_API_KEY: "sk-env" } });
+    expect(resolved.apiKey).toBe("sk-env");
   });
 });
