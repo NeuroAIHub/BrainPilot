@@ -3,6 +3,7 @@ import { Sandbox, SandboxStats } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
+import { runtimeConfig } from "../config";
 
 export type SandboxOperation = "idle" | "loading" | "creating" | "rebuilding" | "destroying";
 
@@ -35,6 +36,51 @@ function selectSandbox(sandboxes: Sandbox[]): Sandbox | null {
 }
 
 export function SandboxProvider({ children }: { children: ReactNode }) {
+  // Single-user local mode: there is no container lifecycle. The runtime
+  // launched by `brainpilot up` is always the sandbox, addressed per-session by
+  // the file routes. We expose a static "running" sandbox so the composer and
+  // file panels work, and never call /api/sandbox/* lifecycle endpoints (which
+  // the local backend does not implement). File operations resolve the real
+  // workspace by the active session id inside the file components themselves.
+  if (runtimeConfig.localMode) {
+    return <LocalSandboxProvider>{children}</LocalSandboxProvider>;
+  }
+  return <RemoteSandboxProvider>{children}</RemoteSandboxProvider>;
+}
+
+const LOCAL_SANDBOX: Sandbox = {
+  id: "local",
+  name: "local",
+  status: "running",
+  port: null,
+  userId: "local",
+  createdAt: new Date(0).toISOString(),
+};
+
+function LocalSandboxProvider({ children }: { children: ReactNode }) {
+  const noop = useCallback(async () => {}, []);
+  const value = useMemo<SandboxContextValue>(
+    () => ({
+      sandboxes: [LOCAL_SANDBOX],
+      currentSandbox: LOCAL_SANDBOX,
+      stats: null,
+      status: "running",
+      operation: "idle",
+      error: null,
+      logs: "",
+      refresh: noop,
+      refreshStats: noop,
+      createSandbox: noop,
+      rebuildSandbox: noop,
+      destroySandbox: noop,
+      reloadConfig: noop,
+    }),
+    [noop],
+  );
+  return <SandboxContext.Provider value={value}>{children}</SandboxContext.Provider>;
+}
+
+function RemoteSandboxProvider({ children }: { children: ReactNode }) {
   const { token } = useAuth();
   const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
   const [currentSandbox, setCurrentSandbox] = useState<Sandbox | null>(null);

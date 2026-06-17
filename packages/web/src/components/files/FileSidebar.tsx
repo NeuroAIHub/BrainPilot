@@ -14,12 +14,14 @@ import {
 } from "lucide-react";
 import { FileContent, FileEntry } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
+import { useSessions } from "../../contexts/SessionContext";
+import { runtimeConfig } from "../../config";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { downloadBlob } from "../../utils/download";
 import { createZipBlob, type ZipEntry } from "../../utils/zip";
 import { IconButton } from "../primitives/IconButton";
-import { ONE_MB, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
+import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
 
 type FileNode = FileEntry & {
@@ -125,6 +127,11 @@ function findNode(root: FileNode, path: string | null): FileNode | null {
 
 export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeStart, width }: FileSidebarProps) {
   const { currentSandbox } = useSandbox();
+  const { currentSession } = useSessions();
+  // In single-user local mode the workspace is addressed by the active session
+  // id (workspaces/<sid>/), not a container id. Elsewhere the sandbox id is the
+  // addressing key. `currentSandbox.status` still gates whether files are live.
+  const sandboxId = runtimeConfig.localMode ? currentSession?.id ?? null : currentSandbox?.id ?? null;
   const t = useT();
   const [tree, setTree] = useState<FileNode>(rootNode);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(["/workspace"]));
@@ -139,16 +146,16 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 
   const loadDirectory = useCallback(
     async (path: string) => {
-      if (!currentSandbox || currentSandbox.status !== "running") {
+      if (!currentSandbox || currentSandbox.status !== "running" || !sandboxId) {
         setError(t("files.error.notRunning"));
         return;
       }
       setError(null);
-      const entries = await api.sandbox.listFiles(currentSandbox.id, path);
+      const entries = await api.sandbox.listFiles(sandboxId, path);
       const children = entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) }));
       setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
     },
-    [currentSandbox],
+    [currentSandbox, sandboxId],
   );
 
   useEffect(() => {
@@ -198,24 +205,24 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 
   const loadDirectoryEntries = useCallback(
     async (path: string): Promise<FileNode[]> => {
-      if (!currentSandbox) {
+      if (!sandboxId) {
         throw new Error("No active sandbox");
       }
       const cached = findNode(tree, path);
       if (cached?.loaded && cached.children) {
         return cached.children;
       }
-      const entries = await api.sandbox.listFiles(currentSandbox.id, path);
+      const entries = await api.sandbox.listFiles(sandboxId, path);
       const children = sortNodes(entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) })));
       setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
       return children;
     },
-    [currentSandbox, tree],
+    [sandboxId, tree],
   );
 
   const collectZipEntries = useCallback(
     async (node: FileNode, zipEntries: ZipEntry[]) => {
-      if (!currentSandbox) {
+      if (!sandboxId) {
         throw new Error("No active sandbox");
       }
       if (node.type === "folder" || node.type === "symlink") {
@@ -230,13 +237,13 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         return;
       }
 
-      const blob = await api.sandbox.readRawFile(currentSandbox.id, node.path);
+      const blob = await api.sandbox.readRawFile(sandboxId, node.path);
       zipEntries.push({
         path: workspaceRelativePath(node.path),
         data: new Uint8Array(await blob.arrayBuffer()),
       });
     },
-    [currentSandbox, loadDirectoryEntries],
+    [sandboxId, loadDirectoryEntries],
   );
 
   const toggleDownloadSelection = useCallback((path: string) => {
@@ -257,7 +264,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 
   const downloadPaths = useCallback(
     async (paths: string[]) => {
-      if (!currentSandbox || isDownloadingSelection) {
+      if (!sandboxId || isDownloadingSelection) {
         return;
       }
       const requestedPaths = removeNestedSelections(paths);
@@ -277,7 +284,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         });
 
         if (nodes.length === 1 && nodes[0].type === "file") {
-          const blob = await api.sandbox.readRawFile(currentSandbox.id, nodes[0].path);
+          const blob = await api.sandbox.readRawFile(sandboxId, nodes[0].path);
           downloadBlob(blob, nodes[0].name);
           return;
         }
@@ -294,7 +301,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         setIsDownloadingSelection(false);
       }
     },
-    [collectZipEntries, currentSandbox, getNodeForPath, isDownloadingSelection],
+    [collectZipEntries, sandboxId, getNodeForPath, isDownloadingSelection],
   );
 
   const refreshFiles = async () => {
@@ -329,14 +336,17 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const selectFile = async (node: FileNode) => {
     setSelectedPath(node.path);
     setSelectedContent(null);
-    if (!currentSandbox) {
+    if (!sandboxId) {
       return;
     }
-    if (node.size > ONE_MB || getPreviewKind(node.name) !== "text") {
+    // Only text files are loaded inline (subject to the 1 MB cap). Binary files
+    // (image/pdf/download) are streamed as blobs by FilePreviewPanel regardless
+    // of size, so they must NOT short-circuit here.
+    if (getPreviewKind(node.name) !== "text" || node.size > ONE_MB) {
       return;
     }
     try {
-      setSelectedContent(await api.sandbox.readFile(currentSandbox.id, node.path));
+      setSelectedContent(await api.sandbox.readFile(sandboxId, node.path));
     } catch (err) {
       setSelectedContent({
         path: node.path,
@@ -452,7 +462,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
           setSelectedContent(null);
           setIsPreviewMaximized(false);
         }}
-        sandboxId={currentSandbox?.id ?? null}
+        sandboxId={sandboxId}
         onToggleMaximize={() => setIsPreviewMaximized((current) => !current)}
       />
     </>
@@ -484,7 +494,12 @@ function FilePreviewPanel({
   const previewKind = file ? getPreviewKind(file.name) : "download";
 
   useEffect(() => {
-    if (!file || !sandboxId || (previewKind !== "image" && previewKind !== "pdf")) {
+    if (
+      !file ||
+      !sandboxId ||
+      (previewKind !== "image" && previewKind !== "pdf") ||
+      file.size > MAX_BINARY_PREVIEW
+    ) {
       setBlobUrl(null);
       setBlobError(null);
       return;
@@ -545,15 +560,23 @@ function FilePreviewPanel({
     return null;
   }
 
+  // Size cap is applied PER TYPE: binary (image/pdf) previews tolerate up to
+  // MAX_BINARY_PREVIEW (streamed to a blob); text is held inline so it keeps the
+  // 1 MB cap. Classifying by previewKind FIRST is what lets a large PDF/image
+  // reach its blob branch instead of being force-classified "tooLarge".
   const previewSource: PreviewSource =
-    file.size > ONE_MB
-      ? { kind: "tooLarge" }
-      : previewKind === "image"
-        ? { kind: "image", blobUrl: blobUrl ?? undefined }
-        : previewKind === "pdf"
-          ? { kind: "pdf", blobUrl: blobUrl ?? undefined }
-          : previewKind === "download"
-            ? { kind: "download" }
+    previewKind === "image"
+      ? file.size > MAX_BINARY_PREVIEW
+        ? { kind: "tooLarge" }
+        : { kind: "image", blobUrl: blobUrl ?? undefined }
+      : previewKind === "pdf"
+        ? file.size > MAX_BINARY_PREVIEW
+          ? { kind: "tooLarge" }
+          : { kind: "pdf", blobUrl: blobUrl ?? undefined }
+        : previewKind === "download"
+          ? { kind: "download" }
+          : file.size > ONE_MB
+            ? { kind: "tooLarge" }
             : { kind: "text", text: content?.content ?? t("files.preview.loading") };
 
   const downloadFile = async () => {
@@ -633,6 +656,8 @@ function FilePreviewPanel({
         renderMarkdown={isMarkdown(file.name)}
         error={blobError}
         t={t}
+        onDownload={sandboxId ? () => void downloadFile() : undefined}
+        isDownloading={isDownloading}
       />
     </section>
   );

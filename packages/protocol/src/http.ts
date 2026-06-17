@@ -183,6 +183,11 @@ export const RUNTIME_ROUTES = {
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },
+  /** Workspace files (`workspaces/:id/`). `?path=` is relative to the workspace root. */
+  listFiles: { method: "GET", path: "/sessions/:id/files" },
+  readFile: { method: "GET", path: "/sessions/:id/files/content" },
+  readRawFile: { method: "GET", path: "/sessions/:id/files/raw" },
+  deleteFile: { method: "DELETE", path: "/sessions/:id/files" },
 } as const satisfies Record<string, RouteDef>;
 
 export type RuntimeRouteName = keyof typeof RUNTIME_ROUTES;

@@ -86,6 +86,15 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sessions/:id/agents", forward("listAgents", { idParam: "id" }));
   api.post("/sessions/:id/evict", forward("evictSession", { idParam: "id", withBody: true }));
 
+  // ---- Workspace files (proxied to runtime) ----------------------------
+  // The SPA addresses files under `/sandbox/:id/*`; in single-user mode the
+  // sandbox id IS the session id, so we forward straight to the runtime's
+  // `/sessions/:id/files*` routes. `?path=` is carried through verbatim.
+  api.get("/sandbox/:id/files", forward("listFiles", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
+  api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
+
   // ---- SSE byte passthrough (修正4) ------------------------------------
   // Canonical protocol path `/sse/:id` (RUNTIME_ROUTES.sessionEvents) plus the
   // SPA's `/sessions/:id/sse` and the `/sessions/:id/events` alias.
@@ -134,7 +143,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   function forward(
     route: keyof typeof RUNTIME_ROUTES,
-    opts: { idParam?: string; withBody?: boolean } = {},
+    opts: { idParam?: string; withBody?: boolean; withQuery?: boolean } = {},
   ) {
     return async (c: import("hono").Context) => {
       const rc = await getClient();
@@ -144,10 +153,12 @@ export function createApp(options: CreateAppOptions): Hono {
       const headers: Record<string, string> = {};
       const ct = c.req.header("content-type");
       if (ct) headers["content-type"] = ct;
+      const query = opts.withQuery ? new URL(c.req.url).search.replace(/^\?/, "") : undefined;
       const upstream = await rc.forward(route, {
         params,
         body: body && body.length > 0 ? body : undefined,
         headers,
+        query: query && query.length > 0 ? query : undefined,
       });
       return relay(c, upstream);
     };

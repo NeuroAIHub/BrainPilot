@@ -83,6 +83,50 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return c.json(res, res.evicted ? 200 : 404);
   });
 
+  // ---- Workspace files (read off disk; independent of in-memory session) ----
+  app.get("/sessions/:id/files", async (c) => {
+    try {
+      const files = await manager.listSessionFiles(c.req.param("id"), c.req.query("path") ?? "");
+      return c.json(files); // bare array — matches the SPA's file-list contract
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.get("/sessions/:id/files/content", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    try {
+      return c.json(await manager.readSessionFile(c.req.param("id"), path));
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 404);
+    }
+  });
+
+  app.get("/sessions/:id/files/raw", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    try {
+      const buf = await manager.readSessionFileRaw(c.req.param("id"), path);
+      c.header("Content-Type", "application/octet-stream");
+      c.header("Content-Length", String(buf.length));
+      return c.body(buf as unknown as ArrayBuffer);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 404);
+    }
+  });
+
+  app.delete("/sessions/:id/files", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    try {
+      const deleted = await manager.deleteSessionFile(c.req.param("id"), path);
+      return c.json({ deleted }, deleted ? 200 : 404);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
   const sseHandler = (id: string, c: import("hono").Context) => {
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
     c.header("Content-Type", "text/event-stream");

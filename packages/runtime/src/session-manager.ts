@@ -9,10 +9,10 @@
  * Persistence (§5): config/history/state live under `<dataRoot>/.bp/{sid}/`,
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
-import { mkdir, readFile, writeFile, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgUiEvent, AgentStatus, Session } from "@brainpilot/protocol";
+import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import { Mailbox } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
@@ -118,6 +118,87 @@ export class SessionManager {
   /** User-editable persona override for an agent (`bp_template/agents/<name>/prompt.md`). */
   private agentPromptPath(name: string): string {
     return join(this.dataRoot, "bp_template", "agents", name, "prompt.md");
+  }
+
+  /* ----------------------------- workspace files ----------------------------- */
+
+  /**
+   * Resolve a workspace-relative path to an absolute one, refusing anything that
+   * escapes the session's `workspaces/<sid>/` root (path traversal guard). This
+   * is the single enforcement point for all file routes.
+   *
+   * The SPA addresses files with a `/workspace`-rooted convention
+   * (`/workspace`, `/workspace/sub/file.txt`); we normalize that to a path
+   * relative to the on-disk workspace root before resolving.
+   */
+  private resolveWorkspacePath(sid: string, rawPath: string): string {
+    const root = this.workspaceDir(sid);
+    let rel = rawPath ?? "";
+    if (rel === "/workspace") rel = "";
+    else if (rel.startsWith("/workspace/")) rel = rel.slice("/workspace/".length);
+    rel = rel.replace(/^\/+/, ""); // never let a leading slash make it absolute
+    const abs = resolve(root, rel);
+    if (abs !== root && !abs.startsWith(root + sep)) {
+      throw new Error(`path escapes workspace: ${rawPath}`);
+    }
+    return abs;
+  }
+
+  /** List one directory level under the session workspace (default: root). */
+  async listSessionFiles(sid: string, rel = ""): Promise<FileEntry[]> {
+    const dir = this.resolveWorkspacePath(sid, rel);
+    let dirents;
+    try {
+      dirents = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return []; // missing workspace → empty (new session, nothing written yet)
+    }
+    const entries = await Promise.all(
+      dirents.map(async (d) => {
+        const type: FileEntry["type"] = d.isDirectory()
+          ? "folder"
+          : d.isSymbolicLink()
+            ? "symlink"
+            : "file";
+        let size = 0;
+        let modified = 0;
+        let permissions = "";
+        try {
+          const st = await stat(join(dir, d.name));
+          size = st.size;
+          modified = Math.floor(st.mtimeMs / 1000);
+          permissions = (st.mode & 0o777).toString(8);
+        } catch {
+          /* broken symlink / race — report zeros */
+        }
+        return { name: d.name, type, size, modified, permissions };
+      }),
+    );
+    return entries;
+  }
+
+  /** Read a workspace text file as UTF-8. */
+  async readSessionFile(sid: string, rel: string): Promise<FileContent> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    const content = await readFile(abs, "utf8");
+    return { path: rel, content, size: Buffer.byteLength(content) };
+  }
+
+  /** Read a workspace file's raw bytes (images/PDF/download). */
+  async readSessionFileRaw(sid: string, rel: string): Promise<Buffer> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    return readFile(abs);
+  }
+
+  /** Delete a workspace file. Returns false if it was already gone. */
+  async deleteSessionFile(sid: string, rel: string): Promise<boolean> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    try {
+      await rm(abs, { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   /**
