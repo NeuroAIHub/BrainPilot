@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { down } from "./down.js";
 import { status } from "./status.js";
-import { writePid, readPid } from "../process-control.js";
+import { writePid, readPid, writeServerState, readServerState } from "../process-control.js";
 import { dataPaths } from "../paths.js";
 
 let dir: string;
@@ -66,6 +66,22 @@ describe("down", () => {
     expect(procs.signals).toHaveLength(0);
     expect(await readPid(p.backendPid)).toBeNull();
   });
+
+  it("removes the persisted server state on down (#41)", async () => {
+    const root = join(dir, "bp");
+    const p = dataPaths(root);
+    await writePid(p.backendPid, 1234);
+    await writeServerState(p.serverState, {
+      pid: 1234,
+      port: 9801,
+      runtimePort: 9802,
+      host: "127.0.0.1",
+    });
+    const procs = fakeProcs(new Set([1234]));
+
+    await down({ dir: root }, { ...procs, log: () => {} });
+    expect(await readServerState(p.serverState)).toBeNull();
+  });
 });
 
 describe("status", () => {
@@ -103,5 +119,51 @@ describe("status", () => {
     expect(report.pid).toBe(555);
     expect(report.healthy).toBe(true);
     expect(report.metrics).toEqual({ activeSessions: 2, runningAgents: 3 });
+  });
+
+  it("reports the persisted custom port from server.json without --port (#41)", async () => {
+    const root = join(dir, "bp");
+    const p = dataPaths(root);
+    await writePid(p.backendPid, 555);
+    await writeServerState(p.serverState, {
+      pid: 555,
+      port: 9801,
+      runtimePort: 9802,
+      host: "127.0.0.1",
+    });
+
+    const probed: string[] = [];
+    const fetchFn = (async (url: string | URL) => {
+      probed.push(String(url));
+      if (String(url).endsWith("/api/health")) return new Response("ok", { status: 200 });
+      return new Response("", { status: 404 });
+    }) as unknown as typeof fetch;
+
+    const report = await status({ dir: root }, { isAlive: () => true, fetchFn, log: () => {} });
+
+    expect(report.backendPort).toBe(9801);
+    expect(report.runtimePort).toBe(9802);
+    expect(report.healthy).toBe(true);
+    expect(probed.some((u) => u.includes(":9801/api/health"))).toBe(true);
+  });
+
+  it("lets an explicit --port override server.json (#41)", async () => {
+    const root = join(dir, "bp");
+    const p = dataPaths(root);
+    await writePid(p.backendPid, 555);
+    await writeServerState(p.serverState, {
+      pid: 555,
+      port: 9801,
+      runtimePort: 9802,
+      host: "127.0.0.1",
+    });
+
+    const report = await status(
+      { dir: root, port: 9701 },
+      { isAlive: () => true, fetchFn: (async () => new Response("ok", { status: 200 })) as unknown as typeof fetch, log: () => {} },
+    );
+
+    expect(report.backendPort).toBe(9701);
+    expect(report.runtimePort).toBe(9702);
   });
 });

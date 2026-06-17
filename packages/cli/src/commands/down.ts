@@ -6,7 +6,7 @@
  */
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
-import { stop, removePid, type ProcessControlDeps } from "../process-control.js";
+import { stop, removePid, removeServerState, type ProcessControlDeps } from "../process-control.js";
 
 export interface DownOptions {
   dir?: string;
@@ -42,6 +42,9 @@ export async function down(
 
   // Backend owns the runtime; clean any leftover runtime pid file regardless.
   await removePid(p.runtimePid);
+  // Drop the persisted server state so a later `status` doesn't report a dead
+  // server's ports (issue #41).
+  await removeServerState(p.serverState);
 
   if (result.pid === null) {
     log(pc.yellow("No running backend found (no pid file)."));

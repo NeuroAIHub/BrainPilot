@@ -50,6 +50,8 @@ export interface DataPaths {
   runtimeLog: string;
   backendPid: string;
   runtimePid: string;
+  /** Runtime state for a detached server (resolved ports/pid) — issue #41. */
+  serverState: string;
 }
 
 /** Build all derived paths from a data dir. Pure — no filesystem access. */
@@ -75,6 +77,7 @@ export function dataPaths(dataDir: string): DataPaths {
     runtimeLog: join(logsDir, "runtime.log"),
     backendPid: join(runtimeDir, "backend.pid"),
     runtimePid: join(runtimeDir, "runtime.pid"),
+    serverState: join(runtimeDir, "server.json"),
   };
 }
 
