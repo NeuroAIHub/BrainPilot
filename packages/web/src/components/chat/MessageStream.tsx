@@ -23,6 +23,13 @@ interface MessageStreamProps {
   onAskUserSubmit?: (requestId: string, answer: string) => void;
   /** 修正6 — cancel a pending auto-retry. Omitted in read-only contexts. */
   onRetryCancel?: () => void;
+  /**
+   * Names of agents whose run is currently active (RUN_STARTED..RUN_FINISHED).
+   * Keeps a folded activity block "in progress" across ReAct rounds even when
+   * no single step is momentarily streaming. Omitted in read-only contexts
+   * (demo replay), where messages are already terminal.
+   */
+  runningAgents?: ReadonlySet<string>;
 }
 
 // Whether this message participates in same-agent avatar merging. User
@@ -65,13 +72,17 @@ function MessageStreamImpl({
   ariaLabel,
   onAskUserSubmit,
   onRetryCancel,
+  runningAgents,
 }: MessageStreamProps) {
   const t = useT();
   const [copiedId, setCopiedId] = useState<string | null>(null);
   const stackRef = useRef<HTMLDivElement | null>(null);
   const isPinnedRef = useRef(true);
 
-  const renderItems = useMemo(() => buildRenderItems(messages), [messages]);
+  const renderItems = useMemo(
+    () => buildRenderItems(messages, runningAgents),
+    [messages, runningAgents],
+  );
 
   // Avatar merging: a mergeable assistant/system row whose immediately
   // preceding render item is a mergeable single from the same agent hides its
