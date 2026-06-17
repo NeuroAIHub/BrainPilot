@@ -1,6 +1,9 @@
 {
   "name": "@brainpilot/runtime",
   "version": "0.0.5",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "description": "BrainPilot Runtime — Pi SDK orchestration, SessionManager, Mailbox, GoT, state authority, HTTP server",

@@ -69,6 +69,21 @@ async function handleJson<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** #47: encode a Blob/File as base64 (without the data: prefix) for upload. */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.onload = () => {
+      const result = reader.result as string;
+      // strip the "data:<mime>;base64," prefix
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(blob);
+  });
+}
+
 export function getSSEUrl(sessionId: string): string {
   // Same origin; relative path lets EventSource follow the current host/port and
   // carry the auth cookie automatically — no token in the query string.
@@ -245,6 +260,20 @@ export const api = {
       if (!res.ok) {
         throw new Error(await parseError(res));
       }
+    },
+
+    // #47: upload a file into the workspace (base64 over the JSON byte chain).
+    async uploadFile(sandboxId: string, path: string, file: Blob): Promise<{ path: string; size: number }> {
+      const contentBase64 = await blobToBase64(file);
+      const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ path, contentBase64 }),
+      });
+      if (!res.ok) {
+        throw new Error(await parseError(res));
+      }
+      return handleJson(res);
     },
   },
 

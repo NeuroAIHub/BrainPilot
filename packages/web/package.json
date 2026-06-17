@@ -1,6 +1,9 @@
 {
   "name": "@brainpilot/web",
   "version": "0.0.5",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "files": [

@@ -193,6 +193,44 @@ describe("workspace file routes", () => {
     expect(res.status).toBe(200);
     expect((await res.json()) as unknown[]).toEqual([]);
   });
+
+  // #47: file upload (base64) into the workspace.
+  it("uploads a file via POST and makes it readable", async () => {
+    const { app: a } = await appWithWorkspace();
+    const contentBase64 = Buffer.from("uploaded content").toString("base64");
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/workspace/upload/notes.txt", contentBase64 }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { path: string; size: number };
+    expect(body.path).toBe(join("upload", "notes.txt"));
+    expect(body.size).toBe(Buffer.byteLength("uploaded content"));
+    // readable back through the read route
+    const txt = await a.request("/sessions/s1/files/content?path=/workspace/upload/notes.txt");
+    expect((await txt.json()) as { content: string }).toMatchObject({ content: "uploaded content" });
+  });
+
+  it("rejects an upload that escapes the workspace with 400", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "../../../etc/evil", contentBase64: "eA==" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a malformed upload body with 400", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "" }),
+    });
+    expect(res.status).toBe(400);
+  });
 });
 
 async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {

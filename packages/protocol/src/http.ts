@@ -168,6 +168,25 @@ export const InterruptResponseSchema = z.object({
 export type InterruptResponse = z.infer<typeof InterruptResponseSchema>;
 
 /* ------------------------------------------------------------------ *
+ * POST /sessions/:id/files  (#47 — upload a file into the workspace)
+ * ------------------------------------------------------------------ */
+
+/** #47: upload body. Content is base64 (binary-safe over the JSON byte chain). */
+export const WriteFileRequestSchema = z.object({
+  /** Workspace-relative path (a leading `/workspace` prefix is tolerated). */
+  path: z.string().trim().min(1),
+  /** File contents, base64-encoded. */
+  contentBase64: z.string(),
+});
+export type WriteFileRequest = z.infer<typeof WriteFileRequestSchema>;
+
+export const WriteFileResponseSchema = z.object({
+  path: z.string(),
+  size: z.number(),
+});
+export type WriteFileResponse = z.infer<typeof WriteFileResponseSchema>;
+
+/* ------------------------------------------------------------------ *
  * GET /sessions/:id/agents  (§10 polling fallback)
  * ------------------------------------------------------------------ */
 
@@ -216,6 +235,8 @@ export const RUNTIME_ROUTES = {
   readFile: { method: "GET", path: "/sessions/:id/files/content" },
   readRawFile: { method: "GET", path: "/sessions/:id/files/raw" },
   deleteFile: { method: "DELETE", path: "/sessions/:id/files" },
+  /** #47: upload a file into the workspace. Body: { path, contentBase64 }. */
+  writeFile: { method: "POST", path: "/sessions/:id/files" },
 } as const satisfies Record<string, RouteDef>;
 
 export type RuntimeRouteName = keyof typeof RUNTIME_ROUTES;

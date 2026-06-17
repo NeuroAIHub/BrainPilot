@@ -50,6 +50,7 @@ export {
   resolveProvider,
   readLocalSettings,
   writeLocalSettings,
+  bootstrapEnvProvider,
   parseDotenv,
   configPaths,
   describeProviderConfig,

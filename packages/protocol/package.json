@@ -1,6 +1,9 @@
 {
   "name": "@brainpilot/protocol",
   "version": "0.0.5",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "description": "BrainPilot AG-UI events + REST/SSE schemas + Runtime HTTP contract (SSOT, zod-validated)",
