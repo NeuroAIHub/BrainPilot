@@ -114,6 +114,22 @@ export class LocalProcessOrchestrator implements Orchestrator {
   private stopping = false;
   private gaveUp = false;
   private lastEnv: NodeJS.ProcessEnv = {};
+  /**
+   * In-flight startup promise (issue #58). ensureRuntime() is single-flight:
+   * concurrent first-run callers share this one promise instead of each
+   * spawning their own runtime child (which raced for the port and crashed the
+   * losers with EADDRINUSE). Null when no startup is in progress.
+   */
+  private starting: Promise<RuntimeHandle> | null = null;
+  /**
+   * Set once the runtime has become healthy at least once (issue #58). The
+   * crash-restart self-heal (§11A.5) is only meant for a runtime that was
+   * healthy and later died — NOT for a first-start spawn that immediately
+   * exits (e.g. a duplicate that lost the port race). While this is false, an
+   * exiting child does not trigger a restart; ensureRuntime's waitForHealth
+   * surfaces the failure instead.
+   */
+  private everHealthy = false;
 
   constructor(options: LocalOrchestratorOptions = {}) {
     this.opts = {
@@ -175,12 +191,30 @@ export class LocalProcessOrchestrator implements Orchestrator {
       return this.handle;
     }
 
-    this.lastEnv = this.buildEnv(opts?.env);
-    this.spawnChild(this.lastEnv);
+    // Single-flight (issue #58): if a startup is already in progress, every
+    // concurrent caller rides the same promise rather than spawning its own
+    // runtime child. This is what prevents the cold-start spawn storm where N
+    // simultaneous requests each spawned a runtime and N-1 crashed on
+    // EADDRINUSE. opts.dataDir/port from a piggybacking caller are ignored on
+    // purpose — a given backend/data-dir has exactly one runtime.
+    if (this.starting) {
+      return this.starting;
+    }
 
-    await this.waitForHealth();
-    this.handle = { baseUrl: this.baseUrl };
-    return this.handle;
+    this.starting = (async () => {
+      this.lastEnv = this.buildEnv(opts?.env);
+      this.spawnChild(this.lastEnv);
+      await this.waitForHealth();
+      this.handle = { baseUrl: this.baseUrl };
+      return this.handle;
+    })();
+
+    try {
+      return await this.starting;
+    } finally {
+      // Clear so a later call can retry (e.g. if waitForHealth threw).
+      this.starting = null;
+    }
   }
 
   async health(): Promise<boolean> {
@@ -190,6 +224,7 @@ export class LocalProcessOrchestrator implements Orchestrator {
 
   async stopRuntime(): Promise<void> {
     this.stopping = true;
+    this.everHealthy = false;
     const child = this.child;
     this.child = null;
     this.handle = null;
@@ -286,6 +321,17 @@ export class LocalProcessOrchestrator implements Orchestrator {
 
   private async handleExit(err: Error): Promise<void> {
     if (this.stopping || this.gaveUp) return;
+    // Issue #58: a child that exits before the runtime ever became healthy is a
+    // failed *startup*, not a crash of a running service. The restart self-heal
+    // (§11A.5) is only for an already-healthy runtime that later died. A
+    // first-start exit (e.g. a duplicate spawn that lost the port race and got
+    // EADDRINUSE) must NOT enter the restart loop — that loop is what flooded
+    // runtime.log and clobbered this.child. Just drop the child and let
+    // ensureRuntime's waitForHealth surface the failure.
+    if (!this.everHealthy) {
+      this.child = null;
+      return;
+    }
     const now = Date.now();
     this.restartTimestamps = this.restartTimestamps.filter(
       (ts) => now - ts < this.opts.restartWindowMs,
@@ -313,7 +359,12 @@ export class LocalProcessOrchestrator implements Orchestrator {
     const deadline = Date.now() + this.opts.healthTimeoutMs;
     // Poll until healthy or timeout. Spacing is small for local startup.
     for (;;) {
-      if (await this.opts.healthProbe(this.baseUrl)) return;
+      if (await this.opts.healthProbe(this.baseUrl)) {
+        // Mark healthy so a later abnormal exit is eligible for the restart
+        // self-heal (issue #58) — first-start exits before this are not.
+        this.everHealthy = true;
+        return;
+      }
       if (Date.now() >= deadline) {
         throw new Error(
           `runtime did not become healthy at ${this.baseUrl} within ` +

@@ -82,6 +82,36 @@ describe("down", () => {
     await down({ dir: root }, { ...procs, log: () => {} });
     expect(await readServerState(p.serverState)).toBeNull();
   });
+
+  it("backstops an orphaned runtime via runtime.pid (#58)", async () => {
+    const root = join(dir, "bp");
+    const p = dataPaths(root);
+    // Backend already gone, but the orchestrator lost track of the runtime, so
+    // runtime.pid still points at a live runtime on port+1.
+    await writePid(p.backendPid, 1000);
+    await writePid(p.runtimePid, 2000);
+    const procs = fakeProcs(new Set([1000, 2000]));
+
+    await down({ dir: root }, { ...procs, log: () => {} });
+
+    // Both the backend and the orphaned runtime must be signalled.
+    expect(procs.signals).toContainEqual({ pid: 1000, sig: "SIGTERM" });
+    expect(procs.signals).toContainEqual({ pid: 2000, sig: "SIGTERM" });
+    // And the runtime pid file is cleaned up by stop().
+    expect(await readPid(p.runtimePid)).toBeNull();
+  });
+
+  it("is a no-op for the runtime when no runtime.pid file exists (#58)", async () => {
+    const root = join(dir, "bp");
+    const p = dataPaths(root);
+    await writePid(p.backendPid, 1234);
+    const procs = fakeProcs(new Set([1234]));
+
+    const res = await down({ dir: root }, { ...procs, log: () => {} });
+    expect(res.stopped).toBe(true);
+    // Only the backend was signalled; no runtime pid to chase.
+    expect(procs.signals).toEqual([{ pid: 1234, sig: "SIGTERM" }]);
+  });
 });
 
 describe("status", () => {
