@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer } from "../server.js";
@@ -230,6 +230,39 @@ describe("workspace file routes", () => {
       body: JSON.stringify({ path: "" }),
     });
     expect(res.status).toBe(400);
+  });
+
+  // #60: a composer upload staged under workspaces/local/ (the draft sandbox id)
+  // must be drained into the real session workspace before the agent runs, so
+  // the agent's cwd (workspaces/<sid>/) contains the file the user attached.
+  it("drains a staged local upload into the session workspace on sendMessage (#60)", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-drain-"));
+    const manager = new SessionManager({ persist: true, dataRoot, agentFactory: mockAgentFactory });
+
+    // Simulate the draft-composer upload: web POSTs against the "local" sandbox
+    // id because the real session does not exist yet.
+    await manager.writeSessionFile(
+      "local",
+      "/workspace/attachment-probe.txt",
+      Buffer.from("probe payload").toString("base64"),
+    );
+
+    // The real session is created when the prompt is sent.
+    const session = await manager.createSession({ title: "Draft" });
+    await manager.sendMessage(session.id, "Please summarize the uploaded attachment.");
+
+    // The file now lives in the agent's cwd (the session workspace)...
+    const inSession = await readFile(
+      join(dataRoot, "workspaces", session.id, "attachment-probe.txt"),
+      "utf8",
+    );
+    expect(inSession).toBe("probe payload");
+
+    // ...and the staging area was drained so it can't leak into a later session.
+    const staged = await readdir(join(dataRoot, "workspaces", "local"));
+    expect(staged).toEqual([]);
+
+    manager.shutdown();
   });
 });
 

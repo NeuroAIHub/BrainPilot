@@ -229,19 +229,25 @@ export const ProviderProfileSchema = z.object({
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
 
 /**
- * #50: validation SSOT for the provider-profile create/update *wire body* (the
- * snake_case shape the SPA POSTs/PUTs). The backend safeParses against these
- * before persisting, so malformed input 400s instead of silently producing an
- * unusable active profile (empty name, `models:"m"` coerced to `[]`).
+ * #50 / #61: validation SSOT for the provider-profile create/update *wire body*
+ * (the snake_case shape the SPA POSTs/PUTs). The backend safeParses against
+ * these before persisting, so malformed input 400s instead of silently
+ * producing an unusable active profile (empty name, `models:"m"` coerced to
+ * `[]`, or — #61 — an empty `models: []` that becomes the active provider with
+ * no selectable model).
  *
- * `models`, when present, must be an array of non-empty strings — a non-array
- * value (e.g. the string "m") is a hard error, not a silent empty list.
+ * `models` must be a non-empty array of non-empty strings: a non-array value
+ * (e.g. the string "m") is a hard error, and an empty list `[]` is rejected
+ * too. On *create* the field is required — a fresh install's first profile is
+ * auto-selected as active, so it must carry at least one usable model. On
+ * *update* (the `.partial()` schema) the field may be omitted to leave models
+ * unchanged, but when present it still must be non-empty.
  */
 const modelsField = z
   .array(z.string().trim().min(1), {
     message: "models must be an array of non-empty strings",
   })
-  .optional();
+  .min(1, "models must not be empty");
 
 export const ProviderProfileCreateSchema = z.object({
   name: z.string().trim().min(1, "name is required"),
@@ -257,7 +263,11 @@ export const ProviderProfileCreateSchema = z.object({
 });
 export type ProviderProfileCreate = z.infer<typeof ProviderProfileCreateSchema>;
 
-/** Update is a partial patch: every field optional, but same shape rules when present. */
+/**
+ * Update is a partial patch: every field optional (omitting `models` leaves it
+ * unchanged), but each field keeps its create-time rule when present — so a
+ * supplied `models` must still be a non-empty array (#61).
+ */
 export const ProviderProfileUpdateSchema = ProviderProfileCreateSchema.partial();
 export type ProviderProfileUpdate = z.infer<typeof ProviderProfileUpdateSchema>;
 
