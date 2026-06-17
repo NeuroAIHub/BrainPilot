@@ -412,3 +412,74 @@ export function formatProviderGuidance(report: ProviderConfigReport): string[] {
     "No key needed for a test run:  BP_MOCK=1 brainpilot up",
   ];
 }
+
+/* ----------------------- MCP server config CRUD ----------------------- *
+ * The runtime reads `mcp_servers.json` from disk (`loadMcpServersConfig` in
+ * mcp-bridge.ts); these functions let the Settings → MCP tab persist entries
+ * through the same file so the UI and disk stay in sync.
+ *
+ * Disk format (keyed map):   { mcpServers: { name: spec } }
+ * HTTP format (flat array):  [{ name, ...spec }]
+ * -------------------------------------------------------------------------- */
+
+export function mcpServersPath(dataDir: string): string {
+  return path.join(dataDir, "bp_template", "mcp_servers.json");
+}
+
+type McpSpec = Record<string, unknown>;
+
+interface McpServersFile {
+  mcpServers: Record<string, McpSpec>;
+}
+
+async function readMcpServersRaw(dataDir: string): Promise<Record<string, McpSpec>> {
+  const raw = await readJsonSafe(mcpServersPath(dataDir));
+  if (raw && typeof (raw as Record<string, unknown>).mcpServers === "object") {
+    return (raw as unknown as McpServersFile).mcpServers;
+  }
+  return {};
+}
+
+async function writeMcpServersRaw(dataDir: string, servers: Record<string, McpSpec>): Promise<void> {
+  const target = mcpServersPath(dataDir);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify({ mcpServers: servers }, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.rename(tmp, target);
+}
+
+export async function readMcpServers(dataDir: string): Promise<Array<{ name: string } & McpSpec>> {
+  const servers = await readMcpServersRaw(dataDir);
+  return Object.entries(servers).map(([name, spec]) => ({ name, ...spec }));
+}
+
+export async function createMcpServer(
+  dataDir: string,
+  name: string,
+  spec: McpSpec,
+): Promise<{ name: string } & McpSpec> {
+  const servers = await readMcpServersRaw(dataDir);
+  servers[name] = spec;
+  await writeMcpServersRaw(dataDir, servers);
+  return { name, ...spec };
+}
+
+export async function updateMcpServer(
+  dataDir: string,
+  name: string,
+  spec: McpSpec,
+): Promise<({ name: string } & McpSpec) | null> {
+  const servers = await readMcpServersRaw(dataDir);
+  if (!(name in servers)) return null;
+  servers[name] = spec;
+  await writeMcpServersRaw(dataDir, servers);
+  return { name, ...spec };
+}
+
+export async function deleteMcpServer(dataDir: string, name: string): Promise<boolean> {
+  const servers = await readMcpServersRaw(dataDir);
+  if (!(name in servers)) return false;
+  delete servers[name];
+  await writeMcpServersRaw(dataDir, servers);
+  return true;
+}
