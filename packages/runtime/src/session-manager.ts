@@ -10,7 +10,7 @@
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
 import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
-import { join, resolve, sep } from "node:path";
+import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session, TraceGraph } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
@@ -226,6 +226,33 @@ export class SessionManager {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * #47: write an uploaded file into the session workspace. Content arrives
+   * base64-encoded (binary-safe over the JSON byte chain). The same
+   * `resolveWorkspacePath` guard prevents path traversal; parent dirs are
+   * created so an upload like `docs/foo.pdf` works. The file lands in the
+   * agent's cwd, so it can `read` it by its workspace-relative path.
+   * `maxBytes` (default 20 MiB) bounds the decoded size.
+   */
+  async writeSessionFile(
+    sid: string,
+    rel: string,
+    contentBase64: string,
+    maxBytes = 20 * 1024 * 1024,
+  ): Promise<{ path: string; size: number }> {
+    const buf = Buffer.from(contentBase64, "base64");
+    if (buf.byteLength > maxBytes) {
+      throw new Error(`file too large: ${buf.byteLength} bytes exceeds limit of ${maxBytes}`);
+    }
+    const abs = this.resolveWorkspacePath(sid, rel);
+    await mkdir(dirname(abs), { recursive: true });
+    await writeFile(abs, buf);
+    // Return the workspace-relative path (strip the absolute root prefix).
+    const root = this.workspaceDir(sid);
+    const relOut = abs === root ? "" : abs.slice(root.length + 1);
+    return { path: relOut, size: buf.byteLength };
   }
 
   /**

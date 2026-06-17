@@ -17,6 +17,7 @@ import {
   CreateSessionRequestSchema,
   SendMessageRequestSchema,
   InterruptRequestSchema,
+  WriteFileRequestSchema,
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
 
@@ -138,6 +139,27 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
       return c.json({ deleted }, deleted ? 200 : 404);
     } catch (err) {
       return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  // #47: upload a file into the workspace (base64 body). Path-traversal guard +
+  // 20 MiB cap live in SessionManager.writeSessionFile.
+  app.post("/sessions/:id/files", async (c) => {
+    const parsed = WriteFileRequestSchema.safeParse(await safeBody(c));
+    if (!parsed.success) {
+      return c.json({ error: "path and contentBase64 are required" }, 400);
+    }
+    try {
+      const res = await manager.writeSessionFile(
+        c.req.param("id"),
+        parsed.data.path,
+        parsed.data.contentBase64,
+      );
+      return c.json(res, 201);
+    } catch (err) {
+      const msg = (err as Error).message;
+      // path traversal / oversize → 400 (client error), not 500
+      return c.json({ error: msg }, 400);
     }
   });
 
