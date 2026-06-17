@@ -39,6 +39,12 @@ COPY --from=builder /app/package.json ./package.json
 
 # Deployment mode is chosen at run time via compose env (BP_RUNTIME_URL → static,
 # BP_ORCHESTRATOR=docker → dynamic). Without those, the image defaults to local.
+#
+# Optional memory budget (issue #20 / R-4): a host that caps container memory can
+# set BP_MEM_LIMIT_MB=<budget MB> to make the runtime soft-throttle at ~85% before
+# the kernel OOM-kills it. Pair it with a V8 heap cap at the launcher (the runtime
+# never sets one itself), e.g. NODE_OPTIONS=--max-old-space-size=<~75% of budget>.
+# Both are strictly opt-in: unset → no behavior change.
 ENV PORT=9001 BP_HOST=0.0.0.0
 EXPOSE 9001
 

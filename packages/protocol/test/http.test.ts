@@ -25,6 +25,8 @@ describe("Runtime HTTP contract", () => {
         runningAgents: 1,
         lastActivityAt: "2026-06-12T00:00:00Z",
         memRss: 12345,
+        memLimitBytes: 1048576,
+        memRatio: 0.5,
       }).runningAgents,
     ).toBe(1);
     expect(
@@ -33,6 +35,8 @@ describe("Runtime HTTP contract", () => {
         runningAgents: 0,
         lastActivityAt: null,
         memRss: 0,
+        memLimitBytes: null,
+        memRatio: null,
       }).lastActivityAt,
     ).toBeNull();
   });
