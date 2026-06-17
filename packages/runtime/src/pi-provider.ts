@@ -54,6 +54,8 @@ export interface PiAuthStorage {
 export interface SessionProviderConfig {
   providerId: string;
   baseUrl?: string;
+  /** #63: wire protocol (Pi models.json `api`). Defaults to anthropic-messages. */
+  api?: string;
   apiKey: string;
   modelId?: string;
 }
@@ -202,7 +204,11 @@ export function resolveSessionModel(
       providers: {
         [cfg.providerId]: {
           baseUrl: cfg.baseUrl,
-          api: "anthropic-messages",
+          // #63: persist the selected wire protocol instead of hardcoding
+          // anthropic-messages. Pi's ModelRegistry accepts any known api; for
+          // azure-openai-responses it derives api-version/deployment from the
+          // Azure base URL, so all protocols configure identically here.
+          api: cfg.api ?? "anthropic-messages",
           // Placeholder — the real key is injected via setRuntimeApiKey below.
           apiKey: `$BP_PROVIDER_${sanitize(cfg.providerId).toUpperCase()}`,
           models: [

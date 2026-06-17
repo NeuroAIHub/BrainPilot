@@ -210,10 +210,26 @@ export const ModelHealthSchema = z.object({
 });
 export type ModelHealth = z.infer<typeof ModelHealthSchema>;
 
+/**
+ * #63: the wire protocol BrainPilot speaks to a provider's gateway. These map
+ * 1:1 to Pi's models.json `providers.<id>.api` values; the runtime writes the
+ * selected value into the per-session models.json instead of hardcoding
+ * `anthropic-messages`. Azure needs only this + the Azure base URL (Pi derives
+ * api-version/deployment), so all four configure identically from the UI.
+ */
+export const ProviderApiSchema = z.enum([
+  "anthropic-messages",
+  "openai-completions",
+  "openai-responses",
+  "azure-openai-responses",
+]);
+export type ProviderApi = z.infer<typeof ProviderApiSchema>;
+
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
   baseUrl: z.string(),
+  api: ProviderApiSchema,
   models: z.array(z.string()),
   icon: z.string(),
   iconColor: z.string(),
@@ -227,7 +243,6 @@ export const ProviderProfileSchema = z.object({
   modelHealth: z.array(ModelHealthSchema),
 });
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
-
 /**
  * #50 / #61: validation SSOT for the provider-profile create/update *wire body*
  * (the snake_case shape the SPA POSTs/PUTs). The backend safeParses against
@@ -253,6 +268,9 @@ export const ProviderProfileCreateSchema = z.object({
   name: z.string().trim().min(1, "name is required"),
   base_url: z.string().optional(),
   baseUrl: z.string().optional(),
+  // #63: provider wire protocol. Optional on create (defaults to
+  // anthropic-messages downstream); on update, omit to leave unchanged.
+  api: ProviderApiSchema.optional(),
   api_key: z.string().optional(),
   apiKey: z.string().optional(),
   models: modelsField,

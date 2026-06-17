@@ -182,6 +182,18 @@ export class MasAgent {
       }
 
       case "message_end": {
+        const end = e as Extract<PiAgentEvent, { type: "message_end" }>;
+        // #63: a provider/HTTP error does NOT throw out of session.prompt(); Pi
+        // finalizes the assistant message with stopReason "error" + errorMessage
+        // and emits it here. Surface it as a visible error instead of letting the
+        // run end with an empty assistant bubble.
+        const msg = end.message as { stopReason?: string; errorMessage?: string } | undefined;
+        if (msg?.stopReason === "error") {
+          const raw = msg.errorMessage || "provider request failed";
+          const message = normalizeAgentError(raw);
+          this.recordError(message);
+          this.setStatus("error");
+        }
         if (this.currentMessageId) {
           if (this.inReasoning) {
             this.bus.emit(ev.reasoningMessageEnd(ctx, this.currentMessageId));
@@ -280,6 +292,20 @@ export class MasAgent {
         this.bus.emit(ev.reasoningMessageEnd(ctx, id));
         this.inReasoning = false;
         return;
+      case "error": {
+        // #63: provider failure streamed mid-message. Route to a visible error
+        // (the message_end handler also catches the finalized stopReason:"error",
+        // but this covers Pi builds that only emit the streaming sub-event).
+        const err = amsg as { error?: unknown; reason?: string };
+        const raw =
+          (err.error as { errorMessage?: string } | undefined)?.errorMessage ??
+          (typeof err.error === "string" ? err.error : undefined) ??
+          err.reason ??
+          "provider request failed";
+        this.recordError(normalizeAgentError(raw));
+        this.setStatus("error");
+        return;
+      }
       default:
         return;
     }

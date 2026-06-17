@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useState } from "react";
 import { Check, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { McpServerEntry, ProviderProfile } from "../../contracts/backend";
+import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
@@ -26,6 +26,7 @@ const tabs: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
 const DEFAULT_PROVIDER_FORM = {
   name: "",
   baseUrl: "https://api.anthropic.com",
+  api: "anthropic-messages" as ProviderApi,
   apiKey: "",
   apiKeyMasked: "",
   models: ["claude-opus-4-6"],
@@ -184,6 +185,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
         ? await api.providers.update(editingProviderId, {
             name: providerForm.name,
             baseUrl: providerForm.baseUrl,
+            api: providerForm.api,
             ...(providerForm.apiKey ? { apiKey: providerForm.apiKey } : {}),
             models,
             iconColor: providerForm.iconColor,
@@ -192,6 +194,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
         : await api.providers.create({
             name: providerForm.name,
             baseUrl: providerForm.baseUrl,
+            api: providerForm.api,
             apiKey: providerForm.apiKey,
             models,
             iconColor: providerForm.iconColor,
@@ -214,6 +217,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
     setProviderForm({
       name: provider.name,
       baseUrl: provider.baseUrl,
+      api: provider.api,
       apiKey: "",
       apiKeyMasked: provider.apiKeyMasked || "",
       models: provider.models.length ? provider.models : [""],
@@ -562,6 +566,20 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 <span>{t("settings.providerForm.baseUrl")}</span>
                 <input placeholder="https://api.anthropic.com" required value={providerForm.baseUrl} onChange={(event) => setProviderForm({ ...providerForm, baseUrl: event.target.value })} />
               </label>
+              <div className="provider-form__field">
+                <span>{t("settings.providerForm.protocol")}</span>
+                <CustomSelect
+                  ariaLabel={t("settings.providerForm.protocolAria")}
+                  onChange={(value) => setProviderForm({ ...providerForm, api: value as ProviderApi })}
+                  options={[
+                    { label: "Anthropic Messages", value: "anthropic-messages" },
+                    { label: "OpenAI Completions", value: "openai-completions" },
+                    { label: "OpenAI Responses", value: "openai-responses" },
+                    { label: "Azure OpenAI Responses", value: "azure-openai-responses" },
+                  ]}
+                  value={providerForm.api}
+                />
+              </div>
               <label className="provider-form__key">
                 <span>{t("settings.providerForm.apiKey")} {editingProviderId ? t("settings.providerForm.apiKeyKeep") : ""}</span>
                 <input

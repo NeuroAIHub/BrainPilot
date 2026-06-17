@@ -5,6 +5,7 @@ import {
   FileEntrySchema,
   McpServerEntrySchema,
   ProviderProfileSchema,
+  ProviderProfileCreateSchema,
   SessionSchema,
   SessionStateSnapshotSchema,
   SettingsDataSchema,
@@ -74,23 +75,34 @@ describe("domain schemas", () => {
       McpServerEntrySchema.parse({ name: "x", type: "http", url: "http://h" }).type,
     ).toBe("http");
     expect(McpServerEntrySchema.safeParse({ name: "x", type: "grpc" }).success).toBe(false);
+    const profile = ProviderProfileSchema.parse({
+      id: "p1",
+      name: "OpenAI",
+      baseUrl: "u",
+      api: "openai-responses",
+      models: ["m"],
+      icon: "circle",
+      iconColor: "#000",
+      notes: "",
+      isActive: true,
+      apiKeyMasked: "sk-***",
+      createdAt: 1,
+      updatedAt: 2,
+      healthStatus: "healthy",
+      modelHealth: [{ model: "m", status: "healthy" }],
+    });
+    expect(profile.healthStatus).toBe("healthy");
+    expect(profile.api).toBe("openai-responses");
+    // #63: an unknown api value is rejected.
     expect(
-      ProviderProfileSchema.parse({
-        id: "p1",
-        name: "OpenAI",
-        baseUrl: "u",
-        models: ["m"],
-        icon: "circle",
-        iconColor: "#000",
-        notes: "",
-        isActive: true,
-        apiKeyMasked: "sk-***",
-        createdAt: 1,
-        updatedAt: 2,
-        healthStatus: "healthy",
-        modelHealth: [{ model: "m", status: "healthy" }],
-      }).healthStatus,
-    ).toBe("healthy");
+      ProviderProfileCreateSchema.safeParse({ name: "x", api: "nope", models: ["m"] }).success,
+    ).toBe(false);
+    // #63: a known api value on create is accepted; omitting it is allowed.
+    expect(
+      ProviderProfileCreateSchema.safeParse({ name: "x", api: "azure-openai-responses", models: ["m"] })
+        .success,
+    ).toBe(true);
+    expect(ProviderProfileCreateSchema.safeParse({ name: "x", models: ["m"] }).success).toBe(true);
   });
 
   it("validates FileEntry / FileContent", () => {
