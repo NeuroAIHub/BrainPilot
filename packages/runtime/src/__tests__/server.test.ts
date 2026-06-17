@@ -85,6 +85,36 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect((await evict.json()) as { evicted: boolean }).toMatchObject({ evicted: true });
   });
 
+  it("PUT /sessions/:id renames and the new title survives a re-GET (#29)", async () => {
+    const a = app();
+    const created = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Untitled session" }),
+    });
+    const { id } = (await created.json()) as { id: string };
+
+    const put = await a.request(`/sessions/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Renamed" }),
+    });
+    expect(put.status).toBe(200);
+    expect((await put.json()) as { title: string }).toMatchObject({ id, title: "Renamed" });
+
+    // re-GET: the new title is the persisted state, not the optimistic one
+    const got = (await (await a.request(`/sessions/${id}`)).json()) as { title: string };
+    expect(got.title).toBe("Renamed");
+
+    // a blank title is ignored (idempotent) — keeps the existing title
+    const blank = await a.request(`/sessions/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "   " }),
+    });
+    expect((await blank.json()) as { title: string }).toMatchObject({ title: "Renamed" });
+  });
+
   it("404s for unknown session", async () => {
     const a = app();
     expect((await a.request("/sessions/nope")).status).toBe(404);
@@ -92,6 +122,12 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect((await a.request("/sessions/nope/trace")).status).toBe(404);
     const del = await a.request("/sessions/nope", { method: "DELETE" });
     expect(del.status).toBe(404);
+    const put = await a.request("/sessions/nope", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "x" }),
+    });
+    expect(put.status).toBe(404);
   });
 });
 

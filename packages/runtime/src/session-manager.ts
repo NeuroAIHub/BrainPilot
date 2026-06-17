@@ -280,6 +280,22 @@ export class SessionManager {
     return e ? this.toSession(e) : undefined;
   }
 
+  /**
+   * Update a session's title and persist it to meta.json (#29). A blank or
+   * non-string title is ignored (idempotent) so the call can't wipe a title.
+   * Returns the updated session, or undefined if the session is unknown.
+   */
+  async renameSession(id: string, title?: unknown): Promise<Session | undefined> {
+    const e = this.sessions.get(id);
+    if (!e) return undefined;
+    if (typeof title === "string" && title.trim().length > 0) {
+      e.title = title.trim();
+    }
+    this.touch(e);
+    await this.writeMeta(e);
+    return this.toSession(e);
+  }
+
   listSessions(): Session[] {
     return [...this.sessions.values()].map((e) => this.toSession(e));
   }

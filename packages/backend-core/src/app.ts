@@ -84,7 +84,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sessions", forward("listSessions"));
   api.post("/sessions", forward("createSession", { withBody: true }));
   api.get("/sessions/:id", forward("getSession", { idParam: "id" }));
-  api.put("/sessions/:id", forwardRename());
+  api.put("/sessions/:id", forward("updateSession", { idParam: "id", withBody: true }));
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
   api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
@@ -179,6 +179,12 @@ export function createApp(options: CreateAppOptions): Hono {
   // Mount the API under /api (the SPA's API_BASE).
   app.route("/api", api);
 
+  // #30: any unmatched /api/* (any method) returns a JSON 404 — never the SPA
+  // index.html. Sits between the API routes and the static fallback, and is
+  // unconditional (independent of serveWeb) so an unimplemented route can't fall
+  // through to text/html (which the frontend's handleJson chokes on).
+  app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
+
   // ---- Static web serving with SPA fallback ----------------------------
   if (options.serveWeb !== false) {
     app.use("/*", serveStatic({ root: webRoot }));
@@ -208,26 +214,6 @@ export function createApp(options: CreateAppOptions): Hono {
         body: body && body.length > 0 ? body : undefined,
         headers,
         query: query && query.length > 0 ? query : undefined,
-      });
-      return relay(c, upstream);
-    };
-  }
-
-  // The SPA's PUT /sessions/:id (rename) has no dedicated runtime route in
-  // §15.4; forward it to the runtime's getSession path with PUT semantics via
-  // a raw forward so the runtime can handle/ignore it. We reuse sendMessage's
-  // session path shape but keep method PUT by hitting getSession's path.
-  function forwardRename() {
-    return async (c: import("hono").Context) => {
-      const rc = await getClient();
-      const id = c.req.param("id") ?? "";
-      const body = await c.req.text();
-      // getSession route path is `/sessions/:id`; issue a PUT against it.
-      const url = rc.urlFor("getSession", { id });
-      const upstream = await (options.fetchFn ?? fetch)(url, {
-        method: "PUT",
-        headers: { "content-type": c.req.header("content-type") ?? "application/json" },
-        body: body && body.length > 0 ? body : undefined,
       });
       return relay(c, upstream);
     };

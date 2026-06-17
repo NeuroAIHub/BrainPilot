@@ -121,6 +121,53 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  // #29: session rename. The SPA PUTs /api/sessions/:id {title}; this must
+  // proxy to the runtime's updateSession route (PUT /sessions/:id) with the
+  // body intact — not the old forwardRename hack that PUT the GET path.
+  it("PUT /api/sessions/:id forwards rename to the runtime updateSession route", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("http://runtime.test/sessions/abc");
+      expect(init.method).toBe("PUT");
+      expect(init.body).toBe('{"title":"Renamed"}');
+      return new Response('{"id":"abc","title":"Renamed"}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/sessions/abc", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: '{"title":"Renamed"}',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: "abc", title: "Renamed" });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  // #30: any unmatched /api/* returns a JSON 404, for every method, and never
+  // touches the runtime (no fetchFn call) nor the SPA static fallback.
+  it.each(["GET", "POST", "PUT", "DELETE"])(
+    "%s /api/<unknown> returns a JSON 404 (not SPA HTML / plain-text)",
+    async (method) => {
+      const fetchFn = vi.fn();
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: fetchFn as never,
+        serveWeb: false,
+      });
+      const res = await app.request("/api/__definitely_unknown__", { method });
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({ error: "not found" });
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
+
   it("GET /api/health returns ok without touching the runtime", async () => {
     const fetchFn = vi.fn();
     const app = createApp({

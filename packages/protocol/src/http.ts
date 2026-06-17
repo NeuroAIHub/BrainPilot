@@ -27,7 +27,7 @@ import { z } from "zod";
 import { AgUiEventSchema } from "./events.js";
 import { AgentStatusSchema, SessionSchema, SessionStateSnapshotSchema } from "./domain.js";
 
-export type HttpMethod = "GET" | "POST" | "DELETE";
+export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
 export interface RouteDef {
   readonly method: HttpMethod;
@@ -177,6 +177,8 @@ export const RUNTIME_ROUTES = {
   createSession: { method: "POST", path: "/sessions" },
   listSessions: { method: "GET", path: "/sessions" },
   getSession: { method: "GET", path: "/sessions/:id" },
+  /** Update session metadata (currently just `title`); persists to meta.json. */
+  updateSession: { method: "PUT", path: "/sessions/:id" },
   deleteSession: { method: "DELETE", path: "/sessions/:id" },
   getSessionState: { method: "GET", path: "/sessions/:id/state" },
   /** Graph of Trace (reasoning DAG) for a session. */
