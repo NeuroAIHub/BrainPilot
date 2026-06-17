@@ -294,8 +294,19 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.listSessions();
       }
-      const raw = await handleJson<unknown[]>(await fetch(`${API_BASE}/sessions`, { headers: authHeaders() }));
-      return raw.map((item) => normalizeSession(item as Parameters<typeof normalizeSession>[0]));
+      // Runtime returns the protocol envelope `{ sessions: [...] }` (see
+      // ListSessionsResponseSchema). Unwrap it; tolerate a bare array (legacy /
+      // mock) and fall back to [] so an unexpected shape never throws
+      // `.map is not a function` into SessionContext's error banner.
+      const raw = await handleJson<{ sessions?: unknown[] } | unknown[]>(
+        await fetch(`${API_BASE}/sessions`, { headers: authHeaders() }),
+      );
+      const list = Array.isArray(raw)
+        ? raw
+        : Array.isArray((raw as { sessions?: unknown[] })?.sessions)
+          ? (raw as { sessions: unknown[] }).sessions
+          : [];
+      return list.map((item) => normalizeSession(item as Parameters<typeof normalizeSession>[0]));
     },
 
     async get(sessionId: string): Promise<Session> {
@@ -437,9 +448,15 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.getSessionEvents(sessionId);
       }
-      const raw = await handleJson<{ events?: unknown[] }>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/events`, { headers: authHeaders() }),
-      );
+      // `/sessions/:id/events` is an SSE alias in backend-core (sseHandler), not
+      // a JSON route — so res.json() would reject. Treat any non-ok / non-JSON
+      // response as "no events" and let callers (demoBundle) use their ordered
+      // fallback instead of crashing on a stream body.
+      const res = await fetch(`${API_BASE}/sessions/${sessionId}/events`, { headers: authHeaders() });
+      if (!res.ok) return [];
+      const contentType = res.headers.get("content-type") || "";
+      if (!contentType.includes("application/json")) return [];
+      const raw = (await res.json().catch(() => ({}))) as { events?: unknown[] };
       return Array.isArray(raw.events) ? (raw.events as RawAgUiEvent[]) : [];
     },
 
