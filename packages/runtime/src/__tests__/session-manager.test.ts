@@ -55,6 +55,39 @@ describe("SessionManager (mock mode)", () => {
     expect(agents.map((a) => a.name)).toContain("principal");
   });
 
+  it("persists the user message as a role:user CHUNK with the client uuid (#42)", async () => {
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (e) => events.push(e));
+
+    await m.sendMessage(s.id, "hello from user", "principal", { uuid: "u-123" });
+    await waitFor(() => events.some((e) => e.type === "RUN_FINISHED"));
+
+    const chunk = events.find((e) => e.type === "TEXT_MESSAGE_CHUNK") as
+      | (AgUiEvent & { message_id: string; role: string; delta: string })
+      | undefined;
+    expect(chunk).toBeDefined();
+    expect(chunk?.role).toBe("user");
+    expect(chunk?.message_id).toBe("u-123");
+    expect(chunk?.delta).toBe("hello from user");
+    expect(() => parseEvent(chunk as AgUiEvent)).not.toThrow();
+  });
+
+  it("falls back to a generated id when the client omits uuid (#42)", async () => {
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (e) => events.push(e));
+
+    await m.sendMessage(s.id, "no uuid here");
+    await waitFor(() => events.some((e) => e.type === "TEXT_MESSAGE_CHUNK"));
+
+    const chunk = events.find((e) => e.type === "TEXT_MESSAGE_CHUNK") as
+      | (AgUiEvent & { message_id: string; role: string })
+      | undefined;
+    expect(chunk?.role).toBe("user");
+    expect(chunk?.message_id).toBeTruthy();
+  });
+
   it("passes app-controlled skill dirs (template + session) to the factory", async () => {
     const seen: string[][] = [];
     const spyFactory: typeof mockAgentFactory = async (params) => {

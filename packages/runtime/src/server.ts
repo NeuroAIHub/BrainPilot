@@ -75,7 +75,9 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const parsed = SendMessageRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
-    const res = await manager.sendMessage(id, parsed.data.content, parsed.data.agent ?? "principal");
+    const res = await manager.sendMessage(id, parsed.data.content, parsed.data.agent ?? "principal", {
+      uuid: parsed.data.data?.uuid,
+    });
     return c.json(res);
   });
 

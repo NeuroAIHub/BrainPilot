@@ -1,12 +1,10 @@
 import {
-  Clock3,
   Check,
   MessageCircle,
   MessageSquarePlus,
   MonitorPlay,
   PanelLeft,
   PenLine,
-  Plug,
   Search,
   Settings,
   Trash2,
@@ -80,6 +78,11 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
           <PenLine size={16} />
           <span>{t("sidebar.newChat")}</span>
         </button>
+        {/*
+          issue #44: 插件 / 自动化 have no view yet — as clickable no-op buttons
+          they read as broken navigation. Hidden until the views exist; the
+          i18n keys (sidebar.plugins / sidebar.automations) are kept. Re-add the
+          Plug / Clock3 lucide imports when restoring these.
         <button className="nav-item" type="button">
           <Plug size={16} />
           <span>{t("sidebar.plugins")}</span>
@@ -88,6 +91,7 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
           <Clock3 size={16} />
           <span>{t("sidebar.automations")}</span>
         </button>
+        */}
         <button
           className={`nav-item ${activePage === "demo" ? "is-active" : ""}`}
           onClick={onOpenDemo}

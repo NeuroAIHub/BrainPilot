@@ -20,7 +20,7 @@ import { isMockMode } from "@brainpilot/runtime";
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
 import { scaffold, isScaffolded, DEFAULT_PORT } from "../scaffold.js";
-import { writePid } from "../process-control.js";
+import { writePid, writeServerState } from "../process-control.js";
 import { resolveWebDist } from "../web-dist.js";
 
 export interface UpOptions {
@@ -177,7 +177,16 @@ export async function up(
     );
   }
   const pid = await deps.spawnDetached(cfg);
-  await writePid(dataPaths(dataDir).backendPid, pid);
+  const paths = dataPaths(dataDir);
+  await writePid(paths.backendPid, pid);
+  // issue #41: persist the resolved ports so `status` (which has no --port)
+  // probes the real backend rather than the default. `down` removes this.
+  await writeServerState(paths.serverState, {
+    pid,
+    port: cfg.port,
+    runtimePort: cfg.runtimePort,
+    host: cfg.host,
+  });
   log(pc.green(`BrainPilot backend started (pid ${pid}) at ${pc.bold(url)}`));
   if (open) await maybeOpen(deps, url);
   return { config: cfg, url, pid };

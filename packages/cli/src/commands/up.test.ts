@@ -8,7 +8,7 @@ import {
   PortInUseError,
   type ResolvedUpConfig,
 } from "./up.js";
-import { readPid } from "../process-control.js";
+import { readPid, readServerState } from "../process-control.js";
 import type { StartServerOptions, RunningServer } from "@brainpilot/backend-core";
 
 let dir: string;
@@ -191,6 +191,9 @@ describe("up — detached start", () => {
     expect(result.pid).toBe(4242);
     const pidFromFile = await readPid(join(root, ".runtime", "backend.pid"));
     expect(pidFromFile).toBe(4242);
+    // issue #41: detached up persists resolved ports for `status`.
+    const state = await readServerState(join(root, ".runtime", "server.json"));
+    expect(state).toEqual({ pid: 4242, port: 9700, runtimePort: 9701, host: "127.0.0.1" });
   });
 });
 

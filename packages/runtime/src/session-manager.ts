@@ -360,7 +360,12 @@ export class SessionManager {
   /* ----------------------------- messaging ----------------------------- */
 
   /** Send a user message to an agent (default principal). §7 L3 isolated. */
-  async sendMessage(sessionId: string, content: string, agentName = "principal"): Promise<{ accepted: boolean; runId?: string }> {
+  async sendMessage(
+    sessionId: string,
+    content: string,
+    agentName = "principal",
+    opts: { uuid?: string } = {},
+  ): Promise<{ accepted: boolean; runId?: string }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
     this.touch(entry);
@@ -379,6 +384,14 @@ export class SessionManager {
     entry.runActive = true;
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
+    // issue #42: persist + broadcast the user's own prompt as a role:"user"
+    // CHUNK *before* the agent runs, so SSE replay reconstructs the full
+    // transcript (user + assistant). The web composer's optimistic bubble uses
+    // the same `uuid`, so the reducer dedupes the replayed event by id rather
+    // than duplicating it. Fall back to a fresh id if the client omitted one.
+    entry.bus.emit(
+      ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
+    );
     // Fire-and-track: don't block the HTTP response on the full run.
     void agent
       .prompt(content)
