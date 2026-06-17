@@ -21,6 +21,10 @@ export function PromptComposer() {
   // 可用命令（已通过真实 API 测试 /context ✅ /cost ✅；/compact 由 SDK 内置 ✅）
   // 不可用命令（已移除）：/usage ❌ /clear ❌ /init ❌
   const DEFAULT_SLASH_COMMANDS = ["/compact", "/context", "/cost"];
+  // issue #43: temporarily hide the whole slash-command button until the
+  // dynamic command list (GET /sessions/:id/commands) is implemented backend
+  // side. Flip to true to restore. Code below is kept intact for that.
+  const SHOW_SLASH_COMMANDS = false;
   const [slashCommands, setSlashCommands] = useState<string[]>(DEFAULT_SLASH_COMMANDS);
 
   const [showCommands, setShowCommands] = useState(false);
@@ -77,29 +81,10 @@ export function PromptComposer() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!currentSession) {
-      setSlashCommands(DEFAULT_SLASH_COMMANDS);
-      return;
-    }
-    void api.sessions.commands(currentSession.id).then((res) => {
-      if (!cancelled) {
-        // Only override defaults when the backend actually returned commands
-        if (res.commands.length > 0) {
-          setSlashCommands(res.commands);
-        }
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        // Keep defaults on API failure so the button stays visible
-        setSlashCommands(DEFAULT_SLASH_COMMANDS);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSession?.id]);
+  // issue #43: the dynamic slash-command list (GET /sessions/:id/commands) is
+  // not implemented on the backend yet — fetching it 404'd on every selected
+  // session. The whole slash-command button is hidden below until that lands,
+  // so we no longer fetch and just keep the local DEFAULT_SLASH_COMMANDS.
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -280,7 +265,7 @@ export function PromptComposer() {
               <IconButton label={t("chat.aria.attachContext")}>
                 <Plus size={18} />
               </IconButton>
-              {slashCommands.length > 0 && (
+              {SHOW_SLASH_COMMANDS && slashCommands.length > 0 && (
                 <div className="command-picker" ref={commandsRef}>
                   <IconButton
                     label={t("chat.command")}
