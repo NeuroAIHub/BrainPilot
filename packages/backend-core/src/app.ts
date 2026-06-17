@@ -27,6 +27,10 @@ import {
   updateProfile,
   deleteProfile,
   setSelectedProfile,
+  readMcpServers,
+  createMcpServer,
+  updateMcpServer,
+  deleteMcpServer,
   type StoredProviderProfile,
 } from "./config.js";
 
@@ -174,6 +178,29 @@ export function createApp(options: CreateAppOptions): Hono {
     const p = profiles.find((x) => x.id === c.req.param("id"));
     if (!p) return c.json({ error: "not found" }, 404);
     return c.json(toHttpProfile(p, selectedProfileId));
+  });
+
+  // ---- MCP Servers CRUD (disk-backed: bp_template/mcp_servers.json) ----
+  api.get("/mcp-servers", async (c) => {
+    return c.json(await readMcpServers(dataDir));
+  });
+  api.post("/mcp-servers", async (c) => {
+    const body = await safeJson(c);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const config = body.config && typeof body.config === "object" ? (body.config as Record<string, unknown>) : null;
+    if (!name || !config) return c.json({ error: "name and config are required" }, 400);
+    return c.json(await createMcpServer(dataDir, name, config), 201);
+  });
+  api.put("/mcp-servers/:name", async (c) => {
+    const config = await safeJson(c);
+    const entry = await updateMcpServer(dataDir, c.req.param("name"), config);
+    if (!entry) return c.json({ error: "not found" }, 404);
+    return c.json(entry);
+  });
+  api.delete("/mcp-servers/:name", async (c) => {
+    const ok = await deleteMcpServer(dataDir, c.req.param("name"));
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.body(null, 204);
   });
 
   // Mount the API under /api (the SPA's API_BASE).
