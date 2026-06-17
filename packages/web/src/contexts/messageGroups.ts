@@ -33,17 +33,34 @@ function isStandalone(message: ChatMessage): boolean {
  * standalone. The activity group id is its first step's id so the native
  * <details> DOM node is reused across re-renders, preserving the user's
  * expand/collapse toggle without explicit React state.
+ *
+ * `runningAgents` is the authoritative set of agent names whose run is still
+ * active (RUN_STARTED..RUN_FINISHED, sourced from `session_state`). An activity
+ * block is "in progress" if any of its steps is still streaming OR its owning
+ * agent's run is still active. Without this, the per-message `streaming` flags
+ * all go false between ReAct rounds (each message's END clears it), so the
+ * block would flash "思考过程 · N 步" (done) in the gap before the next round —
+ * AG-UI explicitly warns against treating a message/tool END as run completion.
+ * Omitting `runningAgents` (e.g. demo replay, where messages are already
+ * terminal) preserves the original streaming-flag-only behavior.
  */
-export function buildRenderItems(messages: ChatMessage[]): RenderItem[] {
+export function buildRenderItems(
+  messages: ChatMessage[],
+  runningAgents?: ReadonlySet<string>,
+): RenderItem[] {
   const items: RenderItem[] = [];
   let buffer: ChatMessage[] = [];
+  // A step keeps its block "in progress" while its owning agent's run is active.
+  // Steps default to the principal agent when unattributed, matching how the
+  // reducer/UI fall back elsewhere.
+  const agentActive = (s: ChatMessage) => runningAgents?.has(s.agent ?? "principal") ?? false;
   const flush = () => {
     if (buffer.length === 0) return;
     items.push({
       type: "activity",
       id: buffer[0].id,
       steps: buffer,
-      streaming: buffer.some((s) => s.streaming),
+      streaming: buffer.some((s) => s.streaming || agentActive(s)),
     });
     buffer = [];
   };
