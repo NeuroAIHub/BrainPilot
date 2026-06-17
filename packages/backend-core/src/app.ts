@@ -13,10 +13,17 @@
  * The app is mounted under `/api` for the proxied/local routes (the SPA calls
  * `API_BASE = "/api"`), with static assets served at the root.
  */
+import { createRequire } from "node:module";
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { RUNTIME_ROUTES } from "@brainpilot/protocol";
+import {
+  RUNTIME_ROUTES,
+  McpServerConfigSchema,
+  ProviderProfileCreateSchema,
+  ProviderProfileUpdateSchema,
+} from "@brainpilot/protocol";
 import { RuntimeClient } from "./runtime-client.js";
+import { probeProvider } from "./provider-probe.js";
 import type { Orchestrator } from "./orchestrator.js";
 import {
   readLocalSettings,
@@ -42,6 +49,8 @@ export interface CreateAppOptions {
   webRoot?: string;
   /** Injectable fetch for the runtime client (tests). */
   fetchFn?: typeof fetch;
+  /** #55: timeout (ms) for the provider connectivity probe. Default 5000. */
+  providerProbeTimeoutMs?: number;
   /** Disable static serving (tests that only exercise the API). */
   serveWeb?: boolean;
   env?: Record<string, string | undefined>;
@@ -55,6 +64,15 @@ const HOP_BY_HOP = new Set([
   "content-encoding",
   "content-length",
 ]);
+
+// #46: report the real package version instead of a hardcoded literal. Read at
+// module load from this package's own package.json (one level above dist/) so
+// the value always tracks the published @brainpilot/backend-core version
+// (kept in lockstep with the root version via `npm run version:sync`).
+const pkg = createRequire(import.meta.url)("../package.json") as {
+  name: string;
+  version: string;
+};
 
 export function createApp(options: CreateAppOptions): Hono {
   const dataDir = options.dataDir ?? process.env.BP_DATA_DIR ?? "./brainpilot";
@@ -79,7 +97,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // ---- Health (backend-local; does not require runtime) ----------------
   api.get("/health", (c) => c.json({ status: "ok" }));
 
-  api.get("/version", (c) => c.json({ name: "@brainpilot/backend-core", version: "0.1.0" }));
+  api.get("/version", (c) => c.json({ name: pkg.name, version: pkg.version }));
 
   // ---- Identity (backend-local) ----------------------------------------
   // Trust-front (#21): hosted deployments resolve identity at the upstream
@@ -115,6 +133,8 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
   api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
   api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
+  // #47: file upload — POST the base64 body through to the runtime writeFile route.
+  api.post("/sandbox/:id/files", forward("writeFile", { idParam: "id", withBody: true }));
 
   // ---- SSE byte passthrough (修正4) ------------------------------------
   // Canonical protocol path `/sse/:id` (RUNTIME_ROUTES.sessionEvents) plus the
@@ -149,7 +169,14 @@ export function createApp(options: CreateAppOptions): Hono {
     return active ? c.json(toHttpProfile(active, selectedProfileId)) : c.body(null, 204);
   });
   api.post("/provider/profiles", async (c) => {
-    const created = await createProfile(dataDir, fromHttpBody(await safeJson(c)));
+    // #50: validate the create body before persisting — empty name and
+    // malformed `models` (e.g. the string "m") must 400, not silently create an
+    // unusable profile that becomes the active selection.
+    const parsed = ProviderProfileCreateSchema.safeParse(await safeJson(c));
+    if (!parsed.success) {
+      return c.json({ error: "invalid provider profile", details: parsed.error.issues }, 400);
+    }
+    const created = await createProfile(dataDir, fromHttpBody(parsed.data));
     const { selectedProfileId } = await readProviders(dataDir);
     return c.json(toHttpProfile(created, selectedProfileId), 201);
   });
@@ -172,7 +199,13 @@ export function createApp(options: CreateAppOptions): Hono {
     return c.json(profiles.map((p) => toHttpProfile(p, selectedProfileId)));
   });
   api.put("/provider/profiles/:id", async (c) => {
-    const updated = await updateProfile(dataDir, c.req.param("id"), fromHttpBody(await safeJson(c)));
+    // #50: same validation on update (partial patch — fields optional, but a
+    // present `name` must be non-empty and `models` a valid string array).
+    const parsed = ProviderProfileUpdateSchema.safeParse(await safeJson(c));
+    if (!parsed.success) {
+      return c.json({ error: "invalid provider profile", details: parsed.error.issues }, 400);
+    }
+    const updated = await updateProfile(dataDir, c.req.param("id"), fromHttpBody(parsed.data));
     if (!updated) return c.json({ error: "not found" }, 404);
     const { selectedProfileId } = await readProviders(dataDir);
     return c.json(toHttpProfile(updated, selectedProfileId));
@@ -182,12 +215,25 @@ export function createApp(options: CreateAppOptions): Hono {
     return c.json({ deleted: ok }, ok ? 200 : 404);
   });
   api.post("/provider/profiles/:id/test", async (c) => {
-    // Connectivity probe is not implemented yet; report unknown so the UI shows
-    // a neutral state rather than 404-ing the whole settings flow.
+    // #55: actually probe the provider gateway instead of echoing "unknown".
+    // A real connectivity/auth check so the UI can report healthy / unavailable
+    // / error rather than telling the user an unreachable gateway was "tested".
     const { profiles, selectedProfileId } = await readProviders(dataDir);
     const p = profiles.find((x) => x.id === c.req.param("id"));
     if (!p) return c.json({ error: "not found" }, 404);
-    return c.json(toHttpProfile(p, selectedProfileId));
+    const result = await probeProvider(
+      { baseUrl: p.baseUrl, apiKey: p.apiKey },
+      { fetchFn: options.fetchFn, timeoutMs: options.providerProbeTimeoutMs },
+    );
+    // model_health stays empty this round (per-model probing is future work);
+    // health_status reflects the real probe outcome.
+    return c.json({
+      ...toHttpProfile(p, selectedProfileId),
+      health_status: result.status === "error" ? "unavailable" : result.status,
+      health_checked_at: Date.now(),
+      health_message: result.message ?? "",
+      health_latency_ms: result.latencyMs ?? null,
+    });
   });
 
   // ---- MCP Servers CRUD (disk-backed: bp_template/mcp_servers.json) ----
@@ -199,11 +245,24 @@ export function createApp(options: CreateAppOptions): Hono {
     const name = typeof body.name === "string" ? body.name.trim() : "";
     const config = body.config && typeof body.config === "object" ? (body.config as Record<string, unknown>) : null;
     if (!name || !config) return c.json({ error: "name and config are required" }, 400);
-    return c.json(await createMcpServer(dataDir, name, config), 201);
+    // #49: validate the transport config before persisting — invalid type /
+    // missing url (http/sse) / missing command (stdio) must 400 and leave the
+    // on-disk file untouched, not 201 + write an unusable entry.
+    const parsed = McpServerConfigSchema.safeParse(config);
+    if (!parsed.success) {
+      return c.json({ error: "invalid mcp server config", details: parsed.error.issues }, 400);
+    }
+    return c.json(await createMcpServer(dataDir, name, parsed.data), 201);
   });
   api.put("/mcp-servers/:name", async (c) => {
     const config = await safeJson(c);
-    const entry = await updateMcpServer(dataDir, c.req.param("name"), config);
+    // #49: same validation on update — a PUT must not be able to write an
+    // invalid transport config either.
+    const parsed = McpServerConfigSchema.safeParse(config);
+    if (!parsed.success) {
+      return c.json({ error: "invalid mcp server config", details: parsed.error.issues }, 400);
+    }
+    const entry = await updateMcpServer(dataDir, c.req.param("name"), parsed.data);
     if (!entry) return c.json({ error: "not found" }, 404);
     return c.json(entry);
   });

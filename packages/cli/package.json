@@ -1,13 +1,18 @@
 {
   "name": "@brainpilot/app",
   "version": "0.0.5",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "description": "BrainPilot CLI — Docker-free local one-click launch (bin: brainpilot / bnpt)",
+  "homepage": "https://github.com/NeuroAIHub/BrainPilot#readme",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "repository": {
     "type": "git",

@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { createApp } from "../src/app.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
@@ -179,6 +180,24 @@ describe("Hono app — REST forwarding", () => {
     expect(await res.json()).toEqual({ status: "ok" });
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  // #46: /version must report the real package version, not a hardcoded
+  // literal. Assert it matches this package's own package.json so the value
+  // can never drift from the published version again.
+  it("GET /api/version reports the real package version (not a hardcoded literal)", async () => {
+    const require = createRequire(import.meta.url);
+    const pkg = require("../package.json") as { name: string; version: string };
+    const fetchFn = vi.fn();
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/version");
+    expect(await res.json()).toEqual({ name: pkg.name, version: pkg.version });
+    expect(pkg.version).not.toBe("0.1.0"); // the old hardcoded drift value
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
 });
 
 describe("Hono app — SSE byte passthrough (修正4)", () => {
@@ -341,5 +360,112 @@ describe("Hono app — local config routes", () => {
     const del = await app.request(`/api/provider/profiles/${profile.id}`, { method: "DELETE" });
     expect(del.status).toBe(200);
     expect((await del.json()) as { deleted: boolean }).toEqual({ deleted: true });
+  });
+
+  // #50: malformed provider profiles must 400, not silently create an unusable
+  // active profile.
+  describe("#50 provider profile validation", () => {
+    async function provApp() {
+      const dir = await mkdtemp(path.join(tmpdir(), "bp-prov50-"));
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: vi.fn() as never,
+        serveWeb: false,
+        dataDir: dir,
+        env: {},
+      });
+      return { app, dir };
+    }
+    const postProfile = (app: ReturnType<typeof createApp>, body: unknown) =>
+      app.request("/api/provider/profiles", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    it("rejects an empty name with 400", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "", base_url: "https://x", api_key: "sk-x", models: ["m"] });
+      expect(res.status).toBe(400);
+      expect(res.headers.get("content-type")).toContain("application/json");
+    });
+
+    it("rejects whitespace-only name with 400", async () => {
+      const { app } = await provApp();
+      expect((await postProfile(app, { name: "   ", models: ["m"] })).status).toBe(400);
+    });
+
+    it("rejects a non-array models with 400 (not a silent empty list)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Bad Models Type", base_url: "https://x", api_key: "sk-x", models: "m" });
+      expect(res.status).toBe(400);
+    });
+
+    it("does not persist or activate an invalid profile", async () => {
+      const { app } = await provApp();
+      await postProfile(app, { name: "", base_url: "https://x", api_key: "sk-x", models: ["m"] });
+      // no profile was created → active returns 204
+      const active = await app.request("/api/provider/profiles/active");
+      expect(active.status).toBe(204);
+      const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+      expect(list).toHaveLength(0);
+    });
+
+    it("still accepts a valid profile (201) and selects it active", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Good", base_url: "https://x", api_key: "sk-x", models: ["m1", "m2"] });
+      expect(res.status).toBe(201);
+      const p = (await res.json()) as { is_active: boolean; models: string[] };
+      expect(p.is_active).toBe(true);
+      expect(p.models).toEqual(["m1", "m2"]);
+    });
+  });
+
+  // #55: the Test button must do a real connectivity probe, not echo unknown.
+  describe("#55 provider test endpoint", () => {
+    async function makeProfile(fetchFn: unknown) {
+      const dir = await mkdtemp(path.join(tmpdir(), "bp-prov55-"));
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: fetchFn as never,
+        serveWeb: false,
+        dataDir: dir,
+        env: {},
+        providerProbeTimeoutMs: 50,
+      });
+      const created = await app.request("/api/provider/profiles", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Gw", base_url: "https://gw.example.com/api", api_key: "sk-x", models: ["m"] }),
+      });
+      const { id } = (await created.json()) as { id: string };
+      return { app, id };
+    }
+
+    it("reports unavailable for an unreachable gateway", async () => {
+      const fetchFn = vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      });
+      const { app, id } = await makeProfile(fetchFn);
+      const res = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { health_status: string };
+      expect(body.health_status).toBe("unavailable");
+    });
+
+    it("reports healthy for a 2xx gateway", async () => {
+      const fetchFn = vi.fn(async () => new Response("{}", { status: 200 }));
+      const { app, id } = await makeProfile(fetchFn);
+      const res = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      const body = (await res.json()) as { health_status: string };
+      expect(body.health_status).toBe("healthy");
+    });
+
+    it("404s for an unknown profile id", async () => {
+      const fetchFn = vi.fn();
+      const { app } = await makeProfile(fetchFn);
+      const res = await app.request("/api/provider/profiles/nope/test", { method: "POST" });
+      expect(res.status).toBe(404);
+    });
   });
 });

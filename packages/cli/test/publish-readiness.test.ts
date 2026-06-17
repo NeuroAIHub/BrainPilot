@@ -40,6 +40,12 @@ describe.each(PUBLIC)("public package %s is publish-ready", (shortName) => {
     expect(pkg.repository?.directory).toBe(`packages/${shortName}`);
   });
 
+  // #56: every published package must declare the documented Node engine range
+  // so installs on Node < 22 get an early npm warning.
+  it("declares engines.node >=22 (#56)", () => {
+    expect(pkg.engines?.node).toBe(">=22");
+  });
+
   it("pins internal @brainpilot/* dependencies (not '*')", () => {
     const deps: Record<string, string> = pkg.dependencies ?? {};
     for (const [name, range] of Object.entries(deps)) {
@@ -55,6 +61,15 @@ describe("targeted publish guards", () => {
   it("client-cli stays private (not published)", () => {
     const pkg = readPkg("../../client-cli/package.json");
     expect(pkg.private).toBe(true);
+  });
+
+  // #52: the @brainpilot/app package must ship a README (npm page + tarball).
+  it("cli ships a README in files and on disk (#52)", () => {
+    const pkg = readPkg("../package.json");
+    expect(pkg.files).toContain("README.md");
+    const readme = readFileSync(new URL("../README.md", import.meta.url), "utf8");
+    expect(readme).toMatch(/@brainpilot\/app/);
+    expect(readme.length).toBeGreaterThan(200);
   });
 
   it("web declares no exports (so SPA dist is located via require.resolve)", () => {
