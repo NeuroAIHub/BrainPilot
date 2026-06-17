@@ -13,6 +13,7 @@
 import type { AgUiEvent, AgentState } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
+import { normalizeAgentError } from "./agent-error.js";
 import type {
   AgentRole,
   IAgentSession,
@@ -99,8 +100,12 @@ export class MasAgent {
       );
       if (this._status !== "error") this.setStatus("idle");
     } catch (err) {
-      const message = (err as Error)?.message ?? String(err);
-      this.recordError(message, (err as Error)?.stack);
+      const raw = (err as Error)?.message ?? String(err);
+      // issue #45: never surface raw SDK guidance (/login, node_modules paths)
+      // — normalize to a product message / redact local paths before it hits
+      // the event stream, events.jsonl, and lastError.
+      const message = normalizeAgentError(raw);
+      this.recordError(message);
       this.bus.emit(
         ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
       );
