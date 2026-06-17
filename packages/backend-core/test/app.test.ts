@@ -401,6 +401,22 @@ describe("Hono app — local config routes", () => {
       expect(res.status).toBe(400);
     });
 
+    it("rejects an empty models array with 400 (#61)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "empty-first", base_url: "", api_key: "sk-empty", models: [] });
+      expect(res.status).toBe(400);
+      // The empty-models profile must not have been persisted or activated.
+      expect((await app.request("/api/provider/profiles/active")).status).toBe(204);
+      const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+      expect(list).toHaveLength(0);
+    });
+
+    it("rejects a create with no models field at all with 400 (#61)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "no-models", base_url: "https://x", api_key: "sk-x" });
+      expect(res.status).toBe(400);
+    });
+
     it("does not persist or activate an invalid profile", async () => {
       const { app } = await provApp();
       await postProfile(app, { name: "", base_url: "https://x", api_key: "sk-x", models: ["m"] });

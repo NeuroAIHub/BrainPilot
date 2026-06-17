@@ -9,7 +9,7 @@
  * Persistence (§5): config/history/state live under `<dataRoot>/.bp/{sid}/`,
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
-import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
+import { mkdir, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session, TraceGraph } from "@brainpilot/protocol";
@@ -131,6 +131,16 @@ export class SessionManager {
   private workspaceDir(sid: string): string {
     return join(this.dataRoot, "workspaces", sid);
   }
+  /**
+   * #60: composer uploads in single-user mode are POSTed against the literal
+   * sandbox id `"local"` (the web `LOCAL_SANDBOX.id`), because a file can be
+   * attached in the draft composer *before* the real session exists. They land
+   * in `workspaces/local/` — but the agent's cwd is `workspaces/<sessionId>/`,
+   * so without this it can't read the file the user just attached. We treat
+   * `workspaces/local/` as a staging area and drain it into the real session
+   * workspace right before the agent runs (see drainLocalUploads).
+   */
+  private static readonly UPLOAD_STAGING_SID = "local";
   private historyPath(sid: string, agent: string): string {
     return join(this.bpDir(sid), "history", `${agent}.jsonl`);
   }
@@ -253,6 +263,81 @@ export class SessionManager {
     const root = this.workspaceDir(sid);
     const relOut = abs === root ? "" : abs.slice(root.length + 1);
     return { path: relOut, size: buf.byteLength };
+  }
+
+  /**
+   * #60: drain the composer upload staging area (`workspaces/local/`) into a
+   * real session's workspace so the agent — whose cwd is `workspaces/<sid>/` —
+   * can read files the user attached in the draft composer (when no real
+   * session id existed yet, the web uploads against the literal `"local"`
+   * sandbox id). Called right before the agent runs.
+   *
+   * Move semantics: each staged entry is renamed into the session workspace
+   * (an existing same-named entry in the session is left untouched and the
+   * staged copy is discarded), then the staging area is emptied so files never
+   * leak into the next session. No-op when the target IS the staging sid, or
+   * when the staging dir is missing/empty. Best-effort: never throws — a copy
+   * failure must not block the user's prompt.
+   */
+  private async drainLocalUploads(sessionId: string): Promise<void> {
+    if (sessionId === SessionManager.UPLOAD_STAGING_SID) return;
+    const stagingDir = this.workspaceDir(SessionManager.UPLOAD_STAGING_SID);
+    let names: string[];
+    try {
+      names = await readdir(stagingDir);
+    } catch {
+      return; // no staging dir → nothing was uploaded in the draft
+    }
+    if (names.length === 0) return;
+    const destDir = this.workspaceDir(sessionId);
+    try {
+      await mkdir(destDir, { recursive: true });
+    } catch {
+      /* best-effort */
+    }
+    for (const name of names) {
+      const from = join(stagingDir, name);
+      const to = join(destDir, name);
+      try {
+        // Don't clobber an existing session file; just drop the staged copy.
+        let exists = false;
+        try {
+          await stat(to);
+          exists = true;
+        } catch {
+          /* target absent → safe to move */
+        }
+        if (exists) {
+          await rm(from, { recursive: true, force: true });
+          continue;
+        }
+        await rename(from, to);
+      } catch {
+        // rename failed (e.g. cross-device, or `from` is a directory on some
+        // platforms): fall back to a content copy so the file still reaches the
+        // session, then remove the staged copy. Best-effort, never throws.
+        try {
+          await this.copyEntry(from, to);
+          await rm(from, { recursive: true, force: true });
+        } catch {
+          /* give up on this entry */
+        }
+      }
+    }
+  }
+
+  /** Recursively copy a file or directory tree (drainLocalUploads fallback). */
+  private async copyEntry(from: string, to: string): Promise<void> {
+    const st = await stat(from);
+    if (st.isDirectory()) {
+      await mkdir(to, { recursive: true });
+      for (const child of await readdir(from)) {
+        await this.copyEntry(join(from, child), join(to, child));
+      }
+      return;
+    }
+    await mkdir(dirname(to), { recursive: true });
+    await writeFile(to, await readFile(from));
   }
 
   /**
@@ -408,6 +493,10 @@ export class SessionManager {
       return { accepted: false };
     }
     const agent = await this.ensureAgent(sessionId, agentName);
+    // #60: pull any composer uploads staged under workspaces/local/ into this
+    // session's workspace (the agent's cwd) before it runs, so it can read the
+    // file the user just attached. No-op when nothing was staged.
+    await this.drainLocalUploads(sessionId);
     entry.runActive = true;
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
