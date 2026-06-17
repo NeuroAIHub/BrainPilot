@@ -3,6 +3,7 @@ import { Sandbox, SandboxStats } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
+import { runtimeConfig } from "../config";
 
 export type SandboxOperation = "idle" | "loading" | "creating" | "rebuilding" | "destroying";
 
@@ -35,7 +36,52 @@ function selectSandbox(sandboxes: Sandbox[]): Sandbox | null {
 }
 
 export function SandboxProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  // Single-user local mode: there is no container lifecycle. The runtime
+  // launched by `brainpilot up` is always the sandbox, addressed per-session by
+  // the file routes. We expose a static "running" sandbox so the composer and
+  // file panels work, and never call /api/sandbox/* lifecycle endpoints (which
+  // the local backend does not implement). File operations resolve the real
+  // workspace by the active session id inside the file components themselves.
+  if (runtimeConfig.localMode) {
+    return <LocalSandboxProvider>{children}</LocalSandboxProvider>;
+  }
+  return <RemoteSandboxProvider>{children}</RemoteSandboxProvider>;
+}
+
+const LOCAL_SANDBOX: Sandbox = {
+  id: "local",
+  name: "local",
+  status: "running",
+  port: null,
+  userId: "local",
+  createdAt: new Date(0).toISOString(),
+};
+
+function LocalSandboxProvider({ children }: { children: ReactNode }) {
+  const noop = useCallback(async () => {}, []);
+  const value = useMemo<SandboxContextValue>(
+    () => ({
+      sandboxes: [LOCAL_SANDBOX],
+      currentSandbox: LOCAL_SANDBOX,
+      stats: null,
+      status: "running",
+      operation: "idle",
+      error: null,
+      logs: "",
+      refresh: noop,
+      refreshStats: noop,
+      createSandbox: noop,
+      rebuildSandbox: noop,
+      destroySandbox: noop,
+      reloadConfig: noop,
+    }),
+    [noop],
+  );
+  return <SandboxContext.Provider value={value}>{children}</SandboxContext.Provider>;
+}
+
+function RemoteSandboxProvider({ children }: { children: ReactNode }) {
+  const { isAuthReady } = useAuth();
   const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
   const [currentSandbox, setCurrentSandbox] = useState<Sandbox | null>(null);
   const [stats, setStats] = useState<SandboxStats | null>(null);
@@ -46,7 +92,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   const shouldAutoStartRef = useRef(true);
 
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!isAuthReady) {
       setSandboxes([]);
       setCurrentSandbox(null);
       setStats(null);
@@ -65,7 +111,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
     } finally {
       setOperation((current) => (current === "loading" ? "idle" : current));
     }
-  }, [token]);
+  }, [isAuthReady]);
 
   const refreshStats = useCallback(async () => {
     if (!currentSandbox || (currentSandbox.status !== "running" && currentSandbox.status !== "quota_exceeded")) {
@@ -100,11 +146,11 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  // Reset auto-start flag on token change (new login)
+  // Reset auto-start flag once auth becomes ready.
   useEffect(() => {
     shouldAutoStartRef.current = true;
     setHasLoaded(false);
-  }, [token]);
+  }, [isAuthReady]);
 
   useEffect(() => {
     void refreshStats();
@@ -197,13 +243,13 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
   //
   // hasLoaded gate: on initial mount the auto-start effect fires *before* the
   // first refresh() completes (refresh's setOperation('loading') is an async
-  // state update, but the effect already runs in the same batch as the token
-  // change). Without this gate currentSandbox is null on first render and we
+  // state update, but the effect already runs in the same batch as the
+  // auth-ready change). Without this gate currentSandbox is null on first render and we
   // mistakenly call createSandbox() → force-removes the same-named live
   // container. Wait until at least one /api/sandbox/list has returned before
   // making the call.
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthReady) return;
     if (!hasLoaded) return;
     if (operation !== "idle") return;
     if (!shouldAutoStartRef.current) return;
@@ -212,7 +258,7 @@ export function SandboxProvider({ children }: { children: ReactNode }) {
     if (!currentSandbox) {
       void createSandbox();
     }
-  }, [token, hasLoaded, operation, currentSandbox, createSandbox]);
+  }, [isAuthReady, hasLoaded, operation, currentSandbox, createSandbox]);
 
   const value = useMemo(
     () => ({

@@ -55,6 +55,16 @@ export function PromptComposer() {
   const isAgentRunning = agents.some((a) => a.status === "running");
   const lastAssistantStreaming = visibleMessages[visibleMessages.length - 1]?.role === "assistant" && visibleMessages[visibleMessages.length - 1]?.streaming;
 
+  // Agents whose run is still active. Threaded to MessageStream so a folded
+  // activity block stays "in progress" across ReAct rounds — without this, the
+  // per-message streaming flags all clear between rounds and the block flashes
+  // "完成思考" in the gap. Memoized so its identity is stable for MessageStream's
+  // memo() (a fresh Set each render would defeat the memoization).
+  const runningAgents = useMemo(
+    () => new Set(agents.filter((a) => a.status === "running").map((a) => a.name)),
+    [agents],
+  );
+
   useEffect(() => {
     let cancelled = false;
     void api.ui.promptSuggestions().then((suggestions) => {
@@ -210,7 +220,12 @@ export function PromptComposer() {
       return;
     }
     draftStore.set(sessionId, "");
-    await sendPrompt(content);
+    // Carry the chosen provider/model so a freshly-created session records its
+    // per-session selection (no-op for an already-running session).
+    await sendPrompt(content, {
+      providerId: activeProvider?.id,
+      modelId: selectedModel || undefined,
+    });
   };
 
   // Writes to the draft store from non-text controls (slash command picks,
@@ -230,6 +245,7 @@ export function PromptComposer() {
             messages={visibleMessages}
             autoScroll
             showTiming
+            runningAgents={runningAgents}
             onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
             onRetryCancel={() => void interruptCurrent()}
           />

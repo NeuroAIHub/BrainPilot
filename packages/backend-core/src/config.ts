@@ -28,6 +28,8 @@ export interface ConfigPaths {
   bpTemplateSettings: string;
   brainpilotConfig: string;
   dotenv: string;
+  /** Multi-provider registry (the SSOT for provider config, §11A.2 rewrite). */
+  providers: string;
 }
 
 export function configPaths(dataDir: string): ConfigPaths {
@@ -36,6 +38,7 @@ export function configPaths(dataDir: string): ConfigPaths {
     bpTemplateSettings: path.join(dataDir, "bp_template", "settings.json"),
     brainpilotConfig: path.join(dataDir, "brainpilot.config.json"),
     dotenv: path.join(dataDir, ".env"),
+    providers: path.join(dataDir, "bp_template", "providers.json"),
   };
 }
 
@@ -98,6 +101,132 @@ export interface ResolveProviderOptions {
   env?: Record<string, string | undefined>;
 }
 
+/* ----------------------------- providers.json ----------------------------- *
+ * The provider registry is the SSOT for LLM credentials in single-user mode.
+ * It stores FULL profiles (incl. plaintext apiKey) on disk under bp_template/;
+ * the data dir is gitignored and written 0600. The HTTP layer never returns the
+ * plaintext key — it masks it (see app.ts `toHttpProfile`). A session selects a
+ * profile + model by id; resolveProvider() resolves the *selected* profile
+ * first, falling back to the legacy env/dotenv chain for backward compat.
+ * -------------------------------------------------------------------------- */
+
+/** A stored provider profile (internal — holds the plaintext key). */
+export interface StoredProviderProfile {
+  id: string;
+  name: string;
+  baseUrl: string;
+  apiKey: string;
+  models: string[];
+  icon?: string;
+  iconColor?: string;
+  notes?: string;
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface ProvidersFile {
+  profiles: StoredProviderProfile[];
+  /** Id of the profile new sessions default to. */
+  selectedProfileId?: string;
+}
+
+export async function readProviders(dataDir: string): Promise<ProvidersFile> {
+  const raw = (await readJsonSafe(configPaths(dataDir).providers)) as unknown as ProvidersFile | null;
+  const profiles = Array.isArray(raw?.profiles) ? raw.profiles : [];
+  const selectedProfileId =
+    typeof raw?.selectedProfileId === "string" ? raw.selectedProfileId : profiles[0]?.id;
+  return { profiles, selectedProfileId };
+}
+
+async function writeProviders(dataDir: string, file: ProvidersFile): Promise<void> {
+  const target = configPaths(dataDir).providers;
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(file, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.rename(tmp, target); // atomic
+}
+
+/** The profile a session should use given an optional explicit id. */
+export async function selectedProfile(
+  dataDir: string,
+  preferId?: string,
+): Promise<StoredProviderProfile | undefined> {
+  const { profiles, selectedProfileId } = await readProviders(dataDir);
+  return (
+    profiles.find((p) => p.id === preferId) ??
+    profiles.find((p) => p.id === selectedProfileId) ??
+    profiles[0]
+  );
+}
+
+let _counter = 0;
+function newId(): string {
+  // No crypto.randomUUID dependency need; ids are local-only and short-lived.
+  _counter += 1;
+  return `p${Date.now().toString(36)}${_counter.toString(36)}`;
+}
+
+export async function createProfile(
+  dataDir: string,
+  input: Partial<StoredProviderProfile>,
+): Promise<StoredProviderProfile> {
+  const file = await readProviders(dataDir);
+  const now = Date.now();
+  const profile: StoredProviderProfile = {
+    id: input.id ?? newId(),
+    name: input.name ?? "Provider",
+    baseUrl: input.baseUrl ?? "",
+    apiKey: input.apiKey ?? "",
+    models: input.models ?? [],
+    icon: input.icon,
+    iconColor: input.iconColor,
+    notes: input.notes,
+    createdAt: now,
+    updatedAt: now,
+  };
+  file.profiles.push(profile);
+  if (!file.selectedProfileId) file.selectedProfileId = profile.id;
+  await writeProviders(dataDir, file);
+  return profile;
+}
+
+export async function updateProfile(
+  dataDir: string,
+  id: string,
+  patch: Partial<StoredProviderProfile>,
+): Promise<StoredProviderProfile | undefined> {
+  const file = await readProviders(dataDir);
+  const profile = file.profiles.find((p) => p.id === id);
+  if (!profile) return undefined;
+  // apiKey omitted in patch → keep existing (UI sends masked key, not the real one).
+  const writable = profile as unknown as Record<string, unknown>;
+  for (const k of ["name", "baseUrl", "models", "icon", "iconColor", "notes"] as const) {
+    if (patch[k] !== undefined) writable[k] = patch[k];
+  }
+  if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) profile.apiKey = patch.apiKey;
+  profile.updatedAt = Date.now();
+  await writeProviders(dataDir, file);
+  return profile;
+}
+
+export async function deleteProfile(dataDir: string, id: string): Promise<boolean> {
+  const file = await readProviders(dataDir);
+  const before = file.profiles.length;
+  file.profiles = file.profiles.filter((p) => p.id !== id);
+  if (file.profiles.length === before) return false;
+  if (file.selectedProfileId === id) file.selectedProfileId = file.profiles[0]?.id;
+  await writeProviders(dataDir, file);
+  return true;
+}
+
+export async function setSelectedProfile(dataDir: string, id: string): Promise<boolean> {
+  const file = await readProviders(dataDir);
+  if (!file.profiles.some((p) => p.id === id)) return false;
+  file.selectedProfileId = id;
+  await writeProviders(dataDir, file);
+  return true;
+}
+
 /**
  * Resolve the effective provider config by walking the priority chain. The
  * apiKey's `source` reflects the FIRST layer that supplied it; baseUrl/model
@@ -108,6 +237,19 @@ export async function resolveProvider(
 ): Promise<ResolvedProvider> {
   const env = options.env ?? process.env;
   const paths = configPaths(options.dataDir);
+
+  // Highest authority: the selected profile in providers.json (SSOT). When set,
+  // it wins outright; the legacy env/dotenv chain below is the fallback for
+  // deployments that haven't migrated (e.g. Docker injecting ANTHROPIC_API_KEY).
+  const profile = await selectedProfile(options.dataDir);
+  if (profile?.apiKey) {
+    return {
+      apiKey: profile.apiKey,
+      baseUrl: profile.baseUrl || undefined,
+      model: profile.models[0],
+      source: "bp_template",
+    };
+  }
 
   const templateSettings = await readJsonSafe(paths.bpTemplateSettings);
   const config = await readJsonSafe(paths.brainpilotConfig);
@@ -181,21 +323,163 @@ export async function readLocalSettings(
 }
 
 /**
- * Persist a settings patch to `bp_template/settings.json` (the user-editable
- * template layer). Merges with existing content.
+ * Persist a simple settings patch into the providers registry (the SSOT). With
+ * no profiles yet it creates a default "Local" profile; otherwise it updates the
+ * selected profile in place. This keeps the legacy single-field `/api/settings`
+ * PUT and `brainpilot init` flowing into providers.json rather than the
+ * deprecated settings.json.
  */
 export async function writeLocalSettings(
   dataDir: string,
   patch: Partial<{ model: string; apiKey: string; baseUrl: string }>,
 ): Promise<void> {
-  const file = configPaths(dataDir).bpTemplateSettings;
-  await fs.mkdir(path.dirname(file), { recursive: true });
-  const existing = (await readJsonSafe(file)) ?? {};
-  const next: Record<string, unknown> = { ...existing };
-  if (patch.model !== undefined) next.model = patch.model;
-  if (patch.apiKey !== undefined) next.apiKey = patch.apiKey;
-  if (patch.baseUrl !== undefined) next.baseUrl = patch.baseUrl;
-  const tmp = `${file}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(next, null, 2), "utf8");
-  await fs.rename(tmp, file); // atomic write (§16.4 fix)
+  const current = await selectedProfile(dataDir);
+  const models = patch.model ? [patch.model] : undefined;
+  if (!current) {
+    await createProfile(dataDir, {
+      name: "Local",
+      baseUrl: patch.baseUrl ?? "",
+      apiKey: patch.apiKey ?? "",
+      models: models ?? [],
+    });
+    return;
+  }
+  await updateProfile(dataDir, current.id, {
+    ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+    ...(patch.apiKey !== undefined ? { apiKey: patch.apiKey } : {}),
+    // merge the model into the profile's model list (front of list = default)
+    ...(models ? { models: Array.from(new Set([...models, ...current.models])) } : {}),
+  });
+}
+
+/**
+ * Onboarding-facing view of the resolved provider config. A boolean-only key
+ * presence (never the plaintext key) plus the two files a user would edit, so
+ * `init`/`up` can print accurate, consistent guidance from one source.
+ */
+export interface ProviderConfigReport {
+  hasKey: boolean;
+  source?: ResolvedProvider["source"];
+  baseUrl?: string;
+  model?: string;
+  /** Absolute path of bp_template/providers.json (the provider registry SSOT). */
+  settingsPath: string;
+  /** Absolute path of the data dir's .env. */
+  dotenvPath: string;
+}
+
+/**
+ * Resolve the provider config and reduce it to an onboarding report. Reuses the
+ * full priority chain via {@link resolveProvider}; folds apiKey to a boolean so
+ * the key never leaves this module in plaintext.
+ */
+export async function describeProviderConfig(
+  options: ResolveProviderOptions,
+): Promise<ProviderConfigReport> {
+  const resolved = await resolveProvider(options);
+  const paths = configPaths(options.dataDir);
+  return {
+    hasKey: Boolean(resolved.apiKey),
+    source: resolved.source,
+    baseUrl: resolved.baseUrl,
+    model: resolved.model,
+    settingsPath: paths.providers,
+    dotenvPath: paths.dotenv,
+  };
+}
+
+/**
+ * Turn a {@link ProviderConfigReport} into human guidance lines (uncolored;
+ * callers pick the styling). Shared by `init` and `up` so the onboarding text
+ * never drifts between them.
+ */
+export function formatProviderGuidance(report: ProviderConfigReport): string[] {
+  if (report.hasKey) {
+    const model = report.model || "(default) claude-sonnet-4-6";
+    const baseUrl = report.baseUrl || "(built-in Anthropic endpoint)";
+    return [
+      `✓ Provider key configured (from ${report.source ?? "unknown"}).`,
+      `  model: ${model}   baseUrl: ${baseUrl}`,
+    ];
+  }
+  return [
+    "No provider API key configured yet. Set one of:",
+    "  • web Settings UI: launch, open Settings → Providers, add a provider (recommended).",
+    `  • providers file:  ${report.settingsPath}`,
+    `      { "profiles": [ { "id": "local", "name": "Local", "apiKey": "<key>", "baseUrl": "<gateway, optional>", "models": ["<id>"] } ], "selectedProfileId": "local" }`,
+    "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / BP_MODEL)",
+    "  • re-run init:    brainpilot init --api-key <key> [--base-url <url>] [--model <id>]",
+    "No key needed for a test run:  BP_MOCK=1 brainpilot up",
+  ];
+}
+
+/* ----------------------- MCP server config CRUD ----------------------- *
+ * The runtime reads `mcp_servers.json` from disk (`loadMcpServersConfig` in
+ * mcp-bridge.ts); these functions let the Settings → MCP tab persist entries
+ * through the same file so the UI and disk stay in sync.
+ *
+ * Disk format (keyed map):   { mcpServers: { name: spec } }
+ * HTTP format (flat array):  [{ name, ...spec }]
+ * -------------------------------------------------------------------------- */
+
+export function mcpServersPath(dataDir: string): string {
+  return path.join(dataDir, "bp_template", "mcp_servers.json");
+}
+
+type McpSpec = Record<string, unknown>;
+
+interface McpServersFile {
+  mcpServers: Record<string, McpSpec>;
+}
+
+async function readMcpServersRaw(dataDir: string): Promise<Record<string, McpSpec>> {
+  const raw = await readJsonSafe(mcpServersPath(dataDir));
+  if (raw && typeof (raw as Record<string, unknown>).mcpServers === "object") {
+    return (raw as unknown as McpServersFile).mcpServers;
+  }
+  return {};
+}
+
+async function writeMcpServersRaw(dataDir: string, servers: Record<string, McpSpec>): Promise<void> {
+  const target = mcpServersPath(dataDir);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify({ mcpServers: servers }, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.rename(tmp, target);
+}
+
+export async function readMcpServers(dataDir: string): Promise<Array<{ name: string } & McpSpec>> {
+  const servers = await readMcpServersRaw(dataDir);
+  return Object.entries(servers).map(([name, spec]) => ({ name, ...spec }));
+}
+
+export async function createMcpServer(
+  dataDir: string,
+  name: string,
+  spec: McpSpec,
+): Promise<{ name: string } & McpSpec> {
+  const servers = await readMcpServersRaw(dataDir);
+  servers[name] = spec;
+  await writeMcpServersRaw(dataDir, servers);
+  return { name, ...spec };
+}
+
+export async function updateMcpServer(
+  dataDir: string,
+  name: string,
+  spec: McpSpec,
+): Promise<({ name: string } & McpSpec) | null> {
+  const servers = await readMcpServersRaw(dataDir);
+  if (!(name in servers)) return null;
+  servers[name] = spec;
+  await writeMcpServersRaw(dataDir, servers);
+  return { name, ...spec };
+}
+
+export async function deleteMcpServer(dataDir: string, name: string): Promise<boolean> {
+  const servers = await readMcpServersRaw(dataDir);
+  if (!(name in servers)) return false;
+  delete servers[name];
+  await writeMcpServersRaw(dataDir, servers);
+  return true;
 }

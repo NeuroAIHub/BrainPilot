@@ -1,10 +1,16 @@
 {
   "name": "@brainpilot/web",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "license": "Apache-2.0",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "index.html",
+    "vite.config.ts",
+    "tsconfig.json",
+    "tsconfig.app.json",
+    "tsconfig.node.json"
   ],
   "repository": {
     "type": "git",
@@ -22,7 +28,7 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "@brainpilot/protocol": "^0.0.4",
+    "@brainpilot/protocol": "^0.0.5",
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource-variable/geist-mono": "^5.2.8",
     "@types/react": "^18.3.12",

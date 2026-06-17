@@ -46,6 +46,13 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return s ? c.json(s) : c.json({ error: "not found" }, 404);
   });
 
+  // #29: rename — PUT the session title and persist it to meta.json.
+  app.put("/sessions/:id", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { title?: unknown };
+    const s = await manager.renameSession(c.req.param("id"), body?.title);
+    return s ? c.json(s) : c.json({ error: "not found" }, 404);
+  });
+
   app.delete("/sessions/:id", async (c) => {
     const id = c.req.param("id");
     const deleted = await manager.deleteSession(id);
@@ -55,6 +62,11 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
   app.get("/sessions/:id/state", (c) => {
     const state = manager.getSessionState(c.req.param("id"));
     return state ? c.json(state) : c.json({ error: "not found" }, 404);
+  });
+
+  app.get("/sessions/:id/trace", (c) => {
+    const graph = manager.getTrace(c.req.param("id"));
+    return graph ? c.json(graph) : c.json({ error: "not found" }, 404);
   });
 
   app.post("/sessions/:id/messages", async (c) => {
@@ -81,6 +93,50 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
   app.post("/sessions/:id/evict", async (c) => {
     const res = await manager.evictSession(c.req.param("id"));
     return c.json(res, res.evicted ? 200 : 404);
+  });
+
+  // ---- Workspace files (read off disk; independent of in-memory session) ----
+  app.get("/sessions/:id/files", async (c) => {
+    try {
+      const files = await manager.listSessionFiles(c.req.param("id"), c.req.query("path") ?? "");
+      return c.json(files); // bare array — matches the SPA's file-list contract
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
+  });
+
+  app.get("/sessions/:id/files/content", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    try {
+      return c.json(await manager.readSessionFile(c.req.param("id"), path));
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 404);
+    }
+  });
+
+  app.get("/sessions/:id/files/raw", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    try {
+      const buf = await manager.readSessionFileRaw(c.req.param("id"), path);
+      c.header("Content-Type", "application/octet-stream");
+      c.header("Content-Length", String(buf.length));
+      return c.body(buf as unknown as ArrayBuffer);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 404);
+    }
+  });
+
+  app.delete("/sessions/:id/files", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    try {
+      const deleted = await manager.deleteSessionFile(c.req.param("id"), path);
+      return c.json({ deleted }, deleted ? 200 : 404);
+    } catch (err) {
+      return c.json({ error: (err as Error).message }, 400);
+    }
   });
 
   const sseHandler = (id: string, c: import("hono").Context) => {
@@ -147,6 +203,13 @@ export function startServer(opts: StartServerOptions = {}): {
 
   const server = serve({ fetch: app.fetch, port });
 
+  // §R-4: surface the opt-in memory budget at boot (only when active).
+  const memLimitMb = process.env.BP_MEM_LIMIT_MB;
+  if (memLimitMb && Number(memLimitMb) > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[runtime] memory budget: ${Number(memLimitMb)}MB (soft watchdog @85%)`);
+  }
+
   // §7 L4 global safety net.
   const onFatal = async (err: unknown) => {
     try {
@@ -165,6 +228,7 @@ export function startServer(opts: StartServerOptions = {}): {
     port,
     close: () =>
       new Promise<void>((resolve) => {
+        manager.shutdown();
         (server as { close: (cb?: () => void) => void }).close(() => resolve());
       }),
   };

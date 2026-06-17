@@ -1,53 +1,43 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { User } from "../contracts/backend";
-import { api, clearStoredToken, getStoredToken, storeToken } from "../utils/api";
-import { tg } from "../i18n/translate";
+import { api } from "../utils/api";
 
 interface AuthContextValue {
+  /** The current identity, resolved from the upstream gateway via GET /api/auth/me. */
   user: User | null;
-  token: string | null;
-  isBootstrapping: boolean;
-  isSubmitting: boolean;
-  error: string | null;
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  /** True once the identity bootstrap has settled (success or redirect-in-flight). */
+  isAuthReady: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+/**
+ * Trust-front auth: the open-source frontend does NOT authenticate. The hosted
+ * gateway owns auth and carries identity via an httpOnly cookie. We only read the
+ * resolved identity (GET /api/auth/me) for display. There is no login/register/
+ * logout UI here.
+ */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
   const [user, setUser] = useState<User | null>(null);
-  const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
-      if (!token) {
-        setIsBootstrapping(false);
-        return;
-      }
-
       try {
         const currentUser = await api.auth.me();
         if (!cancelled) {
           setUser(currentUser);
+          setIsAuthReady(true);
         }
-      } catch (err) {
-        if (!cancelled) {
-          clearStoredToken();
-          setToken(null);
-          setUser(null);
-          setError(err instanceof Error ? err.message : tg("ctx.auth.sessionExpired"));
-        }
-      } finally {
-        if (!cancelled) {
-          setIsBootstrapping(false);
-        }
+      } catch {
+        if (cancelled) return;
+        // No identity resolved. In self-hosted `bp --up` there is no hosted
+        // gateway/login to hand off to, so redirecting here would loop (#38).
+        // Fall back to a local anonymous identity and let the app render.
+        setUser({ id: "local", username: "local", createdAt: new Date(0).toISOString() });
+        setIsAuthReady(true);
       }
     }
 
@@ -55,60 +45,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
-
-  const commitToken = useCallback((nextToken: string, nextUser: User) => {
-    storeToken(nextToken);
-    setToken(nextToken);
-    setUser(nextUser);
-    setError(null);
   }, []);
 
-  const login = useCallback(
-    async (username: string, password: string) => {
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        const result = await api.auth.login(username, password);
-        commitToken(result.accessToken, result.user);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : tg("ctx.auth.loginFailed"));
-        throw err;
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [commitToken],
-  );
-
-  const register = useCallback(
-    async (username: string, password: string) => {
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        const result = await api.auth.register(username, password);
-        commitToken(result.accessToken, result.user);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : tg("ctx.auth.registerFailed"));
-        throw err;
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [commitToken],
-  );
-
-  const logout = useCallback(() => {
-    clearStoredToken();
-    setToken(null);
-    setUser(null);
-    setError(null);
-  }, []);
-
-  const value = useMemo(
-    () => ({ user, token, isBootstrapping, isSubmitting, error, login, register, logout }),
-    [user, token, isBootstrapping, isSubmitting, error, login, register, logout],
-  );
+  const value = useMemo<AuthContextValue>(() => ({ user, isAuthReady }), [user, isAuthReady]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

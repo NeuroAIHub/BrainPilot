@@ -22,6 +22,16 @@ import {
   readLocalSettings,
   writeLocalSettings,
   resolveProvider,
+  readProviders,
+  createProfile,
+  updateProfile,
+  deleteProfile,
+  setSelectedProfile,
+  readMcpServers,
+  createMcpServer,
+  updateMcpServer,
+  deleteMcpServer,
+  type StoredProviderProfile,
 } from "./config.js";
 
 export interface CreateAppOptions {
@@ -71,6 +81,16 @@ export function createApp(options: CreateAppOptions): Hono {
 
   api.get("/version", (c) => c.json({ name: "@brainpilot/backend-core", version: "0.1.0" }));
 
+  // ---- Identity (backend-local) ----------------------------------------
+  // Trust-front (#21): hosted deployments resolve identity at the upstream
+  // gateway, which intercepts /api/auth/me before it reaches us. For
+  // self-hosted `bp --up` there is no gateway, so we answer locally with a
+  // single default identity. Without this the SPA's auth bootstrap 404s into a
+  // hosted-login redirect loop (#38). Shape matches the web `User` contract.
+  api.get("/auth/me", (c) =>
+    c.json({ id: "local", username: "local", createdAt: new Date(0).toISOString() }),
+  );
+
   // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
   api.get("/metrics", forward("metrics"));
 
@@ -78,13 +98,23 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sessions", forward("listSessions"));
   api.post("/sessions", forward("createSession", { withBody: true }));
   api.get("/sessions/:id", forward("getSession", { idParam: "id" }));
-  api.put("/sessions/:id", forwardRename());
+  api.put("/sessions/:id", forward("updateSession", { idParam: "id", withBody: true }));
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
+  api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
   api.post("/sessions/:id/messages", forward("sendMessage", { idParam: "id", withBody: true }));
   api.post("/sessions/:id/interrupt", forward("interrupt", { idParam: "id", withBody: true }));
   api.get("/sessions/:id/agents", forward("listAgents", { idParam: "id" }));
   api.post("/sessions/:id/evict", forward("evictSession", { idParam: "id", withBody: true }));
+
+  // ---- Workspace files (proxied to runtime) ----------------------------
+  // The SPA addresses files under `/sandbox/:id/*`; in single-user mode the
+  // sandbox id IS the session id, so we forward straight to the runtime's
+  // `/sessions/:id/files*` routes. `?path=` is carried through verbatim.
+  api.get("/sandbox/:id/files", forward("listFiles", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
+  api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
 
   // ---- SSE byte passthrough (修正4) ------------------------------------
   // Canonical protocol path `/sse/:id` (RUNTIME_ROUTES.sessionEvents) plus the
@@ -107,19 +137,90 @@ export function createApp(options: CreateAppOptions): Hono {
     });
     return c.json(await readLocalSettings({ dataDir, env }));
   });
-  // Provider profiles: single-user open-source mode exposes the resolved
-  // provider as one active profile (sourced from the §11A.2 priority chain).
+  // Provider profiles (SSOT = providers.json). Full CRUD; the active/selected
+  // profile is what new sessions default to. Keys are masked on the way out.
   api.get("/provider/profiles", async (c) => {
-    const resolved = await resolveProvider({ dataDir, env });
-    return c.json(resolved.apiKey ? [providerProfile(resolved)] : []);
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    return c.json(profiles.map((p) => toHttpProfile(p, selectedProfileId)));
   });
   api.get("/provider/profiles/active", async (c) => {
-    const resolved = await resolveProvider({ dataDir, env });
-    return c.json(resolved.apiKey ? providerProfile(resolved) : null);
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    const active = profiles.find((p) => p.id === selectedProfileId) ?? profiles[0];
+    return active ? c.json(toHttpProfile(active, selectedProfileId)) : c.body(null, 204);
+  });
+  api.post("/provider/profiles", async (c) => {
+    const created = await createProfile(dataDir, fromHttpBody(await safeJson(c)));
+    const { selectedProfileId } = await readProviders(dataDir);
+    return c.json(toHttpProfile(created, selectedProfileId), 201);
+  });
+  api.put("/provider/profiles/active", async (c) => {
+    const body = await safeJson(c);
+    const id = typeof body.id === "string" ? body.id : "";
+    const ok = await setSelectedProfile(dataDir, id);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json(await activeHttpProfile(dataDir));
+  });
+  api.post("/provider/profiles/active", async (c) => {
+    const body = await safeJson(c);
+    const id = typeof body.id === "string" ? body.id : "";
+    const ok = await setSelectedProfile(dataDir, id);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json(await activeHttpProfile(dataDir));
+  });
+  api.get("/provider/profiles/health", async (c) => {
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    return c.json(profiles.map((p) => toHttpProfile(p, selectedProfileId)));
+  });
+  api.put("/provider/profiles/:id", async (c) => {
+    const updated = await updateProfile(dataDir, c.req.param("id"), fromHttpBody(await safeJson(c)));
+    if (!updated) return c.json({ error: "not found" }, 404);
+    const { selectedProfileId } = await readProviders(dataDir);
+    return c.json(toHttpProfile(updated, selectedProfileId));
+  });
+  api.delete("/provider/profiles/:id", async (c) => {
+    const ok = await deleteProfile(dataDir, c.req.param("id"));
+    return c.json({ deleted: ok }, ok ? 200 : 404);
+  });
+  api.post("/provider/profiles/:id/test", async (c) => {
+    // Connectivity probe is not implemented yet; report unknown so the UI shows
+    // a neutral state rather than 404-ing the whole settings flow.
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    const p = profiles.find((x) => x.id === c.req.param("id"));
+    if (!p) return c.json({ error: "not found" }, 404);
+    return c.json(toHttpProfile(p, selectedProfileId));
+  });
+
+  // ---- MCP Servers CRUD (disk-backed: bp_template/mcp_servers.json) ----
+  api.get("/mcp-servers", async (c) => {
+    return c.json(await readMcpServers(dataDir));
+  });
+  api.post("/mcp-servers", async (c) => {
+    const body = await safeJson(c);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    const config = body.config && typeof body.config === "object" ? (body.config as Record<string, unknown>) : null;
+    if (!name || !config) return c.json({ error: "name and config are required" }, 400);
+    return c.json(await createMcpServer(dataDir, name, config), 201);
+  });
+  api.put("/mcp-servers/:name", async (c) => {
+    const config = await safeJson(c);
+    const entry = await updateMcpServer(dataDir, c.req.param("name"), config);
+    if (!entry) return c.json({ error: "not found" }, 404);
+    return c.json(entry);
+  });
+  api.delete("/mcp-servers/:name", async (c) => {
+    const ok = await deleteMcpServer(dataDir, c.req.param("name"));
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.body(null, 204);
   });
 
   // Mount the API under /api (the SPA's API_BASE).
   app.route("/api", api);
+
+  // #30: any unmatched /api/* (any method) returns a JSON 404 — never the SPA
+  // index.html. Sits between the API routes and the static fallback, and is
+  // unconditional (independent of serveWeb) so an unimplemented route can't fall
+  // through to text/html (which the frontend's handleJson chokes on).
+  app.all("/api/*", (c) => c.json({ error: "not found" }, 404));
 
   // ---- Static web serving with SPA fallback ----------------------------
   if (options.serveWeb !== false) {
@@ -134,7 +235,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   function forward(
     route: keyof typeof RUNTIME_ROUTES,
-    opts: { idParam?: string; withBody?: boolean } = {},
+    opts: { idParam?: string; withBody?: boolean; withQuery?: boolean } = {},
   ) {
     return async (c: import("hono").Context) => {
       const rc = await getClient();
@@ -144,30 +245,12 @@ export function createApp(options: CreateAppOptions): Hono {
       const headers: Record<string, string> = {};
       const ct = c.req.header("content-type");
       if (ct) headers["content-type"] = ct;
+      const query = opts.withQuery ? new URL(c.req.url).search.replace(/^\?/, "") : undefined;
       const upstream = await rc.forward(route, {
         params,
         body: body && body.length > 0 ? body : undefined,
         headers,
-      });
-      return relay(c, upstream);
-    };
-  }
-
-  // The SPA's PUT /sessions/:id (rename) has no dedicated runtime route in
-  // §15.4; forward it to the runtime's getSession path with PUT semantics via
-  // a raw forward so the runtime can handle/ignore it. We reuse sendMessage's
-  // session path shape but keep method PUT by hitting getSession's path.
-  function forwardRename() {
-    return async (c: import("hono").Context) => {
-      const rc = await getClient();
-      const id = c.req.param("id") ?? "";
-      const body = await c.req.text();
-      // getSession route path is `/sessions/:id`; issue a PUT against it.
-      const url = rc.urlFor("getSession", { id });
-      const upstream = await (options.fetchFn ?? fetch)(url, {
-        method: "PUT",
-        headers: { "content-type": c.req.header("content-type") ?? "application/json" },
-        body: body && body.length > 0 ? body : undefined,
+        query: query && query.length > 0 ? query : undefined,
       });
       return relay(c, upstream);
     };
@@ -209,30 +292,49 @@ async function safeJson(c: import("hono").Context): Promise<Record<string, unkno
   }
 }
 
-function providerProfile(resolved: {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-}): Record<string, unknown> {
-  const now = Date.now();
-  const masked = resolved.apiKey
-    ? resolved.apiKey.length <= 8
-      ? "****"
-      : `${resolved.apiKey.slice(0, 4)}…${resolved.apiKey.slice(-4)}`
-    : "";
+function maskKey(key: string): string {
+  if (!key) return "";
+  return key.length <= 8 ? "****" : `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+/** Stored profile → masked HTTP shape the SPA's normalizeProviderProfile reads. */
+function toHttpProfile(
+  p: StoredProviderProfile,
+  selectedId?: string,
+): Record<string, unknown> {
   return {
-    id: "local",
-    name: "Local",
-    base_url: resolved.baseUrl ?? "",
-    models: resolved.model ? [resolved.model] : [],
-    icon: "circle",
-    icon_color: "#111111",
-    notes: "",
-    is_active: true,
-    api_key_masked: masked,
-    created_at: now,
-    updated_at: now,
+    id: p.id,
+    name: p.name,
+    base_url: p.baseUrl,
+    models: p.models,
+    icon: p.icon ?? "circle",
+    icon_color: p.iconColor ?? "#111111",
+    notes: p.notes ?? "",
+    is_active: p.id === selectedId,
+    api_key_masked: maskKey(p.apiKey),
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
     health_status: "unknown",
     model_health: [],
   };
+}
+
+/** SPA create/update body (snake_case) → stored-profile patch. */
+function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProfile> {
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  return {
+    name: str(body.name),
+    baseUrl: str(body.base_url) ?? str(body.baseUrl),
+    apiKey: str(body.api_key) ?? str(body.apiKey),
+    models: Array.isArray(body.models) ? (body.models as string[]) : undefined,
+    icon: str(body.icon),
+    iconColor: str(body.icon_color) ?? str(body.iconColor),
+    notes: str(body.notes),
+  };
+}
+
+async function activeHttpProfile(dataDir: string): Promise<Record<string, unknown> | null> {
+  const { profiles, selectedProfileId } = await readProviders(dataDir);
+  const active = profiles.find((p) => p.id === selectedProfileId) ?? profiles[0];
+  return active ? toHttpProfile(active, selectedProfileId) : null;
 }

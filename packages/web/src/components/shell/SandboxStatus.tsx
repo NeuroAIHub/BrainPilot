@@ -3,6 +3,7 @@ import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
+import { runtimeConfig } from "../../config";
 
 type SandboxConnectionState = "disconnected" | "connected" | "connecting" | "creating";
 
@@ -86,6 +87,12 @@ export function SandboxStatus() {
 
   const loadDetails = async () => {
     if (!currentSandbox) {
+      return;
+    }
+    // Local single-user mode has no container logs/health endpoints — the
+    // runtime IS the sandbox. Skip the detail fetch (would hit nonexistent
+    // /api/sandbox/* routes and fall through to the SPA HTML fallback).
+    if (runtimeConfig.localMode) {
       return;
     }
     setDetailsLoading(true);

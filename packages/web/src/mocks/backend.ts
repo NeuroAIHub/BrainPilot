@@ -1,7 +1,6 @@
 import {
   AgentStatus,
   SessionStateSnapshot,
-  AuthToken,
   FileContent,
   FileEntry,
   McpServerEntry,
@@ -227,15 +226,6 @@ const fileContents: Record<string, string> = {
 
 let seq = 0;
 
-function token(username: string): AuthToken {
-  mockUser = { ...mockUser, id: `mock-user-${username}`, username };
-  return {
-    accessToken: "mock-token",
-    tokenType: "bearer",
-    user: mockUser,
-  };
-}
-
 function getMimeType(path: string) {
   if (/\.svg$/i.test(path)) {
     return "image/svg+xml";
@@ -259,16 +249,6 @@ export const mockBackend = {
   async version() {
     await wait(80);
     return { version: "mock-ui-redesign" };
-  },
-
-  async login(username: string, _password: string): Promise<AuthToken> {
-    await wait();
-    return token(username);
-  },
-
-  async register(username: string, _password: string): Promise<AuthToken> {
-    await wait();
-    return token(username);
   },
 
   async me() {

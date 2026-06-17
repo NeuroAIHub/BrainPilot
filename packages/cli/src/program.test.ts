@@ -40,6 +40,15 @@ describe("program — commander wiring", () => {
     expect(initFn.mock.calls[0]![0]).toMatchObject({ apiKey: "sk-1" });
   });
 
+  it("dispatches `init` with --base-url and --model", async () => {
+    const initFn = vi.fn().mockResolvedValue({ dataDir: "/d", created: [], keyPersisted: false });
+    await run(["init", "--base-url", "https://gw/api", "--model", "m1"], { initFn });
+    expect(initFn.mock.calls[0]![0]).toMatchObject({
+      baseUrl: "https://gw/api",
+      model: "m1",
+    });
+  });
+
   it("dispatches `logs --runtime`", async () => {
     const logsFn = vi.fn().mockResolvedValue("");
     await run(["logs", "--runtime"], { logsFn });

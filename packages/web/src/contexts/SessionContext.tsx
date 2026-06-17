@@ -39,7 +39,7 @@ interface SessionContextValue {
   agents: AgentStatus[];
   agentFilters: Record<string, AgentMessageFilter>;
   selectSession: (sessionId: string) => void;
-  createSession: (title?: string) => Promise<Session | null>;
+  createSession: (title?: string, opts?: { providerId?: string; modelId?: string }) => Promise<Session | null>;
   /**
    * Open a fresh draft conversation without persisting anything. Idempotent —
    * repeated calls collapse to the single draft state. The real session is
@@ -48,7 +48,7 @@ interface SessionContextValue {
   startDraftSession: () => void;
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  sendPrompt: (content: string) => Promise<void>;
+  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string }) => Promise<void>;
   interruptCurrent: () => Promise<void>;
   /**
    * 修正6 — answer an ask_user (user_input_request) card. Optimistically
@@ -70,14 +70,14 @@ export const DRAFT_SESSION_ID = "__draft__";
 const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { isAuthReady } = useAuth();
   const { currentSandbox } = useSandbox();
   const { connectSession, disconnectSession, queueRef, tick, connections } = useSSE();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isDraft, setIsDraft] = useState(false);
   // Mirror of isDraft for reading inside callbacks that must not re-create when
-  // the draft flag flips (e.g. refreshSessions, keyed only on token).
+  // the draft flag flips (e.g. refreshSessions, keyed only on isAuthReady).
   const isDraftRef = useRef(false);
   useEffect(() => {
     isDraftRef.current = isDraft;
@@ -107,7 +107,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     : false;
 
   const refreshSessions = useCallback(async () => {
-    if (!token) {
+    if (!isAuthReady) {
       setSessions([]);
       setCurrentSessionId(null);
       return;
@@ -127,7 +127,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [isAuthReady]);
 
   useEffect(() => {
     void refreshSessions();
@@ -211,7 +211,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [disconnectSession]);
 
   const createSession = useCallback(
-    async (title = "New research session") => {
+    async (title = "New research session", opts: { providerId?: string; modelId?: string } = {}) => {
       if (!currentSandbox || currentSandbox.status !== "running") {
         setError(tg("ctx.session.startSandbox"));
         return null;
@@ -220,7 +220,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setIsLoading(true);
       setError(null);
       try {
-        const session = await api.sessions.create(title);
+        const session = await api.sessions.create(title, opts);
         setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
         setIsDraft(false);
         setCurrentSessionId(session.id);
@@ -243,7 +243,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [sessions.length, isLoading, currentSandbox, currentSessionId, isDraft, startDraftSession]);
 
   const sendPrompt = useCallback(
-    async (content: string) => {
+    async (content: string, opts: { providerId?: string; modelId?: string } = {}) => {
       const trimmed = content.trim();
       console.log(`[SessionContext] sendPrompt: "${trimmed.slice(0, 40)}...", isConnected=${isConnected}, isDraft=${isDraft}`);
       if (!trimmed) {
@@ -264,7 +264,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setIsSending(true);
       setError(null);
       try {
-        const session = currentSession ?? (await createSession(trimmed.slice(0, 48)));
+        const session = currentSession ?? (await createSession(trimmed.slice(0, 48), opts));
         if (!session) {
           return;
         }

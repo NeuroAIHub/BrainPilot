@@ -21,10 +21,21 @@ This installs the `brainpilot` CLI (`bnpt` is a built-in short alias for the sam
 ```bash
 brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brainpilot
 ```
-The key is persisted to `brainpilot/bp_template/settings.json`. You can also omit
+The key is persisted to `brainpilot/bp_template/providers.json`. You can also omit
 `--api-key` and supply the key via the `ANTHROPIC_API_KEY` environment variable
-instead — without a key (and without `BP_MOCK=1`), `brainpilot up` exits with
-"No provider API key found."
+instead. A missing key no longer blocks launch — `brainpilot up` starts anyway
+and you can configure the **provider url / key / model** in the web **Settings
+UI** after it opens (the recommended path; it writes `providers.json` for you).
+Without a key (and without `BP_MOCK=1`), agents simply can't make a real LLM call
+until one is set.
+
+To configure a gateway / third-party endpoint in one command, add `--base-url`
+(and optionally `--model`):
+```bash
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+```
+`init` always ends by reporting whether a key is currently resolvable and where
+to set one, so re-running it on an already-initialized dir is safe and informative.
 
 ### 3. Launch
 ```bash
@@ -46,8 +57,17 @@ From a local BrainPilot checkout:
 ```bash
 npm install
 npm run build
-npm run bp -- up     # equivalent to `brainpilot up` from the built CLI
+npm run bp -- up --port 9005     # equivalent to `brainpilot up --port 9005`
 ```
+
+> **Pass flags after `--`.** With `npm run`, the `--` separator is required so
+> npm forwards `up --port 9005` to the CLI instead of consuming `--port` itself.
+> `npm run bp up --port 9005` (no `--`) silently drops the flag and falls back to
+> the default port. To skip npm entirely, call the built binary directly:
+> ```bash
+> node packages/cli/dist/bin.js up --port 9005
+> ```
+> (the runtime uses `port + 1`).
 
 ## 🐳 Docker deployment
 
@@ -107,6 +127,31 @@ single-user, local-process setup and needs none of these variables.
 
 A Docker-free local path also exists (`@brainpilot/app`, `brainpilot up`) — see the npm Quick Start above. It runs a single user on the local orchestrator; deployment-mode variables do not apply.
 
+### Memory budget (`BP_MEM_LIMIT_MB`, optional)
+
+For container deployments that cap memory (`docker run --memory` / a cgroup
+ceiling), you can also tell the runtime its budget so it **self-throttles before
+the kernel OOM-kills it**. Set `BP_MEM_LIMIT_MB` to the per-container budget in MB:
+
+```bash
+BP_MEM_LIMIT_MB=2048          # MB of container RSS the runtime should stay under
+NODE_OPTIONS=--max-old-space-size=1536   # ~75% of the budget — set this at the launcher
+```
+
+- **Strictly opt-in.** Unset → no change at all (the runtime runs to host RAM as
+  today; this is the correct default for single-user self-hosting). Only the
+  cgroup `--memory` ceiling, if any, applies.
+- **When set,** a soft watchdog watches RSS; past **~85%** of the budget it refuses
+  new sessions/messages and emits a system message, rather than accepting work it
+  can't hold. The kernel OOM-killer + Docker `restart` policy remain the backstop.
+- **The heap cap is the launcher's job.** The runtime never sets
+  `--max-old-space-size` for you (a non-empty default would wrongly cap single-user
+  heaps); pass it via `NODE_OPTIONS` at ~75% of the budget if you want a V8 ceiling.
+- **Recommended floor: ~2 GB** for a single-user sandbox running the full platform
+  (runtime + agents + their tool subprocesses). The dominant driver is concurrent
+  agents × model-context size (each agent holds its message history) plus transient
+  bash/tool subprocess RSS; raise the budget for heavier multi-agent research.
+
 ## 🤖 Using a third-party / custom model
 
 By default BrainPilot talks to Pi's built-in Anthropic endpoint. Pi does **not**
@@ -145,6 +190,82 @@ Full `models.json` schema — `api` types, `compat` flags, `$ENV` key
 interpolation, per-model cost/limits — is documented at
 <https://pi.dev/docs/latest/models>.
 
+## 🔌 Connecting MCP servers
+
+Agents can call tools served over the **Model Context Protocol**. The runtime
+bridges every configured MCP server into the agents' toolset: each remote tool
+shows up namespaced as `mcp__<server>__<tool>`. Three transports are supported —
+**stdio** (spawned local process), **streamable-http**, and **sse** (remote).
+
+### What ships by default
+
+`brainpilot init` (and `brainpilot up`, which scaffolds on first launch) writes
+`mcp_servers.json` into your **data dir** — it is generated at runtime, not stored
+in the repo. The data dir is resolved as `--dir` > `$BP_DATA_DIR` > `./brainpilot`
+under the directory you run the command from, so the file lands at
+`<data-dir>/bp_template/mcp_servers.json`. It comes pre-wired to BrainPilot's three
+built-in remote services (streamable-http, no auth):
+
+| Server | Purpose | URL |
+|--------|---------|-----|
+| `bp_KB` | Knowledge base | `http://8.145.42.208:8005/mcp` |
+| `bp_skills` | Skills | `http://8.145.42.208:8006/mcp` |
+| `bp_papersearch` | Paper search | `http://8.145.42.208:8007/mcp` |
+
+These connect automatically on launch — no extra setup. Remove or edit any entry
+to opt out or point at your own deployment. A server is connected lazily and a
+failing one is logged and skipped, so it never blocks the others or aborts launch.
+
+> Scaffolding is idempotent: an existing `mcp_servers.json` is never overwritten.
+> If you initialized before these defaults existed, edit the file in your data dir
+> by hand (or delete it and re-run `brainpilot init`).
+
+### Adding your own server
+
+Edit `<data-dir>/bp_template/mcp_servers.json` (global, shared by every session)
+or `<data-dir>/.bp/<session-id>/mcp_servers.json` (per session) — where
+`<data-dir>` is your generated data dir (e.g. `./brainpilot`), not a path in the
+repo. The format is the standard MCP/Claude `mcpServers` map; pick a transport
+with `type`:
+
+```jsonc
+{
+  "mcpServers": {
+    // Local process over stdio (type defaults to "stdio" if omitted):
+    "fs": {
+      "type": "stdio",
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-filesystem", "/path/to/dir"],
+      "env": {}
+    },
+    // Remote over streamable-http, with an auth header:
+    "my-api": {
+      "type": "http",
+      "url": "https://your-host.example.com/mcp",
+      "headers": { "Authorization": "Bearer <token>" }
+    },
+    // Remote over server-sent events:
+    "my-events": {
+      "type": "sse",
+      "url": "https://your-host.example.com/sse",
+      "headers": { "Authorization": "Bearer <token>" }
+    }
+  }
+}
+```
+
+Field reference:
+- `type` — `"stdio"` | `"http"` | `"sse"`. Omitted ⇒ `"stdio"`.
+- `command` / `args` / `env` — stdio only: the executable to spawn and its env.
+- `url` — http/sse only: the server endpoint.
+- `headers` — http/sse only: extra HTTP headers (e.g. `Authorization`) sent on
+  every request.
+
+An http/sse entry whose `url` is left blank (or a stdio entry with no `command`)
+is treated as an unconfigured placeholder and skipped silently at startup, so you
+can keep a slot in the file before wiring up its address. A ready-to-copy example
+covering all three transports is written to `bp_template/mcp_servers.example.json`.
+
 ## 📦 Publishing (maintainers)
 
 ```bash
@@ -154,6 +275,30 @@ npm run release:dry       # pack-preview all 5 public packages (no upload)
 npm run release           # version-sync, build, then publish protocol→runtime→backend-core→web→app
 ```
 `@brainpilot/client-cli` stays private and is never published.
+
+### Docker 镜像发布
+
+镜像版本号与 npm 版本一致（根 `package.json` 的 `version`）。三个镜像：`brainpilot-main`、
+`brainpilot-sandbox`（cpu）、`brainpilot-sandbox-gpu`（CUDA torch）。
+
+```bash
+# 一次性：复制示范配置，填入国内镜像源 / 私有 registry 地址（两个 .local 文件均不提交）
+cp scripts/release-mirrors.example.sh scripts/release-mirrors.local.sh   # pip/apt 镜像源
+cp scripts/release-targets.example.sh scripts/release-targets.local.sh   # ACR/内网 registry
+
+# 构建（默认全部；可传子串只建子集）
+bash scripts/release-build.sh                # 全部三个镜像
+bash scripts/release-build.sh main           # 只建 main
+bash scripts/release-build.sh sandbox-gpu    # 只建 GPU 变体（体积大、慢）
+
+# 推送（需先 docker login 各 registry）
+bash scripts/release-push.sh --dry-run                       # 先看计划
+bash scripts/release-push.sh                                 # 全部 → 全部 registry
+bash scripts/release-push.sh --image sandbox-gpu --registry acr,intranet  # GPU 跳过公网 ghcr
+```
+
+推送目标 registry 在 `scripts/release-images.sh`（ghcr，公开）+ `release-targets.local.sh`
+（ACR / 内网，私有）声明。GPU 镜像约 6GB，推公网 ghcr 可能超时，建议 `--registry acr,intranet`。
 
 ## 🧪 Testing
 

@@ -116,3 +116,49 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+describe("SessionManager memory watchdog (§R-4 / #20)", () => {
+  it("is fully opt-out when no budget is set (identical to today)", async () => {
+    const m = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "ok" });
+    const res = await m.sendMessage(s.id, "hi");
+    expect(res.accepted).toBe(true);
+    const metrics = m.metrics();
+    expect(metrics.memLimitBytes).toBeNull();
+    expect(metrics.memRatio).toBeNull();
+  });
+
+  it("refuses new sessions when RSS is over the soft limit", async () => {
+    // Budget 1000B, injected RSS 900B (>85%) => over the soft threshold.
+    const m = new SessionManager({
+      persist: false,
+      agentFactory: mockAgentFactory,
+      memLimitBytes: 1000,
+      readRss: () => 900,
+    });
+    await expect(m.createSession({ title: "nope" })).rejects.toThrow(/memory budget/);
+  });
+
+  it("refuses messages over the soft limit and emits a warning system_message", async () => {
+    let rss = 100; // start healthy so the session can be created
+    const m = new SessionManager({
+      persist: false,
+      agentFactory: mockAgentFactory,
+      memLimitBytes: 1000,
+      readRss: () => rss,
+    });
+    const s = await m.createSession({ title: "tight" });
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (e) => events.push(e));
+
+    rss = 900; // now over 85%
+    const res = await m.sendMessage(s.id, "hello");
+    expect(res.accepted).toBe(false);
+    expect(events.some((e) => e.type === "system_message")).toBe(true);
+
+    const metrics = m.metrics();
+    expect(metrics.memLimitBytes).toBe(1000);
+    expect(metrics.memRatio).toBeCloseTo(0.9);
+  });
+});
+

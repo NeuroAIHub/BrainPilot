@@ -37,6 +37,7 @@ export interface DataPaths {
   bpTemplate: string;
   bpTemplateAgents: string;
   bpTemplateSettings: string;
+  bpTemplateProviders: string;
   bpTemplateMcpServers: string;
   bpTemplateSkills: string;
   bp: string;
@@ -61,6 +62,7 @@ export function dataPaths(dataDir: string): DataPaths {
     bpTemplate,
     bpTemplateAgents: join(bpTemplate, "agents"),
     bpTemplateSettings: join(bpTemplate, "settings.json"),
+    bpTemplateProviders: join(bpTemplate, "providers.json"),
     bpTemplateMcpServers: join(bpTemplate, "mcp_servers.json"),
     bpTemplateSkills: join(bpTemplate, "skills"),
     bp: join(dataDir, ".bp"),

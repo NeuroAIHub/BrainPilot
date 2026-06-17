@@ -31,7 +31,7 @@ describe("scaffold", () => {
     expect(await exists(join(paths.bpTemplateAgents, "principal", "prompt.md"))).toBe(true);
     expect(await exists(join(paths.bpTemplateAgents, "principal", "settings.json"))).toBe(true);
     expect(await exists(join(paths.bpTemplateAgents, "principal", "manifest.json"))).toBe(true);
-    expect(await exists(paths.bpTemplateSettings)).toBe(true);
+    expect(await exists(paths.bpTemplateProviders)).toBe(true);
     expect(await exists(paths.bpTemplateMcpServers)).toBe(true);
     expect(await exists(paths.bpTemplateSkills)).toBe(true);
     expect(await exists(join(paths.bpTemplateSkills, "README.md"))).toBe(true);
@@ -97,8 +97,9 @@ describe("scaffold", () => {
 
   it("uses the current default model id (claude-sonnet-4-6) in settings", async () => {
     const { paths } = await scaffold(join(dir, "bp"));
-    const tmpl = JSON.parse(await readFile(paths.bpTemplateSettings, "utf8"));
-    expect(tmpl.model).toBe("claude-sonnet-4-6");
+    // Provider registry scaffolds empty (users add profiles via UI / init).
+    const providers = JSON.parse(await readFile(paths.bpTemplateProviders, "utf8"));
+    expect(providers.profiles).toEqual([]);
     const principal = JSON.parse(
       await readFile(
         join(paths.bpTemplateAgents, "principal", "settings.json"),

@@ -16,7 +16,7 @@
  */
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
-import { resolveGatewayModel, type PiProviderSdk } from "./pi-provider.js";
+import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -38,12 +38,13 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
 
   const agentDir = getAgentDir();
 
-  // Target a custom Anthropic-compatible gateway when ANTHROPIC_BASE_URL is set
-  // (Pi ignores that env var on its own). Returns {} for the default endpoint.
-  const { model, modelRegistry } = resolveGatewayModel(
-    sdk as unknown as PiProviderSdk,
-    agentDir,
-  );
+  // Target a custom Anthropic-compatible gateway. A per-session providerConfig
+  // (from providers.json) wins and isolates its key via setRuntimeApiKey;
+  // otherwise fall back to the env-based gateway (Docker/static compat).
+  const resolved = params.providerConfig
+    ? resolveSessionModel(sdk as unknown as PiProviderSdk, agentDir, params.providerConfig)
+    : resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir);
+  const { model, modelRegistry, authStorage } = resolved;
 
   // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
   // per-role persona is injected through a DefaultResourceLoader. We use
@@ -75,6 +76,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     sessionManager: SessionManager.open(params.historyPath),
     ...(model ? { model } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
+    ...(authStorage ? { authStorage } : {}),
   });
 
   return new RealAgentSession(session);
@@ -144,6 +146,7 @@ interface PiSdk {
     sessionManager?: unknown;
     model?: unknown;
     modelRegistry?: unknown;
+    authStorage?: unknown;
   }): Promise<{ session: PiSession }>;
   defineTool(def: {
     name: string;
@@ -164,7 +167,10 @@ interface PiSdk {
     additionalSkillPaths?: string[];
   }) => { reload(): Promise<void> };
   getAgentDir(): string;
-  AuthStorage: { create(path: string): unknown };
+  AuthStorage: {
+    create(path: string): unknown;
+    inMemory?(): { setRuntimeApiKey?(provider: string, key: string): void };
+  };
   ModelRegistry: {
     create(authStorage: unknown, modelsJsonPath?: string): {
       refresh(): void;

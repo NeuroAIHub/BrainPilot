@@ -52,10 +52,13 @@ export {
   writeLocalSettings,
   parseDotenv,
   configPaths,
+  describeProviderConfig,
+  formatProviderGuidance,
 } from "./config.js";
 export type {
   ResolvedProvider,
   LocalSettings,
   ConfigPaths,
   ResolveProviderOptions,
+  ProviderConfigReport,
 } from "./config.js";

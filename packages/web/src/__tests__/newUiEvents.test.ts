@@ -193,3 +193,44 @@ describe("reducer passthrough", () => {
     expect(reduceMessagesForEvent(existing, { type: "WHATEVER" } as WebSocketEvent)).toBe(existing);
   });
 });
+
+// Regression: a START with no matching END leaves a message stuck at
+// streaming:true, so the activity group shows "智能体思考中" forever. The run
+// terminators (RUN_FINISHED / RUN_ERROR) must sweep dangling streaming flags.
+describe("run terminators clear dangling streaming flags", () => {
+  const open = (agent: string): ChatMessage => ({
+    id: `m-${agent}`,
+    role: "assistant",
+    content: "partial…",
+    createdAt: new Date().toISOString(),
+    agent,
+    streaming: true,
+    kind: "text",
+  });
+
+  it("RUN_FINISHED clears streaming on the run agent's messages", () => {
+    const out = reduceMessagesForEvent([open("principal")], {
+      type: "RUN_FINISHED",
+      agentName: "principal",
+    } as WebSocketEvent);
+    expect(out[0]!.streaming).toBe(false);
+  });
+
+  it("RUN_FINISHED leaves OTHER agents' messages streaming (multi-agent isolation)", () => {
+    const out = reduceMessagesForEvent([open("worker")], {
+      type: "RUN_FINISHED",
+      agentName: "principal",
+    } as WebSocketEvent);
+    expect(out[0]!.streaming).toBe(true);
+  });
+
+  it("RUN_ERROR clears streaming AND appends an error message", () => {
+    const out = reduceMessagesForEvent([open("principal")], {
+      type: "RUN_ERROR",
+      agentName: "principal",
+      message: "boom",
+    } as WebSocketEvent);
+    expect(out[0]!.streaming).toBe(false);
+    expect(out.some((m) => m.kind === "error" && m.content === "boom")).toBe(true);
+  });
+});

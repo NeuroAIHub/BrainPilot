@@ -52,7 +52,7 @@ function splitList(value: string) {
 }
 
 export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
-  const { user, logout } = useAuth();
+  const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
   const [activeTab, setActiveTab] = useState<SettingsTab>("account");
@@ -359,9 +359,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     <dd>{user?.createdAt ? new Date(user.createdAt).toLocaleString() : "-"}</dd>
                   </div>
                 </dl>
-                <button className="settings-button" onClick={() => { logout(); onClose(); }} type="button">
-                  {t("settings.account.signOut")}
-                </button>
+                <p className="settings-note">{t("settings.account.managedByHost")}</p>
                 {version ? <span className="settings-version">{version}</span> : null}
               </section>
             ) : null}

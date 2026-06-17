@@ -91,6 +91,83 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it("GET /api/sessions/:id/trace forwards to the runtime (not the SPA fallback)", async () => {
+    // Same class as the /metrics regression: the SPA calls
+    // GET /api/sessions/:id/trace, but the route was missing from the /api
+    // table, so it fell through to the static fallback and returned index.html
+    // (200 text/html) — the frontend then choked with "Unexpected token '<'".
+    const graphBody = '{"meta":{"sessionId":"abc","createdAt":"2026-01-01T00:00:00.000Z"},"nodes":[]}';
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/sessions/abc/trace");
+      return new Response(graphBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "bp-web-trace-"));
+    await writeFile(path.join(root, "index.html"), "<!doctype html><title>BP</title>");
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      webRoot: root,
+    });
+    const res = await app.request("/api/sessions/abc/trace");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({
+      meta: { sessionId: "abc", createdAt: "2026-01-01T00:00:00.000Z" },
+      nodes: [],
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  // #29: session rename. The SPA PUTs /api/sessions/:id {title}; this must
+  // proxy to the runtime's updateSession route (PUT /sessions/:id) with the
+  // body intact — not the old forwardRename hack that PUT the GET path.
+  it("PUT /api/sessions/:id forwards rename to the runtime updateSession route", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("http://runtime.test/sessions/abc");
+      expect(init.method).toBe("PUT");
+      expect(init.body).toBe('{"title":"Renamed"}');
+      return new Response('{"id":"abc","title":"Renamed"}', {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/sessions/abc", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: '{"title":"Renamed"}',
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ id: "abc", title: "Renamed" });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  // #30: any unmatched /api/* returns a JSON 404, for every method, and never
+  // touches the runtime (no fetchFn call) nor the SPA static fallback.
+  it.each(["GET", "POST", "PUT", "DELETE"])(
+    "%s /api/<unknown> returns a JSON 404 (not SPA HTML / plain-text)",
+    async (method) => {
+      const fetchFn = vi.fn();
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: fetchFn as never,
+        serveWeb: false,
+      });
+      const res = await app.request("/api/__definitely_unknown__", { method });
+      expect(res.status).toBe(404);
+      expect(res.headers.get("content-type")).toContain("application/json");
+      expect(await res.json()).toEqual({ error: "not found" });
+      expect(fetchFn).not.toHaveBeenCalled();
+    },
+  );
+
   it("GET /api/health returns ok without touching the runtime", async () => {
     const fetchFn = vi.fn();
     const app = createApp({
@@ -228,5 +305,41 @@ describe("Hono app — local config routes", () => {
     expect(body.apiKey).toContain("…"); // masked
     expect(body.apiKey).not.toContain("abcd1234"); // raw key body never leaks
     expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("provider profiles: create → list → set active → delete (no 404)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-"));
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: vi.fn() as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {},
+    });
+
+    // create (the bug: this used to 404)
+    const created = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Gw", base_url: "https://gw", api_key: "sk-secret", models: ["m1"] }),
+    });
+    expect(created.status).toBe(201);
+    const profile = (await created.json()) as { id: string; api_key_masked: string; is_active: boolean };
+    expect(profile.id).toBeTruthy();
+    expect(profile.is_active).toBe(true); // first profile auto-selected
+    expect(profile.api_key_masked).not.toContain("secret"); // masked on the wire
+
+    // list
+    const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+    expect(list).toHaveLength(1);
+
+    // active
+    const active = await app.request("/api/provider/profiles/active");
+    expect(active.status).toBe(200);
+
+    // delete
+    const del = await app.request(`/api/provider/profiles/${profile.id}`, { method: "DELETE" });
+    expect(del.status).toBe(200);
+    expect((await del.json()) as { deleted: boolean }).toEqual({ deleted: true });
   });
 });
