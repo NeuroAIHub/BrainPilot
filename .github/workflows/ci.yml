@@ -72,6 +72,10 @@ jobs:
         if: steps.detect.outputs.present == 'true'
         run: node testbed/suites/demo-bundle.test.mjs
 
+      - name: probes 单测（质量探针，纯函数，零依赖）
+        if: steps.detect.outputs.present == 'true'
+        run: node testbed/suites/probes.test.mjs
+
       - name: 起 mock 实例 + 跑 contract/scenarios（零 token）
         if: steps.detect.outputs.present == 'true'
         env:
@@ -86,4 +90,5 @@ jobs:
           cd testbed/suites
           node contract.mjs --base-url http://127.0.0.1:19020/api
           node run-scenarios.mjs --base-url http://127.0.0.1:19020/api --data-dir "$DATA"
+          node web-journeys.mjs --base-url http://127.0.0.1:19020/api
 
