@@ -362,7 +362,7 @@ export interface ProviderConfigReport {
   source?: ResolvedProvider["source"];
   baseUrl?: string;
   model?: string;
-  /** Absolute path of bp_template/settings.json (the highest-authority layer). */
+  /** Absolute path of bp_template/providers.json (the provider registry SSOT). */
   settingsPath: string;
   /** Absolute path of the data dir's .env. */
   dotenvPath: string;
@@ -383,7 +383,7 @@ export async function describeProviderConfig(
     source: resolved.source,
     baseUrl: resolved.baseUrl,
     model: resolved.model,
-    settingsPath: paths.bpTemplateSettings,
+    settingsPath: paths.providers,
     dotenvPath: paths.dotenv,
   };
 }
@@ -404,11 +404,11 @@ export function formatProviderGuidance(report: ProviderConfigReport): string[] {
   }
   return [
     "No provider API key configured yet. Set one of:",
-    `  • settings file:  ${report.settingsPath}`,
-    `      { "apiKey": "<key>", "baseUrl": "<gateway, optional>", "model": "<id, optional>" }`,
+    "  • web Settings UI: launch, open Settings → Providers, add a provider (recommended).",
+    `  • providers file:  ${report.settingsPath}`,
+    `      { "profiles": [ { "id": "local", "name": "Local", "apiKey": "<key>", "baseUrl": "<gateway, optional>", "models": ["<id>"] } ], "selectedProfileId": "local" }`,
     "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / BP_MODEL)",
     "  • re-run init:    brainpilot init --api-key <key> [--base-url <url>] [--model <id>]",
-    "  • or just launch and configure url/key/model in the web Settings UI.",
     "No key needed for a test run:  BP_MOCK=1 brainpilot up",
   ];
 }

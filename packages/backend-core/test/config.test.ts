@@ -103,7 +103,7 @@ describe("describeProviderConfig", () => {
     expect(r.source).toBe("bp_template");
     expect(r.baseUrl).toBe("https://gw");
     expect(r.model).toBe("m1");
-    expect(r.settingsPath).toBe(path.join(dir, "bp_template", "settings.json"));
+    expect(r.settingsPath).toBe(path.join(dir, "bp_template", "providers.json"));
     expect(r.dotenvPath).toBe(path.join(dir, ".env"));
   });
 
@@ -137,14 +137,14 @@ describe("describeProviderConfig", () => {
 });
 
 describe("formatProviderGuidance", () => {
-  it("unconfigured: lists settings file, env, init, settings UI, and BP_MOCK", () => {
+  it("unconfigured: lists providers file, env, init, settings UI, and BP_MOCK", () => {
     const lines = formatProviderGuidance({
       hasKey: false,
-      settingsPath: "/data/bp_template/settings.json",
+      settingsPath: "/data/bp_template/providers.json",
       dotenvPath: "/data/.env",
     });
     const text = lines.join("\n");
-    expect(text).toContain("/data/bp_template/settings.json");
+    expect(text).toContain("/data/bp_template/providers.json");
     expect(text).toContain("ANTHROPIC_API_KEY");
     expect(text).toContain("--base-url");
     expect(text.toLowerCase()).toContain("settings"); // UI hint
