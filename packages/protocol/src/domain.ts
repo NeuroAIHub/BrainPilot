@@ -166,6 +166,38 @@ export const McpServerEntrySchema = z.object({
 });
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
 
+/**
+ * #49: validation SSOT for an MCP server *config* (the on-disk spec, without the
+ * `name` key). A discriminated union by `type` enforces the cross-field rules
+ * the flat `McpServerEntrySchema` above can't: http/sse require a non-empty
+ * `url`; stdio requires a non-empty `command`; any other `type` is rejected.
+ * The CRUD routes safeParse against this before persisting, so invalid configs
+ * 400 and never reach disk.
+ */
+const nonEmpty = z.string().trim().min(1);
+export const McpServerConfigSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("stdio"),
+    command: nonEmpty,
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    timeout: z.number().optional(),
+  }),
+  z.object({
+    type: z.literal("http"),
+    url: nonEmpty,
+    headers: z.record(z.string(), z.string()).optional(),
+    timeout: z.number().optional(),
+  }),
+  z.object({
+    type: z.literal("sse"),
+    url: nonEmpty,
+    headers: z.record(z.string(), z.string()).optional(),
+    timeout: z.number().optional(),
+  }),
+]);
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
 export const HealthStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 
@@ -195,6 +227,39 @@ export const ProviderProfileSchema = z.object({
   modelHealth: z.array(ModelHealthSchema),
 });
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
+
+/**
+ * #50: validation SSOT for the provider-profile create/update *wire body* (the
+ * snake_case shape the SPA POSTs/PUTs). The backend safeParses against these
+ * before persisting, so malformed input 400s instead of silently producing an
+ * unusable active profile (empty name, `models:"m"` coerced to `[]`).
+ *
+ * `models`, when present, must be an array of non-empty strings — a non-array
+ * value (e.g. the string "m") is a hard error, not a silent empty list.
+ */
+const modelsField = z
+  .array(z.string().trim().min(1), {
+    message: "models must be an array of non-empty strings",
+  })
+  .optional();
+
+export const ProviderProfileCreateSchema = z.object({
+  name: z.string().trim().min(1, "name is required"),
+  base_url: z.string().optional(),
+  baseUrl: z.string().optional(),
+  api_key: z.string().optional(),
+  apiKey: z.string().optional(),
+  models: modelsField,
+  icon: z.string().optional(),
+  icon_color: z.string().optional(),
+  iconColor: z.string().optional(),
+  notes: z.string().optional(),
+});
+export type ProviderProfileCreate = z.infer<typeof ProviderProfileCreateSchema>;
+
+/** Update is a partial patch: every field optional, but same shape rules when present. */
+export const ProviderProfileUpdateSchema = ProviderProfileCreateSchema.partial();
+export type ProviderProfileUpdate = z.infer<typeof ProviderProfileUpdateSchema>;
 
 /* ------------------------------------------------------------------ *
  * Files
