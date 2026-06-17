@@ -33,6 +33,39 @@ interface FilePreviewViewProps {
   /** Error loading the bytes (image/pdf), shown instead of the media. */
   error?: string | null;
   t: (key: string, vars?: TranslateVars) => string;
+  /** When provided, "too large" / "not previewable" notices offer a download. */
+  onDownload?: () => void;
+  /** Disables the download button while a download is in flight. */
+  isDownloading?: boolean;
+}
+
+/** Notice text + an optional download fallback for un-previewable files. */
+function NoticeWithDownload({
+  text,
+  onDownload,
+  isDownloading,
+  t,
+}: {
+  text: string;
+  onDownload?: () => void;
+  isDownloading?: boolean;
+  t: (key: string, vars?: TranslateVars) => string;
+}) {
+  return (
+    <div className="file-preview__notice">
+      <p>{text}</p>
+      {onDownload ? (
+        <button
+          className="file-preview__download"
+          disabled={isDownloading}
+          onClick={() => onDownload()}
+          type="button"
+        >
+          {isDownloading ? t("files.preview.downloading") : t("files.preview.download")}
+        </button>
+      ) : null}
+    </div>
+  );
 }
 
 /**
@@ -41,9 +74,24 @@ interface FilePreviewViewProps {
  * demo player (which feeds embedded bytes) render identically. Callers own
  * blob-URL lifecycle and byte loading; this component only renders.
  */
-export function FilePreviewView({ name, source, renderMarkdown, error, t }: FilePreviewViewProps) {
+export function FilePreviewView({
+  name,
+  source,
+  renderMarkdown,
+  error,
+  t,
+  onDownload,
+  isDownloading,
+}: FilePreviewViewProps) {
   if (source.kind === "tooLarge") {
-    return <p className="file-preview__notice">{t("files.preview.tooLarge")}</p>;
+    return (
+      <NoticeWithDownload
+        text={t("files.preview.tooLarge")}
+        onDownload={onDownload}
+        isDownloading={isDownloading}
+        t={t}
+      />
+    );
   }
   if (source.kind === "unreadable") {
     return (
@@ -68,7 +116,14 @@ export function FilePreviewView({ name, source, renderMarkdown, error, t }: File
     );
   }
   if (source.kind === "download") {
-    return <p className="file-preview__notice">{t("files.preview.notPreviewable")}</p>;
+    return (
+      <NoticeWithDownload
+        text={t("files.preview.notPreviewable")}
+        onDownload={onDownload}
+        isDownloading={isDownloading}
+        t={t}
+      />
+    );
   }
   // text
   if (renderMarkdown && isMarkdown(name)) {

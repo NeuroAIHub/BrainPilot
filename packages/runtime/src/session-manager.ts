@@ -9,10 +9,10 @@
  * Persistence (§5): config/history/state live under `<dataRoot>/.bp/{sid}/`,
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
-import { mkdir, readFile, writeFile, readdir, rm } from "node:fs/promises";
-import { join } from "node:path";
+import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
+import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgUiEvent, AgentStatus, Session } from "@brainpilot/protocol";
+import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import { Mailbox } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
@@ -22,6 +22,7 @@ import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import { personaFor } from "./personas.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool } from "./types.js";
 
 interface SessionEntry {
@@ -38,6 +39,8 @@ interface SessionEntry {
   tasks: Map<string, string>;
   runActive: boolean;
   activeRunId: string | null;
+  /** This session's chosen provider/model (resolved against providers.json). */
+  providerRef: SessionProviderRef;
 }
 
 export interface SessionManagerOptions {
@@ -120,6 +123,87 @@ export class SessionManager {
     return join(this.dataRoot, "bp_template", "agents", name, "prompt.md");
   }
 
+  /* ----------------------------- workspace files ----------------------------- */
+
+  /**
+   * Resolve a workspace-relative path to an absolute one, refusing anything that
+   * escapes the session's `workspaces/<sid>/` root (path traversal guard). This
+   * is the single enforcement point for all file routes.
+   *
+   * The SPA addresses files with a `/workspace`-rooted convention
+   * (`/workspace`, `/workspace/sub/file.txt`); we normalize that to a path
+   * relative to the on-disk workspace root before resolving.
+   */
+  private resolveWorkspacePath(sid: string, rawPath: string): string {
+    const root = this.workspaceDir(sid);
+    let rel = rawPath ?? "";
+    if (rel === "/workspace") rel = "";
+    else if (rel.startsWith("/workspace/")) rel = rel.slice("/workspace/".length);
+    rel = rel.replace(/^\/+/, ""); // never let a leading slash make it absolute
+    const abs = resolve(root, rel);
+    if (abs !== root && !abs.startsWith(root + sep)) {
+      throw new Error(`path escapes workspace: ${rawPath}`);
+    }
+    return abs;
+  }
+
+  /** List one directory level under the session workspace (default: root). */
+  async listSessionFiles(sid: string, rel = ""): Promise<FileEntry[]> {
+    const dir = this.resolveWorkspacePath(sid, rel);
+    let dirents;
+    try {
+      dirents = await readdir(dir, { withFileTypes: true });
+    } catch {
+      return []; // missing workspace → empty (new session, nothing written yet)
+    }
+    const entries = await Promise.all(
+      dirents.map(async (d) => {
+        const type: FileEntry["type"] = d.isDirectory()
+          ? "folder"
+          : d.isSymbolicLink()
+            ? "symlink"
+            : "file";
+        let size = 0;
+        let modified = 0;
+        let permissions = "";
+        try {
+          const st = await stat(join(dir, d.name));
+          size = st.size;
+          modified = Math.floor(st.mtimeMs / 1000);
+          permissions = (st.mode & 0o777).toString(8);
+        } catch {
+          /* broken symlink / race — report zeros */
+        }
+        return { name: d.name, type, size, modified, permissions };
+      }),
+    );
+    return entries;
+  }
+
+  /** Read a workspace text file as UTF-8. */
+  async readSessionFile(sid: string, rel: string): Promise<FileContent> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    const content = await readFile(abs, "utf8");
+    return { path: rel, content, size: Buffer.byteLength(content) };
+  }
+
+  /** Read a workspace file's raw bytes (images/PDF/download). */
+  async readSessionFileRaw(sid: string, rel: string): Promise<Buffer> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    return readFile(abs);
+  }
+
+  /** Delete a workspace file. Returns false if it was already gone. */
+  async deleteSessionFile(sid: string, rel: string): Promise<boolean> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    try {
+      await rm(abs, { recursive: true });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   /**
    * Resolve an agent's system persona. Prefers the user-editable on-disk
    * `bp_template/agents/<name>/prompt.md` (so personas can be tuned without a
@@ -138,11 +222,22 @@ export class SessionManager {
 
   /* ---------------------------- session CRUD ---------------------------- */
 
-  async createSession(input: { id?: string; title?: string } = {}): Promise<Session> {
+  async createSession(
+    input: { id?: string; title?: string; providerId?: string; modelId?: string } = {},
+  ): Promise<Session> {
     const id = input.id ?? randomUUID();
     if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
     const nowIso = new Date().toISOString();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
+
+    // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
+    // (restore path) so reviving a session never clobbers its chosen model.
+    const explicitRef = input.providerId !== undefined || input.modelId !== undefined;
+    const providerRef: SessionProviderRef = explicitRef
+      ? { providerId: input.providerId, modelId: input.modelId }
+      : this.persist
+        ? await this.readProviderRef(id)
+        : {};
 
     const bus = new EventBus({ persistPath: persistBase ? join(persistBase, "events.jsonl") : undefined });
     const mailbox = new Mailbox(id, persistBase ? join(persistBase, "mailbox") : undefined);
@@ -161,6 +256,7 @@ export class SessionManager {
       tasks: new Map(),
       runActive: false,
       activeRunId: null,
+      providerRef,
     };
     this.sessions.set(id, entry);
     this.touch(entry);
@@ -170,6 +266,9 @@ export class SessionManager {
       await mkdir(this.sessionSkillsDir(id), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
       await this.writeMeta(entry);
+      // Only (re)write the ref when the caller chose one — restore must not
+      // clobber an existing ref with an empty object.
+      if (explicitRef) await this.writeProviderRef(entry);
       await mailbox.recover();
       await this.loadTrace(entry);
     }
@@ -282,6 +381,10 @@ export class SessionManager {
     const builtins = builtinToolNamesForRole(role, name);
     const allowedToolNames = [...builtins, ...agentTools.map((t) => t.name)];
 
+    // Resolve this session's provider against the SSOT (providers.json). When
+    // unset/empty the factory falls back to Pi's env-based default.
+    const providerConfig = await resolveSessionProvider(this.dataRoot, entry.providerRef);
+
     const session = await this.agentFactory({
       sessionId,
       agentName: name,
@@ -292,6 +395,7 @@ export class SessionManager {
       allowedToolNames,
       systemPrompt: await this.loadPersona(name, role),
       skillPaths: [this.templateSkillsDir(), this.sessionSkillsDir(sessionId)],
+      providerConfig,
     });
 
     const agent = new MasAgent({
@@ -406,6 +510,32 @@ export class SessionManager {
     };
     await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
     await writeFile(join(this.bpDir(entry.id), "meta.json"), JSON.stringify(meta, null, 2), "utf8").catch(() => {});
+  }
+
+  private providerRefPath(sid: string): string {
+    return join(this.bpDir(sid), "provider.json");
+  }
+
+  /** Persist this session's `{ providerId, modelId }` reference (no key). */
+  private async writeProviderRef(entry: SessionEntry): Promise<void> {
+    if (!this.persist) return;
+    await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
+    await writeFile(
+      this.providerRefPath(entry.id),
+      JSON.stringify(entry.providerRef, null, 2),
+      "utf8",
+    ).catch(() => {});
+  }
+
+  /** Load a session's stored provider ref from disk (restore path). */
+  private async readProviderRef(sid: string): Promise<SessionProviderRef> {
+    try {
+      const raw = await readFile(this.providerRefPath(sid), "utf8");
+      const ref = JSON.parse(raw) as SessionProviderRef;
+      return { providerId: ref.providerId, modelId: ref.modelId };
+    } catch {
+      return {};
+    }
   }
 
   private async loadTrace(entry: SessionEntry): Promise<void> {

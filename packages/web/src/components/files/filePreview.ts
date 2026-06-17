@@ -5,6 +5,14 @@
 
 export const ONE_MB = 1024 * 1024;
 
+/**
+ * Upper bound for previewing BINARY files (images/PDF) via a blob URL. Text
+ * files keep the smaller {@link ONE_MB} inline cap (they're held in memory as a
+ * string); binary previews are streamed to an <img>/<iframe>, so a larger cap
+ * is fine. Above this, the panel shows a "too large" notice + a download button.
+ */
+export const MAX_BINARY_PREVIEW = 50 * ONE_MB;
+
 export type PreviewKind = "text" | "image" | "pdf" | "download";
 
 export function getPreviewKind(fileName: string): PreviewKind {

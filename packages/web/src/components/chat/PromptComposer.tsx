@@ -210,7 +210,12 @@ export function PromptComposer() {
       return;
     }
     draftStore.set(sessionId, "");
-    await sendPrompt(content);
+    // Carry the chosen provider/model so a freshly-created session records its
+    // per-session selection (no-op for an already-running session).
+    await sendPrompt(content, {
+      providerId: activeProvider?.id,
+      modelId: selectedModel || undefined,
+    });
   };
 
   // Writes to the draft store from non-text controls (slash command picks,

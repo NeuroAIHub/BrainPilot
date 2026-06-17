@@ -1,4 +1,7 @@
 import { describe, it, expect } from "vitest";
+import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { createServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
@@ -81,6 +84,62 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect((await a.request("/sessions/nope/state")).status).toBe(404);
     const del = await a.request("/sessions/nope", { method: "DELETE" });
     expect(del.status).toBe(404);
+  });
+});
+
+describe("workspace file routes", () => {
+  async function appWithWorkspace() {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-files-"));
+    const ws = join(dataRoot, "workspaces", "s1");
+    await mkdir(join(ws, "sub"), { recursive: true });
+    await writeFile(join(ws, "a.txt"), "hello");
+    await writeFile(join(ws, "sub", "b.txt"), "world");
+    await writeFile(join(ws, "img.bin"), Buffer.from([1, 2, 3, 4]));
+    const manager = new SessionManager({ persist: false, dataRoot, agentFactory: mockAgentFactory });
+    return { app: createServer({ manager }).app, dataRoot };
+  }
+
+  it("lists, reads (text + raw), and deletes workspace files", async () => {
+    const { app: a } = await appWithWorkspace();
+
+    // list root (bare array, /workspace-rooted path)
+    const listRes = await a.request("/sessions/s1/files?path=/workspace");
+    expect(listRes.status).toBe(200);
+    const files = (await listRes.json()) as Array<{ name: string; type: string; size: number }>;
+    expect(files.map((f) => f.name).sort()).toEqual(["a.txt", "img.bin", "sub"]);
+    expect(files.find((f) => f.name === "sub")?.type).toBe("folder");
+
+    // read text
+    const txt = await a.request("/sessions/s1/files/content?path=/workspace/a.txt");
+    expect(txt.status).toBe(200);
+    expect((await txt.json()) as { content: string }).toMatchObject({ content: "hello" });
+
+    // read raw bytes
+    const raw = await a.request("/sessions/s1/files/raw?path=/workspace/img.bin");
+    expect(raw.status).toBe(200);
+    expect(new Uint8Array(await raw.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+
+    // delete
+    const del = await a.request("/sessions/s1/files?path=/workspace/a.txt", { method: "DELETE" });
+    expect(del.status).toBe(200);
+    const after = (await (await a.request("/sessions/s1/files?path=/workspace")).json()) as unknown[];
+    expect(after).toHaveLength(2);
+  });
+
+  it("rejects path traversal outside the workspace", async () => {
+    const { app: a } = await appWithWorkspace();
+    // content + raw + delete all guard via resolveWorkspacePath → 404/400.
+    expect((await a.request("/sessions/s1/files/content?path=../../../etc/passwd")).status).toBe(404);
+    expect((await a.request("/sessions/s1/files/raw?path=/workspace/../../secret")).status).toBe(404);
+    const del = await a.request("/sessions/s1/files?path=../escape", { method: "DELETE" });
+    expect(del.status).toBe(400);
+  });
+
+  it("returns empty list for a session with no workspace yet", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/never-created/files?path=/workspace");
+    expect(res.status).toBe(200);
+    expect((await res.json()) as unknown[]).toEqual([]);
   });
 });
 

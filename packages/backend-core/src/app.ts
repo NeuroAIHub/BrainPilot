@@ -22,6 +22,12 @@ import {
   readLocalSettings,
   writeLocalSettings,
   resolveProvider,
+  readProviders,
+  createProfile,
+  updateProfile,
+  deleteProfile,
+  setSelectedProfile,
+  type StoredProviderProfile,
 } from "./config.js";
 
 export interface CreateAppOptions {
@@ -86,6 +92,15 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sessions/:id/agents", forward("listAgents", { idParam: "id" }));
   api.post("/sessions/:id/evict", forward("evictSession", { idParam: "id", withBody: true }));
 
+  // ---- Workspace files (proxied to runtime) ----------------------------
+  // The SPA addresses files under `/sandbox/:id/*`; in single-user mode the
+  // sandbox id IS the session id, so we forward straight to the runtime's
+  // `/sessions/:id/files*` routes. `?path=` is carried through verbatim.
+  api.get("/sandbox/:id/files", forward("listFiles", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
+  api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
+
   // ---- SSE byte passthrough (修正4) ------------------------------------
   // Canonical protocol path `/sse/:id` (RUNTIME_ROUTES.sessionEvents) plus the
   // SPA's `/sessions/:id/sse` and the `/sessions/:id/events` alias.
@@ -107,15 +122,57 @@ export function createApp(options: CreateAppOptions): Hono {
     });
     return c.json(await readLocalSettings({ dataDir, env }));
   });
-  // Provider profiles: single-user open-source mode exposes the resolved
-  // provider as one active profile (sourced from the §11A.2 priority chain).
+  // Provider profiles (SSOT = providers.json). Full CRUD; the active/selected
+  // profile is what new sessions default to. Keys are masked on the way out.
   api.get("/provider/profiles", async (c) => {
-    const resolved = await resolveProvider({ dataDir, env });
-    return c.json(resolved.apiKey ? [providerProfile(resolved)] : []);
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    return c.json(profiles.map((p) => toHttpProfile(p, selectedProfileId)));
   });
   api.get("/provider/profiles/active", async (c) => {
-    const resolved = await resolveProvider({ dataDir, env });
-    return c.json(resolved.apiKey ? providerProfile(resolved) : null);
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    const active = profiles.find((p) => p.id === selectedProfileId) ?? profiles[0];
+    return active ? c.json(toHttpProfile(active, selectedProfileId)) : c.body(null, 204);
+  });
+  api.post("/provider/profiles", async (c) => {
+    const created = await createProfile(dataDir, fromHttpBody(await safeJson(c)));
+    const { selectedProfileId } = await readProviders(dataDir);
+    return c.json(toHttpProfile(created, selectedProfileId), 201);
+  });
+  api.put("/provider/profiles/active", async (c) => {
+    const body = await safeJson(c);
+    const id = typeof body.id === "string" ? body.id : "";
+    const ok = await setSelectedProfile(dataDir, id);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json(await activeHttpProfile(dataDir));
+  });
+  api.post("/provider/profiles/active", async (c) => {
+    const body = await safeJson(c);
+    const id = typeof body.id === "string" ? body.id : "";
+    const ok = await setSelectedProfile(dataDir, id);
+    if (!ok) return c.json({ error: "not found" }, 404);
+    return c.json(await activeHttpProfile(dataDir));
+  });
+  api.get("/provider/profiles/health", async (c) => {
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    return c.json(profiles.map((p) => toHttpProfile(p, selectedProfileId)));
+  });
+  api.put("/provider/profiles/:id", async (c) => {
+    const updated = await updateProfile(dataDir, c.req.param("id"), fromHttpBody(await safeJson(c)));
+    if (!updated) return c.json({ error: "not found" }, 404);
+    const { selectedProfileId } = await readProviders(dataDir);
+    return c.json(toHttpProfile(updated, selectedProfileId));
+  });
+  api.delete("/provider/profiles/:id", async (c) => {
+    const ok = await deleteProfile(dataDir, c.req.param("id"));
+    return c.json({ deleted: ok }, ok ? 200 : 404);
+  });
+  api.post("/provider/profiles/:id/test", async (c) => {
+    // Connectivity probe is not implemented yet; report unknown so the UI shows
+    // a neutral state rather than 404-ing the whole settings flow.
+    const { profiles, selectedProfileId } = await readProviders(dataDir);
+    const p = profiles.find((x) => x.id === c.req.param("id"));
+    if (!p) return c.json({ error: "not found" }, 404);
+    return c.json(toHttpProfile(p, selectedProfileId));
   });
 
   // Mount the API under /api (the SPA's API_BASE).
@@ -134,7 +191,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   function forward(
     route: keyof typeof RUNTIME_ROUTES,
-    opts: { idParam?: string; withBody?: boolean } = {},
+    opts: { idParam?: string; withBody?: boolean; withQuery?: boolean } = {},
   ) {
     return async (c: import("hono").Context) => {
       const rc = await getClient();
@@ -144,10 +201,12 @@ export function createApp(options: CreateAppOptions): Hono {
       const headers: Record<string, string> = {};
       const ct = c.req.header("content-type");
       if (ct) headers["content-type"] = ct;
+      const query = opts.withQuery ? new URL(c.req.url).search.replace(/^\?/, "") : undefined;
       const upstream = await rc.forward(route, {
         params,
         body: body && body.length > 0 ? body : undefined,
         headers,
+        query: query && query.length > 0 ? query : undefined,
       });
       return relay(c, upstream);
     };
@@ -209,30 +268,49 @@ async function safeJson(c: import("hono").Context): Promise<Record<string, unkno
   }
 }
 
-function providerProfile(resolved: {
-  apiKey?: string;
-  baseUrl?: string;
-  model?: string;
-}): Record<string, unknown> {
-  const now = Date.now();
-  const masked = resolved.apiKey
-    ? resolved.apiKey.length <= 8
-      ? "****"
-      : `${resolved.apiKey.slice(0, 4)}…${resolved.apiKey.slice(-4)}`
-    : "";
+function maskKey(key: string): string {
+  if (!key) return "";
+  return key.length <= 8 ? "****" : `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+/** Stored profile → masked HTTP shape the SPA's normalizeProviderProfile reads. */
+function toHttpProfile(
+  p: StoredProviderProfile,
+  selectedId?: string,
+): Record<string, unknown> {
   return {
-    id: "local",
-    name: "Local",
-    base_url: resolved.baseUrl ?? "",
-    models: resolved.model ? [resolved.model] : [],
-    icon: "circle",
-    icon_color: "#111111",
-    notes: "",
-    is_active: true,
-    api_key_masked: masked,
-    created_at: now,
-    updated_at: now,
+    id: p.id,
+    name: p.name,
+    base_url: p.baseUrl,
+    models: p.models,
+    icon: p.icon ?? "circle",
+    icon_color: p.iconColor ?? "#111111",
+    notes: p.notes ?? "",
+    is_active: p.id === selectedId,
+    api_key_masked: maskKey(p.apiKey),
+    created_at: p.createdAt,
+    updated_at: p.updatedAt,
     health_status: "unknown",
     model_health: [],
   };
+}
+
+/** SPA create/update body (snake_case) → stored-profile patch. */
+function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProfile> {
+  const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  return {
+    name: str(body.name),
+    baseUrl: str(body.base_url) ?? str(body.baseUrl),
+    apiKey: str(body.api_key) ?? str(body.apiKey),
+    models: Array.isArray(body.models) ? (body.models as string[]) : undefined,
+    icon: str(body.icon),
+    iconColor: str(body.icon_color) ?? str(body.iconColor),
+    notes: str(body.notes),
+  };
+}
+
+async function activeHttpProfile(dataDir: string): Promise<Record<string, unknown> | null> {
+  const { profiles, selectedProfileId } = await readProviders(dataDir);
+  const active = profiles.find((p) => p.id === selectedProfileId) ?? profiles[0];
+  return active ? toHttpProfile(active, selectedProfileId) : null;
 }

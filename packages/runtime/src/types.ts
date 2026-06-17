@@ -113,6 +113,16 @@ export type AgentSessionFactory = (params: {
    * discovery — see agent-factory `noSkills: true`.
    */
   skillPaths: string[];
+  /**
+   * Per-session LLM provider resolved from providers.json. When omitted, the
+   * factory falls back to Pi's env-based default (Docker/static compat).
+   */
+  providerConfig?: {
+    providerId: string;
+    baseUrl?: string;
+    apiKey: string;
+    modelId?: string;
+  };
 }) => Promise<IAgentSession>;
 
 /**

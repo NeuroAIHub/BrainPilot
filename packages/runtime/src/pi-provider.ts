@@ -32,7 +32,10 @@ const DEFAULT_MAX_TOKENS = 8_192;
 
 /** Minimal structural surface of the Pi SDK bits this module needs. */
 export interface PiProviderSdk {
-  AuthStorage: { create(path: string): unknown };
+  AuthStorage: {
+    create(path: string): PiAuthStorage;
+    inMemory?(): PiAuthStorage;
+  };
   ModelRegistry: {
     create(authStorage: unknown, modelsJsonPath?: string): {
       refresh(): void;
@@ -42,9 +45,24 @@ export interface PiProviderSdk {
   };
 }
 
+export interface PiAuthStorage {
+  /** In-memory, non-persisted, highest-priority key override (per provider). */
+  setRuntimeApiKey?(provider: string, key: string): void;
+}
+
+/** A concrete per-session provider config resolved from providers.json. */
+export interface SessionProviderConfig {
+  providerId: string;
+  baseUrl?: string;
+  apiKey: string;
+  modelId?: string;
+}
+
 export interface ResolvedProvider {
   model?: unknown;
   modelRegistry?: unknown;
+  /** Per-session AuthStorage holding the runtime key (when provider-configured). */
+  authStorage?: unknown;
 }
 
 /** Parse a positive integer env var, or `undefined` if unset/invalid. */
@@ -156,4 +174,76 @@ function select(
     throw new Error(`model not found in ${modelsJsonPath}: ${provider}/${modelId}`);
   }
   return { model, modelRegistry };
+}
+
+/**
+ * Resolve a model for a PER-SESSION provider config (from providers.json),
+ * isolated from process env so concurrent sessions can use different keys.
+ *
+ * Strategy (per the Pi SDK): build a dedicated models.json + ModelRegistry +
+ * AuthStorage for this provider, then push the key via
+ * `authStorage.setRuntimeApiKey` — an in-memory, non-persisted, top-priority
+ * override. The models.json `apiKey` is a harmless placeholder; the runtime
+ * override wins at request time. Returns `{}` when no usable config is given,
+ * so the caller falls back to {@link resolveGatewayModel} (env-based).
+ */
+export function resolveSessionModel(
+  sdk: PiProviderSdk,
+  agentDir: string,
+  cfg: SessionProviderConfig,
+): ResolvedProvider {
+  if (!cfg.apiKey || !cfg.baseUrl || !cfg.modelId) return {};
+
+  mkdirSync(agentDir, { recursive: true });
+  // One models.json per provider id — distinct registries stay isolated.
+  const modelsJsonPath = join(agentDir, `bp-session-${sanitize(cfg.providerId)}-models.json`);
+  const desired = JSON.stringify(
+    {
+      providers: {
+        [cfg.providerId]: {
+          baseUrl: cfg.baseUrl,
+          api: "anthropic-messages",
+          // Placeholder — the real key is injected via setRuntimeApiKey below.
+          apiKey: `$BP_PROVIDER_${sanitize(cfg.providerId).toUpperCase()}`,
+          models: [
+            {
+              id: cfg.modelId,
+              input: ["text"],
+              contextWindow: intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
+              maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
+            },
+          ],
+        },
+      },
+    },
+    null,
+    2,
+  );
+  let current: string | undefined;
+  try {
+    current = readFileSync(modelsJsonPath, "utf8");
+  } catch {
+    /* not written yet */
+  }
+  if (current !== desired) writeFileSync(modelsJsonPath, desired);
+
+  // A per-session AuthStorage isolates the runtime key. Prefer inMemory()
+  // (never touches disk); fall back to a file-backed instance if unavailable.
+  const authStorage: PiAuthStorage = sdk.AuthStorage.inMemory
+    ? sdk.AuthStorage.inMemory()
+    : sdk.AuthStorage.create(join(agentDir, `auth-${sanitize(cfg.providerId)}.json`));
+  authStorage.setRuntimeApiKey?.(cfg.providerId, cfg.apiKey);
+
+  const modelRegistry = sdk.ModelRegistry.create(authStorage, modelsJsonPath);
+  modelRegistry.refresh();
+  const err = modelRegistry.getError();
+  if (err) throw new Error(`Pi models.json load error (${modelsJsonPath}): ${err}`);
+  const model = modelRegistry.find(cfg.providerId, cfg.modelId);
+  if (!model) throw new Error(`model not found: ${cfg.providerId}/${cfg.modelId}`);
+  return { model, modelRegistry, authStorage };
+}
+
+/** Filesystem/JSON-key-safe form of a provider id. */
+function sanitize(id: string): string {
+  return id.replace(/[^A-Za-z0-9_-]/g, "_");
 }

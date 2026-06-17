@@ -21,13 +21,13 @@ This installs the `brainpilot` CLI (`bnpt` is a built-in short alias for the sam
 ```bash
 brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brainpilot
 ```
-The key is persisted to `brainpilot/bp_template/settings.json`. You can also omit
+The key is persisted to `brainpilot/bp_template/providers.json`. You can also omit
 `--api-key` and supply the key via the `ANTHROPIC_API_KEY` environment variable
 instead. A missing key no longer blocks launch — `brainpilot up` starts anyway
 and you can configure the **provider url / key / model** in the web **Settings
-UI** after it opens (or edit `bp_template/settings.json` directly). Without a key
-(and without `BP_MOCK=1`), agents simply can't make a real LLM call until one is
-set.
+UI** after it opens (the recommended path; it writes `providers.json` for you).
+Without a key (and without `BP_MOCK=1`), agents simply can't make a real LLM call
+until one is set.
 
 To configure a gateway / third-party endpoint in one command, add `--base-url`
 (and optionally `--model`):
@@ -57,8 +57,17 @@ From a local BrainPilot checkout:
 ```bash
 npm install
 npm run build
-npm run bp -- up     # equivalent to `brainpilot up` from the built CLI
+npm run bp -- up --port 9005     # equivalent to `brainpilot up --port 9005`
 ```
+
+> **Pass flags after `--`.** With `npm run`, the `--` separator is required so
+> npm forwards `up --port 9005` to the CLI instead of consuming `--port` itself.
+> `npm run bp up --port 9005` (no `--`) silently drops the flag and falls back to
+> the default port. To skip npm entirely, call the built binary directly:
+> ```bash
+> node packages/cli/dist/bin.js up --port 9005
+> ```
+> (the runtime uses `port + 1`).
 
 ## 🐳 Docker deployment
 
