@@ -18,7 +18,7 @@ export default defineMessages(
     "settings.account.username": "用户名",
     "settings.account.userId": "用户 ID",
     "settings.account.created": "创建于",
-    "settings.account.signOut": "退出登录",
+    "settings.account.managedByHost": "身份与登录由托管层管理。",
     // providers
     "settings.providers.title": "服务商",
     "settings.providers.desc": "服务商配置包含 API 接入设置和可供新会话使用的模型列表。",
@@ -110,7 +110,7 @@ export default defineMessages(
     "settings.account.username": "Username",
     "settings.account.userId": "User ID",
     "settings.account.created": "Created",
-    "settings.account.signOut": "Sign out",
+    "settings.account.managedByHost": "Identity and sign-in are managed by the hosting layer.",
     "settings.providers.title": "Providers",
     "settings.providers.desc": "Provider profiles contain both API provider settings and the model list available for new sessions.",
     "settings.providers.add": "Add Provider",

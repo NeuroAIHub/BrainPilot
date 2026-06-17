@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Bot, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
@@ -21,7 +21,7 @@ const MIN_SIDEBAR_WIDTH = 220;
 const MAX_SIDEBAR_WIDTH = 420;
 
 export function DesktopShell() {
-  const { user, isBootstrapping } = useAuth();
+  const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
   const { currentSession, currentView, messages, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
   const t = useT();
@@ -86,6 +86,18 @@ export function DesktopShell() {
       window.removeEventListener("pointerup", handlePointerUp);
     };
   }, []);
+
+  // Trust-front: while the upstream identity is resolving (GET /api/auth/me),
+  // show a lightweight splash. On failure AuthProvider redirects to the hosted
+  // login, so we never render the app for an unauthenticated request.
+  if (!isAuthReady) {
+    return (
+      <div className="app-bootstrapping" role="status" aria-live="polite">
+        <span className="sandbox-status__eyebrow">BrainPilot</span>
+        <p>{t("shell.bootstrapping")}</p>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -219,60 +231,6 @@ export function DesktopShell() {
         quotaBytes={stats?.disk.quotaBytes ?? 0}
         percentOfQuota={stats?.disk.percentOfQuota ?? 0}
       />
-      {!user || isBootstrapping ? <LoginPanel /> : null}
-    </div>
-  );
-}
-
-function LoginPanel() {
-  const { isBootstrapping, isSubmitting, error, login, register } = useAuth();
-  const t = useT();
-  const [username, setUsername] = useState("");
-  const [password, setPassword] = useState("");
-  const [mode, setMode] = useState<"login" | "register">("login");
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (mode === "login") {
-      await login(username, password);
-    } else {
-      await register(username, password);
-    }
-  };
-
-  return (
-    <div className="auth-overlay" role="dialog" aria-label={t("shell.auth.aria.signIn")}>
-      <form className="auth-panel" onSubmit={handleSubmit}>
-        <span className="sandbox-status__eyebrow">BrainPilot</span>
-        <h2>{isBootstrapping ? t("shell.auth.restoring") : mode === "login" ? t("shell.auth.loginTitle") : t("shell.auth.registerTitle")}</h2>
-        <label>
-          <span>{t("shell.auth.username")}</span>
-          <input
-            value={username}
-            onChange={(event) => setUsername(event.target.value)}
-            minLength={3}
-            placeholder={t("shell.auth.usernamePlaceholder")}
-            required
-          />
-        </label>
-        <label>
-          <span>{t("shell.auth.password")}</span>
-          <input
-            value={password}
-            onChange={(event) => setPassword(event.target.value)}
-            minLength={6}
-            required
-            type="password"
-          />
-        </label>
-        {error ? <p className="auth-error">{error}</p> : null}
-        <button disabled={isBootstrapping || isSubmitting} type="submit">
-          {mode === "login" ? t("shell.auth.login") : t("shell.auth.register")}
-        </button>
-        <button className="auth-switch" onClick={() => setMode(mode === "login" ? "register" : "login")} type="button">
-          {mode === "login" ? t("shell.auth.toRegister") : t("shell.auth.toLogin")}
-        </button>
-      </form>
     </div>
   );
 }
