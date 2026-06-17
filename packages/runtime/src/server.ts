@@ -46,6 +46,13 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return s ? c.json(s) : c.json({ error: "not found" }, 404);
   });
 
+  // #29: rename — PUT the session title and persist it to meta.json.
+  app.put("/sessions/:id", async (c) => {
+    const body = (await c.req.json().catch(() => ({}))) as { title?: unknown };
+    const s = await manager.renameSession(c.req.param("id"), body?.title);
+    return s ? c.json(s) : c.json({ error: "not found" }, 404);
+  });
+
   app.delete("/sessions/:id", async (c) => {
     const id = c.req.param("id");
     const deleted = await manager.deleteSession(id);
