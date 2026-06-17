@@ -91,6 +91,36 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it("GET /api/sessions/:id/trace forwards to the runtime (not the SPA fallback)", async () => {
+    // Same class as the /metrics regression: the SPA calls
+    // GET /api/sessions/:id/trace, but the route was missing from the /api
+    // table, so it fell through to the static fallback and returned index.html
+    // (200 text/html) — the frontend then choked with "Unexpected token '<'".
+    const graphBody = '{"meta":{"sessionId":"abc","createdAt":"2026-01-01T00:00:00.000Z"},"nodes":[]}';
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/sessions/abc/trace");
+      return new Response(graphBody, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "bp-web-trace-"));
+    await writeFile(path.join(root, "index.html"), "<!doctype html><title>BP</title>");
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      webRoot: root,
+    });
+    const res = await app.request("/api/sessions/abc/trace");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({
+      meta: { sessionId: "abc", createdAt: "2026-01-01T00:00:00.000Z" },
+      nodes: [],
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   it("GET /api/health returns ok without touching the runtime", async () => {
     const fetchFn = vi.fn();
     const app = createApp({

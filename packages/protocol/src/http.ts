@@ -179,6 +179,8 @@ export const RUNTIME_ROUTES = {
   getSession: { method: "GET", path: "/sessions/:id" },
   deleteSession: { method: "DELETE", path: "/sessions/:id" },
   getSessionState: { method: "GET", path: "/sessions/:id/state" },
+  /** Graph of Trace (reasoning DAG) for a session. */
+  getTrace: { method: "GET", path: "/sessions/:id/trace" },
   sendMessage: { method: "POST", path: "/sessions/:id/messages" },
   /** Canonical AG-UI event stream (§15.4). */
   sessionEvents: { method: "GET", path: "/sse/:id" },

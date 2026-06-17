@@ -57,6 +57,27 @@ export function eventSessionId(event: WebSocketEvent): string | undefined {
 }
 
 /**
+ * Clear `streaming` on any message still marked in-progress for a finished run.
+ * A START with no matching END (interrupt, mid-run error, dropped END) would
+ * otherwise leave a message stuck at streaming:true, and the activity group
+ * shows "智能体思考中" forever. RUN_FINISHED / RUN_ERROR are the authoritative
+ * terminators: once a run ends, nothing under that agent can still be streaming.
+ * Scoped to `agentName` so a finishing sub-agent never clears another agent's
+ * still-live spinner in a multi-agent run (undefined sweeps all, as a fallback).
+ */
+function sweepStreaming(messages: ChatMessage[], agentName?: string): ChatMessage[] {
+  let changed = false;
+  const next = messages.map((m) => {
+    if (m.streaming && (!agentName || m.agent === agentName)) {
+      changed = true;
+      return { ...m, streaming: false };
+    }
+    return m;
+  });
+  return changed ? next : messages;
+}
+
+/**
  * Convert an AG-UI message (from MESSAGES_SNAPSHOT) into a UI ChatMessage.
  */
 export function agUiMessageToChatMessage(msg: AgUiMessage): ChatMessage {
@@ -278,8 +299,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
 
     case "RUN_ERROR": {
       const message = event.message ?? "Run error";
+      // Run is over → sweep any dangling streaming flag before appending error.
+      const swept = sweepStreaming(existing, event.agentName);
       return [
-        ...existing,
+        ...swept,
         {
           id: generateUUID(),
           role: "system",
@@ -326,9 +349,14 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       return existing;
     }
 
+    // RUN_FINISHED is the authoritative end of a run: sweep any message left
+    // streaming because its END never arrived (interrupt / dropped END), so the
+    // "thinking" spinner reliably clears.
+    case "RUN_FINISHED":
+      return sweepStreaming(existing, event.agentName);
+
     // Lifecycle / brackets / extensions — no message-list change
     case "RUN_STARTED":
-    case "RUN_FINISHED":
     case "REASONING_START":
     case "REASONING_END":
       return existing;

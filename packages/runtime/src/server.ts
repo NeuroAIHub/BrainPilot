@@ -57,6 +57,11 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return state ? c.json(state) : c.json({ error: "not found" }, 404);
   });
 
+  app.get("/sessions/:id/trace", (c) => {
+    const graph = manager.getTrace(c.req.param("id"));
+    return graph ? c.json(graph) : c.json({ error: "not found" }, 404);
+  });
+
   app.post("/sessions/:id/messages", async (c) => {
     const id = c.req.param("id");
     const body = await safeBody(c);

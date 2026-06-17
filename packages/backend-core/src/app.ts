@@ -87,6 +87,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.put("/sessions/:id", forwardRename());
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
+  api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
   api.post("/sessions/:id/messages", forward("sendMessage", { idParam: "id", withBody: true }));
   api.post("/sessions/:id/interrupt", forward("interrupt", { idParam: "id", withBody: true }));
   api.get("/sessions/:id/agents", forward("listAgents", { idParam: "id" }));

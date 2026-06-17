@@ -68,6 +68,13 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const state = await a.request(`/sessions/${id}/state`);
     expect(state.status).toBe(200);
 
+    // trace (Graph of Trace) — returns { meta, nodes } for an existing session
+    const trace = await a.request(`/sessions/${id}/trace`);
+    expect(trace.status).toBe(200);
+    const graph = (await trace.json()) as { meta: { sessionId: string }; nodes: unknown[] };
+    expect(graph.meta.sessionId).toBe(id);
+    expect(Array.isArray(graph.nodes)).toBe(true);
+
     // interrupt
     const intr = await a.request(`/sessions/${id}/interrupt`, { method: "POST" });
     expect(intr.status).toBe(200);
@@ -82,6 +89,7 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const a = app();
     expect((await a.request("/sessions/nope")).status).toBe(404);
     expect((await a.request("/sessions/nope/state")).status).toBe(404);
+    expect((await a.request("/sessions/nope/trace")).status).toBe(404);
     const del = await a.request("/sessions/nope", { method: "DELETE" });
     expect(del.status).toBe(404);
   });
