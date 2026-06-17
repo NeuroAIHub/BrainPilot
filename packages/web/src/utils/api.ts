@@ -1,6 +1,5 @@
 import {
   AgentStatus,
-  AuthToken,
   FileContent,
   FileEntry,
   McpServerEntry,
@@ -23,7 +22,6 @@ import {
   normalizeSession,
   normalizeSessionState,
   normalizeSettings,
-  normalizeToken,
   normalizeTraceGraph,
   normalizeUser,
   serializeMcpConfig,
@@ -37,28 +35,16 @@ import { mockBackend } from "../mocks/backend";
 import { RawAgUiEvent } from "../contracts/demoBundle";
 
 const API_BASE = "/api";
-const TOKEN_KEY = "mas_access_token";
 
-export function getStoredToken(): string | null {
-  return localStorage.getItem(TOKEN_KEY) || localStorage.getItem("token");
-}
-
-export function storeToken(token: string): void {
-  localStorage.setItem(TOKEN_KEY, token);
-  localStorage.setItem("token", token);
-}
-
-export function clearStoredToken(): void {
-  localStorage.removeItem(TOKEN_KEY);
-  localStorage.removeItem("token");
+// Trust-front: the hosted gateway authenticates via an httpOnly cookie that the
+// browser carries automatically. The frontend never reads, stores, or attaches a
+// token — it just makes credentialed requests.
+function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
+  return fetch(input, { credentials: "include", ...init });
 }
 
 function authHeaders(json = true): Record<string, string> {
-  const token = getStoredToken();
-  return {
-    ...(json ? { "Content-Type": "application/json" } : {}),
-    ...(token ? { Authorization: `Bearer ${token}` } : {}),
-  };
+  return json ? { "Content-Type": "application/json" } : {};
 }
 
 async function parseError(res: Response): Promise<string> {
@@ -83,14 +69,15 @@ async function handleJson<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
-export function getSSEUrl(sessionId: string, token: string): string {
-  // Same origin; relative path lets EventSource follow the current host/port.
-  return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/sse?token=${encodeURIComponent(token)}`;
+export function getSSEUrl(sessionId: string): string {
+  // Same origin; relative path lets EventSource follow the current host/port and
+  // carry the auth cookie automatically — no token in the query string.
+  return `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/sse`;
 }
 
-export function getTerminalWsUrl(sandboxId: string, token: string, cols = 80, rows = 24): string {
+export function getTerminalWsUrl(sandboxId: string, cols = 80, rows = 24): string {
   const protocol = window.location.protocol === "https:" ? "wss:" : "ws:";
-  const params = new URLSearchParams({ token, cols: String(cols), rows: String(rows) });
+  const params = new URLSearchParams({ cols: String(cols), rows: String(rows) });
   return `${protocol}//${window.location.host}${API_BASE}/sandbox/${sandboxId}/terminal?${params}`;
 }
 
@@ -99,43 +86,15 @@ export const api = {
     if (runtimeConfig.useMockBackend) {
       return mockBackend.version();
     }
-    return handleJson(await fetch(`${API_BASE}/version`));
+    return handleJson(await apiFetch(`${API_BASE}/version`));
   },
 
   auth: {
-    async login(username: string, password: string): Promise<AuthToken> {
-      if (runtimeConfig.useMockBackend) {
-        return mockBackend.login(username, password);
-      }
-      const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/auth/login`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password }),
-        }),
-      );
-      return normalizeToken(raw as Parameters<typeof normalizeToken>[0]);
-    },
-
-    async register(username: string, password: string): Promise<AuthToken> {
-      if (runtimeConfig.useMockBackend) {
-        return mockBackend.register(username, password);
-      }
-      const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/auth/register`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ username, password }),
-        }),
-      );
-      return normalizeToken(raw as Parameters<typeof normalizeToken>[0]);
-    },
-
     async me(): Promise<User> {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.me();
       }
-      const raw = await handleJson<unknown>(await fetch(`${API_BASE}/auth/me`, { headers: authHeaders() }));
+      const raw = await handleJson<unknown>(await apiFetch(`${API_BASE}/auth/me`, { headers: authHeaders() }));
       return normalizeUser(raw as Parameters<typeof normalizeUser>[0]);
     },
   },
@@ -145,7 +104,7 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.listSandboxes();
       }
-      const raw = await handleJson<unknown[]>(await fetch(`${API_BASE}/sandbox/list`, { headers: authHeaders() }));
+      const raw = await handleJson<unknown[]>(await apiFetch(`${API_BASE}/sandbox/list`, { headers: authHeaders() }));
       return raw.map((item) => normalizeSandbox(item as Parameters<typeof normalizeSandbox>[0]));
     },
 
@@ -154,7 +113,7 @@ export const api = {
         return mockBackend.createSandbox(sandboxName);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sandbox/create`, {
+        await apiFetch(`${API_BASE}/sandbox/create`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify({ sandbox_name: sandboxName }),
@@ -169,7 +128,7 @@ export const api = {
       }
       const params = new URLSearchParams({ sandbox_id: sandboxId });
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sandbox/rebuild?${params}`, {
+        await apiFetch(`${API_BASE}/sandbox/rebuild?${params}`, {
           method: "POST",
           headers: authHeaders(),
         }),
@@ -182,7 +141,7 @@ export const api = {
         return mockBackend.destroySandbox();
       }
       await handleJson<void>(
-        await fetch(`${API_BASE}/sandbox/${sandboxId}`, {
+        await apiFetch(`${API_BASE}/sandbox/${sandboxId}`, {
           method: "DELETE",
           headers: authHeaders(),
         }),
@@ -194,7 +153,7 @@ export const api = {
         return mockBackend.sandboxStats();
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sandbox/${sandboxId}/stats`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sandbox/${sandboxId}/stats`, { headers: authHeaders() }),
       );
       return normalizeSandboxStats(raw);
     },
@@ -205,7 +164,7 @@ export const api = {
       }
       const params = new URLSearchParams({ tail: String(tail) });
       const raw = await handleJson<{ logs?: string }>(
-        await fetch(`${API_BASE}/sandbox/${sandboxId}/logs?${params}`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sandbox/${sandboxId}/logs?${params}`, { headers: authHeaders() }),
       );
       return raw.logs || "";
     },
@@ -214,7 +173,7 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return { status: 'ok' }
       }
-      const res = await fetch(`${API_BASE}/sandbox/reload-config?sandbox_id=${sandboxId}`, {
+      const res = await apiFetch(`${API_BASE}/sandbox/reload-config?sandbox_id=${sandboxId}`, {
         method: 'POST',
         headers: authHeaders(),
       })
@@ -230,7 +189,7 @@ export const api = {
         return mockBackend.sandboxHealth();
       }
       return handleJson<Record<string, unknown>>(
-        await fetch(`${API_BASE}/sandbox/${sandboxId}/health`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sandbox/${sandboxId}/health`, { headers: authHeaders() }),
       );
     },
 
@@ -240,7 +199,7 @@ export const api = {
       }
       const params = new URLSearchParams({ path });
       const raw = await handleJson<unknown[]>(
-        await fetch(`${API_BASE}/sandbox/${sandboxId}/files?${params}`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files?${params}`, { headers: authHeaders() }),
       );
       return raw.map((item) => normalizeFileEntry(item as Parameters<typeof normalizeFileEntry>[0]));
     },
@@ -251,7 +210,7 @@ export const api = {
       }
       const params = new URLSearchParams({ path });
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sandbox/${sandboxId}/files/content?${params}`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files/content?${params}`, { headers: authHeaders() }),
       );
       return normalizeFileContent(raw);
     },
@@ -261,7 +220,7 @@ export const api = {
         return mockBackend.readRawFile(sandboxId, path);
       }
       const params = new URLSearchParams({ path });
-      const res = await fetch(`${API_BASE}/sandbox/${sandboxId}/files/raw?${params}`, {
+      const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files/raw?${params}`, {
         headers: authHeaders(false),
       });
       if (!res.ok) {
@@ -279,7 +238,7 @@ export const api = {
         return mockBackend.deleteFile(sandboxId, path);
       }
       const params = new URLSearchParams({ path });
-      const res = await fetch(`${API_BASE}/sandbox/${sandboxId}/files?${params}`, {
+      const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files?${params}`, {
         method: "DELETE",
         headers: authHeaders(),
       });
@@ -299,7 +258,7 @@ export const api = {
       // mock) and fall back to [] so an unexpected shape never throws
       // `.map is not a function` into SessionContext's error banner.
       const raw = await handleJson<{ sessions?: unknown[] } | unknown[]>(
-        await fetch(`${API_BASE}/sessions`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sessions`, { headers: authHeaders() }),
       );
       const list = Array.isArray(raw)
         ? raw
@@ -313,7 +272,7 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.getSession(sessionId);
       }
-      const raw = await handleJson<unknown>(await fetch(`${API_BASE}/sessions/${sessionId}`, { headers: authHeaders() }));
+      const raw = await handleJson<unknown>(await apiFetch(`${API_BASE}/sessions/${sessionId}`, { headers: authHeaders() }));
       return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);
     },
 
@@ -325,7 +284,7 @@ export const api = {
         return mockBackend.createSession(title);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sessions`, {
+        await apiFetch(`${API_BASE}/sessions`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify({
@@ -343,7 +302,7 @@ export const api = {
         return mockBackend.updateSession(sessionId, title);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sessions/${sessionId}`, {
+        await apiFetch(`${API_BASE}/sessions/${sessionId}`, {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify({ title }),
@@ -357,7 +316,7 @@ export const api = {
         return mockBackend.removeSession(sessionId);
       }
       await handleJson<void>(
-        await fetch(`${API_BASE}/sessions/${sessionId}`, {
+        await apiFetch(`${API_BASE}/sessions/${sessionId}`, {
           method: "DELETE",
           headers: authHeaders(),
         }),
@@ -369,7 +328,7 @@ export const api = {
         return { status: "ok" };
       }
       return handleJson<{ status: string }>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({ type: "interrupt", session_id: sessionId }),
@@ -386,7 +345,7 @@ export const api = {
         return { status: "ok" };
       }
       return handleJson<{ status: string }>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -406,7 +365,7 @@ export const api = {
         return { commands: ["/compact", "/context", "/cost"] };
       }
       return handleJson<{ commands: string[] }>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/commands`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/commands`, { headers: authHeaders() }),
       );
     },
 
@@ -421,7 +380,7 @@ export const api = {
         return { status: "ok" };
       }
       return handleJson<{ status: string }>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({
@@ -439,7 +398,7 @@ export const api = {
         return mockBackend.getTrace(sessionId);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/trace`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/trace`, { headers: authHeaders() }),
       );
       return normalizeTraceGraph(raw);
     },
@@ -452,7 +411,7 @@ export const api = {
       // a JSON route — so res.json() would reject. Treat any non-ok / non-JSON
       // response as "no events" and let callers (demoBundle) use their ordered
       // fallback instead of crashing on a stream body.
-      const res = await fetch(`${API_BASE}/sessions/${sessionId}/events`, { headers: authHeaders() });
+      const res = await apiFetch(`${API_BASE}/sessions/${sessionId}/events`, { headers: authHeaders() });
       if (!res.ok) return [];
       const contentType = res.headers.get("content-type") || "";
       if (!contentType.includes("application/json")) return [];
@@ -465,7 +424,7 @@ export const api = {
         return mockBackend.state();
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/sessions/${sessionId}/state`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/state`, { headers: authHeaders() }),
       );
       return normalizeSessionState(raw);
     },
@@ -485,7 +444,7 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.getSettings();
       }
-      const raw = await handleJson<unknown>(await fetch(`${API_BASE}/settings`, { headers: authHeaders() }));
+      const raw = await handleJson<unknown>(await apiFetch(`${API_BASE}/settings`, { headers: authHeaders() }));
       return normalizeSettings(raw as Parameters<typeof normalizeSettings>[0]);
     },
 
@@ -494,7 +453,7 @@ export const api = {
         return mockBackend.updateSettings(data);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/settings`, {
+        await apiFetch(`${API_BASE}/settings`, {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify(serializeSettings(data)),
@@ -508,7 +467,7 @@ export const api = {
         return mockBackend.resetConfig();
       }
       await handleJson<void>(
-        await fetch(`${API_BASE}/settings/reset-config`, {
+        await apiFetch(`${API_BASE}/settings/reset-config`, {
           method: "POST",
           headers: authHeaders(),
         }),
@@ -521,7 +480,7 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.listMcpServers();
       }
-      const raw = await handleJson<unknown[]>(await fetch(`${API_BASE}/mcp-servers`, { headers: authHeaders() }));
+      const raw = await handleJson<unknown[]>(await apiFetch(`${API_BASE}/mcp-servers`, { headers: authHeaders() }));
       return raw.map(normalizeMcpServer);
     },
 
@@ -530,7 +489,7 @@ export const api = {
         return mockBackend.addMcpServer(name, config);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/mcp-servers`, {
+        await apiFetch(`${API_BASE}/mcp-servers`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify({ name, config: serializeMcpConfig(config) }),
@@ -544,7 +503,7 @@ export const api = {
         return mockBackend.updateMcpServer(name, config);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/mcp-servers/${name}`, {
+        await apiFetch(`${API_BASE}/mcp-servers/${name}`, {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify(serializeMcpConfig(config)),
@@ -558,7 +517,7 @@ export const api = {
         return mockBackend.removeMcpServer(name);
       }
       await handleJson<void>(
-        await fetch(`${API_BASE}/mcp-servers/${name}`, {
+        await apiFetch(`${API_BASE}/mcp-servers/${name}`, {
           method: "DELETE",
           headers: authHeaders(),
         }),
@@ -572,7 +531,7 @@ export const api = {
         return mockBackend.listProviders();
       }
       const raw = await handleJson<unknown[]>(
-        await fetch(`${API_BASE}/provider/profiles`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/provider/profiles`, { headers: authHeaders() }),
       );
       return raw.map((item) => normalizeProviderProfile(item as Parameters<typeof normalizeProviderProfile>[0]));
     },
@@ -582,7 +541,7 @@ export const api = {
         return mockBackend.createProvider(data);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/provider/profiles`, {
+        await apiFetch(`${API_BASE}/provider/profiles`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify(serializeProviderCreate(data)),
@@ -596,7 +555,7 @@ export const api = {
         return mockBackend.updateProvider(id, data);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/provider/profiles/${id}`, {
+        await apiFetch(`${API_BASE}/provider/profiles/${id}`, {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify(serializeProviderUpdate(data)),
@@ -610,7 +569,7 @@ export const api = {
         return mockBackend.removeProvider(id);
       }
       await handleJson<void>(
-        await fetch(`${API_BASE}/provider/profiles/${id}`, {
+        await apiFetch(`${API_BASE}/provider/profiles/${id}`, {
           method: "DELETE",
           headers: authHeaders(),
         }),
@@ -621,7 +580,7 @@ export const api = {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.getActiveProvider();
       }
-      const res = await fetch(`${API_BASE}/provider/profiles/active`, { headers: authHeaders() });
+      const res = await apiFetch(`${API_BASE}/provider/profiles/active`, { headers: authHeaders() });
       if (res.status === 204) {
         return null;
       }
@@ -633,7 +592,7 @@ export const api = {
         return mockBackend.setActiveProvider(id);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/provider/profiles/active`, {
+        await apiFetch(`${API_BASE}/provider/profiles/active`, {
           method: "POST",
           headers: authHeaders(),
           body: JSON.stringify({ id }),
@@ -647,7 +606,7 @@ export const api = {
         return mockBackend.listProvidersHealth();
       }
       const raw = await handleJson<unknown[]>(
-        await fetch(`${API_BASE}/provider/profiles/health`, { headers: authHeaders() }),
+        await apiFetch(`${API_BASE}/provider/profiles/health`, { headers: authHeaders() }),
       );
       return raw.map((item) => normalizeProviderProfile(item as Parameters<typeof normalizeProviderProfile>[0]));
     },
@@ -657,7 +616,7 @@ export const api = {
         return mockBackend.testProvider(id);
       }
       const raw = await handleJson<unknown>(
-        await fetch(`${API_BASE}/provider/profiles/${id}/test`, {
+        await apiFetch(`${API_BASE}/provider/profiles/${id}/test`, {
           method: "POST",
           headers: authHeaders(),
         }),

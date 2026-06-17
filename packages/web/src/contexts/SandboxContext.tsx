@@ -81,7 +81,7 @@ function LocalSandboxProvider({ children }: { children: ReactNode }) {
 }
 
 function RemoteSandboxProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { isAuthReady } = useAuth();
   const [sandboxes, setSandboxes] = useState<Sandbox[]>([]);
   const [currentSandbox, setCurrentSandbox] = useState<Sandbox | null>(null);
   const [stats, setStats] = useState<SandboxStats | null>(null);
@@ -92,7 +92,7 @@ function RemoteSandboxProvider({ children }: { children: ReactNode }) {
   const shouldAutoStartRef = useRef(true);
 
   const refresh = useCallback(async () => {
-    if (!token) {
+    if (!isAuthReady) {
       setSandboxes([]);
       setCurrentSandbox(null);
       setStats(null);
@@ -111,7 +111,7 @@ function RemoteSandboxProvider({ children }: { children: ReactNode }) {
     } finally {
       setOperation((current) => (current === "loading" ? "idle" : current));
     }
-  }, [token]);
+  }, [isAuthReady]);
 
   const refreshStats = useCallback(async () => {
     if (!currentSandbox || (currentSandbox.status !== "running" && currentSandbox.status !== "quota_exceeded")) {
@@ -146,11 +146,11 @@ function RemoteSandboxProvider({ children }: { children: ReactNode }) {
     void refresh();
   }, [refresh]);
 
-  // Reset auto-start flag on token change (new login)
+  // Reset auto-start flag once auth becomes ready.
   useEffect(() => {
     shouldAutoStartRef.current = true;
     setHasLoaded(false);
-  }, [token]);
+  }, [isAuthReady]);
 
   useEffect(() => {
     void refreshStats();
@@ -243,13 +243,13 @@ function RemoteSandboxProvider({ children }: { children: ReactNode }) {
   //
   // hasLoaded gate: on initial mount the auto-start effect fires *before* the
   // first refresh() completes (refresh's setOperation('loading') is an async
-  // state update, but the effect already runs in the same batch as the token
-  // change). Without this gate currentSandbox is null on first render and we
+  // state update, but the effect already runs in the same batch as the
+  // auth-ready change). Without this gate currentSandbox is null on first render and we
   // mistakenly call createSandbox() → force-removes the same-named live
   // container. Wait until at least one /api/sandbox/list has returned before
   // making the call.
   useEffect(() => {
-    if (!token) return;
+    if (!isAuthReady) return;
     if (!hasLoaded) return;
     if (operation !== "idle") return;
     if (!shouldAutoStartRef.current) return;
@@ -258,7 +258,7 @@ function RemoteSandboxProvider({ children }: { children: ReactNode }) {
     if (!currentSandbox) {
       void createSandbox();
     }
-  }, [token, hasLoaded, operation, currentSandbox, createSandbox]);
+  }, [isAuthReady, hasLoaded, operation, currentSandbox, createSandbox]);
 
   const value = useMemo(
     () => ({

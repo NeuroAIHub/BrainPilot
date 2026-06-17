@@ -35,7 +35,7 @@ interface SessionConn {
 }
 
 export function SSEProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { isAuthReady } = useAuth();
   const { currentSandbox } = useSandbox();
   const connsRef = useRef<Map<string, SessionConn>>(new Map());
   const queueRef = useRef<Map<string, WebSocketEvent[]>>(new Map());
@@ -50,7 +50,7 @@ export function SSEProvider({ children }: { children: ReactNode }) {
     });
   }, []);
 
-  const openConnection = useCallback((sessionId: string, tokenValue: string) => {
+  const openConnection = useCallback((sessionId: string) => {
     if (runtimeConfig.useMockBackend) {
       setStatus(sessionId, "open");
       return;
@@ -63,7 +63,7 @@ export function SSEProvider({ children }: { children: ReactNode }) {
 
     console.log(`[SSE] openConnection: ${sessionId}`);
     setStatus(sessionId, "connecting");
-    const source = new EventSource(getSSEUrl(sessionId, tokenValue));
+    const source = new EventSource(getSSEUrl(sessionId));
 
     const entry: SessionConn = {
       source,
@@ -118,17 +118,17 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       console.log(`[SSE] reconnect: ${sessionId} in ${delay}ms`);
       entry.reconnectTimer = window.setTimeout(() => {
         entry.reconnectTimer = null;
-        openConnection(sessionId, tokenValue);
+        openConnection(sessionId);
       }, delay);
     };
   }, [setStatus]);
 
   const connectSession = useCallback((sessionId: string) => {
-    console.log(`[SSE] connectSession: ${sessionId}, token=${!!token}, sandbox=${currentSandbox?.status}`);
-    if (!token) return;
+    console.log(`[SSE] connectSession: ${sessionId}, authReady=${isAuthReady}, sandbox=${currentSandbox?.status}`);
+    if (!isAuthReady) return;
     if (!runtimeConfig.useMockBackend && currentSandbox?.status !== "running") return;
-    openConnection(sessionId, token);
-  }, [token, currentSandbox?.status, openConnection]);
+    openConnection(sessionId);
+  }, [isAuthReady, currentSandbox?.status, openConnection]);
 
   const disconnectSession = useCallback((sessionId: string) => {
     console.log(`[SSE] disconnectSession: ${sessionId}`);
@@ -144,7 +144,7 @@ export function SSEProvider({ children }: { children: ReactNode }) {
     setStatus(sessionId, "idle");
   }, [setStatus]);
 
-  // On unmount or token/sandbox change, tear down every connection.
+  // On unmount or auth/sandbox change, tear down every connection.
   useEffect(() => {
     return () => {
       for (const [, entry] of connsRef.current) {
@@ -156,7 +156,7 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       }
       connsRef.current.clear();
     };
-  }, [token, currentSandbox?.status]);
+  }, [isAuthReady, currentSandbox?.status]);
 
   const value = useMemo<SSEContextValue>(
     () => ({ connectSession, disconnectSession, queueRef, tick, connections }),

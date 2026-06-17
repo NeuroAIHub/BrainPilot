@@ -1,97 +1,52 @@
-import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useState } from "react";
+import { createContext, ReactNode, useContext, useEffect, useMemo, useState } from "react";
 import { User } from "../contracts/backend";
-import { api, clearStoredToken, getStoredToken, storeToken } from "../utils/api";
-import { runtimeConfig } from "../config";
-import { tg } from "../i18n/translate";
+import { api } from "../utils/api";
 
 interface AuthContextValue {
+  /** The current identity, resolved from the upstream gateway via GET /api/auth/me. */
   user: User | null;
-  token: string | null;
-  isBootstrapping: boolean;
-  isSubmitting: boolean;
-  error: string | null;
-  login: (username: string, password: string) => Promise<void>;
-  register: (username: string, password: string) => Promise<void>;
-  logout: () => void;
+  /** True once the identity bootstrap has settled (success or redirect-in-flight). */
+  isAuthReady: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-// Single-user bypass identity (auth disabled). Kept stable so `token` —
-// which other contexts use as a "ready to connect" gate — is always truthy
-// and the login overlay (gated on `!user`) never renders.
-const LOCAL_USER: User = {
-  id: "local",
-  username: "local",
-  createdAt: "1970-01-01T00:00:00.000Z",
-};
-const LOCAL_TOKEN = "local";
+// Where to send the browser when the upstream gateway reports we're not
+// authenticated. Login/register/account live in the hosted shell, not here.
+const HOSTED_LOGIN_PATH = "/account/login";
+
+function redirectToHostedLogin() {
+  const redirect = encodeURIComponent(window.location.pathname + window.location.search);
+  window.location.assign(`${HOSTED_LOGIN_PATH}?redirect=${redirect}`);
+}
 
 /**
- * AuthProvider has two modes, selected at build time by VITE_AUTH_ENABLED:
- *
- * - auth DISABLED (default, this single-user repo): a bypass that reports an
- *   always-signed-in local user with a fixed token. No login screen, no
- *   network calls; login/register/logout are no-ops.
- * - auth ENABLED (downstream multi-user deployment, VITE_AUTH_ENABLED=1):
- *   the real bootstrap/login/register/logout flow in RealAuthProvider.
+ * Trust-front auth: the open-source frontend does NOT authenticate. The hosted
+ * gateway owns auth and carries identity via an httpOnly cookie. We only read the
+ * resolved identity (GET /api/auth/me) for display; on failure we hand off to the
+ * hosted login page. There is no login/register/logout UI here.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  if (!runtimeConfig.authEnabled) {
-    return <BypassAuthProvider>{children}</BypassAuthProvider>;
-  }
-  return <RealAuthProvider>{children}</RealAuthProvider>;
-}
-
-function BypassAuthProvider({ children }: { children: ReactNode }) {
-  const value = useMemo<AuthContextValue>(
-    () => ({
-      user: LOCAL_USER,
-      token: LOCAL_TOKEN,
-      isBootstrapping: false,
-      isSubmitting: false,
-      error: null,
-      login: async () => {},
-      register: async () => {},
-      logout: () => {},
-    }),
-    [],
-  );
-  return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
-}
-
-function RealAuthProvider({ children }: { children: ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => getStoredToken());
   const [user, setUser] = useState<User | null>(null);
-  const [isBootstrapping, setIsBootstrapping] = useState(true);
-  const [isSubmitting, setIsSubmitting] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isAuthReady, setIsAuthReady] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
 
     async function bootstrap() {
-      if (!token) {
-        setIsBootstrapping(false);
-        return;
-      }
-
       try {
         const currentUser = await api.auth.me();
         if (!cancelled) {
           setUser(currentUser);
+          setIsAuthReady(true);
         }
-      } catch (err) {
-        if (!cancelled) {
-          clearStoredToken();
-          setToken(null);
-          setUser(null);
-          setError(err instanceof Error ? err.message : tg("ctx.auth.sessionExpired"));
-        }
-      } finally {
-        if (!cancelled) {
-          setIsBootstrapping(false);
-        }
+      } catch {
+        if (cancelled) return;
+        // Not authenticated upstream — defer to the hosted login. We still flip
+        // isAuthReady so the shell stops showing the bootstrapping splash while
+        // the navigation is in flight.
+        setIsAuthReady(true);
+        redirectToHostedLogin();
       }
     }
 
@@ -99,60 +54,9 @@ function RealAuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [token]);
-
-  const commitToken = useCallback((nextToken: string, nextUser: User) => {
-    storeToken(nextToken);
-    setToken(nextToken);
-    setUser(nextUser);
-    setError(null);
   }, []);
 
-  const login = useCallback(
-    async (username: string, password: string) => {
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        const result = await api.auth.login(username, password);
-        commitToken(result.accessToken, result.user);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : tg("ctx.auth.loginFailed"));
-        throw err;
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [commitToken],
-  );
-
-  const register = useCallback(
-    async (username: string, password: string) => {
-      setIsSubmitting(true);
-      setError(null);
-      try {
-        const result = await api.auth.register(username, password);
-        commitToken(result.accessToken, result.user);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : tg("ctx.auth.registerFailed"));
-        throw err;
-      } finally {
-        setIsSubmitting(false);
-      }
-    },
-    [commitToken],
-  );
-
-  const logout = useCallback(() => {
-    clearStoredToken();
-    setToken(null);
-    setUser(null);
-    setError(null);
-  }, []);
-
-  const value = useMemo(
-    () => ({ user, token, isBootstrapping, isSubmitting, error, login, register, logout }),
-    [user, token, isBootstrapping, isSubmitting, error, login, register, logout],
-  );
+  const value = useMemo<AuthContextValue>(() => ({ user, isAuthReady }), [user, isAuthReady]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
 }

@@ -70,14 +70,14 @@ export const DRAFT_SESSION_ID = "__draft__";
 const SessionContext = createContext<SessionContextValue | null>(null);
 
 export function SessionProvider({ children }: { children: ReactNode }) {
-  const { token } = useAuth();
+  const { isAuthReady } = useAuth();
   const { currentSandbox } = useSandbox();
   const { connectSession, disconnectSession, queueRef, tick, connections } = useSSE();
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isDraft, setIsDraft] = useState(false);
   // Mirror of isDraft for reading inside callbacks that must not re-create when
-  // the draft flag flips (e.g. refreshSessions, keyed only on token).
+  // the draft flag flips (e.g. refreshSessions, keyed only on isAuthReady).
   const isDraftRef = useRef(false);
   useEffect(() => {
     isDraftRef.current = isDraft;
@@ -107,7 +107,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     : false;
 
   const refreshSessions = useCallback(async () => {
-    if (!token) {
+    if (!isAuthReady) {
       setSessions([]);
       setCurrentSessionId(null);
       return;
@@ -127,7 +127,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     } finally {
       setIsLoading(false);
     }
-  }, [token]);
+  }, [isAuthReady]);
 
   useEffect(() => {
     void refreshSessions();

@@ -49,7 +49,7 @@ export function TerminalDrawer({
   tabs,
 }: TerminalDrawerProps) {
   const t = useT();
-  const { token } = useAuth();
+  const { isAuthReady } = useAuth();
   const { currentSandbox } = useSandbox();
   const [height, setHeight] = useState(DEFAULT_TERMINAL_HEIGHT);
   const [loadingIds, setLoadingIds] = useState<Set<string>>(new Set());
@@ -114,7 +114,7 @@ export function TerminalDrawer({
   const activeTab = tabs.find((tab) => tab.id === activeTabId) ?? tabs[0];
   const isOpen = tabs.length > 0 && !isMinimized;
   const isLoading = activeTab ? loadingIds.has(activeTab.id) : false;
-  const isReady = !!activeTab && !!token && currentSandbox?.status === "running";
+  const isReady = !!activeTab && isAuthReady && currentSandbox?.status === "running";
   const activeConnection = activeTab ? (connectionByTab[activeTab.id] ?? "idle") : "idle";
 
   const getTerminalSize = () => {
@@ -135,7 +135,7 @@ export function TerminalDrawer({
   };
 
   useEffect(() => {
-    if (!isOpen || !activeTab || !token || !currentSandbox || currentSandbox.status !== "running") {
+    if (!isOpen || !activeTab || !isAuthReady || !currentSandbox || currentSandbox.status !== "running") {
       wsRef.current?.close();
       wsRef.current = null;
       return;
@@ -160,7 +160,7 @@ export function TerminalDrawer({
     setConnectionByTab((current) => ({ ...current, [activeTab.id]: "connecting" }));
     setLoadingIds((current) => new Set(current).add(activeTab.id));
     const { cols, rows } = getTerminalSize();
-    const ws = new WebSocket(getTerminalWsUrl(currentSandbox.id, token, cols, rows));
+    const ws = new WebSocket(getTerminalWsUrl(currentSandbox.id, cols, rows));
     wsRef.current = ws;
 
     ws.onopen = () => {
@@ -214,7 +214,7 @@ export function TerminalDrawer({
         wsRef.current = null;
       }
     };
-  }, [activeTab, currentSandbox, isOpen, reconnectKey, token]);
+  }, [activeTab, currentSandbox, isOpen, reconnectKey, isAuthReady]);
 
   useEffect(() => {
     if (!isOpen || !activeTab || activeConnection !== "connected") {

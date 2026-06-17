@@ -1818,8 +1818,7 @@ button {
   width: min(1040px, 100%);
 }
 
-.composer-status--error,
-.auth-error {
+.composer-status--error {
   color: var(--color-danger);
 }
 
@@ -2886,92 +2885,23 @@ button {
   font: inherit;
 }
 
-.auth-overlay {
+.app-bootstrapping {
   position: fixed;
   inset: 0;
   z-index: 80;
   display: grid;
   place-items: center;
-  background: var(--color-overlay);
-  backdrop-filter: blur(12px);
+  align-content: center;
+  gap: 10px;
+  background: var(--color-canvas);
+  color: var(--color-text-muted);
+  text-align: center;
 }
 
 @media (prefers-reduced-motion: no-preference) {
-  .auth-overlay {
+  .app-bootstrapping {
     animation: fadeIn var(--duration-base) ease both;
   }
-  .auth-panel {
-    animation: scaleIn var(--ease-layout) both;
-  }
-}
-
-.auth-panel {
-  display: grid;
-  width: min(380px, calc(100vw - 32px));
-  gap: 14px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-md);
-  background: var(--color-surface-raised);
-  box-shadow: var(--shadow-xl);
-  padding: 24px;
-}
-
-.auth-panel h2 {
-  margin: 0;
-  font-size: 22px;
-  font-weight: 600;
-}
-
-.auth-panel label {
-  display: grid;
-  gap: 6px;
-  color: var(--color-text-muted);
-  font-size: 13px;
-}
-
-.auth-panel input {
-  height: 38px;
-  border: 1px solid var(--color-border);
-  border-radius: var(--radius-sm);
-  background: var(--color-surface);
-  color: var(--color-text);
-  padding: 0 10px;
-  transition: border-color var(--ease-standard), box-shadow var(--ease-standard);
-}
-
-.auth-panel input:focus-visible {
-  border-color: var(--color-border-strong);
-  box-shadow: 0 0 0 3px color-mix(in srgb, var(--color-text) 14%, transparent);
-  outline: none;
-}
-
-.auth-panel button {
-  height: 38px;
-  border: 0;
-  border-radius: var(--radius-sm);
-  background: var(--color-text);
-  color: var(--color-canvas);
-  font-weight: 500;
-  transition: box-shadow var(--ease-standard), opacity var(--ease-standard);
-}
-
-.auth-panel button:not(.auth-switch):hover:not(:disabled) {
-  box-shadow: var(--shadow-md);
-}
-
-.auth-panel button:disabled {
-  opacity: 0.5;
-}
-
-.auth-panel .auth-switch {
-  background: transparent;
-  color: var(--color-text-muted);
-}
-
-.auth-panel .auth-switch:hover {
-  color: var(--color-text);
-  text-decoration: underline;
-  text-underline-offset: 2px;
 }
 
 .desktop-shell--sidebar-collapsed .sidebar {
