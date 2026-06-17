@@ -120,6 +120,19 @@ export const SendMessageRequestSchema = z.object({
   content: z.string(),
   /** Target agent; defaults to principal. */
   agent: z.string().optional(),
+  /**
+   * Optional client-supplied metadata (issue #42). The web composer sends the
+   * `uuid` it used for the optimistic user bubble so the runtime can persist a
+   * matching `TEXT_MESSAGE_CHUNK` (role:"user") under the same id — on reload
+   * the replayed event dedupes against the optimistic one by id rather than
+   * duplicating it.
+   */
+  data: z
+    .object({
+      uuid: z.string().optional(),
+      timestamp: z.string().optional(),
+    })
+    .optional(),
 });
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
 

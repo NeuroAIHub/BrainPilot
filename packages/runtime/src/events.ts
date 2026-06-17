@@ -61,6 +61,19 @@ export const ev = {
   textMessageEnd(ctx: Ctx, messageId: string): AgUiEvent {
     return { type: "TEXT_MESSAGE_END", ...envelope(ctx), message_id: messageId } as AgUiEvent;
   },
+  /**
+   * Atomic text message (issue #42). CHUNK is the AG-UI shorthand for the
+   * START→CONTENT→END triad; the client transformer/reducer expands it. We use
+   * it with role:"user" to persist + replay the user's own prompt as a bubble
+   * in the event stream. AG-UI's canonical carrier for user input is
+   * `RunAgentInput.messages`/`MESSAGES_SNAPSHOT`, but BrainPilot's whole
+   * history/replay path is the events.jsonl stream, and the spec explicitly
+   * permits a single role:"user" CHUNK to echo a user bubble into the output
+   * stream — which is exactly this case.
+   */
+  textMessageChunk(ctx: Ctx, messageId: string, delta: string, role = "assistant"): AgUiEvent {
+    return { type: "TEXT_MESSAGE_CHUNK", ...envelope(ctx), message_id: messageId, role, delta } as AgUiEvent;
+  },
   reasoningMessageStart(ctx: Ctx, messageId: string): AgUiEvent {
     return { type: "REASONING_MESSAGE_START", ...envelope(ctx), message_id: messageId } as AgUiEvent;
   },
