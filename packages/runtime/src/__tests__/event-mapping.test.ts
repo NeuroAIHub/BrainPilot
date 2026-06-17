@@ -102,4 +102,50 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(sys.length).toBeGreaterThan(0);
     expect(agent.status).toBe("error");
   });
+
+  // #63: a provider/HTTP failure surfaces as a finalized assistant message with
+  // stopReason "error" (Pi does NOT throw). The runtime must turn that into a
+  // visible error, not an empty assistant bubble + RUN_FINISHED.
+  it("surfaces a stopReason:error message as a visible error (#63)", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((e) => captured.push(e));
+
+    // Minimal fake Pi session that emits an errored assistant message.
+    let listener: ((e: unknown) => void) | undefined;
+    const session = {
+      subscribe(l: (e: unknown) => void) {
+        listener = l;
+        return () => {};
+      },
+      async prompt() {
+        listener?.({ type: "message_start", message: { role: "assistant" } });
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", stopReason: "error", errorMessage: "Azure OpenAI API error (404): no route" },
+        });
+      },
+      async abort() {},
+      dispose() {},
+    };
+    const agent = new MasAgent({
+      sessionId: "s4",
+      name: "principal",
+      role: "principal",
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      session: session as any,
+      bus,
+    });
+
+    await agent.prompt("hi");
+
+    for (const e of captured) expect(() => parseEvent(e)).not.toThrow();
+    const sys = captured.filter((e) => e.type === "system_message") as Array<{ level?: string; content?: string }>;
+    expect(sys.some((e) => e.level === "error")).toBe(true);
+    // The error detail (redacted product message) reaches the user, and the run
+    // ends in error status rather than a silent empty reply.
+    expect(agent.status).toBe("error");
+    const types = captured.map((e) => e.type);
+    expect(types).toContain("TEXT_MESSAGE_END"); // bubble still closed cleanly
+  });
 });

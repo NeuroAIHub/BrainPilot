@@ -11,6 +11,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { ProviderApi } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -115,6 +116,9 @@ export interface StoredProviderProfile {
   id: string;
   name: string;
   baseUrl: string;
+  /** #63: wire protocol. Optional for back-compat with pre-#63 profiles
+   *  (read as anthropic-messages). createProfile defaults it. */
+  api?: ProviderApi;
   apiKey: string;
   models: string[];
   icon?: string;
@@ -176,6 +180,7 @@ export async function createProfile(
     id: input.id ?? newId(),
     name: input.name ?? "Provider",
     baseUrl: input.baseUrl ?? "",
+    api: input.api ?? "anthropic-messages",
     apiKey: input.apiKey ?? "",
     models: input.models ?? [],
     icon: input.icon,
@@ -200,7 +205,7 @@ export async function updateProfile(
   if (!profile) return undefined;
   // apiKey omitted in patch → keep existing (UI sends masked key, not the real one).
   const writable = profile as unknown as Record<string, unknown>;
-  for (const k of ["name", "baseUrl", "models", "icon", "iconColor", "notes"] as const) {
+  for (const k of ["name", "baseUrl", "api", "models", "icon", "iconColor", "notes"] as const) {
     if (patch[k] !== undefined) writable[k] = patch[k];
   }
   if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) profile.apiKey = patch.apiKey;

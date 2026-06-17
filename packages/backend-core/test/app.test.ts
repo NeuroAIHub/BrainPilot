@@ -435,6 +435,38 @@ describe("Hono app — local config routes", () => {
       expect(p.is_active).toBe(true);
       expect(p.models).toEqual(["m1", "m2"]);
     });
+
+    it("persists and echoes the selected api protocol (#63)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "Azure",
+        base_url: "https://r.openai.azure.com/openai",
+        api: "azure-openai-responses",
+        api_key: "sk-az",
+        models: ["gpt-5.5"],
+      });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { api: string }).api).toBe("azure-openai-responses");
+    });
+
+    it("defaults api to anthropic-messages when omitted (#63 back-compat)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Legacy", base_url: "https://x", api_key: "sk-x", models: ["m"] });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { api: string }).api).toBe("anthropic-messages");
+    });
+
+    it("rejects an unknown api value with 400 (#63)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "Bad Api",
+        base_url: "https://x",
+        api: "totally-made-up",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(res.status).toBe(400);
+    });
   });
 
   // #55: the Test button must do a real connectivity probe, not echo unknown.

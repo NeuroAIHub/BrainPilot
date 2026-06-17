@@ -365,6 +365,7 @@ function toHttpProfile(
     id: p.id,
     name: p.name,
     base_url: p.baseUrl,
+    api: p.api ?? "anthropic-messages",
     models: p.models,
     icon: p.icon ?? "circle",
     icon_color: p.iconColor ?? "#111111",
@@ -384,6 +385,7 @@ function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProf
   return {
     name: str(body.name),
     baseUrl: str(body.base_url) ?? str(body.baseUrl),
+    api: str(body.api) as StoredProviderProfile["api"] | undefined,
     apiKey: str(body.api_key) ?? str(body.apiKey),
     models: Array.isArray(body.models) ? (body.models as string[]) : undefined,
     icon: str(body.icon),

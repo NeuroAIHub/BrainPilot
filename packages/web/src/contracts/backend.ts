@@ -18,6 +18,7 @@ import type {
   McpServerEntry,
   ModelHealth,
   ProviderProfile,
+  ProviderApi,
   FileEntry,
   FileContent,
   TraceNode,
@@ -38,6 +39,7 @@ export type {
   McpServerEntry,
   ModelHealth,
   ProviderProfile,
+  ProviderApi,
   FileEntry,
   FileContent,
   TraceNode,
@@ -195,6 +197,7 @@ export interface MessageFilterConfig {
 export interface ProviderCreate {
   name: string;
   baseUrl: string;
+  api?: ProviderApi;
   apiKey: string;
   models?: string[];
   icon?: string;
@@ -205,6 +208,7 @@ export interface ProviderCreate {
 export interface ProviderUpdate {
   name?: string;
   baseUrl?: string;
+  api?: ProviderApi;
   apiKey?: string;
   models?: string[];
   icon?: string;
@@ -400,6 +404,7 @@ interface RawProviderProfile {
   name?: string;
   base_url?: string;
   baseUrl?: string;
+  api?: string;
   models?: string[];
   icon?: string;
   icon_color?: string;
@@ -639,6 +644,7 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     id: stringValue(raw.id),
     name: stringValue(raw.name),
     baseUrl: stringValue(raw.baseUrl ?? raw.base_url),
+    api: (raw.api ?? "anthropic-messages") as ProviderApi,
     models: Array.isArray(raw.models) ? raw.models : [],
     icon: stringValue(raw.icon, "circle"),
     iconColor: stringValue(raw.iconColor ?? raw.icon_color, "#111111"),
@@ -657,6 +663,7 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
   return {
     name: data.name,
     base_url: data.baseUrl,
+    api: data.api,
     api_key: data.apiKey,
     models: data.models,
     icon: data.icon,
@@ -669,6 +676,7 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
   return {
     ...(data.name !== undefined ? { name: data.name } : {}),
     ...(data.baseUrl !== undefined ? { base_url: data.baseUrl } : {}),
+    ...(data.api !== undefined ? { api: data.api } : {}),
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),

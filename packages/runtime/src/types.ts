@@ -74,6 +74,10 @@ export type PiAssistantMessageEvent =
   | { type: "reasoning_delta"; delta: string }
   | { type: "reasoning_start" }
   | { type: "reasoning_end" }
+  // #63: provider/HTTP failure surfaced mid-stream (e.g. a protocol mismatch
+  // 404). Pi emits this instead of throwing, so the runtime must route it to an
+  // error event rather than dropping it (which produced an empty reply).
+  | { type: "error"; error?: unknown; reason?: string }
   | { type: string; [k: string]: unknown };
 
 /** Pi message (assistant/user/tool). We read `role` + `content` blocks. */
@@ -120,6 +124,8 @@ export type AgentSessionFactory = (params: {
   providerConfig?: {
     providerId: string;
     baseUrl?: string;
+    /** #63: wire protocol (Pi models.json api). Defaults to anthropic-messages. */
+    api?: string;
     apiKey: string;
     modelId?: string;
   };
