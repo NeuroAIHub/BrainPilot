@@ -1,6 +1,6 @@
 {
   "name": "@brainpilot/backend-core",
-  "version": "0.0.4",
+  "version": "0.0.5",
   "license": "Apache-2.0",
   "type": "module",
   "description": "BrainPilot Backend — Hono REST+SSE proxy, serve web, Orchestrator abstraction (Docker/Local)",
@@ -34,8 +34,8 @@
     "start": "node ./dist/server.js"
   },
   "dependencies": {
-    "@brainpilot/protocol": "^0.0.4",
-    "@brainpilot/runtime": "^0.0.4",
+    "@brainpilot/protocol": "^0.0.5",
+    "@brainpilot/runtime": "^0.0.5",
     "@hono/node-server": "^1.13.0",
     "hono": "^4.6.0"
   },
