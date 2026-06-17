@@ -292,7 +292,9 @@ export async function resolveProvider(
     pickString(templateSettings, "model") ||
     pickString(config, "model") ||
     env.BP_MODEL ||
+    env.ANTHROPIC_MODEL ||
     dotenv.BP_MODEL ||
+    dotenv.ANTHROPIC_MODEL ||
     undefined;
 
   return { apiKey, baseUrl, model, source };
@@ -353,6 +355,46 @@ export async function writeLocalSettings(
 }
 
 /**
+ * #51: project env-only provider config into a real, selected provider profile
+ * on first launch, so a user who supplies ANTHROPIC_API_KEY (etc.) via the
+ * environment — the README's documented quick-start path — sees an active
+ * provider in Settings → Providers and an enabled model selector, instead of an
+ * empty providers.json and a disabled UI.
+ *
+ * Bootstrap semantics (intentionally a one-time seed, matching `init --api-key`):
+ *   - only runs when providers.json has NO profiles yet;
+ *   - only when the env actually supplies an API key;
+ *   - writes a selected "Environment" profile from the resolved env key / base
+ *     URL / model.
+ * After this, providers.json is the SSOT — anything the user later edits in
+ * Settings wins and is never re-overwritten from the env.
+ *
+ * Returns the created profile, or null if nothing was bootstrapped.
+ */
+export async function bootstrapEnvProvider(
+  dataDir: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<StoredProviderProfile | null> {
+  const { profiles } = await readProviders(dataDir);
+  if (profiles.length > 0) return null; // already configured — never clobber
+
+  // Reuse the full resolution chain, then only act on env/dotenv-sourced keys
+  // (a template/config key would already imply a profile or be handled by init).
+  const resolved = await resolveProvider({ dataDir, env });
+  if (!resolved.apiKey || (resolved.source !== "env" && resolved.source !== "dotenv")) {
+    return null;
+  }
+
+  return createProfile(dataDir, {
+    name: "Environment",
+    baseUrl: resolved.baseUrl ?? "",
+    apiKey: resolved.apiKey,
+    models: resolved.model ? [resolved.model] : [],
+    notes: "Auto-created from environment variables on first launch.",
+  });
+}
+
+/**
  * Onboarding-facing view of the resolved provider config. A boolean-only key
  * presence (never the plaintext key) plus the two files a user would edit, so
  * `init`/`up` can print accurate, consistent guidance from one source.
@@ -407,7 +449,7 @@ export function formatProviderGuidance(report: ProviderConfigReport): string[] {
     "  • web Settings UI: launch, open Settings → Providers, add a provider (recommended).",
     `  • providers file:  ${report.settingsPath}`,
     `      { "profiles": [ { "id": "local", "name": "Local", "apiKey": "<key>", "baseUrl": "<gateway, optional>", "models": ["<id>"] } ], "selectedProfileId": "local" }`,
-    "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / BP_MODEL)",
+    "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / ANTHROPIC_MODEL / BP_MODEL)",
     "  • re-run init:    brainpilot init --api-key <key> [--base-url <url>] [--model <id>]",
     "No key needed for a test run:  BP_MOCK=1 brainpilot up",
   ];
