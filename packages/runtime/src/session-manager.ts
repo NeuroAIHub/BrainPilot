@@ -12,7 +12,7 @@
 import { mkdir, readFile, writeFile, readdir, rm, stat } from "node:fs/promises";
 import { join, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session } from "@brainpilot/protocol";
+import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session, TraceGraph } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import { Mailbox } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
@@ -451,6 +451,12 @@ export class SessionManager {
       agents: this.listAgents(sessionId),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
     };
+  }
+
+  /** The session's Graph of Trace (reasoning DAG), or undefined if no session. */
+  getTrace(sessionId: string): TraceGraph | undefined {
+    const entry = this.sessions.get(sessionId);
+    return entry?.trace.getGraph();
   }
 
   metrics(): { activeSessions: number; runningAgents: number; lastActivityAt: string | null; memRss: number } {
