@@ -4,7 +4,13 @@
   "license": "Apache-2.0",
   "type": "module",
   "files": [
-    "dist"
+    "dist",
+    "src",
+    "index.html",
+    "vite.config.ts",
+    "tsconfig.json",
+    "tsconfig.app.json",
+    "tsconfig.node.json"
   ],
   "repository": {
     "type": "git",
