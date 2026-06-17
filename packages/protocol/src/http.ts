@@ -55,6 +55,13 @@ export const MetricsResponseSchema = z.object({
   lastActivityAt: z.string().nullable(),
   /** Resident set size in bytes. */
   memRss: z.number(),
+  /**
+   * Container memory budget in bytes (BP_MEM_LIMIT_MB, §R-4). Null when the
+   * opt-in budget is unset — i.e. single-user / no in-runtime throttle.
+   */
+  memLimitBytes: z.number().nullable(),
+  /** memRss / memLimitBytes, or null when no budget is set. */
+  memRatio: z.number().nullable(),
 });
 export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
 

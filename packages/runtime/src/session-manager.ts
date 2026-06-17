@@ -23,6 +23,7 @@ import { selectFactory, isMockMode } from "./agent-factory.js";
 import { personaFor } from "./personas.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
+import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool } from "./types.js";
 
 interface SessionEntry {
@@ -52,6 +53,15 @@ export interface SessionManagerOptions {
   persist?: boolean;
   /** Override the external MCP bridge (default: real stdio bridge). Tests inject a fake. */
   mcpBridge?: McpBridge;
+  /**
+   * Memory budget in bytes (issue #20 / R-4). When set, an opt-in soft watchdog
+   * refuses new work past ~85% of the budget. Defaults to `BP_MEM_LIMIT_MB`
+   * (parsed to bytes); `null`/absent → feature disabled, no behavior change.
+   * Tests inject this directly.
+   */
+  memLimitBytes?: number | null;
+  /** Override the watchdog's RSS reader (tests inject; default reads real RSS). */
+  readRss?: () => number;
 }
 
 /** Roles inferred from agent name. */
@@ -74,11 +84,25 @@ export class SessionManager {
   private mcpTools: SystemTool[] = [];
   private mcpLoaded = false;
 
+  // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
+  private readonly memWatchdog: MemWatchdog | null;
+
   constructor(opts: SessionManagerOptions = {}) {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
     this.mcpBridge = opts.mcpBridge ?? null;
+
+    const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
+    this.memWatchdog =
+      limitBytes != null
+        ? new MemWatchdog({
+            limitBytes,
+            readRss: opts.readRss,
+            onThrottle: (snap) => this.onMemoryThrottle(snap),
+          })
+        : null;
+    this.memWatchdog?.start();
   }
 
   /**
@@ -225,6 +249,9 @@ export class SessionManager {
   async createSession(
     input: { id?: string; title?: string; providerId?: string; modelId?: string } = {},
   ): Promise<Session> {
+    if (this.memWatchdog?.isOverSoftLimit()) {
+      throw new Error("memory budget exceeded: refusing new session");
+    }
     const id = input.id ?? randomUUID();
     if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
     const nowIso = new Date().toISOString();
@@ -337,6 +364,17 @@ export class SessionManager {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
     this.touch(entry);
+    // §R-4: refuse new runs past the soft memory threshold. The HTTP `accepted`
+    // flag alone isn't surfaced by the web, so also emit a system message.
+    if (this.memWatchdog?.isOverSoftLimit()) {
+      entry.bus.emit(
+        ev.systemMessage(sessionId, "warning", "内存接近上限,暂不接受新任务,请稍后重试。", {
+          agent: agentName,
+          recoverable: true,
+        }),
+      );
+      return { accepted: false };
+    }
     const agent = await this.ensureAgent(sessionId, agentName);
     entry.runActive = true;
     entry.activeRunId = `run_${randomUUID()}`;
@@ -475,18 +513,51 @@ export class SessionManager {
     return entry?.trace.getGraph();
   }
 
-  metrics(): { activeSessions: number; runningAgents: number; lastActivityAt: string | null; memRss: number } {
+  metrics(): {
+    activeSessions: number;
+    runningAgents: number;
+    lastActivityAt: string | null;
+    memRss: number;
+    memLimitBytes: number | null;
+    memRatio: number | null;
+  } {
     let runningAgents = 0;
     for (const e of this.sessions.values()) {
       for (const a of e.agents.values()) if (a.status === "running") runningAgents++;
     }
+    const snap = this.memWatchdog?.snapshot() ?? null;
     return {
       activeSessions: this.sessions.size,
       runningAgents,
       lastActivityAt: this.lastActivityAt ? new Date(this.lastActivityAt).toISOString() : null,
       memRss: process.memoryUsage().rss,
+      // null when the opt-in budget is unset (single-user) — keeps the metric meaningful.
+      memLimitBytes: snap ? snap.limitBytes : null,
+      memRatio: snap ? snap.ratio : null,
     };
   }
+
+  /**
+   * Stop background work (memory watchdog). Called on graceful shutdown so the
+   * poll interval doesn't outlive the manager. Idempotent.
+   */
+  shutdown(): void {
+    this.memWatchdog?.stop();
+  }
+
+  /**
+   * Rising-edge handler when RSS crosses the soft memory threshold (§R-4).
+   * Warns every currently-loaded session once so in-flight users see the
+   * back-off; new sessions/messages are then refused at their entry points.
+   */
+  private onMemoryThrottle(snap: { rss: number; limitBytes: number }): void {
+    const mb = (n: number) => Math.round(n / (1024 * 1024));
+    const msg = `内存使用接近容器上限 (${mb(snap.rss)}MB / ${mb(snap.limitBytes)}MB),正在限流,暂不接受新任务。`;
+    for (const [id, entry] of this.sessions) {
+      entry.bus.emit(ev.systemMessage(id, "warning", msg, { recoverable: true }));
+    }
+  }
+
 
   /* ----------------------------- SSE/events ---------------------------- */
 

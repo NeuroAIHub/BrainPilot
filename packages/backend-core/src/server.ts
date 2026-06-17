@@ -62,7 +62,8 @@ export async function startServer(
     await orchestrator.stopRuntime();
   };
 
-  // Graceful shutdown on signals (best-effort; CLI/PM2 may also manage this).
+  // Graceful shutdown on signals. Containers run no PM2 inside; a fatal/OOM
+  // cleanly exits and Docker's `restart` policy is the backstop (§R-4 / #20).
   const onSignal = (): void => {
     void stop().finally(() => process.exit(0));
   };

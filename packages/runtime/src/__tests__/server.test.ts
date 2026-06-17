@@ -25,9 +25,17 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
   it("GET /metrics", async () => {
     const res = await app().request("/metrics");
     expect(res.status).toBe(200);
-    const body = (await res.json()) as { activeSessions: number; memRss: number };
+    const body = (await res.json()) as {
+      activeSessions: number;
+      memRss: number;
+      memLimitBytes: number | null;
+      memRatio: number | null;
+    };
     expect(body.activeSessions).toBe(0);
     expect(body.memRss).toBeGreaterThan(0);
+    // Opt-in budget unset by default → null (single-user / no throttle).
+    expect(body.memLimitBytes).toBeNull();
+    expect(body.memRatio).toBeNull();
   });
 
   it("full session lifecycle over HTTP", async () => {

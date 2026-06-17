@@ -127,6 +127,31 @@ single-user, local-process setup and needs none of these variables.
 
 A Docker-free local path also exists (`@brainpilot/app`, `brainpilot up`) — see the npm Quick Start above. It runs a single user on the local orchestrator; deployment-mode variables do not apply.
 
+### Memory budget (`BP_MEM_LIMIT_MB`, optional)
+
+For container deployments that cap memory (`docker run --memory` / a cgroup
+ceiling), you can also tell the runtime its budget so it **self-throttles before
+the kernel OOM-kills it**. Set `BP_MEM_LIMIT_MB` to the per-container budget in MB:
+
+```bash
+BP_MEM_LIMIT_MB=2048          # MB of container RSS the runtime should stay under
+NODE_OPTIONS=--max-old-space-size=1536   # ~75% of the budget — set this at the launcher
+```
+
+- **Strictly opt-in.** Unset → no change at all (the runtime runs to host RAM as
+  today; this is the correct default for single-user self-hosting). Only the
+  cgroup `--memory` ceiling, if any, applies.
+- **When set,** a soft watchdog watches RSS; past **~85%** of the budget it refuses
+  new sessions/messages and emits a system message, rather than accepting work it
+  can't hold. The kernel OOM-killer + Docker `restart` policy remain the backstop.
+- **The heap cap is the launcher's job.** The runtime never sets
+  `--max-old-space-size` for you (a non-empty default would wrongly cap single-user
+  heaps); pass it via `NODE_OPTIONS` at ~75% of the budget if you want a V8 ceiling.
+- **Recommended floor: ~2 GB** for a single-user sandbox running the full platform
+  (runtime + agents + their tool subprocesses). The dominant driver is concurrent
+  agents × model-context size (each agent holds its message history) plus transient
+  bash/tool subprocess RSS; raise the budget for heavier multi-agent research.
+
 ## 🤖 Using a third-party / custom model
 
 By default BrainPilot talks to Pi's built-in Anthropic endpoint. Pi does **not**

@@ -203,6 +203,13 @@ export function startServer(opts: StartServerOptions = {}): {
 
   const server = serve({ fetch: app.fetch, port });
 
+  // §R-4: surface the opt-in memory budget at boot (only when active).
+  const memLimitMb = process.env.BP_MEM_LIMIT_MB;
+  if (memLimitMb && Number(memLimitMb) > 0) {
+    // eslint-disable-next-line no-console
+    console.log(`[runtime] memory budget: ${Number(memLimitMb)}MB (soft watchdog @85%)`);
+  }
+
   // §7 L4 global safety net.
   const onFatal = async (err: unknown) => {
     try {
@@ -221,6 +228,7 @@ export function startServer(opts: StartServerOptions = {}): {
     port,
     close: () =>
       new Promise<void>((resolve) => {
+        manager.shutdown();
         (server as { close: (cb?: () => void) => void }).close(() => resolve());
       }),
   };
