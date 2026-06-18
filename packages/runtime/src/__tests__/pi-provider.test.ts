@@ -299,4 +299,55 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers["legacy"].api).toBe("anthropic-messages");
   });
+
+  // #68: when api is unset, the precise wire value is derived from the coarse
+  // adapter family. Explicit api still wins.
+  it("derives api from the adapter when api is unset (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "oai",
+      baseUrl: "https://api.openai.com/v1",
+      adapter: "openai",
+      apiKey: "sk-oai",
+      modelId: "gpt-x",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["oai"].api).toBe("openai-completions");
+  });
+
+  it("adapter=anthropic derives anthropic-messages (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "ant",
+      baseUrl: "https://gw/api",
+      adapter: "anthropic",
+      apiKey: "sk-a",
+      modelId: "claude-x",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["ant"].api).toBe("anthropic-messages");
+  });
+
+  it("adapter=auto falls back to the default api (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "autop",
+      baseUrl: "https://gw/api",
+      adapter: "auto",
+      apiKey: "sk-x",
+      modelId: "m",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["autop"].api).toBe("anthropic-messages");
+  });
+
+  it("explicit api wins over adapter (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "mix",
+      baseUrl: "https://gw/api",
+      api: "openai-responses",
+      adapter: "anthropic",
+      apiKey: "sk-x",
+      modelId: "m",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["mix"].api).toBe("openai-responses");
+  });
 });

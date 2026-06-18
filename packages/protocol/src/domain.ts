@@ -225,11 +225,29 @@ export const ProviderApiSchema = z.enum([
 ]);
 export type ProviderApi = z.infer<typeof ProviderApiSchema>;
 
+/**
+ * #68 (R-10): coarse provider family the UI/hosted layer declares — "which kind
+ * of endpoint is this base URL". This is the user-facing intent; `api` (above)
+ * is the precise Pi wire value the runtime executes. `auto` means "infer"
+ * (the runtime derives `api` from the base URL / falls back to the default).
+ * Optional so single-user / open-source deploys can omit it (defaults to
+ * `auto` semantically). When `api` is unset, the runtime derives it from
+ * `adapter`: anthropic→anthropic-messages, openai→openai-completions,
+ * auto→default.
+ */
+export const ProviderAdapterSchema = z.enum(["auto", "openai", "anthropic"]);
+export type ProviderAdapter = z.infer<typeof ProviderAdapterSchema>;
+
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
   baseUrl: z.string(),
   api: ProviderApiSchema,
+  // #68 (R-10): coarse family + hosted-layer sharing flag. `adapter` optional
+  // (defaults to "auto" semantically); `isShared` is always false in
+  // single-user/open-source mode, true for globally-shared hosted profiles.
+  adapter: ProviderAdapterSchema.optional(),
+  isShared: z.boolean(),
   models: z.array(z.string()),
   icon: z.string(),
   iconColor: z.string(),
@@ -271,6 +289,9 @@ export const ProviderProfileCreateSchema = z.object({
   // #63: provider wire protocol. Optional on create (defaults to
   // anthropic-messages downstream); on update, omit to leave unchanged.
   api: ProviderApiSchema.optional(),
+  // #68: coarse adapter family (auto/openai/anthropic). Optional; when set
+  // without an explicit `api`, the runtime derives the precise wire value.
+  adapter: ProviderAdapterSchema.optional(),
   api_key: z.string().optional(),
   apiKey: z.string().optional(),
   models: modelsField,

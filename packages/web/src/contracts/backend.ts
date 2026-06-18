@@ -19,6 +19,7 @@ import type {
   ModelHealth,
   ProviderProfile,
   ProviderApi,
+  ProviderAdapter,
   FileEntry,
   FileContent,
   TraceNode,
@@ -40,6 +41,7 @@ export type {
   ModelHealth,
   ProviderProfile,
   ProviderApi,
+  ProviderAdapter,
   FileEntry,
   FileContent,
   TraceNode,
@@ -198,6 +200,7 @@ export interface ProviderCreate {
   name: string;
   baseUrl: string;
   api?: ProviderApi;
+  adapter?: ProviderAdapter;
   apiKey: string;
   models?: string[];
   icon?: string;
@@ -209,6 +212,7 @@ export interface ProviderUpdate {
   name?: string;
   baseUrl?: string;
   api?: ProviderApi;
+  adapter?: ProviderAdapter;
   apiKey?: string;
   models?: string[];
   icon?: string;
@@ -405,6 +409,7 @@ interface RawProviderProfile {
   base_url?: string;
   baseUrl?: string;
   api?: string;
+  adapter?: string;
   models?: string[];
   icon?: string;
   icon_color?: string;
@@ -412,6 +417,8 @@ interface RawProviderProfile {
   notes?: string;
   is_active?: boolean;
   isActive?: boolean;
+  is_shared?: boolean;
+  isShared?: boolean;
   api_key_masked?: string;
   apiKeyMasked?: string;
   created_at?: number;
@@ -645,6 +652,8 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     name: stringValue(raw.name),
     baseUrl: stringValue(raw.baseUrl ?? raw.base_url),
     api: (raw.api ?? "anthropic-messages") as ProviderApi,
+    adapter: (raw.adapter ?? "auto") as ProviderAdapter,
+    isShared: Boolean(raw.isShared ?? raw.is_shared),
     models: Array.isArray(raw.models) ? raw.models : [],
     icon: stringValue(raw.icon, "circle"),
     iconColor: stringValue(raw.iconColor ?? raw.icon_color, "#111111"),
@@ -664,6 +673,7 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
     name: data.name,
     base_url: data.baseUrl,
     api: data.api,
+    adapter: data.adapter,
     api_key: data.apiKey,
     models: data.models,
     icon: data.icon,
@@ -677,6 +687,7 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
     ...(data.name !== undefined ? { name: data.name } : {}),
     ...(data.baseUrl !== undefined ? { base_url: data.baseUrl } : {}),
     ...(data.api !== undefined ? { api: data.api } : {}),
+    ...(data.adapter !== undefined ? { adapter: data.adapter } : {}),
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),
