@@ -2,7 +2,11 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { Mailbox } from "../mailbox.js";
+import { Mailbox, MailboxFullError, MAX_INBOX } from "../mailbox.js";
+
+function msg(content: string, to = "principal") {
+  return { fromAgent: "a", toAgent: to, content, msgType: "task_delegate" as const };
+}
 
 describe("Mailbox", () => {
   it("round-trips a message and drains on read", async () => {
@@ -43,5 +47,64 @@ describe("Mailbox", () => {
     } finally {
       await rm(dir, { recursive: true, force: true });
     }
+  });
+
+  describe("backpressure (#76)", () => {
+    it("rejects a write past MAX_INBOX with MailboxFullError", async () => {
+      const mb = new Mailbox("cap");
+      for (let i = 0; i < MAX_INBOX; i++) await mb.write(msg(`m${i}`));
+      expect(mb.count("principal")).toBe(MAX_INBOX);
+      await expect(mb.write(msg("overflow"))).rejects.toBeInstanceOf(MailboxFullError);
+      // The rejected message did not land.
+      expect(mb.count("principal")).toBe(MAX_INBOX);
+    });
+
+    it("draining below the cap allows writes again", async () => {
+      const mb = new Mailbox("cap2");
+      for (let i = 0; i < MAX_INBOX; i++) await mb.write(msg(`m${i}`));
+      await mb.read("principal"); // drain all
+      await expect(mb.write(msg("now ok"))).resolves.toBeUndefined();
+      expect(mb.count("principal")).toBe(1);
+    });
+  });
+
+  describe("readBatch (#76)", () => {
+    it("takes at most maxMessages and preserves FIFO + remainder", async () => {
+      const mb = new Mailbox("b1");
+      for (const c of ["m1", "m2", "m3", "m4", "m5"]) await mb.write(msg(c));
+      const first = await mb.readBatch("principal", 3, 1_000_000);
+      expect(first.map((m) => m.content)).toEqual(["m1", "m2", "m3"]);
+      const second = await mb.readBatch("principal", 3, 1_000_000);
+      expect(second.map((m) => m.content)).toEqual(["m4", "m5"]);
+      expect(mb.count("principal")).toBe(0);
+    });
+
+    it("stops at the char budget but always takes the first message", async () => {
+      const mb = new Mailbox("b2");
+      await mb.write(msg("a".repeat(100)));
+      await mb.write(msg("b".repeat(100)));
+      await mb.write(msg("c".repeat(100)));
+      // Budget fits only ~1.5 messages → first two would exceed; take just one.
+      const batch = await mb.readBatch("principal", 3, 150);
+      expect(batch).toHaveLength(1);
+      expect(batch[0]!.content).toBe("a".repeat(100));
+      expect(mb.count("principal")).toBe(2);
+    });
+
+    it("ships an oversized first message alone rather than stranding it", async () => {
+      const mb = new Mailbox("b3");
+      await mb.write(msg("X".repeat(50_000))); // bigger than any sane budget
+      await mb.write(msg("small"));
+      const batch = await mb.readBatch("principal", 3, 24_000);
+      expect(batch).toHaveLength(1);
+      expect(batch[0]!.content.length).toBe(50_000);
+      // The small one waits for the next turn (FIFO preserved).
+      expect(mb.count("principal")).toBe(1);
+    });
+
+    it("returns empty for an empty inbox", async () => {
+      const mb = new Mailbox("b4");
+      expect(await mb.readBatch("principal")).toEqual([]);
+    });
   });
 });

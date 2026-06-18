@@ -16,6 +16,7 @@ function deps(name: string): ToolDeps {
     trace: new GraphOfTrace("s"),
     ensureAgent: async () => {},
     destroyAgent: async () => {},
+    wakeAgent: () => {},
     requestUserInput: async () => "stub-answer",
   };
 }
