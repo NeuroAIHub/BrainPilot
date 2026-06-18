@@ -646,10 +646,23 @@ export class SessionManager {
     return true;
   }
 
-  /** Interrupt a session (or a specific agent). */
+  /**
+   * Interrupt a session (or a specific agent).
+   *
+   * Targeted (`agentName` given): abort just that agent. Mailboxes and the
+   * principal are left untouched — a narrow "stop this one expert" contract.
+   *
+   * Whole-session (`agentName` omitted, the Stop button — #90): abort EVERY
+   * agent (incl. their running script subprocesses, via Pi `session.abort()`),
+   * then clear ALL mailboxes so a queued message can't re-wake a stopped agent,
+   * surface a user-facing system_message, and immediately prompt the principal
+   * one run with an interrupt notice so PI knows the user interrupted and should
+   * await further instructions.
+   */
   async interrupt(sessionId: string, agentName?: string): Promise<boolean> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return false;
+    const wholeSession = agentName === undefined;
     const targets = agentName ? [entry.agents.get(agentName)].filter(Boolean) : [...entry.agents.values()];
     for (const a of targets) await a!.abort();
     entry.runActive = false;
@@ -658,7 +671,55 @@ export class SessionManager {
       d.reject(new Error("interrupted"));
       entry.pendingInputs.delete(id);
     }
+    if (wholeSession) {
+      // Clear every inbox BEFORE notifying PI: otherwise a queued task_delegate
+      // would re-wake the expert the user just stopped.
+      await entry.mailbox.clearAll();
+      entry.bus.emit(
+        ev.systemMessage(sessionId, "info", "⏹️ 用户已中断当前任务,信箱已清空,正在等候进一步指示。", {
+          agent: "principal",
+          recoverable: true,
+        }),
+      );
+      this.notifyPrincipalInterrupted(entry);
+    }
     return targets.length > 0;
+  }
+
+  /**
+   * #90: after a whole-session Stop, prompt the principal one run with an
+   * interrupt notice. Mirrors `sendMessage`'s fire-and-track run accounting but
+   * emits NO role:"user" text chunk — the notice is system context, not a user
+   * bubble. The principal should acknowledge briefly and await the user.
+   */
+  private notifyPrincipalInterrupted(entry: SessionEntry): void {
+    const notice =
+      "<system_notice>\n" +
+      "  The user interrupted the current task. All running agents were stopped " +
+      "and every mailbox was cleared, so any in-flight delegation is cancelled. " +
+      "Do not resume or re-delegate the prior work. Briefly acknowledge the " +
+      "interruption and wait for the user's next instruction.\n" +
+      "</system_notice>";
+    void this.ensureAgent(entry.id, "principal")
+      .then((agent) => {
+        entry.runActive = true;
+        entry.activeRunId = `run_${randomUUID()}`;
+        this.emitSessionState(entry);
+        return agent.prompt(notice).finally(() => {
+          entry.runActive = false;
+          entry.activeRunId = null;
+          this.touch(entry);
+          this.emitSessionState(entry);
+        });
+      })
+      .catch(() => {
+        /* error-isolated: prompt() never throws, ensureAgent failure is best-effort */
+      });
+  }
+
+  /** Test/diagnostic accessor: number of queued messages in `agent`'s inbox. */
+  mailboxCount(sessionId: string, agent: string): number {
+    return this.sessions.get(sessionId)?.mailbox.count(agent) ?? 0;
   }
 
   /* ------------------------------ agents ------------------------------- */
