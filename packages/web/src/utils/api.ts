@@ -352,15 +352,19 @@ export const api = {
       );
     },
 
-    async interrupt(sessionId: string): Promise<{ status: string }> {
+    async interrupt(sessionId: string): Promise<{ interrupted: boolean }> {
       if (runtimeConfig.useMockBackend) {
-        return { status: "ok" };
+        return { interrupted: true };
       }
-      return handleJson<{ status: string }>(
-        await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+      // #90: Stop = whole-session interrupt. Hit the dedicated interrupt route
+      // (RUNTIME_ROUTES.interrupt), NOT /messages — the messages endpoint's body
+      // schema rejects {type:"interrupt"} so the agent was never actually
+      // stopped. Empty body = interrupt every agent in the session.
+      return handleJson<{ interrupted: boolean }>(
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/interrupt`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "interrupt", session_id: sessionId }),
+          body: JSON.stringify({}),
         }),
       );
     },

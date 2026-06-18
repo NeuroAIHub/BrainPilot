@@ -308,24 +308,34 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async () => {
       if (!currentSession) return;
       const sid = currentSession.id;
-      // Optimistic update: immediately stop the spinner so the user can type
-      // the next message without waiting for the backend RUN_FINISHED round-trip.
-      setMessagesBySession((current) => {
-        const msgs = current[sid] ?? [];
-        const stoppedMsg: ChatMessage = {
-          id: generateUUID(),
-          role: "system",
-          content: "Task stopped by user",
-          createdAt: new Date().toISOString(),
-          kind: "status",
-        };
-        return { ...current, [sid]: [...finalizeAssistant(msgs), stoppedMsg] };
-      });
-      setAgents((current) =>
-        current.map((a) => ({ ...a, status: "idle", task: "" })),
-      );
+      // #90: NOT optimistic. Wait for the interrupt to actually land before
+      // touching the UI — the old code optimistically forced every agent idle
+      // and inserted a "stopped" message even when the request hit the wrong
+      // endpoint and failed, permanently masking the failure while the runtime
+      // kept the agent running. We never speculatively mutate agent state now, so
+      // a failed interrupt leaves the true (still-running) state visible via the
+      // authoritative SSE session_state stream.
       try {
-        await api.sessions.interrupt(sid);
+        const { interrupted } = await api.sessions.interrupt(sid);
+        if (!interrupted) {
+          // Nothing was running to interrupt (or the session is gone). Surface it
+          // rather than pretending the task stopped.
+          setError(tg("ctx.session.interruptFailed"));
+          return;
+        }
+        // Confirmed stopped: insert the status line. Agent state (incl. the PI
+        // interrupt-acknowledgement run the runtime now fires) flows in via SSE.
+        setMessagesBySession((current) => {
+          const msgs = current[sid] ?? [];
+          const stoppedMsg: ChatMessage = {
+            id: generateUUID(),
+            role: "system",
+            content: "Task stopped by user",
+            createdAt: new Date().toISOString(),
+            kind: "status",
+          };
+          return { ...current, [sid]: [...finalizeAssistant(msgs), stoppedMsg] };
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : tg("ctx.session.interruptFailed"));
       }

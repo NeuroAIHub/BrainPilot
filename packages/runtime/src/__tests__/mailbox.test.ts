@@ -68,6 +68,42 @@ describe("Mailbox", () => {
     });
   });
 
+  describe("clearAll (#90 stop/interrupt)", () => {
+    it("drains every inbox in-memory so no message re-wakes an agent", async () => {
+      const mb = new Mailbox("clr");
+      await mb.write(msg("to-pi", "principal"));
+      await mb.write(msg("to-eng", "engineer"));
+      await mb.write(msg("to-lib", "librarian"));
+      expect(mb.count("principal")).toBe(1);
+      expect(mb.count("engineer")).toBe(1);
+      expect(mb.count("librarian")).toBe(1);
+
+      await mb.clearAll();
+
+      expect(mb.count("principal")).toBe(0);
+      expect(mb.count("engineer")).toBe(0);
+      expect(mb.count("librarian")).toBe(0);
+      expect(await mb.read("engineer")).toHaveLength(0);
+    });
+
+    it("empties persisted inbox files on disk", async () => {
+      const dir = await mkdtemp(join(tmpdir(), "bp-mb-clr-"));
+      try {
+        const mb = new Mailbox("clr2", dir);
+        await mb.write(msg("m1", "engineer"));
+        await mb.write(msg("m2", "engineer"));
+        await mb.flush();
+        expect(JSON.parse(await readFile(join(dir, "engineer.json"), "utf8"))).toHaveLength(2);
+
+        await mb.clearAll();
+        await mb.flush();
+        expect(JSON.parse(await readFile(join(dir, "engineer.json"), "utf8"))).toHaveLength(0);
+      } finally {
+        await rm(dir, { recursive: true, force: true });
+      }
+    });
+  });
+
   describe("readBatch (#76)", () => {
     it("takes at most maxMessages and preserves FIFO + remainder", async () => {
       const mb = new Mailbox("b1");
