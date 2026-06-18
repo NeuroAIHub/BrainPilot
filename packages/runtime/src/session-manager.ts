@@ -26,6 +26,22 @@ import { resolveSessionProvider, type SessionProviderRef } from "./provider-conf
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool } from "./types.js";
 
+interface Deferred<T> {
+  promise: Promise<T>;
+  resolve: (value: T) => void;
+  reject: (reason: Error) => void;
+}
+
+function makeDeferred<T>(): Deferred<T> {
+  let resolve!: (value: T) => void;
+  let reject!: (reason: Error) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
 interface SessionEntry {
   id: string;
   title: string;
@@ -40,6 +56,8 @@ interface SessionEntry {
   tasks: Map<string, string>;
   runActive: boolean;
   activeRunId: string | null;
+  /** Outstanding ask_user requests, keyed by request_id (§ ask_user). */
+  pendingInputs: Map<string, Deferred<string>>;
   /** This session's chosen provider/model (resolved against providers.json). */
   providerRef: SessionProviderRef;
 }
@@ -395,6 +413,7 @@ export class SessionManager {
       tasks: new Map(),
       runActive: false,
       activeRunId: null,
+      pendingInputs: new Map(),
       providerRef,
     };
     this.sessions.set(id, entry);
@@ -465,6 +484,10 @@ export class SessionManager {
     await e.mailbox.flush();
     await e.trace.flush();
     e.bus.clear();
+    for (const [id2, d] of e.pendingInputs) {
+      d.reject(new Error("evicted"));
+      e.pendingInputs.delete(id2);
+    }
     this.sessions.delete(id);
     return { evicted: true, agentsKilled: killed };
   }
@@ -530,6 +553,44 @@ export class SessionManager {
     return { accepted: true, runId };
   }
 
+  /**
+   * Ask the terminal user a question on behalf of `agent`. Emits a
+   * `user_input_request` event and returns a promise that resolves when
+   * `resolveInput` is called with the matching request_id, or rejects if the
+   * session is interrupted/evicted. Blocks the calling tool's turn.
+   */
+  private requestUserInput(
+    entry: SessionEntry,
+    agent: string,
+    req: { question: string; options?: string[]; allow_free_text?: boolean },
+  ): Promise<string> {
+    const requestId = `req_${randomUUID()}`;
+    const deferred = makeDeferred<string>();
+    entry.pendingInputs.set(requestId, deferred);
+    entry.bus.emit(
+      ev.userInputRequest(
+        { sessionId: entry.id, runId: entry.activeRunId ?? undefined },
+        { request_id: requestId, agent, question: req.question, options: req.options, allow_free_text: req.allow_free_text },
+      ),
+    );
+    return deferred.promise;
+  }
+
+  /**
+   * Resolve an outstanding ask_user request. Returns false when the session or
+   * request_id is unknown/already consumed (stale answer). Pure lookup; never
+   * throws — the server handles 404 for unknown sessions before calling.
+   */
+  resolveInput(sessionId: string, requestId: string, answer: string): boolean {
+    const entry = this.sessions.get(sessionId);
+    const deferred = entry?.pendingInputs.get(requestId);
+    if (!entry || !deferred) return false;
+    entry.pendingInputs.delete(requestId);
+    deferred.resolve(answer);
+    this.touch(entry);
+    return true;
+  }
+
   /** Interrupt a session (or a specific agent). */
   async interrupt(sessionId: string, agentName?: string): Promise<boolean> {
     const entry = this.sessions.get(sessionId);
@@ -538,6 +599,10 @@ export class SessionManager {
     for (const a of targets) await a!.abort();
     entry.runActive = false;
     entry.activeRunId = null;
+    for (const [id, d] of entry.pendingInputs) {
+      d.reject(new Error("interrupted"));
+      entry.pendingInputs.delete(id);
+    }
     return targets.length > 0;
   }
 
@@ -562,6 +627,7 @@ export class SessionManager {
       destroyAgent: async (target) => {
         await this.destroyAgent(sessionId, target);
       },
+      requestUserInput: (req) => this.requestUserInput(entry, name, req),
     };
     const systemTools = systemToolsForRole(role, name, deps);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
