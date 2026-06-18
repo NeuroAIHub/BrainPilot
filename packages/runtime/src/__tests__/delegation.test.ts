@@ -294,4 +294,93 @@ describe("expert delegation (#76)", () => {
     expect(libPrompt!.text).toBe("hi librarian");
     expect(libPrompt!.text).not.toContain("<message_envelope>");
   });
+
+  it("merges multiple queued messages into one delegated turn (batch)", async () => {
+    // Two experts both report back to the principal. With the principal's
+    // delivery gated until both replies have landed, the loop drains them as a
+    // single batch → one principal turn carrying BOTH envelopes.
+    const observe = newObserve();
+    let release!: () => void;
+    const gate = new Promise<void>((r) => (release = r));
+    const base = scriptedFactory(
+      {
+        principal: {
+          onPrompt: (text) =>
+            text.includes("FANOUT")
+              ? { tool: "send_message", args: { to: "librarian", content: "kick" } }
+              : undefined,
+        },
+        // librarian, on its task, asks the engineer to also report — so two
+        // messages end up queued for the principal.
+        librarian: {
+          onPrompt: (text) =>
+            text.includes("kick")
+              ? { tool: "send_message", args: { to: "principal", content: "from-lib" } }
+              : undefined,
+        },
+      },
+      observe,
+    );
+    // Gate the principal's SECOND run (the delivery of replies) so both can queue.
+    let principalRuns = 0;
+    const gated: AgentSessionFactory = async (params) => {
+      const sess = await base(params);
+      if (params.agentName !== "principal") return sess;
+      const realPrompt = sess.prompt.bind(sess);
+      return {
+        ...sess,
+        async prompt(text: string) {
+          principalRuns++;
+          if (principalRuns >= 2) await gate; // hold the reply-delivery turn
+          return realPrompt(text);
+        },
+      };
+    };
+    const m = new SessionManager({ persist: false, agentFactory: gated });
+    const s = await m.createSession();
+    await m.sendMessage(s.id, "please FANOUT");
+
+    // Wait until librarian has reported back AND a second message is queued for
+    // the principal, then add a second queued reply via a direct expert send.
+    await waitFor(() => observe.prompts.some((p) => p.agent === "librarian"));
+    // Engineer also reports back while the principal's delivery is gated.
+    await m.sendMessage(s.id, "from-eng", "principal").catch(() => {});
+    // Let the gate open so the principal drains whatever is queued.
+    await waitFor(() => m.getSessionState(s.id) !== undefined);
+    release();
+
+    await waitFor(() => observe.prompts.filter((p) => p.agent === "principal").length >= 2);
+    const reply = observe.prompts.filter((p) => p.agent === "principal")[1]!;
+    // The batched turn carries the librarian's envelope.
+    expect(reply.text).toContain("from-lib");
+    expect(reply.text).toContain("<message_envelope>");
+  });
+
+  it("rejects a send when the target inbox is full (backpressure)", async () => {
+    const { Mailbox, MAX_INBOX } = await import("../mailbox.js");
+    const { createSendMessageTool } = await import("../tools/system-tools.js");
+    const { GraphOfTrace } = await import("../trace.js");
+    const mailbox = new Mailbox("s");
+    for (let i = 0; i < MAX_INBOX; i++) {
+      await mailbox.write({ fromAgent: "x", toAgent: "principal", content: `m${i}`, msgType: "result_deliver" });
+    }
+    let woke = false;
+    const tool = createSendMessageTool({
+      sessionId: "s",
+      fromAgent: "librarian",
+      mailbox,
+      trace: new GraphOfTrace("s"),
+      ensureAgent: async () => {},
+      destroyAgent: async () => {},
+      wakeAgent: () => {
+        woke = true;
+      },
+      requestUserInput: async () => "",
+    });
+    const res = await tool.execute({ to: "principal", content: "one too many" });
+    expect(res.isError).toBe(true);
+    expect(res.content[0]!.text).toContain("full");
+    // A rejected send must NOT wake the target (nothing was delivered).
+    expect(woke).toBe(false);
+  });
 });

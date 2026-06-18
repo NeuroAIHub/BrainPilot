@@ -8,7 +8,7 @@
  * applied by `toolsForRole` — each role only receives its allowed tools.
  */
 import type { AgentRole, SystemTool } from "../types.js";
-import type { Mailbox, MsgType } from "../mailbox.js";
+import { MailboxFullError, type Mailbox, type MsgType } from "../mailbox.js";
 import type { GraphOfTrace } from "../trace.js";
 
 export interface ToolDeps {
@@ -56,7 +56,17 @@ export function createSendMessageTool(deps: ToolDeps): SystemTool {
       const content = String(params.content ?? "");
       const msgType = (params.msg_type as MsgType) ?? deriveMsgType(deps.fromAgent, to);
       await deps.ensureAgent(to);
-      await deps.mailbox.write({ fromAgent: deps.fromAgent, toAgent: to, content, msgType });
+      try {
+        await deps.mailbox.write({ fromAgent: deps.fromAgent, toAgent: to, content, msgType });
+      } catch (err) {
+        // #76 backpressure: the target inbox is full. Signal a failed tool call
+        // (isError) so the sending agent sees the rejection and backs off,
+        // rather than silently dropping the message or growing the inbox.
+        if (err instanceof MailboxFullError) {
+          return { ...ok(`cannot deliver to ${to}: ${err.message}`), isError: true };
+        }
+        throw err;
+      }
       // #76: actively wake the target so it consumes the inbox and runs. This is
       // fire-and-forget — the sending agent's turn returns immediately ("you
       // never poll", per the A2A persona); the target's run proceeds in its own

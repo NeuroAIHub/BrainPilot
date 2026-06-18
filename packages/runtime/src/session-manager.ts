@@ -714,6 +714,11 @@ export class SessionManager {
       // this trailing frame the derived run-active flag would stay stuck true.
       const entry = this.sessions.get(sessionId);
       if (entry) this.emitSessionState(entry);
+      // Re-check after releasing the guard: a message could have been written
+      // between the loop's final empty read and this delete, and that writer's
+      // wakeAgent would have bailed (key still present) — leaving the message
+      // unread. Re-wake if the inbox is non-empty so it never strands.
+      if (entry && entry.mailbox.count(name) > 0) this.wakeAgent(sessionId, name);
     });
   }
 
@@ -732,7 +737,7 @@ export class SessionManager {
     for (;;) {
       const entry = this.sessions.get(sessionId);
       if (!entry) return;
-      const msgs = await entry.mailbox.read(name); // atomic drain
+      const msgs = await entry.mailbox.readBatch(name); // bounded FIFO batch (#76)
       if (msgs.length === 0) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
