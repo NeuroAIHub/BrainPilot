@@ -3,6 +3,7 @@ import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
 import { EventBus } from "../event-bus.js";
 import { MasAgent } from "../mas-agent.js";
 import { MockAgentSession } from "../mock-agent.js";
+import { ev } from "../events.js";
 
 /**
  * Event mapping: drive a MasAgent over the MockAgentSession (which emits real
@@ -86,6 +87,21 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(types).toContain("TOOL_CALL_RESULT");
     const result = captured.find((e) => e.type === "TOOL_CALL_RESULT") as { content: string };
     expect(result.content).toBe("pong");
+  });
+
+  describe("ev.userInputRequest", () => {
+    it("builds a valid user_input_request event", () => {
+      const e = ev.userInputRequest(
+        { sessionId: "s1", runId: "run_1" },
+        { request_id: "req_1", agent: "principal", question: "Pick one", options: ["a", "b"], allow_free_text: true },
+      );
+      const parsed = parseEvent(e); // throws if invalid against the protocol union
+      expect(parsed.type).toBe("user_input_request");
+      expect((parsed as any).request_id).toBe("req_1");
+      expect((parsed as any).question).toBe("Pick one");
+      expect((parsed as any).options).toEqual(["a", "b"]);
+      expect((parsed as any).session_id).toBe("s1");
+    });
   });
 
   it("maps auto_retry failure to a system_message and error status", async () => {
