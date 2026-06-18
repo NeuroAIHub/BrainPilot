@@ -5,6 +5,7 @@ import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
 import { draftStore } from "../../contexts/draftStore";
 import { applyMessageFilters } from "../../contexts/messageFilters";
+import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
@@ -71,6 +72,14 @@ export function PromptComposer() {
   // memo() (a fresh Set each render would defeat the memoization).
   const runningAgents = useMemo(
     () => new Set(agents.filter((a) => a.status === "running").map((a) => a.name)),
+    [agents],
+  );
+
+  // Names of agents actively working, for the "X 正在工作" toast. Excludes the
+  // trace agent (it self-records continuously and isn't "the user's task"),
+  // matching the runtime's run-active aggregation (#76).
+  const workingAgentNames = useMemo(
+    () => agents.filter((a) => a.status === "running" && a.name !== "trace").map((a) => a.name),
     [agents],
   );
 
@@ -271,7 +280,12 @@ export function PromptComposer() {
         {isAgentRunning || lastAssistantStreaming ? (
           <div className="agent-running-toast" role="status" aria-live="polite">
             <span className="agent-running-toast__dot" />
-            <span className="agent-running-toast__label">{t("chat.agentThinking")}</span>
+            <span className="agent-running-toast__label">
+              {(() => {
+                const label = runningToastLabel(workingAgentNames);
+                return t(label.key, label.vars);
+              })()}
+            </span>
             <button
               className="agent-running-toast__stop"
               type="button"
