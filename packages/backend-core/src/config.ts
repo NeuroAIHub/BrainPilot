@@ -11,7 +11,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ProviderApi } from "@brainpilot/protocol";
+import type { ProviderApi, HealthStatus } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -124,6 +124,13 @@ export interface StoredProviderProfile {
   icon?: string;
   iconColor?: string;
   notes?: string;
+  /** #69: last connectivity-probe result, persisted so the Settings card
+   *  reflects the test outcome across reads/reopens instead of "unknown".
+   *  Written by POST /provider/profiles/:id/test. */
+  healthStatus?: HealthStatus;
+  healthCheckedAt?: number;
+  healthMessage?: string;
+  healthLatencyMs?: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -210,6 +217,33 @@ export async function updateProfile(
   }
   if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) profile.apiKey = patch.apiKey;
   profile.updatedAt = Date.now();
+  await writeProviders(dataDir, file);
+  return profile;
+}
+
+/**
+ * #69: persist the latest connectivity-probe result on a profile. Kept
+ * separate from updateProfile (which is for user-edited fields and bumps
+ * updatedAt) — a health write must not look like a profile edit. Returns the
+ * updated profile, or undefined if the id is unknown.
+ */
+export async function setProfileHealth(
+  dataDir: string,
+  id: string,
+  health: {
+    healthStatus: HealthStatus;
+    healthCheckedAt: number;
+    healthMessage?: string;
+    healthLatencyMs?: number | null;
+  },
+): Promise<StoredProviderProfile | undefined> {
+  const file = await readProviders(dataDir);
+  const profile = file.profiles.find((p) => p.id === id);
+  if (!profile) return undefined;
+  profile.healthStatus = health.healthStatus;
+  profile.healthCheckedAt = health.healthCheckedAt;
+  profile.healthMessage = health.healthMessage ?? "";
+  profile.healthLatencyMs = health.healthLatencyMs ?? null;
   await writeProviders(dataDir, file);
   return profile;
 }

@@ -515,5 +515,43 @@ describe("Hono app — local config routes", () => {
       const res = await app.request("/api/provider/profiles/nope/test", { method: "POST" });
       expect(res.status).toBe(404);
     });
+
+    // #69: the probe result must be persisted, so a later GET (card refresh /
+    // reopen) keeps the tested status instead of reverting to "unknown".
+    it("persists the probe result across list + health reads", async () => {
+      const fetchFn = vi.fn(async () => new Response("forbidden", { status: 403 }));
+      const { app, id } = await makeProfile(fetchFn);
+
+      // before any test: unknown
+      const before = (await (await app.request("/api/provider/profiles")).json()) as Array<{
+        id: string;
+        health_status: string;
+      }>;
+      expect(before.find((p) => p.id === id)?.health_status).toBe("unknown");
+
+      // test → 403 maps to "unavailable"
+      const test = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      const tested = (await test.json()) as { health_status: string; health_checked_at: number; health_message: string };
+      expect(tested.health_status).toBe("unavailable");
+      expect(tested.health_checked_at).toBeGreaterThan(0);
+      expect(tested.health_message).toContain("403");
+
+      // list still reflects the tested status (no longer unknown)
+      const list = (await (await app.request("/api/provider/profiles")).json()) as Array<{
+        id: string;
+        health_status: string;
+        health_checked_at?: number;
+      }>;
+      const fromList = list.find((p) => p.id === id);
+      expect(fromList?.health_status).toBe("unavailable");
+      expect(fromList?.health_checked_at).toBeGreaterThan(0);
+
+      // and the dedicated health endpoint too
+      const health = (await (await app.request("/api/provider/profiles/health")).json()) as Array<{
+        id: string;
+        health_status: string;
+      }>;
+      expect(health.find((p) => p.id === id)?.health_status).toBe("unavailable");
+    });
   });
 });
