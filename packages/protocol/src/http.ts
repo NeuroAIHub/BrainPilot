@@ -116,7 +116,8 @@ export type GetSessionStateResponse = z.infer<typeof GetSessionStateResponseSche
  * POST /sessions/:id/messages  (inject user message)
  * ------------------------------------------------------------------ */
 
-export const SendMessageRequestSchema = z.object({
+/** A normal user message injected into the session. */
+export const SendMessageContentSchema = z.object({
   content: z.string(),
   /** Target agent; defaults to principal. */
   agent: z.string().optional(),
@@ -134,7 +135,26 @@ export const SendMessageRequestSchema = z.object({
     })
     .optional(),
 });
+
+/** A reply to an outstanding ask_user (user_input_request) — see events.ts. */
+export const UserInputResponseBodySchema = z.object({
+  type: z.literal("user_input_response"),
+  session_id: z.string(),
+  request_id: z.string(),
+  answer: z.string(),
+});
+
+/**
+ * POST /sessions/:id/messages accepts EITHER a normal message OR an ask_user
+ * reply. The answer body is matched by its `type` literal; everything else is
+ * treated as a content message.
+ */
+export const SendMessageRequestSchema = z.union([
+  UserInputResponseBodySchema,
+  SendMessageContentSchema,
+]);
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
+export type UserInputResponseBody = z.infer<typeof UserInputResponseBodySchema>;
 
 export const SendMessageResponseSchema = z.object({
   accepted: z.boolean(),

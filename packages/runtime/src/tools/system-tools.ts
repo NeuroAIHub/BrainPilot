@@ -20,6 +20,12 @@ export interface ToolDeps {
   ensureAgent: (name: string) => Promise<void>;
   /** Destroy an agent (memory only; history kept). */
   destroyAgent: (name: string) => Promise<void>;
+  /** Ask the terminal user a question; resolves with their answer. Blocks the turn. */
+  requestUserInput: (req: {
+    question: string;
+    options?: string[];
+    allow_free_text?: boolean;
+  }) => Promise<string>;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -53,6 +59,39 @@ export function createSendMessageTool(deps: ToolDeps): SystemTool {
 function deriveMsgType(from: string, to: string): MsgType {
   if (to === "principal") return "result_deliver";
   return "task_delegate";
+}
+
+export function createAskUserTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "ask_user",
+    description:
+      "Ask the human user a question and wait for their answer. Use when you need a decision or information only the user can provide. Returns the user's answer as text.",
+    parameters: {
+      type: "object",
+      properties: {
+        question: { type: "string", description: "The question to show the user" },
+        options: {
+          type: "array",
+          items: { type: "string" },
+          description: "Optional choices to offer the user",
+        },
+        allow_free_text: {
+          type: "boolean",
+          description: "Whether the user may type a free-text answer (default true)",
+        },
+      },
+      required: ["question"],
+    },
+    execute: async (params: Record<string, unknown>) => {
+      const answer = await deps.requestUserInput({
+        question: String(params.question ?? ""),
+        options: Array.isArray(params.options) ? (params.options as string[]) : undefined,
+        allow_free_text:
+          typeof params.allow_free_text === "boolean" ? params.allow_free_text : undefined,
+      });
+      return ok(answer);
+    },
+  };
 }
 
 export function createCreateAgentTool(deps: ToolDeps): SystemTool {
@@ -212,6 +251,7 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
 export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
   const tools = [
     createSendMessageTool(deps),
+    createAskUserTool(deps),
     createCreateAgentTool(deps),
     createDestroyAgentTool(deps),
     createRecordTraceTool(deps),
@@ -229,7 +269,7 @@ export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
  * tools (read/bash/grep/...) are controlled separately via `builtinToolsForRole`.
  */
 export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
-  principal: ["send_message", "create_agent", "destroy_agent", "record_trace"],
+  principal: ["send_message", "create_agent", "destroy_agent", "record_trace", "ask_user"],
   trace: ["create_trace_node", "update_trace_node", "add_trace_relation", "get_trace_graph"],
   expert: ["send_message", "record_trace"],
   // Default for any other expert-like agent.

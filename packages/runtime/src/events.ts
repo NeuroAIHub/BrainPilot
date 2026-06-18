@@ -136,6 +136,20 @@ export const ev = {
     }
     return e as AgUiEvent;
   },
+  userInputRequest(
+    ctx: Ctx,
+    req: { request_id: string; agent: string; question: string; options?: string[]; allow_free_text?: boolean },
+  ): AgUiEvent {
+    return {
+      type: "user_input_request",
+      ...envelope(ctx),
+      request_id: req.request_id,
+      agent: req.agent,
+      question: req.question,
+      options: req.options,
+      allow_free_text: req.allow_free_text,
+    } as AgUiEvent;
+  },
   systemMessage(
     sessionId: string,
     level: "info" | "warning" | "error" | "fatal",
