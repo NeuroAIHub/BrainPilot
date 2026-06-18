@@ -21,6 +21,7 @@ import {
   McpServerConfigSchema,
   ProviderProfileCreateSchema,
   ProviderProfileUpdateSchema,
+  deriveProviderApi,
 } from "@brainpilot/protocol";
 import { RuntimeClient } from "./runtime-client.js";
 import { probeProvider } from "./provider-probe.js";
@@ -369,7 +370,10 @@ function toHttpProfile(
     id: p.id,
     name: p.name,
     base_url: p.baseUrl,
-    api: p.api ?? "anthropic-messages",
+    // #75: echo the effective api — explicit, else derived from adapter, else
+    // the default — so the response never shows a value that contradicts the
+    // adapter (e.g. adapter:"openai" + api:"anthropic-messages").
+    api: p.api ?? deriveProviderApi(p.adapter) ?? "anthropic-messages",
     // #68 (R-10): coarse adapter family + sharing flag. Single-user open-source
     // is never shared, so is_shared is always false here.
     adapter: p.adapter ?? "auto",

@@ -22,6 +22,7 @@
  */
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { deriveProviderApi, type ProviderAdapter } from "@brainpilot/protocol";
 
 /** The synthetic provider id under which the auto-generated gateway lives. */
 export const GATEWAY_PROVIDER = "bp-gateway";
@@ -61,24 +62,6 @@ export interface SessionProviderConfig {
   adapter?: string;
   apiKey: string;
   modelId?: string;
-}
-
-/**
- * #68: derive the precise Pi wire `api` from the coarse `adapter` family when
- * no explicit `api` is set. `anthropic`→anthropic-messages,
- * `openai`→openai-completions; `auto`/unknown → undefined (caller falls back to
- * the default). This keeps `api` (precise, #63) authoritative while letting the
- * UI/hosted layer declare intent via the coarser `adapter`.
- */
-function deriveApiFromAdapter(adapter?: string): string | undefined {
-  switch (adapter) {
-    case "anthropic":
-      return "anthropic-messages";
-    case "openai":
-      return "openai-completions";
-    default:
-      return undefined;
-  }
 }
 
 export interface ResolvedProvider {
@@ -230,7 +213,7 @@ export function resolveSessionModel(
           // derived from `adapter` (coarse family, #68) → default. Pi's
           // ModelRegistry accepts any known api; azure-openai-responses derives
           // api-version/deployment from the Azure base URL.
-          api: cfg.api ?? deriveApiFromAdapter(cfg.adapter) ?? "anthropic-messages",
+          api: cfg.api ?? deriveProviderApi(cfg.adapter as ProviderAdapter | undefined) ?? "anthropic-messages",
           // Placeholder — the real key is injected via setRuntimeApiKey below.
           apiKey: `$BP_PROVIDER_${sanitize(cfg.providerId).toUpperCase()}`,
           models: [
