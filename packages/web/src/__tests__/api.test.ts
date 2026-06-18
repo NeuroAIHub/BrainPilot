@@ -101,3 +101,27 @@ describe("api.sessions.getEvents — tolerates SSE / non-JSON responses", () => 
     await expect(api.sessions.getEvents("s1")).resolves.toEqual([]);
   });
 });
+
+describe("api.sessions.interrupt — hits the interrupt route, not /messages (#90)", () => {
+  it("POSTs to /sessions/:id/interrupt and returns { interrupted }", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: { interrupted: true } }),
+    );
+    const out = await api.sessions.interrupt("s1");
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/sessions\/s1\/interrupt$/);
+    expect(String(url)).not.toMatch(/\/messages$/);
+    expect((init as RequestInit).method).toBe("POST");
+    expect(out.interrupted).toBe(true);
+  });
+
+  it("never routes the Stop action through the messages endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: { interrupted: true } }),
+    );
+    await api.sessions.interrupt("abc");
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url.endsWith("/messages")).toBe(false);
+  });
+});
