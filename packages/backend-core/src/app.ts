@@ -34,6 +34,7 @@ import {
   updateProfile,
   deleteProfile,
   setSelectedProfile,
+  setProfileHealth,
   readMcpServers,
   createMcpServer,
   updateMcpServer,
@@ -225,15 +226,18 @@ export function createApp(options: CreateAppOptions): Hono {
       { baseUrl: p.baseUrl, apiKey: p.apiKey },
       { fetchFn: options.fetchFn, timeoutMs: options.providerProbeTimeoutMs },
     );
-    // model_health stays empty this round (per-model probing is future work);
-    // health_status reflects the real probe outcome.
-    return c.json({
-      ...toHttpProfile(p, selectedProfileId),
-      health_status: result.status === "error" ? "unavailable" : result.status,
-      health_checked_at: Date.now(),
-      health_message: result.message ?? "",
-      health_latency_ms: result.latencyMs ?? null,
+    // #69: persist the probe outcome so a later GET /provider/profiles (card
+    // refresh / reopen) keeps the same health instead of reverting to
+    // "unknown". model_health stays empty this round (per-model probing is
+    // future work). ProbeStatus "error" maps to the HealthStatus "unavailable".
+    const healthStatus = result.status === "error" ? "unavailable" : result.status;
+    const saved = await setProfileHealth(dataDir, p.id, {
+      healthStatus,
+      healthCheckedAt: Date.now(),
+      healthMessage: result.message ?? "",
+      healthLatencyMs: result.latencyMs ?? null,
     });
+    return c.json(toHttpProfile(saved ?? p, selectedProfileId));
   });
 
   // ---- MCP Servers CRUD (disk-backed: bp_template/mcp_servers.json) ----
@@ -374,7 +378,12 @@ function toHttpProfile(
     api_key_masked: maskKey(p.apiKey),
     created_at: p.createdAt,
     updated_at: p.updatedAt,
-    health_status: "unknown",
+    // #69: surface the persisted probe result instead of a hardcoded
+    // "unknown", so the Settings card reflects the last test across reloads.
+    health_status: p.healthStatus ?? "unknown",
+    health_checked_at: p.healthCheckedAt,
+    health_message: p.healthMessage ?? "",
+    health_latency_ms: p.healthLatencyMs ?? null,
     model_health: [],
   };
 }
