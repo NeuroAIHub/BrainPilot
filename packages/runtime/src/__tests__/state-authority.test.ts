@@ -45,6 +45,55 @@ describe("state authority (§10)", () => {
     expect(after.memRss).toBeGreaterThan(0);
   });
 
+  // #70: the runtime must push CUSTOM:session_state snapshots so the web Agents
+  // panel updates live (without a reload/reselect). Previously the builder
+  // existed but was never called, leaving the panel blank until a /state poll.
+  it("emits CUSTOM:session_state snapshots on send + status transitions", async () => {
+    const m = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession();
+
+    type Snap = {
+      runState: { active: boolean; runId: string | null };
+      agents: Array<{ name: string; status: string }>;
+    };
+    const snapshots: Snap[] = [];
+    m.subscribe(s.id, (e) => {
+      if (e.type === "CUSTOM" && (e as { name?: string }).name === "session_state") {
+        snapshots.push((e as { value: Snap }).value);
+      }
+    });
+
+    await m.sendMessage(s.id, "hello");
+    await waitFor(() => {
+      const agents = m.listAgents(s.id);
+      return agents.length > 0 && agents[0]!.status === "idle";
+    });
+
+    // At least: initial frame (active) + running + idle.
+    expect(snapshots.length).toBeGreaterThanOrEqual(2);
+
+    // The first frame is the explicit initial one from sendMessage: run active,
+    // principal already present.
+    const first = snapshots[0]!;
+    expect(first.runState.active).toBe(true);
+    expect(first.agents.some((a) => a.name === "principal")).toBe(true);
+
+    // Somewhere we saw principal running, and the final snapshot is idle.
+    expect(
+      snapshots.some((sn) => sn.agents.some((a) => a.name === "principal" && a.status === "running")),
+    ).toBe(true);
+    const last = snapshots[snapshots.length - 1]!;
+    expect(last.agents.find((a) => a.name === "principal")?.status).toBe("idle");
+
+    // Reconnect snapshot: the ring buffer replay ends on the latest
+    // session_state, so a re-subscribing client recovers the idle state.
+    const replay = m.recentEvents(s.id).filter(
+      (e) => e.type === "CUSTOM" && (e as { name?: string }).name === "session_state",
+    );
+    const lastReplay = replay[replay.length - 1] as { value: Snap };
+    expect(lastReplay.value.agents.find((a) => a.name === "principal")?.status).toBe("idle");
+  });
+
   it("evict stops agents and drops the session from memory", async () => {
     const m = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
     const s = await m.createSession();
