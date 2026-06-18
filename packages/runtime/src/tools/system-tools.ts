@@ -20,6 +20,12 @@ export interface ToolDeps {
   ensureAgent: (name: string) => Promise<void>;
   /** Destroy an agent (memory only; history kept). */
   destroyAgent: (name: string) => Promise<void>;
+  /**
+   * Wake a target agent to consume its mailbox (#76). Fire-and-forget: kicks a
+   * serial delivery loop on the target so a delivered message actually starts
+   * its run, instead of sitting unread in an idle agent's inbox.
+   */
+  wakeAgent: (name: string) => void;
   /** Ask the terminal user a question; resolves with their answer. Blocks the turn. */
   requestUserInput: (req: {
     question: string;
@@ -51,6 +57,11 @@ export function createSendMessageTool(deps: ToolDeps): SystemTool {
       const msgType = (params.msg_type as MsgType) ?? deriveMsgType(deps.fromAgent, to);
       await deps.ensureAgent(to);
       await deps.mailbox.write({ fromAgent: deps.fromAgent, toAgent: to, content, msgType });
+      // #76: actively wake the target so it consumes the inbox and runs. This is
+      // fire-and-forget — the sending agent's turn returns immediately ("you
+      // never poll", per the A2A persona); the target's run proceeds in its own
+      // delivery loop. Without this the message is written but never read.
+      deps.wakeAgent(to);
       return ok(`delivered to ${to}`);
     },
   };

@@ -14,7 +14,7 @@ import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session, TraceGraph } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
-import { Mailbox } from "./mailbox.js";
+import { Mailbox, type MailboxMessage } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
 import { MasAgent } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
@@ -95,6 +95,12 @@ export class SessionManager {
   private readonly agentFactory: AgentSessionFactory;
   private readonly persist: boolean;
   private lastActivityAt = 0;
+
+  // #76: active mailbox delivery. A delivery loop drains a target agent's inbox
+  // and runs it; the key (`${sid}:${name}`) guards re-entrancy so concurrent
+  // wakes for one agent collapse into a single serial loop (its `prompt` is
+  // never invoked concurrently).
+  private readonly deliveryLoops = new Set<string>();
 
   // External MCP tools (§9 decision 2): loaded once, lazily, shared by all
   // non-trace agents. Null until first agent is created.
@@ -549,6 +555,11 @@ export class SessionManager {
         entry.runActive = false;
         entry.activeRunId = null;
         this.touch(entry);
+        // #76: re-evaluate the derived run-active flag now that the user-prompt
+        // correlation is cleared. For a direct reply this yields the terminal
+        // active=false frame; for a delegation a pending delivery loop keeps it
+        // true (the loop emits its own terminal frame when it drains).
+        this.emitSessionState(entry);
       });
     return { accepted: true, runId };
   }
@@ -627,6 +638,7 @@ export class SessionManager {
       destroyAgent: async (target) => {
         await this.destroyAgent(sessionId, target);
       },
+      wakeAgent: (target) => this.wakeAgent(sessionId, target),
       requestUserInput: (req) => this.requestUserInput(entry, name, req),
     };
     const systemTools = systemToolsForRole(role, name, deps);
@@ -681,6 +693,74 @@ export class SessionManager {
     entry.agents.delete(name); // history on disk is kept (§5).
   }
 
+  /* ------------------------- mailbox delivery (#76) ------------------------- */
+
+  /**
+   * #76: wake `name` to consume its mailbox. Fire-and-forget — `send_message`
+   * calls this after writing; the actual run happens in a serial delivery loop.
+   * The re-entrancy guard (`deliveryLoops`) means concurrent wakes for the same
+   * agent collapse into the one already-running loop (which re-drains after each
+   * turn), so an agent's `prompt` is never invoked concurrently.
+   */
+  private wakeAgent(sessionId: string, name: string): void {
+    const key = `${sessionId}:${name}`;
+    if (this.deliveryLoops.has(key)) return;
+    this.deliveryLoops.add(key);
+    void this.runDeliveryLoop(sessionId, name).finally(() => {
+      this.deliveryLoops.delete(key);
+      // Emit a final frame AFTER the key is gone: the agent's own running→idle
+      // transition fired emitSessionState while this key was still present (so
+      // that frame still read active via the pending-delivery check). Without
+      // this trailing frame the derived run-active flag would stay stuck true.
+      const entry = this.sessions.get(sessionId);
+      if (entry) this.emitSessionState(entry);
+    });
+  }
+
+  /**
+   * Drain `name`'s inbox and run it, looping so messages that arrive *during* a
+   * turn are picked up without a second external wake. Each iteration atomically
+   * drains the inbox, ensures the agent, wraps the messages as
+   * `<message_envelope>`s (the format the A2A persona documents), and prompts.
+   * `MasAgent.prompt` is error-isolated (never throws), so a failed expert turn
+   * ends the loop cleanly rather than rejecting. A `session_state` frame is
+   * emitted on entry and exit so the derived run-active flag reflects the
+   * delegated work even across the await gap between the sender finishing and
+   * the target starting.
+   */
+  private async runDeliveryLoop(sessionId: string, name: string): Promise<void> {
+    for (;;) {
+      const entry = this.sessions.get(sessionId);
+      if (!entry) return;
+      const msgs = await entry.mailbox.read(name); // atomic drain
+      if (msgs.length === 0) return;
+      const agent = await this.ensureAgent(sessionId, name);
+      if (agent.status === "stopped") return;
+      this.touch(entry);
+      // Surface the delegated run immediately (derived active flag, agent list).
+      this.emitSessionState(entry);
+      await agent.prompt(this.renderEnvelopes(msgs));
+    }
+  }
+
+  /**
+   * Wrap drained mailbox messages in the `<message_envelope>` header the A2A
+   * persona (`personas.ts`) tells agents to expect, so the model knows who sent
+   * each message and why. User-origin messages declare `<source type="user"/>`;
+   * agent-origin ones name the sender.
+   */
+  private renderEnvelopes(msgs: readonly MailboxMessage[]): string {
+    return msgs
+      .map((m) => {
+        const source =
+          m.msgType === "user_message"
+            ? `<source type="user" />`
+            : `<source type="agent" name="${m.fromAgent}" />`;
+        return `<message_envelope>\n  ${source}\n  <type>${m.msgType}</type>\n</message_envelope>\n${m.content}`;
+      })
+      .join("\n\n");
+  }
+
   /* -------------------------- state authority -------------------------- */
 
   /** §10 polling fallback: list agents with authoritative status. */
@@ -701,17 +781,42 @@ export class SessionManager {
   }
 
   /**
-   * #70: emit the authoritative live snapshot as a `CUSTOM:session_state`
+   * #76: a session is "running" whenever ANY non-trace agent is running, or a
+   * mailbox delivery loop is pending for a non-trace target (the loop is
+   * registered synchronously inside `send_message`, so this closes the await gap
+   * between the sender finishing its turn and the delegated target starting —
+   * without it the flag would flicker false in that window). The trace agent is
+   * excluded from the aggregate (it self-records continuously and shouldn't read
+   * as "the user's task is still running"), but it is still LISTED in `agents[]`
+   * with its own status, so the UI shows exactly which agents are running.
+   */
+  private deriveRunActive(entry: SessionEntry): boolean {
+    if (entry.runActive) return true;
+    for (const a of entry.agents.values()) {
+      if (a.role !== "trace" && a.status === "running") return true;
+    }
+    for (const key of this.deliveryLoops) {
+      const sep = entry.id.length;
+      // key === `${sid}:${name}` — match this session, exclude the trace target.
+      if (key.startsWith(`${entry.id}:`) && key.slice(sep + 1) !== "trace") return true;
+    }
+    return false;
+  }
+
+  /**
+   * #70/#76: emit the authoritative live snapshot as a `CUSTOM:session_state`
    * event. This is the wholesale source the web Agents panel replaces its
    * agents list from; it is pushed on every agent status transition
-   * (`onStatusChange`) plus an initial frame in `sendMessage`. The ring buffer
-   * replays the last frame on reconnect, so a re-subscribing client recovers
-   * the current snapshot. Shape matches `SessionStateSnapshotSchema`.
+   * (`onStatusChange`), an initial frame in `sendMessage`, and on delivery-loop
+   * entry/exit. `runState.active` is DERIVED (any non-trace agent running / a
+   * pending delivery), so a delegated expert keeps the run visibly active. The
+   * ring buffer replays the last frame on reconnect, so a re-subscribing client
+   * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
    */
   private emitSessionState(entry: SessionEntry): void {
     entry.bus.emit(
       ev.custom({ sessionId: entry.id }, "session_state", {
-        runState: { active: entry.runActive, runId: entry.activeRunId },
+        runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
         agents: this.listAgents(entry.id),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
       }),
@@ -726,7 +831,7 @@ export class SessionManager {
     const entry = this.sessions.get(sessionId);
     if (!entry) return undefined;
     return {
-      runState: { active: entry.runActive, runId: entry.activeRunId },
+      runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
       agents: this.listAgents(sessionId),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
     };
