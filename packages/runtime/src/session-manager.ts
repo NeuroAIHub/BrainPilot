@@ -24,7 +24,7 @@ import { personaFor } from "./personas.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
-import type { AgentRole, AgentSessionFactory, EventListener, SystemTool } from "./types.js";
+import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -80,6 +80,15 @@ export interface SessionManagerOptions {
   memLimitBytes?: number | null;
   /** Override the watchdog's RSS reader (tests inject; default reads real RSS). */
   readRss?: () => number;
+  /**
+   * Max estimated tokens per tool result before truncation (issue #80).
+   * When a tool returns content exceeding this threshold, the result is
+   * truncated, the full content is saved to the session workspace, and a
+   * warning is surfaced in the chat. Default: 64000 (~224KB text).
+   * Set to 0 to disable truncation entirely.
+   * Env override: BP_MAX_TOOL_RESULT_TOKENS.
+   */
+  maxToolResultTokens?: number;
 }
 
 /** Roles inferred from agent name. */
@@ -87,6 +96,28 @@ function roleFor(name: string): AgentRole {
   if (name === "principal") return "principal";
   if (name === "trace") return "trace";
   return "expert";
+}
+
+/**
+ * Conservative token estimation from character count (issue #80).
+ * English text averages ~4 chars/token; CJK text ~1-2 chars/token.
+ * 3.5 gives a safety margin — we'd rather truncate slightly early than
+ * overflow the provider's context window. Exported for tests.
+ */
+export function estimateTokens(text: string): number {
+  return Math.ceil(text.length / 3.5);
+}
+
+/** Filesystem-safe form of a tool name (for saving truncated results). */
+function sanitiseFilename(name: string): string {
+  return name.replace(/[^A-Za-z0-9_-]/g, "_").slice(0, 64);
+}
+
+/** Human-readable byte size (e.g. "1.2MB"). */
+function formatBytes(n: number): string {
+  if (n < 1024) return `${n}B`;
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)}KB`;
+  return `${(n / (1024 * 1024)).toFixed(1)}MB`;
 }
 
 export class SessionManager {
@@ -111,11 +142,24 @@ export class SessionManager {
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
   private readonly memWatchdog: MemWatchdog | null;
 
+  // Tool result truncation (issue #80). 0 = disabled.
+  private readonly maxToolResultTokens: number;
+
   constructor(opts: SessionManagerOptions = {}) {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
     this.mcpBridge = opts.mcpBridge ?? null;
+    this.maxToolResultTokens =
+      opts.maxToolResultTokens ??
+      (() => {
+        const env = process.env.BP_MAX_TOOL_RESULT_TOKENS?.trim();
+        if (env !== undefined && env !== "") {
+          const n = Number(env);
+          if (Number.isInteger(n) && n >= 0) return n;
+        }
+        return 64000;
+      })();
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -619,6 +663,100 @@ export class SessionManager {
 
   /* ------------------------------ agents ------------------------------- */
 
+  /**
+   * Wrap a SystemTool so its execute() results are guarded against overflowing
+   * the model's context window (issue #80). When truncation triggers, the full
+   * result is saved to `<workspace>/.truncated/` and a system_message warning
+   * is emitted. No-op when maxToolResultTokens is 0.
+   */
+  private wrapToolWithTruncation(
+    tool: SystemTool,
+    sessionId: string,
+    bus: EventBus,
+  ): SystemTool {
+    if (this.maxToolResultTokens <= 0) return tool;
+    const maxTokens = this.maxToolResultTokens;
+    const saveFullResult = (origResult: SystemToolResult) =>
+      this.truncateToolResult(tool.name, sessionId, bus, origResult, maxTokens);
+    const originalExecute = tool.execute.bind(tool);
+    return {
+      name: tool.name,
+      description: tool.description,
+      parameters: tool.parameters,
+      execute: async (params: Record<string, unknown>): Promise<SystemToolResult> => {
+        const result = await originalExecute(params);
+        if (result.isError) return result; // never truncate error messages
+        return saveFullResult(result);
+      },
+    };
+  }
+
+  /**
+   * Estimate tokens in a tool result, truncate if over budget, save the full
+   * content to the session workspace, and emit a warning event.
+   */
+  private async truncateToolResult(
+    toolName: string,
+    sessionId: string,
+    bus: EventBus,
+    result: SystemToolResult,
+    maxTokens: number,
+  ): Promise<SystemToolResult> {
+    // Concatenate all text blocks to estimate total tokens.
+    const fullText = result.content.map((c) => c.text).join("");
+    const estimated = estimateTokens(fullText);
+    if (estimated <= maxTokens) return result;
+
+    // Truncate at ~maxTokens chars (conservative).
+    const maxChars = maxTokens * 3.5;
+    const truncatedText = fullText.slice(0, Math.floor(maxChars));
+    const now = new Date().toISOString();
+    const ts = now.replace(/[:.]/g, "-");
+    const fname = `${sanitiseFilename(toolName)}_${ts}.json`;
+    const relPath = `.truncated/${fname}`;
+
+    // Save full content to workspace.
+    try {
+      const absDir = join(this.workspaceDir(sessionId), ".truncated");
+      await mkdir(absDir, { recursive: true });
+      const saved: Record<string, unknown> = {
+        tool: toolName,
+        truncatedAt: now,
+        originalBytes: Buffer.byteLength(fullText),
+        truncatedBytes: Buffer.byteLength(truncatedText),
+        estimatedTokens: estimated,
+        maxTokens,
+        content: fullText,
+      };
+      await writeFile(join(absDir, fname), JSON.stringify(saved, null, 2), "utf8");
+    } catch {
+      // Best-effort — never block the agent on file I/O.
+    }
+
+    // Emit warning.
+    bus.emit(
+      ev.systemMessage(
+        sessionId,
+        "warning",
+        `⚠️ 工具 ${toolName} 返回结果过大 ` +
+          `(原始约 ${estimated} tokens / ${formatBytes(Buffer.byteLength(fullText))})，` +
+          `已截断至约 ${estimateTokens(truncatedText)} tokens。` +
+          `完整结果已保存至 workspace/${relPath}`,
+        { recoverable: true },
+      ),
+    );
+
+    const notice =
+      `\n\n---\n` +
+      `[⚠️ 结果已截断: 原始 ${estimated} tokens / ${formatBytes(Buffer.byteLength(fullText))} → ` +
+      `截断后 ${estimateTokens(truncatedText)} tokens。` +
+      `完整内容已保存至 workspace/${relPath} ，可用 read 工具读取]`;
+
+    return {
+      content: [{ type: "text", text: truncatedText + notice }],
+    };
+  }
+
   /** Ensure an agent exists (create or resurrect). */
   async ensureAgent(sessionId: string, name: string): Promise<MasAgent> {
     const entry = this.sessions.get(sessionId);
@@ -644,7 +782,9 @@ export class SessionManager {
     const systemTools = systemToolsForRole(role, name, deps);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
-    const agentTools = [...systemTools, ...mcpTools];
+    const rawTools = [...systemTools, ...mcpTools];
+    // #80: guard every tool result against context-window overflow.
+    const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
     const builtins = builtinToolNamesForRole(role, name);
     const allowedToolNames = [...builtins, ...agentTools.map((t) => t.name)];
 
