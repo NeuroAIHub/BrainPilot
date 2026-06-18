@@ -306,7 +306,13 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
  * `bash, edit, find, glob, grep, ls, read, write`.
  */
 export const BUILTIN_TOOL_CONFIG: Record<string, string[]> = {
-  principal: [],
+  // PI is the user-facing orchestrator: it must be able to inspect and touch the
+  // workspace directly (read a file, run a quick check, make a small edit) for
+  // the lightweight framing / synthesis its persona promises. Substantial domain
+  // work is still delegated to experts — that's a persona discipline, not a tool
+  // restriction. Previously `[]`, which made PI truthfully report it could not
+  // read/write/bash, contradicting its own prompt.
+  principal: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   trace: ["read"],
   expert: ["read", "grep", "find"],
   _default: ["read", "grep", "find"],

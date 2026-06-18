@@ -59,7 +59,11 @@ describe("tool access control (§9)", () => {
   });
 
   it("builtin tool allowlist differs by role", () => {
-    expect(builtinToolNamesForRole("principal")).toEqual([]);
+    // PI gets the full builtin set so it can inspect/touch the workspace directly
+    // (its persona promises file inspection + "just do X"); it is no longer `[]`.
+    expect(builtinToolNamesForRole("principal")).toEqual(
+      expect.arrayContaining(["read", "write", "edit", "bash", "grep", "find"]),
+    );
     expect(builtinToolNamesForRole("expert")).toContain("read");
     expect(builtinToolNamesForRole("trace")).toEqual(["read"]);
   });
