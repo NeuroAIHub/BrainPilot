@@ -293,6 +293,10 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   principal: ["send_message", "create_agent", "destroy_agent", "record_trace", "ask_user"],
   trace: ["create_trace_node", "update_trace_node", "add_trace_relation", "get_trace_graph"],
   expert: ["send_message", "record_trace"],
+  // Auditor: comms + self-trace only. Deliberately NO `get_trace_graph` —
+  // evidence is restricted to the session workspace; the audit must not
+  // dredge the trace graph or other agents' internal state.
+  auditor: ["send_message", "record_trace"],
   // Default for any other expert-like agent.
   _default: ["send_message", "record_trace"],
 };
@@ -318,6 +322,11 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "grep", "find", "glob"],
+  // Auditor: read-only inspection + `write` for its own audit report. NO `edit`
+  // (must not modify other agents' artefacts). `bash` is included for
+  // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
+  // enforced by the auditor persona, not by the tool whitelist.
+  auditor: ["read", "grep", "find", "glob", "bash", "write"],
 };
 
 export function systemToolNamesForRole(role: AgentRole, agentName: string): string[] {

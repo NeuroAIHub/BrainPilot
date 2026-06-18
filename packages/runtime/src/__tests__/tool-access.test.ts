@@ -89,4 +89,23 @@ describe("tool access control (§9)", () => {
       ["find", "grep", "read"].sort(),
     );
   });
+
+  it("auditor gets send_message + record_trace, but NO trace-graph access", () => {
+    const names = systemToolNamesForRole("expert", "auditor");
+    expect(names.sort()).toEqual(["record_trace", "send_message"].sort());
+    // Audit evidence is restricted to the workspace — no graph reads, no
+    // create/destroy, no graph mutation.
+    expect(names).not.toContain("get_trace_graph");
+    expect(names).not.toContain("create_trace_node");
+    expect(names).not.toContain("create_agent");
+    expect(names).not.toContain("destroy_agent");
+  });
+
+  it("auditor builtins include read+grep+bash+write but NOT edit", () => {
+    const a = builtinToolNamesForRole("expert", "auditor");
+    // Read-only inspection + write for its own audit report.
+    expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash", "write"]));
+    // Must NOT be able to modify other agents' artefacts.
+    expect(a).not.toContain("edit");
+  });
 });
