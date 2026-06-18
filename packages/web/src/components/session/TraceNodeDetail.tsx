@@ -44,6 +44,11 @@ export function TraceNodeDetail({ node, onSelectNode, onSelectArtifact, activeAr
         <span>{node.id}</span>
         <span>{getNodeKind(node)}</span>
         <span>{node.agent || "agent unknown"}</span>
+        {node.metadata?.auto ? (
+          <span className="trace-detail__badge--auto" title={t("trace.node.autoTitle")}>
+            {t("trace.node.auto")}
+          </span>
+        ) : null}
       </div>
       <p>{node.summary || node.description || node.content || "No summary recorded."}</p>
       {node.reason ? (

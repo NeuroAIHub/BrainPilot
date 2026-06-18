@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, ChatMessage, MessageFilterRule, Session, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, ChatMessage, MessageFilterRule, Session, TraceGraph, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
@@ -15,6 +15,7 @@ import {
   reduceMessagesForEvent,
 } from "./messageReducer";
 import { reduceAgentsForEvent } from "./agentsReducer";
+import { reduceTraceForEvent } from "./traceReducer";
 
 export interface AgentMessageFilter {
   hideMessages: boolean;
@@ -39,6 +40,10 @@ interface SessionContextValue {
   currentView: "chat" | "agents" | "trace";
   agents: AgentStatus[];
   agentFilters: Record<string, AgentMessageFilter>;
+  /** Live Graph of Trace for the current session (#79), or null if none/unloaded. */
+  currentTrace: TraceGraph | null;
+  /** Re-seed the trace graph from the HTTP route (manual refresh). */
+  refreshTrace: (sessionId: string) => Promise<void>;
   selectSession: (sessionId: string) => void;
   createSession: (title?: string, opts?: { providerId?: string; modelId?: string }) => Promise<Session | null>;
   /**
@@ -95,6 +100,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
   const [messageFilters, setMessageFilters] = useState<MessageFilterRule[]>(defaultFilterRules);
+  // #79: live Graph of Trace per session. Seeded by a fetch on session change,
+  // then kept live by CUSTOM:trace_node SSE events (see the queue drain below).
+  const [traceBySession, setTraceBySession] = useState<Record<string, TraceGraph>>({});
 
 
   const currentSession = useMemo(
@@ -416,6 +424,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     };
   }, [currentSession?.id]);
 
+  // #79: seed the Graph of Trace once per session. Live updates thereafter
+  // arrive incrementally via CUSTOM:trace_node (queue drain below), so no poll.
+  const refreshTrace = useCallback(async (sessionId: string) => {
+    try {
+      const graph = await api.sessions.getTrace(sessionId);
+      setTraceBySession((current) => ({ ...current, [sessionId]: graph }));
+    } catch {
+      // Non-fatal — the panel shows an empty graph until events arrive.
+    }
+  }, []);
+
+  useEffect(() => {
+    const sid = currentSession?.id;
+    if (!sid) return;
+    void refreshTrace(sid);
+  }, [currentSession?.id, refreshTrace]);
+
   // Auto-connect SSE whenever the current session changes. Other connections
   // are kept open so background sessions continue receiving events.
   useEffect(() => {
@@ -558,6 +583,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return nextAgents;
     });
 
+    // #79: fold CUSTOM:trace_node events into the live Graph of Trace. The queue
+    // is already scoped to the current session, so only this session's graph
+    // updates. reduceTraceForEvent ignores non-trace events (same reference).
+    setTraceBySession((current) => {
+      const start = current[sid] ?? null;
+      let graph: TraceGraph | null = start;
+      for (const event of queue) {
+        graph = reduceTraceForEvent(graph, event, sid);
+      }
+      return graph && graph !== start ? { ...current, [sid]: graph } : current;
+    });
+
     // Process all events through the message reducer.
     setMessagesBySession((current) => {
       let messages = current[sid] ?? [];
@@ -590,6 +627,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const currentTrace = useMemo(
+    () => (currentSessionId ? (traceBySession[currentSessionId] ?? null) : null),
+    [currentSessionId, traceBySession],
+  );
+
   const value = useMemo(
     () => ({
       sessions,
@@ -604,6 +646,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       currentView,
       agents,
       agentFilters,
+      currentTrace,
+      refreshTrace,
       selectSession,
       createSession,
       startDraftSession,
@@ -631,6 +675,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       currentView,
       agents,
       agentFilters,
+      currentTrace,
+      refreshTrace,
       selectSession,
       createSession,
       startDraftSession,

@@ -12,11 +12,19 @@
 import { mkdir, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { AgUiEvent, AgentStatus, FileContent, FileEntry, Session, TraceGraph } from "@brainpilot/protocol";
+import {
+  CUSTOM_EVENT,
+  type AgUiEvent,
+  type AgentStatus,
+  type FileContent,
+  type FileEntry,
+  type Session,
+  type TraceGraph,
+} from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import { Mailbox, type MailboxMessage } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
-import { MasAgent } from "./mas-agent.js";
+import { MasAgent, type TurnTrackers } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
@@ -96,6 +104,16 @@ function roleFor(name: string): AgentRole {
   if (name === "principal") return "principal";
   if (name === "trace") return "trace";
   return "expert";
+}
+
+/** Builtin tools that mutate the workspace — a milestone worth tracing (#79). */
+const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "bash"]);
+function hasWorkspaceMutation(used: Set<string>): boolean {
+  for (const t of used) if (WORKSPACE_MUTATION_TOOLS.has(t)) return true;
+  return false;
+}
+function listTools(used: Set<string>): string {
+  return [...used].filter((t) => WORKSPACE_MUTATION_TOOLS.has(t)).join(", ") || "the workspace tools";
 }
 
 /**
@@ -448,7 +466,16 @@ export class SessionManager {
 
     const bus = new EventBus({ persistPath: persistBase ? join(persistBase, "events.jsonl") : undefined });
     const mailbox = new Mailbox(id, persistBase ? join(persistBase, "mailbox") : undefined);
-    const trace = new GraphOfTrace(id, persistBase ? join(persistBase, "trace.json") : undefined);
+    // #79: push every trace mutation to the SSE stream as CUSTOM:trace_node so
+    // the web Graph of Trace updates live instead of polling. The store stays
+    // bus-agnostic; the manager owns the wire shape.
+    const trace = new GraphOfTrace(
+      id,
+      persistBase ? join(persistBase, "trace.json") : undefined,
+      (op, node) => {
+        bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_NODE, { op, node }));
+      },
+    );
 
     const entry: SessionEntry = {
       id,
@@ -879,10 +906,62 @@ export class SessionManager {
         this.touch(entry);
         this.emitSessionState(entry);
       },
+      // #79: deterministic milestone capture. If a turn did meaningful work but
+      // the model never called record_trace, synthesize a chained node so the
+      // Graph of Trace is reliable without depending on prompt compliance.
+      onTurnEnd: (info) => this.captureMilestone(entry, info),
     });
     entry.agents.set(name, agent);
     if (!entry.tasks.has(name)) entry.tasks.set(name, "");
     return agent;
+  }
+
+  /**
+   * §8 / #79 — deterministic post-turn trace capture. Called at every agent
+   * `turn_end`. When the model already recorded a trace this turn we stay quiet
+   * (the LLM's node, possibly refined by the trace agent, is authoritative). We
+   * only synthesize a node when a milestone clearly happened but went unrecorded:
+   *  - principal delegated work (`create_agent`) → "Delegated to <target>";
+   *  - principal mutated the workspace (write/edit/bash) → "Principal action";
+   *  - an expert delivered a result back (`send_message`) → "<name> delivered result".
+   * The synthesized node is chained to the previous node so the graph stays a DAG,
+   * and tagged `metadata.auto` so the UI can distinguish it from LLM traces.
+   * The `trace` agent itself is exempt (it IS the recorder).
+   */
+  private captureMilestone(
+    entry: SessionEntry,
+    info: { name: string; role: AgentRole; trackers: TurnTrackers },
+  ): void {
+    const { name, role, trackers } = info;
+    if (role === "trace") return;
+    if (trackers.traced) return; // LLM already recorded — don't duplicate.
+
+    let title: string | undefined;
+    let description: string | undefined;
+    if (role === "principal" && trackers.delegated) {
+      const target = trackers.delegateTarget ?? "an expert";
+      title = `Delegated to ${target}`;
+      description = `Principal delegated work to ${target}.`;
+    } else if (role === "principal" && hasWorkspaceMutation(trackers.usedToolNames)) {
+      title = "Principal action";
+      description = `Principal acted directly using ${listTools(trackers.usedToolNames)}.`;
+    } else if (role !== "principal" && trackers.replied) {
+      title = `${name} delivered result`;
+      description = `${name} delivered a result back to the principal.`;
+    }
+    if (!title) return; // nothing milestone-worthy this turn.
+
+    try {
+      entry.trace.createChainedNode({
+        title,
+        agent: name,
+        description,
+        metadata: { auto: true, hook: role === "principal" ? "principal_trace" : "expert_reply" },
+      });
+      this.touch(entry);
+    } catch {
+      // Best-effort — a trace write must never break the agent turn.
+    }
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {
