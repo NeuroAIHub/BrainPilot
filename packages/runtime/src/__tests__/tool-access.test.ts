@@ -16,6 +16,7 @@ function deps(name: string): ToolDeps {
     trace: new GraphOfTrace("s"),
     ensureAgent: async () => {},
     destroyAgent: async () => {},
+    requestUserInput: async () => "stub-answer",
   };
 }
 
@@ -25,6 +26,12 @@ describe("tool access control (§9)", () => {
     expect(names).toEqual(expect.arrayContaining(["send_message", "create_agent", "destroy_agent", "record_trace"]));
     expect(names).not.toContain("create_trace_node");
     expect(names).not.toContain("get_trace_graph");
+  });
+
+  it("principal can ask_user; experts and trace cannot", () => {
+    expect(systemToolNamesForRole("principal", "principal")).toContain("ask_user");
+    expect(systemToolNamesForRole("expert", "librarian")).not.toContain("ask_user");
+    expect(systemToolNamesForRole("trace", "trace")).not.toContain("ask_user");
   });
 
   it("trace agent gets ONLY graph tools", () => {
