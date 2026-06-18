@@ -120,6 +120,22 @@ export class Mailbox {
     return take;
   }
 
+  /**
+   * Drain EVERY inbox (in-memory + persisted) so no queued message can re-wake
+   * an agent. Used by whole-session interrupt (#90 Stop): after aborting all
+   * agents we clear their mailboxes, otherwise the delivery loop would re-deliver
+   * pending messages and revive the agents the user just stopped.
+   */
+  async clearAll(): Promise<void> {
+    const agents = [...this.inboxes.keys()];
+    for (const agent of agents) {
+      const box = this.inbox(agent);
+      if (box.length === 0) continue;
+      box.length = 0;
+      await this.persist(agent);
+    }
+  }
+
   /** Non-destructive peek. */
   peek(agent: string): readonly MailboxMessage[] {
     return [...this.inbox(agent)];
