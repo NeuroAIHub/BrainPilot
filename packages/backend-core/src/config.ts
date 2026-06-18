@@ -12,6 +12,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ProviderApi, ProviderAdapter, HealthStatus } from "@brainpilot/protocol";
+import { deriveProviderApi } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -197,7 +198,12 @@ export async function createProfile(
     id: input.id ?? newId(),
     name: input.name ?? "Provider",
     baseUrl: input.baseUrl ?? "",
-    api: input.api ?? "anthropic-messages",
+    // #75: do not unconditionally default api to anthropic-messages — that
+    // short-circuited the runtime's adapter fallback (an `adapter:"openai"`
+    // profile got `api:"anthropic-messages"`, a contradictory state). Precedence:
+    // explicit api → derived from adapter → default. Persist only an explicit or
+    // adapter-derived api; leave it unset otherwise so the runtime resolves it.
+    api: input.api ?? deriveProviderApi(input.adapter),
     adapter: input.adapter,
     apiKey: input.apiKey ?? "",
     apiKeyEnv: input.apiKeyEnv,

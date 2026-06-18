@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
@@ -476,6 +476,53 @@ describe("Hono app — local config routes", () => {
       const b = (await noAdapter.json()) as { adapter: string; is_shared: boolean };
       expect(b.adapter).toBe("auto");
       expect(b.is_shared).toBe(false);
+    });
+
+    // #75: adapter without an explicit api must NOT be overridden by a default
+    // anthropic-messages — the echoed api derives from the adapter, and the
+    // stored profile carries no contradictory api.
+    it("derives api from adapter when api is omitted, no contradictory default (#75)", async () => {
+      const { app, dir } = await provApp();
+      const res = await postProfile(app, {
+        name: "adapter-openai-no-api",
+        adapter: "openai",
+        base_url: "https://example.invalid/v1",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { api: string; adapter: string };
+      // echo reflects the derived wire value, not anthropic-messages
+      expect(body.adapter).toBe("openai");
+      expect(body.api).toBe("openai-completions");
+
+      // the stored profile must not contain the contradictory default
+      const stored = JSON.parse(
+        await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
+      ) as { profiles: Array<{ adapter?: string; api?: string }> };
+      expect(stored.profiles[0].adapter).toBe("openai");
+      expect(stored.profiles[0].api).toBe("openai-completions");
+    });
+
+    it("adapter=anthropic derives anthropic-messages; auto falls back to default (#75)", async () => {
+      const { app } = await provApp();
+      const ant = await postProfile(app, { name: "A", adapter: "anthropic", base_url: "https://x", api_key: "k", models: ["m"] });
+      expect(((await ant.json()) as { api: string }).api).toBe("anthropic-messages");
+      const auto = await postProfile(app, { name: "B", adapter: "auto", base_url: "https://x", api_key: "k", models: ["m"] });
+      expect(((await auto.json()) as { api: string }).api).toBe("anthropic-messages");
+    });
+
+    it("explicit api still wins over adapter (#75)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "explicit",
+        adapter: "anthropic",
+        api: "openai-responses",
+        base_url: "https://x",
+        api_key: "k",
+        models: ["m"],
+      });
+      expect(((await res.json()) as { api: string }).api).toBe("openai-responses");
     });
 
     it("rejects an unknown adapter value with 400 (#68)", async () => {

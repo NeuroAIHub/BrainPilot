@@ -238,6 +238,26 @@ export type ProviderApi = z.infer<typeof ProviderApiSchema>;
 export const ProviderAdapterSchema = z.enum(["auto", "openai", "anthropic"]);
 export type ProviderAdapter = z.infer<typeof ProviderAdapterSchema>;
 
+/**
+ * #75: single source of truth for adapter→api derivation, shared by the backend
+ * (so create/echo never persist a default that contradicts the adapter) and the
+ * runtime (so the wire value it writes matches). `anthropic`→anthropic-messages,
+ * `openai`→openai-completions; `auto`/undefined → undefined (caller falls back
+ * to its own default). Keeping this in protocol prevents the two layers from
+ * drifting (the footgun #75 surfaced: backend defaulting api to
+ * anthropic-messages short-circuited the runtime's adapter fallback).
+ */
+export function deriveProviderApi(adapter?: ProviderAdapter): ProviderApi | undefined {
+  switch (adapter) {
+    case "anthropic":
+      return "anthropic-messages";
+    case "openai":
+      return "openai-completions";
+    default:
+      return undefined;
+  }
+}
+
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
