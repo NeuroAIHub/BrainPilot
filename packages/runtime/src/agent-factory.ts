@@ -59,10 +59,18 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // `.bp/<sid>/skills/` per-session, passed as `skillPaths`). `additionalSkillPaths`
   // bypasses Pi's project-trust gate, so this works in our non-interactive runtime.
   // Custom loaders are NOT auto-reloaded by the SDK, so we must reload() before use.
+  //
+  // Context files: for the SAME reproducibility reason we set `noContextFiles: true`.
+  // Pi would otherwise walk cwd→root collecting every AGENTS.md / CLAUDE.md and
+  // inject them as project context. Agents run with cwd under the host repo, so
+  // they'd absorb whatever AGENTS.md/CLAUDE.md happen to sit in the ancestry —
+  // e.g. the legacy "MAS Platform Phase 1" doc — and mis-identify themselves.
+  // Agent identity must come ONLY from the per-role persona below.
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
     noSkills: true,
+    noContextFiles: true,
     additionalSkillPaths: params.skillPaths,
     appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
   });
@@ -163,6 +171,8 @@ interface PiSdk {
     systemPrompt?: string;
     /** Drop host-global skill auto-discovery (~/.pi/agent/skills, etc.). */
     noSkills?: boolean;
+    /** Drop the AGENTS.md/CLAUDE.md cwd→root context-file walk (host-dependent identity). */
+    noContextFiles?: boolean;
     /** Explicit skill dirs/files; loaded even when noSkills is true, and not trust-gated. */
     additionalSkillPaths?: string[];
   }) => { reload(): Promise<void> };
