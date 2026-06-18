@@ -379,7 +379,10 @@ function toHttpProfile(
     icon_color: p.iconColor ?? "#111111",
     notes: p.notes ?? "",
     is_active: p.id === selectedId,
-    api_key_masked: maskKey(p.apiKey),
+    // #65: an env-bootstrapped profile stores no key — show its env source
+    // instead of an empty mask so the UI doesn't look misconfigured.
+    api_key_masked: p.apiKeyEnv ? `env:$${p.apiKeyEnv}` : maskKey(p.apiKey),
+    api_key_env: p.apiKeyEnv,
     created_at: p.createdAt,
     updated_at: p.updatedAt,
     // #69: surface the persisted probe result instead of a hardcoded

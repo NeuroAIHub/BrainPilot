@@ -124,6 +124,12 @@ export interface StoredProviderProfile {
    *  precise wire value. Optional; absent → treated as "auto". */
   adapter?: ProviderAdapter;
   apiKey: string;
+  /** #65: name of an env var the key is read from at request time, instead of
+   *  persisting the plaintext secret. Set by the env bootstrap so a self-hosted
+   *  user who supplies ANTHROPIC_API_KEY via the environment never has it copied
+   *  into providers.json. When set, apiKey is left empty on disk and the runtime
+   *  falls back to its env gateway path (which reads the same env var). */
+  apiKeyEnv?: string;
   models: string[];
   icon?: string;
   iconColor?: string;
@@ -194,6 +200,7 @@ export async function createProfile(
     api: input.api ?? "anthropic-messages",
     adapter: input.adapter,
     apiKey: input.apiKey ?? "",
+    apiKeyEnv: input.apiKeyEnv,
     models: input.models ?? [],
     icon: input.icon,
     iconColor: input.iconColor,
@@ -220,7 +227,12 @@ export async function updateProfile(
   for (const k of ["name", "baseUrl", "api", "adapter", "models", "icon", "iconColor", "notes"] as const) {
     if (patch[k] !== undefined) writable[k] = patch[k];
   }
-  if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) profile.apiKey = patch.apiKey;
+  if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) {
+    profile.apiKey = patch.apiKey;
+    // #65: the user is now intentionally persisting a key in Settings — drop the
+    // env reference so the stored key (not the env var) is the source of truth.
+    delete profile.apiKeyEnv;
+  }
   profile.updatedAt = Date.now();
   await writeProviders(dataDir, file);
   return profile;
@@ -429,12 +441,30 @@ export async function bootstrapEnvProvider(
     return null;
   }
 
+  // #65: do NOT copy the plaintext env key into providers.json. Record only the
+  // *name* of the env var the key came from; the profile is created with an
+  // empty apiKey, so at request time both resolveProvider (backend) and
+  // resolveSessionProvider (runtime) skip the empty key and fall back to the
+  // env gateway path, which reads the same env var. The profile still exists so
+  // the user sees an active "Environment" provider + model in Settings (#51),
+  // but the secret stays in the environment, never on disk.
+  const keySources =
+    resolved.source === "dotenv"
+      ? (await parseDotenv(configPaths(dataDir).dotenv))
+      : env;
+  const apiKeyEnv =
+    (keySources.ANTHROPIC_API_KEY && "ANTHROPIC_API_KEY") ||
+    (keySources.BP_API_KEY && "BP_API_KEY") ||
+    (keySources.OPENAI_API_KEY && "OPENAI_API_KEY") ||
+    "ANTHROPIC_API_KEY";
+
   return createProfile(dataDir, {
     name: "Environment",
     baseUrl: resolved.baseUrl ?? "",
-    apiKey: resolved.apiKey,
+    apiKey: "", // #65: never persisted; resolved from apiKeyEnv at request time
+    apiKeyEnv,
     models: resolved.model ? [resolved.model] : [],
-    notes: "Auto-created from environment variables on first launch.",
+    notes: `Auto-created from environment variables on first launch. The API key is read from $${apiKeyEnv} at request time and is not stored on disk.`,
   });
 }
 
