@@ -76,8 +76,18 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const parsed = SendMessageRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
-    const res = await manager.sendMessage(id, parsed.data.content, parsed.data.agent ?? "principal", {
-      uuid: parsed.data.data?.uuid,
+
+    // ask_user reply branch: resolve the outstanding request.
+    const data = parsed.data;
+    if ("type" in data && data.type === "user_input_response") {
+      const okResolved = manager.resolveInput(id, data.request_id, data.answer);
+      return c.json({ status: okResolved ? "ok" : "stale" });
+    }
+
+    // Normal message branch.
+    if (!("content" in data)) return c.json({ error: "invalid body" }, 400);
+    const res = await manager.sendMessage(id, data.content, data.agent ?? "principal", {
+      uuid: data.data?.uuid,
     });
     return c.json(res);
   });

@@ -137,6 +137,47 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     });
     expect(put.status).toBe(404);
   });
+
+  it("POST /messages with user_input_response resolves or reports stale", async () => {
+    const a = app();
+    const created = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "T" }),
+    });
+    const { id } = (await created.json()) as { id: string };
+
+    // No outstanding request → stale, but still 200.
+    const res = await a.request(`/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "user_input_response",
+        session_id: id,
+        request_id: "req_missing",
+        answer: "x",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "stale" });
+  });
+
+  it("POST /messages still accepts a normal content body", async () => {
+    const a = app();
+    const created = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "T" }),
+    });
+    const { id } = (await created.json()) as { id: string };
+    const res = await a.request(`/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).accepted).toBe(true);
+  });
 });
 
 describe("workspace file routes", () => {
