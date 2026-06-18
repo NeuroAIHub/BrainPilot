@@ -80,6 +80,8 @@ describe("domain schemas", () => {
       name: "OpenAI",
       baseUrl: "u",
       api: "openai-responses",
+      adapter: "openai",
+      isShared: false,
       models: ["m"],
       icon: "circle",
       iconColor: "#000",
@@ -93,6 +95,9 @@ describe("domain schemas", () => {
     });
     expect(profile.healthStatus).toBe("healthy");
     expect(profile.api).toBe("openai-responses");
+    // #68: adapter + isShared surface on the response shape.
+    expect(profile.adapter).toBe("openai");
+    expect(profile.isShared).toBe(false);
     // #63: an unknown api value is rejected.
     expect(
       ProviderProfileCreateSchema.safeParse({ name: "x", api: "nope", models: ["m"] }).success,
@@ -103,6 +108,13 @@ describe("domain schemas", () => {
         .success,
     ).toBe(true);
     expect(ProviderProfileCreateSchema.safeParse({ name: "x", models: ["m"] }).success).toBe(true);
+    // #68: adapter on create is accepted; an unknown adapter is rejected.
+    expect(
+      ProviderProfileCreateSchema.safeParse({ name: "x", adapter: "openai", models: ["m"] }).success,
+    ).toBe(true);
+    expect(
+      ProviderProfileCreateSchema.safeParse({ name: "x", adapter: "nope", models: ["m"] }).success,
+    ).toBe(false);
   });
 
   it("validates FileEntry / FileContent", () => {

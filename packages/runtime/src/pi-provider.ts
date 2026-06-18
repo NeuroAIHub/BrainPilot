@@ -56,8 +56,29 @@ export interface SessionProviderConfig {
   baseUrl?: string;
   /** #63: wire protocol (Pi models.json `api`). Defaults to anthropic-messages. */
   api?: string;
+  /** #68: coarse adapter family (auto/openai/anthropic). When `api` is unset,
+   *  the precise wire value is derived from this. */
+  adapter?: string;
   apiKey: string;
   modelId?: string;
+}
+
+/**
+ * #68: derive the precise Pi wire `api` from the coarse `adapter` family when
+ * no explicit `api` is set. `anthropic`→anthropic-messages,
+ * `openai`→openai-completions; `auto`/unknown → undefined (caller falls back to
+ * the default). This keeps `api` (precise, #63) authoritative while letting the
+ * UI/hosted layer declare intent via the coarser `adapter`.
+ */
+function deriveApiFromAdapter(adapter?: string): string | undefined {
+  switch (adapter) {
+    case "anthropic":
+      return "anthropic-messages";
+    case "openai":
+      return "openai-completions";
+    default:
+      return undefined;
+  }
 }
 
 export interface ResolvedProvider {
@@ -204,11 +225,12 @@ export function resolveSessionModel(
       providers: {
         [cfg.providerId]: {
           baseUrl: cfg.baseUrl,
-          // #63: persist the selected wire protocol instead of hardcoding
-          // anthropic-messages. Pi's ModelRegistry accepts any known api; for
-          // azure-openai-responses it derives api-version/deployment from the
-          // Azure base URL, so all protocols configure identically here.
-          api: cfg.api ?? "anthropic-messages",
+          // #63/#68: persist the selected wire protocol instead of hardcoding
+          // anthropic-messages. Precedence: explicit `api` (precise, #63) →
+          // derived from `adapter` (coarse family, #68) → default. Pi's
+          // ModelRegistry accepts any known api; azure-openai-responses derives
+          // api-version/deployment from the Azure base URL.
+          api: cfg.api ?? deriveApiFromAdapter(cfg.adapter) ?? "anthropic-messages",
           // Placeholder — the real key is injected via setRuntimeApiKey below.
           apiKey: `$BP_PROVIDER_${sanitize(cfg.providerId).toUpperCase()}`,
           models: [

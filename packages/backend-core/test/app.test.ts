@@ -456,6 +456,40 @@ describe("Hono app — local config routes", () => {
       expect(((await res.json()) as { api: string }).api).toBe("anthropic-messages");
     });
 
+    // #68 (R-10): adapter + is_shared on the wire.
+    it("persists and echoes the adapter, defaulting to auto; is_shared is always false (#68)", async () => {
+      const { app } = await provApp();
+      const withAdapter = await postProfile(app, {
+        name: "OpenAI-ish",
+        base_url: "https://x",
+        adapter: "openai",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(withAdapter.status).toBe(201);
+      const a = (await withAdapter.json()) as { adapter: string; is_shared: boolean };
+      expect(a.adapter).toBe("openai");
+      expect(a.is_shared).toBe(false);
+
+      // omitted adapter → "auto"
+      const noAdapter = await postProfile(app, { name: "Plain", base_url: "https://y", api_key: "sk-y", models: ["m"] });
+      const b = (await noAdapter.json()) as { adapter: string; is_shared: boolean };
+      expect(b.adapter).toBe("auto");
+      expect(b.is_shared).toBe(false);
+    });
+
+    it("rejects an unknown adapter value with 400 (#68)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "Bad Adapter",
+        base_url: "https://x",
+        adapter: "totally-made-up",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(res.status).toBe(400);
+    });
+
     it("rejects an unknown api value with 400 (#63)", async () => {
       const { app } = await provApp();
       const res = await postProfile(app, {

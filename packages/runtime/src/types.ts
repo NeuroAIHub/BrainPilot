@@ -126,6 +126,8 @@ export type AgentSessionFactory = (params: {
     baseUrl?: string;
     /** #63: wire protocol (Pi models.json api). Defaults to anthropic-messages. */
     api?: string;
+    /** #68: coarse adapter family (auto/openai/anthropic); derives api when api unset. */
+    adapter?: string;
     apiKey: string;
     modelId?: string;
   };

@@ -11,7 +11,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ProviderApi, HealthStatus } from "@brainpilot/protocol";
+import type { ProviderApi, ProviderAdapter, HealthStatus } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -119,6 +119,10 @@ export interface StoredProviderProfile {
   /** #63: wire protocol. Optional for back-compat with pre-#63 profiles
    *  (read as anthropic-messages). createProfile defaults it. */
   api?: ProviderApi;
+  /** #68 (R-10): coarse adapter family declared by the UI (auto/openai/
+   *  anthropic). When set without an explicit `api`, the runtime derives the
+   *  precise wire value. Optional; absent → treated as "auto". */
+  adapter?: ProviderAdapter;
   apiKey: string;
   models: string[];
   icon?: string;
@@ -188,6 +192,7 @@ export async function createProfile(
     name: input.name ?? "Provider",
     baseUrl: input.baseUrl ?? "",
     api: input.api ?? "anthropic-messages",
+    adapter: input.adapter,
     apiKey: input.apiKey ?? "",
     models: input.models ?? [],
     icon: input.icon,
@@ -212,7 +217,7 @@ export async function updateProfile(
   if (!profile) return undefined;
   // apiKey omitted in patch → keep existing (UI sends masked key, not the real one).
   const writable = profile as unknown as Record<string, unknown>;
-  for (const k of ["name", "baseUrl", "api", "models", "icon", "iconColor", "notes"] as const) {
+  for (const k of ["name", "baseUrl", "api", "adapter", "models", "icon", "iconColor", "notes"] as const) {
     if (patch[k] !== undefined) writable[k] = patch[k];
   }
   if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) profile.apiKey = patch.apiKey;
