@@ -500,6 +500,12 @@ export class SessionManager {
     entry.runActive = true;
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
+    // #70: emit an initial session_state frame here — onStatusChange only fires
+    // on a status *change*, and ensureAgent creates the agent as idle without
+    // emitting, so without this the panel stays empty until the first
+    // setStatus("running"). This first frame carries runState.active=true + the
+    // freshly-ensured agent.
+    this.emitSessionState(entry);
     // issue #42: persist + broadcast the user's own prompt as a role:"user"
     // CHUNK *before* the agent runs, so SSE replay reconstructs the full
     // transcript (user + assistant). The web composer's optimistic bubble uses
@@ -587,7 +593,13 @@ export class SessionManager {
       role,
       session,
       bus: entry.bus,
-      onStatusChange: () => this.touch(entry),
+      // #70: keep the touch (idle-reclaim) AND push an authoritative live
+      // snapshot so the web Agents panel updates without a reload/reselect.
+      // setStatus early-returns on no-op transitions, so this never storms.
+      onStatusChange: () => {
+        this.touch(entry);
+        this.emitSessionState(entry);
+      },
     });
     entry.agents.set(name, agent);
     if (!entry.tasks.has(name)) entry.tasks.set(name, "");
@@ -620,6 +632,24 @@ export class SessionManager {
       };
       return out;
     });
+  }
+
+  /**
+   * #70: emit the authoritative live snapshot as a `CUSTOM:session_state`
+   * event. This is the wholesale source the web Agents panel replaces its
+   * agents list from; it is pushed on every agent status transition
+   * (`onStatusChange`) plus an initial frame in `sendMessage`. The ring buffer
+   * replays the last frame on reconnect, so a re-subscribing client recovers
+   * the current snapshot. Shape matches `SessionStateSnapshotSchema`.
+   */
+  private emitSessionState(entry: SessionEntry): void {
+    entry.bus.emit(
+      ev.custom({ sessionId: entry.id }, "session_state", {
+        runState: { active: entry.runActive, runId: entry.activeRunId },
+        agents: this.listAgents(entry.id),
+        lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
+      }),
+    );
   }
 
   getSessionState(sessionId: string): {

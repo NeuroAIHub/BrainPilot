@@ -14,6 +14,7 @@ import {
   generateUUID,
   reduceMessagesForEvent,
 } from "./messageReducer";
+import { reduceAgentsForEvent } from "./agentsReducer";
 
 export interface AgentMessageFilter {
   hideMessages: boolean;
@@ -506,6 +507,46 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         continue;
       }
     }
+
+    // #70: keep the Agents panel live between session_state snapshots by merging
+    // standalone agent_status_update events. session_state (above) remains the
+    // wholesale authority; this applies single-agent deltas on top so the panel
+    // updates on the first run without a reload/reselect. The queue is already
+    // scoped to the current session (queueRef.get(sid)), so background-session
+    // events don't leak in here.
+    setAgents((current) => {
+      let nextAgents = current;
+      const appended: AgentStatus[] = [];
+      for (const event of queue) {
+        if (event.type !== "agent_status_update") continue;
+        const before = nextAgents;
+        nextAgents = reduceAgentsForEvent(nextAgents, event);
+        if (nextAgents.length > before.length) {
+          appended.push(nextAgents[nextAgents.length - 1]!);
+        }
+      }
+      if (appended.length > 0) {
+        // Apply the same default filters session_state uses for newly seen
+        // agents (trace: hide messages/tools; all: hide hooks).
+        setAgentFilters((cur) => {
+          let changed = false;
+          const nf = { ...cur };
+          for (const agent of appended) {
+            if (!cur[agent.name]) {
+              changed = true;
+              const isTrace = agent.name === "trace";
+              nf[agent.name] = {
+                hideMessages: isTrace,
+                hideTools: isTrace,
+                hideHooks: true,
+              };
+            }
+          }
+          return changed ? nf : cur;
+        });
+      }
+      return nextAgents;
+    });
 
     // Process all events through the message reducer.
     setMessagesBySession((current) => {
