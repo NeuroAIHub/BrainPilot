@@ -696,7 +696,7 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
   };
 }
 
-function normalizeTraceNode(rawValue: unknown): TraceNode {
+export function normalizeTraceNode(rawValue: unknown): TraceNode {
   const raw = asDict(rawValue);
   const parents = Array.isArray(raw.parents)
     ? raw.parents.map((parent) => {

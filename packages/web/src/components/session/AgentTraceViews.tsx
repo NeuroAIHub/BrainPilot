@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Network, Pause, Play, RefreshCw, Search, UserRoundCog, X } from "lucide-react";
-import { TraceGraph, TraceNode } from "../../contracts/backend";
+import { TraceNode } from "../../contracts/backend";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { AgentNetwork } from "./AgentNetwork";
@@ -54,18 +53,18 @@ export function AgentsPanel() {
 }
 
 export function TracePanel() {
-  const { currentSession } = useSessions();
+  // #79: trace is now live — seeded + kept current by SessionContext via SSE
+  // (CUSTOM:trace_node), so this panel reads it instead of polling.
+  const { currentSession, currentTrace, refreshTrace } = useSessions();
   const t = useT();
-  const [trace, setTrace] = useState<TraceGraph | null>(null);
+  const trace = currentTrace;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [direction, setDirection] = useState<"LR" | "TB">("LR");
   const [zoom, setZoom] = useState(1);
-  const [isAutoRefresh, setIsAutoRefresh] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [fitToken, setFitToken] = useState(0);
@@ -126,54 +125,24 @@ export function TracePanel() {
     return visibleNodes.find((node) => node.id === selectedNodeId) ?? visibleNodes[0] ?? null;
   }, [selectedNodeId, trace, visibleNodes]);
 
-  const loadTrace = async (silent = false) => {
-    if (!currentSession) {
-      setTrace(null);
-      setSelectedNodeId(null);
-      return;
-    }
-    if (!silent) {
-      setIsLoading(true);
-    }
-    setError(null);
+  const handleRefresh = async () => {
+    if (!currentSession) return;
+    setIsRefreshing(true);
     try {
-      const nextTrace = await api.sessions.getTrace(currentSession.id);
-      setTrace(nextTrace);
-      if (!silent) {
-        prevNodeCountRef.current = nextTrace.nodes.length;
-        if (!wasUserAdjustedRef.current) {
-          setPlaybackIndex(nextTrace.nodes.length);
-        }
-      }
-      setSelectedNodeId((current) => {
-        if (current && nextTrace.nodes.some((node) => node.id === current)) {
-          return current;
-        }
-        return nextTrace.nodes[0]?.id ?? null;
-      });
-    } catch (err) {
-      if (!silent) {
-        setTrace(null);
-        setError(err instanceof Error ? err.message : t("trace.loadFailed"));
-      }
+      await refreshTrace(currentSession.id);
     } finally {
-      if (!silent) {
-        setIsLoading(false);
-      }
+      setIsRefreshing(false);
     }
   };
 
+  // Keep a selection valid as nodes stream in: default to the first node, and
+  // hold the current selection while it still exists.
   useEffect(() => {
-    void loadTrace();
-  }, [currentSession?.id]);
-
-  useEffect(() => {
-    if (!currentSession || !isAutoRefresh) {
-      return;
-    }
-    const interval = window.setInterval(() => void loadTrace(true), 3000);
-    return () => window.clearInterval(interval);
-  }, [currentSession?.id, isAutoRefresh]);
+    setSelectedNodeId((current) => {
+      if (current && allNodes.some((node) => node.id === current)) return current;
+      return allNodes[0]?.id ?? null;
+    });
+  }, [allNodes]);
 
   useEffect(() => {
     if (selectedNodeId && visibleNodes.length > 0 && !visibleNodeIds.has(selectedNodeId)) {
@@ -254,25 +223,17 @@ export function TracePanel() {
               <button className={direction === "TB" ? "is-active" : ""} onClick={() => setDirection("TB")} type="button">TB</button>
             </div>
             <div className="trace-refresh-group" aria-label={t("trace.aria.refreshControls")}>
-              <IconButton className={isLoading ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void loadTrace()}>
+              <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
                 <RefreshCw size={15} />
               </IconButton>
-              <button
-                aria-pressed={isAutoRefresh}
-                className={`trace-live-toggle ${isAutoRefresh ? "is-active" : ""}`}
-                disabled={!currentSession}
-                onClick={() => setIsAutoRefresh((current) => !current)}
-                title={t("trace.autoRefreshTitle")}
-                type="button"
-              >
+              <span className="trace-live-indicator" title={t("trace.liveTitle")}>
                 <span aria-hidden="true" />
                 {t("trace.live")}
-              </button>
+              </span>
             </div>
           </div>
         </header>
 
-        {error ? <p className="workspace-panel__empty workspace-panel__empty--error">{error}</p> : null}
         {!currentSession ? <p className="workspace-panel__empty">{t("trace.emptyNoSession")}</p> : null}
 
         {trace ? (

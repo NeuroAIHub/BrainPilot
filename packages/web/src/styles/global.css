@@ -858,42 +858,22 @@ button {
   border-radius: 0;
 }
 
-.trace-live-toggle {
+/* #79: trace is live-by-SSE — a static "Live" indicator, not a poll toggle. */
+.trace-live-indicator {
   display: inline-flex;
   height: 28px;
   align-items: center;
   gap: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   padding: 0 9px;
   font-size: 12px;
 }
 
-.trace-live-toggle span {
+.trace-live-indicator span {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--color-text-subtle);
-}
-
-.trace-live-toggle.is-active {
-  color: var(--color-text);
-}
-
-.trace-live-toggle.is-active span {
   background: var(--color-success);
-}
-
-.trace-live-toggle:hover:not(:disabled),
-.trace-live-toggle:focus-visible {
-  background: var(--color-hover);
-  color: var(--color-text);
-  outline: none;
-}
-
-.trace-live-toggle:disabled {
-  opacity: 0.5;
 }
 
 .agent-grid {
@@ -1510,6 +1490,13 @@ button {
   color: var(--color-text-muted);
   padding: 0 8px;
   font-size: 11px;
+}
+
+/* #79: auto-captured (hook-driven) trace nodes get a distinct badge. */
+.trace-detail__badges span.trace-detail__badge--auto {
+  border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: var(--color-success);
 }
 
 .trace-detail__section {

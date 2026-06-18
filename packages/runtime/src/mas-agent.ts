@@ -23,6 +23,20 @@ import type {
 
 export type AgentStatus = "idle" | "running" | "error" | "stopped";
 
+/** Per-turn activity summary handed to the §8 post-turn hook. */
+export interface TurnTrackers {
+  /** Replied to another agent via `send_message`. */
+  replied: boolean;
+  /** Recorded a trace node via `record_trace` / `create_trace_*`. */
+  traced: boolean;
+  /** Spawned a sub-agent via `create_agent`. */
+  delegated: boolean;
+  /** Name of the most recent `create_agent` target this turn, if any. */
+  delegateTarget?: string;
+  /** Tool names that ran (no error) this turn. */
+  usedToolNames: Set<string>;
+}
+
 export interface MasAgentOpts {
   sessionId: string;
   name: string;
@@ -30,6 +44,12 @@ export interface MasAgentOpts {
   session: IAgentSession;
   bus: EventBus;
   onStatusChange?: (name: string, status: AgentStatus) => void;
+  /**
+   * §8 deterministic post-turn hook. Fired at every Pi `turn_end` with a
+   * snapshot of what the turn did, so the host can capture a milestone into the
+   * Graph of Trace even when the model never called `record_trace` (#79).
+   */
+  onTurnEnd?: (info: { name: string; role: AgentRole; trackers: TurnTrackers }) => void;
 }
 
 export class MasAgent {
@@ -48,7 +68,12 @@ export class MasAgent {
   private lastError: AgentState["lastError"];
 
   // §8 hook trackers (reset each turn).
-  private trackers = { replied: false, traced: false, delegated: false };
+  private trackers: TurnTrackers = {
+    replied: false,
+    traced: false,
+    delegated: false,
+    usedToolNames: new Set(),
+  };
 
   constructor(private readonly opts: MasAgentOpts) {
     this.name = opts.name;
@@ -145,7 +170,12 @@ export class MasAgent {
   }
 
   private resetTrackers(): void {
-    this.trackers = { replied: false, traced: false, delegated: false };
+    this.trackers = {
+      replied: false,
+      traced: false,
+      delegated: false,
+      usedToolNames: new Set(),
+    };
   }
 
   /** Translate one Pi event into zero or more AG-UI events (§6). */
@@ -153,7 +183,6 @@ export class MasAgent {
     const ctx = { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId };
     switch (e.type) {
       case "agent_start":
-      case "turn_end":
       case "agent_end":
       case "compaction_start":
       case "compaction_end":
@@ -162,6 +191,14 @@ export class MasAgent {
         return;
 
       case "turn_start":
+        this.resetTrackers();
+        return;
+
+      case "turn_end":
+        // §8 deterministic capture: hand the turn summary to the host hook
+        // before resetting, so a missed milestone can still enter the graph (#79).
+        // Not exposed as an AG-UI event (§6 keeps turn_* internal).
+        this.opts.onTurnEnd?.({ name: this.name, role: this.role, trackers: this.trackers });
         this.resetTrackers();
         return;
 
@@ -211,6 +248,13 @@ export class MasAgent {
         this.bus.emit(ev.toolCallStart(ctx, t.toolCallId, t.toolName, this.currentMessageId));
         const argsStr = safeStringify(t.args);
         if (argsStr) this.bus.emit(ev.toolCallArgs(ctx, t.toolCallId, argsStr));
+        // Capture the delegation target for the §8 hook (#79). `create_agent`'s
+        // arg is `agent_type` (see createCreateAgentTool); fall back to `name`.
+        if (t.toolName === "create_agent") {
+          const args = (t.args ?? {}) as Record<string, unknown>;
+          const target = args.agent_type ?? args.name;
+          if (typeof target === "string" && target) this.trackers.delegateTarget = target;
+        }
         return;
       }
 
@@ -313,14 +357,15 @@ export class MasAgent {
 
   private onToolResult(toolName: string, isError: boolean): void {
     if (isError) return;
+    this.trackers.usedToolNames.add(toolName);
     if (toolName === "send_message") this.trackers.replied = true;
     if (toolName === "record_trace" || toolName.startsWith("create_trace")) this.trackers.traced = true;
     if (toolName === "create_agent") this.trackers.delegated = true;
   }
 
   /** Expose tracker state (for hook tests). */
-  getTrackers(): { replied: boolean; traced: boolean; delegated: boolean } {
-    return { ...this.trackers };
+  getTrackers(): TurnTrackers {
+    return { ...this.trackers, usedToolNames: new Set(this.trackers.usedToolNames) };
   }
 }
 
