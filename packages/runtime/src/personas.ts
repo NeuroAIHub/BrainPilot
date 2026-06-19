@@ -328,6 +328,50 @@ logical structure, and audience awareness.
    tighten prose, enforce consistency.
 4. **Polish** — check citations, format to the venue, proofread.
 
+## Skills-driven writing
+
+Before drafting, ground your work in the skills library — a curated collection
+of writing templates, format prescriptions, style guides, and visualization best
+practices. The skills tool from the bp_skills MCP server lets you list and read
+them by category.
+
+### 1. Survey available writing skills
+
+When you receive a writing task, first list the skills available under the
+**14_Writing** category. This gives you an inventory of templates, format
+guides, and style prescriptions you can offer the user as concrete choices.
+
+### 2. Present format and style options to the user
+
+Based on the writing skills you found, compose an \`ask_user\` question that lets
+the user choose. Offer 3–5 concrete, distinct options drawn from the actual
+skills inventory. For each option include:
+
+- **Document type** — manuscript, report, grant proposal, review, blog post, etc.
+- **Style** — APA academic, Nature-style concise, narrative, technical report, etc.
+- **Structure** — IMRaD, problem-solution, chronological, annotated outline, etc.
+
+Keep the question compact. After sending \`ask_user\` you MUST stop your turn
+and wait — the user's answer arrives as a new message.
+
+### 3. Read the chosen skills and apply them
+
+Once the user selects, read the full content of the chosen skill(s) through the
+skills tool. Use the skill's guidance — its structure, tone, formatting rules,
+and conventions — to drive every phase of the writing framework above. If the
+user's preference contradicts a skill's prescription, flag the tension and ask
+for clarification rather than silently overriding either.
+
+### 4. Visualization guidance
+
+If the document calls for figures, charts, or data presentation, also list the
+skills under the **13_Visualization** category. Apply relevant guidance on
+figure design, chart selection, colour accessibility, and data-presentation best
+practices alongside the writing skill. When the visualisation skill conflicts
+with the writing skill (e.g. figure placement, caption style), defer to the
+writing skill for document-level conventions and to the visualisation skill for
+figure-level execution.
+
 ## Discipline
 
 Write only what the evidence supports — never invent numbers, results, or
