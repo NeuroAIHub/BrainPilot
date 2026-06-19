@@ -20,6 +20,7 @@ import { isMockMode } from "@brainpilot/runtime";
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
 import { scaffold, isScaffolded, DEFAULT_PORT } from "../scaffold.js";
+import { detectPromptDrift } from "./template.js";
 import { writePid, writeServerState } from "../process-control.js";
 import { resolveWebDist } from "../web-dist.js";
 
@@ -160,6 +161,27 @@ export async function up(
   if (!(await isScaffolded(dataDir))) {
     log(pc.dim(`Scaffolding ${dataDir} ...`));
     await scaffold(dataDir, { port });
+  }
+
+  // 2b. Non-blocking banner if any on-disk prompt overrides have drifted from
+  //     the in-code built-in (#102). The runtime still loads the on-disk file
+  //     verbatim — we just surface the divergence so users notice when
+  //     `git pull` updated a prompt they previously customised.
+  try {
+    const drift = await detectPromptDrift(dataDir);
+    if (drift.length > 0) {
+      const names = drift.map((d) => d.name).join(", ");
+      log(
+        pc.yellow(
+          `ℹ Detected ${drift.length} on-disk agent prompt override(s) diverging from built-ins: ${names}`,
+        ),
+      );
+      log(pc.dim("    inspect:  npm run bp -- template diff"));
+      log(pc.dim("    refresh:  npm run bp -- template reset"));
+      log(pc.dim("    keep:     ignore this notice (overrides take precedence)"));
+    }
+  } catch {
+    // banner is best-effort — never fail `up` over template introspection
   }
 
   // 3. Resolve provider key. Skipped under BP_MOCK=1 — the mock agent replaces

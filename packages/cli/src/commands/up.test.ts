@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -102,6 +102,50 @@ describe("up — provider key resolution", () => {
       await readFile(join(root, "brainpilot.config.json"), "utf8"),
     );
     expect(cfg.port).toBeGreaterThan(0);
+  });
+
+  it("flashes a drift banner when on-disk agent prompts diverge from built-ins (#102)", async () => {
+    const root = join(dir, "brainpilot");
+    // Pre-scaffold via a stub override that doesn't match any built-in.
+    await mkdir(join(root, "bp_template", "agents", "principal"), { recursive: true });
+    await writeFile(
+      join(root, "bp_template", "agents", "principal", "prompt.md"),
+      "USER CUSTOMISED PROMPT\n",
+      "utf8",
+    );
+    const logs: string[] = [];
+    await up(
+      { dir: root, port: 9890, foreground: true, open: false },
+      {
+        env: { BP_MOCK: "1" },
+        startServer: async () =>
+          ({ stop: async () => {} }) as unknown as RunningServer,
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    const text = logs.join("\n");
+    expect(text).toContain("on-disk agent prompt override");
+    expect(text).toContain("principal");
+    expect(text).toContain("template reset");
+  });
+
+  it("does NOT flash the drift banner when no overrides exist", async () => {
+    const root = join(dir, "brainpilot");
+    const logs: string[] = [];
+    await up(
+      { dir: root, port: 9891, foreground: true, open: false },
+      {
+        env: { BP_MOCK: "1" },
+        startServer: async () =>
+          ({ stop: async () => {} }) as unknown as RunningServer,
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    expect(logs.join("\n")).not.toContain("on-disk agent prompt override");
   });
 
   it("skips the key warning under BP_MOCK=1 (no key needed)", async () => {
