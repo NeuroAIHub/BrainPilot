@@ -247,6 +247,14 @@ export const RUNTIME_ROUTES = {
   sessionEvents: { method: "GET", path: "/sse/:id" },
   /** Alias path some callers use; same AgUiEvent payload as `sessionEvents`. */
   sessionEventsAlias: { method: "GET", path: "/sessions/:id/events" },
+  /**
+   * Persisted AG-UI event history from `events.jsonl`. The SPA calls this on
+   * session activation to rehydrate chat after a runtime restart (the SSE
+   * stream only replays the in-memory ring buffer). Query: `?limit=N`
+   * (default 1000, capped at 5000); returns the most recent N events when
+   * the file is longer.
+   */
+  getSessionHistory: { method: "GET", path: "/sessions/:id/history" },
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },

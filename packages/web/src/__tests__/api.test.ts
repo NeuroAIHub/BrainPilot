@@ -102,6 +102,42 @@ describe("api.sessions.getEvents — tolerates SSE / non-JSON responses", () => 
   });
 });
 
+describe("api.sessions.getHistory — persisted events.jsonl rehydration", () => {
+  it("returns the envelope shape from a JSON response", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { events: [{ type: "TEXT_MESSAGE_CHUNK", delta: "hi" }], total: 1, truncated: false },
+      }),
+    );
+    const out = await api.sessions.getHistory("s1");
+    expect(out.events).toHaveLength(1);
+    expect(out.total).toBe(1);
+    expect(out.truncated).toBe(false);
+  });
+
+  it("forwards the limit query string", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: { events: [], total: 0, truncated: false } }),
+    );
+    await api.sessions.getHistory("s1", { limit: 42 });
+    const url = String(fetchMock.mock.calls[0]![0]);
+    expect(url).toContain("/sessions/s1/history?limit=42");
+  });
+
+  it("returns the empty envelope on a non-ok response", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ ok: false, status: 404 }));
+    const out = await api.sessions.getHistory("s1");
+    expect(out).toEqual({ events: [], total: 0, truncated: false });
+  });
+
+  it("returns the empty envelope when the body is null", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
+    const out = await api.sessions.getHistory("s1");
+    expect(out).toEqual({ events: [], total: 0, truncated: false });
+  });
+});
+
 describe("api.sessions.interrupt — hits the interrupt route, not /messages (#90)", () => {
   it("POSTs to /sessions/:id/interrupt and returns { interrupted }", async () => {
     fetchMock.mockResolvedValueOnce(
