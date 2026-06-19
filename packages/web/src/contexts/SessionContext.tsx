@@ -54,7 +54,9 @@ interface SessionContextValue {
   startDraftSession: () => void;
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string }) => Promise<void>;
+  /** Resolves true when the message was accepted, false on validation/timeout/
+   *  error — the composer uses this to restore the draft so input isn't lost. */
+  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string }) => Promise<boolean>;
   interruptCurrent: () => Promise<void>;
   /**
    * 修正6 — answer an ask_user (user_input_request) card. Optimistically
@@ -321,26 +323,30 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const trimmed = content.trim();
       console.log(`[SessionContext] sendPrompt: "${trimmed.slice(0, 40)}...", isConnected=${isConnected}, isDraft=${isDraft}`);
       if (!trimmed) {
-        return;
+        return false;
       }
       // A draft has no SSE connection yet — the session is created and
       // connected below. Only block on connection for an already-persisted
       // session.
       if (!currentSession && !isDraft) {
         setError(tg("ctx.session.noConnection"));
-        return;
+        return false;
       }
       if (currentSession && !isConnected) {
         setError(tg("ctx.session.noConnection"));
-        return;
+        return false;
       }
 
       setIsSending(true);
       setError(null);
+      // Tracked so we can roll back the optimistic user message if the post
+      // fails/times out (#106) — otherwise the bubble lingers and a retry
+      // duplicates it.
+      let optimistic: { sessionId: string; messageId: string } | null = null;
       try {
         const session = currentSession ?? (await createSession(trimmed.slice(0, 48), opts));
         if (!session) {
-          return;
+          return false;
         }
         // Freshly created (draft → persisted): open the SSE stream so the
         // assistant's streamed reply is received.
@@ -360,6 +366,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           createdAt: timestamp,
           agent: "user",
         };
+        optimistic = { sessionId: session.id, messageId: uuid };
         setMessagesBySession((current) => ({
           ...current,
           [session.id]: [...(current[session.id] ?? []), userMessage],
@@ -367,9 +374,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         console.log(`[SessionContext] posting message to ${session.id}`);
         await api.sessions.postMessage(session.id, { content: trimmed, uuid, timestamp });
         console.log(`[SessionContext] postMessage success`);
+        return true;
       } catch (err) {
         console.error(`[SessionContext] sendPrompt error:`, err);
-        setError(err instanceof Error ? err.message : tg("ctx.session.sendFailed"));
+        // #106: roll back the optimistic bubble so the failed send doesn't
+        // leave a ghost message (and a retry doesn't duplicate it).
+        if (optimistic) {
+          const { sessionId: sid, messageId } = optimistic;
+          setMessagesBySession((current) => ({
+            ...current,
+            [sid]: (current[sid] ?? []).filter((m) => m.id !== messageId),
+          }));
+        }
+        // AbortSignal.timeout() rejects with a TimeoutError (and a hard abort
+        // with AbortError). Surface a clear, retryable message instead of the
+        // raw DOMException text, and let `finally` release isSending so the
+        // composer never stays stuck on "正在准备发送".
+        const isTimeout =
+          err instanceof DOMException &&
+          (err.name === "TimeoutError" || err.name === "AbortError");
+        setError(
+          isTimeout
+            ? tg("ctx.session.sendTimeout")
+            : err instanceof Error
+              ? err.message
+              : tg("ctx.session.sendFailed"),
+        );
+        return false;
       } finally {
         setIsSending(false);
       }

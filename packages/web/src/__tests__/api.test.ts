@@ -108,6 +108,34 @@ describe("api.sessions.create — unwraps the { id, session } envelope (#96)", (
   });
 });
 
+describe("composer-driving requests carry an abort timeout (#106)", () => {
+  it("create passes an AbortSignal so a hung POST can't wedge the composer", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: { id: "x", session: { id: "x", title: "t" } } }),
+    );
+    await api.sessions.create("t");
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("postMessage passes an AbortSignal", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: { status: "ok" } }),
+    );
+    await api.sessions.postMessage("s1", { content: "hi", uuid: "u", timestamp: "2026-06-18T00:00:00Z" });
+    const init = fetchMock.mock.calls[0][1] as RequestInit;
+    expect(init.signal).toBeInstanceOf(AbortSignal);
+  });
+
+  it("propagates the timeout rejection to the caller (releases isSending upstream)", async () => {
+    // Simulate AbortSignal.timeout firing: fetch rejects with a TimeoutError.
+    fetchMock.mockRejectedValueOnce(new DOMException("timed out", "TimeoutError"));
+    await expect(
+      api.sessions.postMessage("s1", { content: "hi", uuid: "u", timestamp: "2026-06-18T00:00:00Z" }),
+    ).rejects.toBeInstanceOf(DOMException);
+  });
+});
+
 describe("api.sessions.getEvents — tolerates SSE / non-JSON responses", () => {
   it("returns the events array for a JSON { events } body", async () => {
     fetchMock.mockResolvedValueOnce(

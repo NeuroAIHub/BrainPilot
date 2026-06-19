@@ -223,13 +223,25 @@ export function PromptComposer() {
     // they exist in its workspace and can `read` them. Cleared after send.
     const notice =
       attachments.length > 0 ? `${t("chat.upload.notice", { names: attachments.join(", ") })}\n\n` : "";
+    const sentAttachments = attachments;
     if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
-    await sendPrompt(`${notice}${content}`, {
+    const ok = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
     });
+    // #106: a failed/timed-out send must not silently eat the user's input.
+    // Restore the draft (and attachment chips) so they can retry without
+    // retyping. Only restore if they haven't already started typing again.
+    if (!ok) {
+      if (draftStore.get(sessionId).trim().length === 0) {
+        draftStore.set(sessionId, content);
+      }
+      if (sentAttachments.length > 0) {
+        setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
+      }
+    }
   };
 
   // #47: upload the chosen files into the session workspace, then track their

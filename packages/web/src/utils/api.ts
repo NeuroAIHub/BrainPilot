@@ -39,9 +39,28 @@ const API_BASE = "/api";
 // Trust-front: the hosted gateway authenticates via an httpOnly cookie that the
 // browser carries automatically. The frontend never reads, stores, or attaches a
 // token — it just makes credentialed requests.
-function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  return fetch(input, { credentials: "include", ...init });
+//
+// #106: callers that drive composer state (postMessage / create) pass a
+// `timeoutMs`. A hung request used to leave `isSending` true forever (the
+// `finally` that resets it never ran), permanently disabling the composer and
+// silently dropping the user's input. With a timeout the request rejects, the
+// caller's catch surfaces a recoverable error, and `isSending` is released.
+function apiFetch(
+  input: RequestInfo | URL,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<Response> {
+  const { timeoutMs, signal, ...rest } = init;
+  if (timeoutMs == null) {
+    return fetch(input, { credentials: "include", signal, ...rest });
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  // Honour an upstream signal too, if one was supplied.
+  const merged = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  return fetch(input, { credentials: "include", signal: merged, ...rest });
 }
+
+/** #106: default ceiling for composer-driving requests (create / postMessage). */
+const SEND_TIMEOUT_MS = 30_000;
 
 function authHeaders(json = true): Record<string, string> {
   return json ? { "Content-Type": "application/json" } : {};
@@ -316,6 +335,7 @@ export const api = {
         await apiFetch(`${API_BASE}/sessions`, {
           method: "POST",
           headers: authHeaders(),
+          timeoutMs: SEND_TIMEOUT_MS,
           body: JSON.stringify({
             title,
             ...(opts.providerId ? { providerId: opts.providerId } : {}),
@@ -390,6 +410,7 @@ export const api = {
         await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
+          timeoutMs: SEND_TIMEOUT_MS,
           body: JSON.stringify({
             type: payload.type ?? "user_message",
             content: payload.content,
