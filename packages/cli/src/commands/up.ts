@@ -78,13 +78,17 @@ export function buildStartServerOptions(
 }
 
 /** Pick the right CLI invocation hint based on how the process was launched.
- *  When started via `npm run <script>`, npm sets `npm_lifecycle_event` to the
- *  script name — flags need `--` to reach the underlying command, so the hint
- *  becomes `npm run <script> -- --port <n>` instead of the bare binary form. */
+ *
+ *  Direct binary call → `brainpilot up --port <n>`.
+ *
+ *  npm script call → `npm run <script> -- up --port <n>`. The `--` is required
+ *  to stop npm from swallowing flags (otherwise it warns "Unknown cli config
+ *  '--port'" and never passes them through), and the `up` subcommand has to
+ *  follow it because the script itself only invokes `node bin.js`. */
 export function portFlagHint(env: NodeJS.ProcessEnv = process.env): string {
   const script = env.npm_lifecycle_event;
   if (script && script !== "npx") {
-    return `npm run ${script} -- --port <n>`;
+    return `npm run ${script} -- up --port <n>`;
   }
   return "brainpilot up --port <n>";
 }

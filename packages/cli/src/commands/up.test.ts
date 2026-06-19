@@ -203,12 +203,15 @@ describe("portFlagHint", () => {
     expect(portFlagHint({})).toBe("brainpilot up --port <n>");
   });
 
-  it("returns `npm run <script> -- --port <n>` when npm_lifecycle_event is set", () => {
+  it("returns `npm run <script> -- up --port <n>` when npm_lifecycle_event is set", () => {
+    // The `up` subcommand has to come *after* `--`, since the npm script
+    // itself only runs `node bin.js` — without `up` the CLI defaults to a
+    // different command and never reaches the port path.
     expect(portFlagHint({ npm_lifecycle_event: "bp" })).toBe(
-      "npm run bp -- --port <n>",
+      "npm run bp -- up --port <n>",
     );
     expect(portFlagHint({ npm_lifecycle_event: "start" })).toBe(
-      "npm run start -- --port <n>",
+      "npm run start -- up --port <n>",
     );
   });
 
@@ -221,9 +224,9 @@ describe("portFlagHint", () => {
 
 describe("PortInUseError", () => {
   it("includes the supplied hint in the message", () => {
-    const e = new PortInUseError(9001, "npm run bp -- --port <n>");
+    const e = new PortInUseError(9001, "npm run bp -- up --port <n>");
     expect(e.message).toContain("Port 9001 is already in use.");
-    expect(e.message).toContain("`npm run bp -- --port <n>`");
+    expect(e.message).toContain("`npm run bp -- up --port <n>`");
   });
 
   it("falls back to the default hint when none supplied", () => {
