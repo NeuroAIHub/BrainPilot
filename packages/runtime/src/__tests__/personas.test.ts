@@ -39,10 +39,12 @@ describe("personas", () => {
   it("principal persona is delegation-oriented and names the experts", () => {
     const p = PERSONAS.principal!;
     expect(p).toContain("send_message");
+    expect(p).toContain("ask_user");
     expect(p).toContain("librarian");
     expect(p).toContain("engineer");
     expect(p).toContain("writer");
     expect(p).toContain("experimentalist");
+    expect(p).toContain("Final reports");
   });
 
   it("expert personas carry the send_message-back contract", () => {
@@ -56,6 +58,9 @@ describe("personas", () => {
     expect(p).toContain("Pre-delivery audit");
     expect(p).toContain("MUST");
     expect(p).toContain("auditor");
+    expect(p).toContain("expert deliverable");
+    expect(p).toContain("original user need");
+    expect(p).toContain("Do NOT personally perform fabrication/reliability audit");
     // The exemption clause keeps the audit out of pure conversational turns.
     expect(p.toLowerCase()).toContain("exemption");
   });
