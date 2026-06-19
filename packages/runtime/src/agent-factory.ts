@@ -17,6 +17,7 @@
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
+import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -66,6 +67,15 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // they'd absorb whatever AGENTS.md/CLAUDE.md happen to sit in the ancestry —
   // e.g. the legacy "MAS Platform Phase 1" doc — and mis-identify themselves.
   // Agent identity must come ONLY from the per-role persona below.
+  // Pi-native hooks: register the trace-reminder extension per AgentSession (its
+  // closure state is naturally per-agent). Only the real factory loads it — the
+  // mock factory has no Pi event loop, so behavioural hooks are verified in real
+  // mode (design §7 / T2).
+  const traceReminder = makeTraceReminderExt({
+    role: params.role,
+    name: params.agentName,
+    onUnreplied: params.onUnreplied ?? (() => {}),
+  });
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
@@ -73,6 +83,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     noContextFiles: true,
     additionalSkillPaths: params.skillPaths,
     appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
+    extensionFactories: [traceReminder],
   });
   await resourceLoader.reload();
 
@@ -175,6 +186,8 @@ interface PiSdk {
     noContextFiles?: boolean;
     /** Explicit skill dirs/files; loaded even when noSkills is true, and not trust-gated. */
     additionalSkillPaths?: string[];
+    /** Inline Pi extensions: each is called with the per-session ExtensionAPI. */
+    extensionFactories?: unknown[];
   }) => { reload(): Promise<void> };
   getAgentDir(): string;
   AuthStorage: {

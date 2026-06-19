@@ -65,6 +65,9 @@ export const relationLabels: Record<string, string> = {
   used: "used",
   produced: "produced",
   comparison_with: "compared with",
+  follows: "then",
+  depends_on: "depends on",
+  parent: "parent",
 };
 
 export const artifactLabels: Record<string, string> = {

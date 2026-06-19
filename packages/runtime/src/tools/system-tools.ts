@@ -152,7 +152,10 @@ export function createDestroyAgentTool(deps: ToolDeps): SystemTool {
 export function createRecordTraceTool(deps: ToolDeps): SystemTool {
   return {
     name: "record_trace",
-    description: "Record a reasoning/trace event into the Graph of Trace.",
+    description:
+      "Notify the Trace Agent of a reasoning/trace event. The Trace Agent is a " +
+      "real agent that owns the Graph of Trace; it decides whether to create a " +
+      "new node, update an existing one, or merge with a sibling.",
     parameters: {
       type: "object",
       properties: {
@@ -163,16 +166,49 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       required: ["description"],
     },
     execute: async (params: Record<string, unknown>) => {
-      const node = deps.trace.createNode({
-        title: String(params.description ?? "trace"),
-        type: "trace",
-        status: "completed",
-        agent: deps.fromAgent,
-        description: String(params.description ?? ""),
-        content: String(params.context ?? ""),
-        artifacts: ((params.artifacts as string[]) ?? []).map((p) => ({ path: p })),
-      });
-      return ok(`trace recorded: ${node.id}`);
+      // §10 (legacy parity): record_trace does NOT mutate the graph directly.
+      // Instead it dispatches a [Trace Event] envelope into the trace agent's
+      // mailbox; the trace agent — a real Pi AgentSession — receives it and
+      // calls create_trace_node / update_trace_node / add_trace_relation as the
+      // editor. This keeps the trace agent's status authentically live in the
+      // Agents panel (otherwise it would be a permanently-dormant placeholder)
+      // and lets the trace agent merge/dedupe across multiple sources, which is
+      // exactly the persona we already ship for it.
+      const description = String(params.description ?? "");
+      const context = String(params.context ?? "");
+      const artifacts = (params.artifacts as string[]) ?? [];
+      const lines = [`[Trace Event]`, `Description: ${description}`];
+      if (context) lines.push(`Context: ${context}`);
+      lines.push("", "Artifacts:");
+      if (artifacts.length === 0) {
+        lines.push("(none)");
+      } else {
+        for (const a of artifacts) lines.push(`- ${a}`);
+      }
+      const envelope = lines.join("\n");
+
+      // Spawn-on-demand: the trace agent is a real Pi session. ensureAgent
+      // creates one if it doesn't exist yet (idempotent) and resurrects a
+      // stopped one. That spawn is what finally surfaces the trace agent as
+      // "idle/running" in the Agents panel.
+      await deps.ensureAgent("trace");
+      try {
+        await deps.mailbox.write({
+          fromAgent: deps.fromAgent,
+          toAgent: "trace",
+          content: envelope,
+          msgType: "trace_event",
+        });
+      } catch (err) {
+        if (err instanceof MailboxFullError) {
+          return { ...ok(`cannot deliver to trace: ${err.message}`), isError: true };
+        }
+        throw err;
+      }
+      // Fire-and-forget: kick the trace agent's delivery loop so the envelope
+      // is consumed in its own run rather than sitting unread.
+      deps.wakeAgent("trace");
+      return ok("trace event dispatched");
     },
   };
 }
@@ -193,14 +229,18 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
       required: ["title"],
     },
     execute: async (params: Record<string, unknown>) => {
-      const parentId = params.parent_id ? String(params.parent_id) : undefined;
+      // Honour an explicit parent_id; otherwise chain to the most recent node so
+      // the graph stays connected instead of accumulating orphan nodes.
+      const explicitParent = params.parent_id ? String(params.parent_id) : undefined;
+      const parentId = explicitParent ?? deps.trace.getLastNodeId();
+      const relation = explicitParent ? "parent" : "follows";
       const node = deps.trace.createNode({
         title: String(params.title ?? ""),
         type: params.type ? String(params.type) : undefined,
         status: params.status ? String(params.status) : undefined,
         description: params.description ? String(params.description) : undefined,
         agent: deps.fromAgent,
-        parents: parentId ? [{ id: parentId, relation: "parent" }] : undefined,
+        parents: parentId ? [{ id: parentId, relation }] : undefined,
       });
       return ok(`node ${node.id} created`);
     },

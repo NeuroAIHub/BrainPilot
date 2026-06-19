@@ -1,12 +1,17 @@
 /**
- * #79 — deterministic post-turn trace capture.
+ * Graph of Trace — structural guarantees driven through the real SessionManager.
  *
- * The Graph of Trace must stay reliable even when the model never calls
- * `record_trace`. These tests drive scripted agent turns through the real
- * SessionManager and assert:
- *   - a principal that delegates without record_trace still gets an auto node;
- *   - an expert that delivers a result without record_trace gets an auto node;
- *   - a turn that DOES call record_trace produces no duplicate auto node;
+ * After the legacy-parity rewrite, `record_trace` does NOT mutate the graph
+ * directly. It dispatches a `[Trace Event]` envelope into the trace agent's
+ * mailbox; the trace agent (a real Pi AgentSession) is the editor that calls
+ * `create_trace_node` / `update_trace_node` / `add_trace_relation`. These tests
+ * pin down the host-side plumbing — independent of the Pi-native reminder hooks
+ * which only load under the real factory (verified separately per design §7/T2):
+ *   - the principal calling `record_trace` causes a trace agent to be spawned
+ *     and a `trace_event` envelope to land in its mailbox;
+ *   - when the trace agent runs and calls `create_trace_node` consecutively,
+ *     the resulting nodes are chained into a connected DAG via the
+ *     `getLastNodeId()` fallback (visible edges, not orphan dots);
  *   - every trace mutation is pushed to the SSE stream as CUSTOM:trace_node.
  */
 import { describe, it, expect } from "vitest";
@@ -79,80 +84,53 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-describe("deterministic trace capture (#79)", () => {
-  it("auto-captures a milestone when principal delegates without record_trace", async () => {
+describe("Graph of Trace structural plumbing", () => {
+  it("chains consecutive trace agent nodes into a connected DAG (not orphans)", async () => {
+    // Regression: before the agent-driven rewrite, `record_trace` chained nodes
+    // itself; now the trace agent is the writer. The `create_trace_node` tool
+    // still falls back to `getLastNodeId()` when no explicit parent is given,
+    // so consecutive trace-agent decisions remain a connected chain.
+    let principalTurn = 0;
+    let traceTurn = 0;
     const factory = scriptedFactory({
       principal: {
-        onPrompt: (text) =>
-          text.includes("DELEGATE")
-            ? { tool: "create_agent", args: { agent_type: "librarian", task: "survey" } }
-            : undefined,
+        onPrompt: () => {
+          principalTurn += 1;
+          return {
+            tool: "record_trace",
+            args: { description: `decision ${principalTurn}` },
+          };
+        },
       },
-      librarian: {},
+      trace: {
+        onPrompt: (text) => {
+          // The trace agent reads the [Trace Event] envelope and creates a
+          // node; it does NOT pass parent_id, so the chain is via the
+          // create_trace_node fallback to getLastNodeId.
+          if (!text.includes("[Trace Event]")) return undefined;
+          traceTurn += 1;
+          return {
+            tool: "create_trace_node",
+            args: { title: `decision ${traceTurn}`, type: "trace" },
+          };
+        },
+      },
     });
     const m = new SessionManager({ persist: false, agentFactory: factory });
     const s = await m.createSession();
 
-    await m.sendMessage(s.id, "please DELEGATE this");
-    await waitFor(() => m.getTrace(s.id)!.nodes.length > 0);
+    await m.sendMessage(s.id, "first");
+    await waitFor(() => m.getTrace(s.id)!.nodes.length >= 1);
+    await m.sendMessage(s.id, "second");
+    await waitFor(() => m.getTrace(s.id)!.nodes.length >= 2);
 
     const nodes = m.getTrace(s.id)!.nodes;
-    const auto = nodes.find((n) => n.metadata?.auto);
-    expect(auto).toBeDefined();
-    expect(auto!.title).toBe("Delegated to librarian");
-    expect(auto!.agent).toBe("principal");
-    expect(auto!.metadata?.hook).toBe("principal_trace");
-  });
-
-  it("auto-captures an expert delivery without record_trace", async () => {
-    const factory = scriptedFactory({
-      principal: {
-        onPrompt: (text) =>
-          text.includes("DELEGATE")
-            ? { tool: "send_message", args: { to: "librarian", content: "do work" } }
-            : undefined,
-      },
-      librarian: {
-        onPrompt: (text) =>
-          text.includes("do work")
-            ? { tool: "send_message", args: { to: "principal", content: "findings ready" } }
-            : undefined,
-      },
-    });
-    const m = new SessionManager({ persist: false, agentFactory: factory });
-    const s = await m.createSession();
-
-    await m.sendMessage(s.id, "please DELEGATE this");
-    await waitFor(() =>
-      m.getTrace(s.id)!.nodes.some((n) => n.agent === "librarian" && n.metadata?.auto),
-    );
-
-    const lib = m.getTrace(s.id)!.nodes.find((n) => n.agent === "librarian" && n.metadata?.auto)!;
-    expect(lib.title).toBe("librarian delivered result");
-    expect(lib.metadata?.hook).toBe("expert_reply");
-  });
-
-  it("does NOT add an auto node when the model already called record_trace", async () => {
-    const factory = scriptedFactory({
-      principal: {
-        onPrompt: (text) =>
-          text.includes("TRACE")
-            ? { tool: "record_trace", args: { description: "explicit decision" } }
-            : undefined,
-      },
-    });
-    const m = new SessionManager({ persist: false, agentFactory: factory });
-    const s = await m.createSession();
-
-    await m.sendMessage(s.id, "please TRACE this");
-    await waitFor(() => m.getTrace(s.id)!.nodes.length > 0);
-    // settle: let the turn_end hook run
-    await new Promise((r) => setTimeout(r, 20));
-
-    const nodes = m.getTrace(s.id)!.nodes;
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]!.metadata?.auto).toBeUndefined();
-    expect(nodes[0]!.title).toBe("explicit decision");
+    const first = nodes.find((n) => n.title === "decision 1")!;
+    const second = nodes.find((n) => n.title === "decision 2")!;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    expect(second.parentIds).toContain(first.id);
+    expect(second.parents[0]!.relation).toBe("follows");
   });
 
   it("pushes every trace mutation to the SSE stream as CUSTOM:trace_node", async () => {
@@ -161,6 +139,12 @@ describe("deterministic trace capture (#79)", () => {
         onPrompt: (text) =>
           text.includes("TRACE")
             ? { tool: "record_trace", args: { description: "a decision" } }
+            : undefined,
+      },
+      trace: {
+        onPrompt: (text) =>
+          text.includes("[Trace Event]")
+            ? { tool: "create_trace_node", args: { title: "a decision", type: "trace" } }
             : undefined,
       },
     });

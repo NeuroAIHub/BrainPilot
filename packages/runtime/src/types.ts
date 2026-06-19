@@ -112,6 +112,13 @@ export type AgentSessionFactory = (params: {
   /** System prompt for the agent. */
   systemPrompt: string;
   /**
+   * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
+   * when an expert was reminded once and STILL did not report back, so the host
+   * can write a fallback note into the principal's mailbox (the PI never
+   * dead-waits). Omitted by the mock factory.
+   */
+  onUnreplied?: (agentName: string) => void;
+  /**
    * App-controlled skill directories loaded for this agent (template dir shared
    * by all sessions + this session's own dir). Replaces the host-global skill
    * discovery — see agent-factory `noSkills: true`.

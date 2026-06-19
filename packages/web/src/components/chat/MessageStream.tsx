@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Copy } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../contracts/backend";
 import { buildRenderItems } from "../../contexts/messageGroups";
 import { useT } from "../../i18n/useT";
@@ -7,12 +7,21 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { AskUserCard } from "./AskUserCard";
 import { AutoRetryIndicator } from "./AutoRetryIndicator";
+import { formatToolName, formatPayload } from "../../utils/toolDisplay";
+import { getChatScroll, setChatScroll, resolveScrollTop } from "./chatScrollMemory";
 
 interface MessageStreamProps {
   /** Already filtered / time-sliced by the host. */
   messages: ChatMessage[];
   /** Pin to bottom as new messages arrive (live chat). Default false. */
   autoScroll?: boolean;
+  /**
+   * #89 — session id used to remember scroll position/pinned intent across
+   * tab switches (Chat is unmounted when Agents/Trace is active). When set, the
+   * stream restores its prior position on mount instead of replaying a visible
+   * top-to-bottom scroll. Omit in read-only contexts (demo replay).
+   */
+  scrollKey?: string;
   /** Show the "N messages" toolbar row. Default true. */
   showToolbarCount?: boolean;
   /** Show per-agent elapsed timers + total conversation time. Live chat only. */
@@ -66,6 +75,7 @@ function formatElapsed(ms: number): string {
 function MessageStreamImpl({
   messages,
   autoScroll = false,
+  scrollKey,
   showToolbarCount = true,
   showTiming = false,
   className,
@@ -169,6 +179,35 @@ function MessageStreamImpl({
     return formatElapsed(end - entry.start);
   };
 
+  // #89 — restore scroll position on (re)mount BEFORE the browser paints, so
+  // returning to Chat from another tab lands at the right place with no visible
+  // top-to-bottom replay. Reads the per-session memory: pinned/fresh → bottom,
+  // otherwise the saved history position. A double rAF re-applies after async
+  // layout (Markdown, images) settles, in case scrollHeight grew post-mount.
+  useLayoutEffect(() => {
+    const node = stackRef.current;
+    if (!node) return;
+    const mem = getChatScroll(scrollKey);
+    isPinnedRef.current = mem ? mem.pinned : true;
+    const apply = () => {
+      const n = stackRef.current;
+      if (!n) return;
+      n.scrollTop = resolveScrollTop(mem, n.scrollHeight);
+    };
+    apply();
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      apply();
+      raf2 = window.requestAnimationFrame(apply);
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+    };
+    // Mount-only restore; live append is handled by the autoScroll effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollKey]);
+
   useEffect(() => {
     if (!autoScroll) {
       return;
@@ -187,6 +226,8 @@ function MessageStreamImpl({
     }
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
     isPinnedRef.current = distanceFromBottom < 24;
+    // #89 — persist intent so a tab switch (which unmounts Chat) can restore it.
+    setChatScroll(scrollKey, { scrollTop: node.scrollTop, pinned: isPinnedRef.current });
   };
 
   const handleCopy = async (id: string, text: string) => {
@@ -377,15 +418,20 @@ function MessageStreamImpl({
   const renderActivityStep = (step: ChatMessage) => {
     const isExpert = !!step.agent && step.agent !== "principal";
     if (step.kind === "tool") {
+      // #84: render a friendly tool name (mcp__server__tool → server · tool) and
+      // un-escaped payloads. The raw name stays in `title` for debugging/copy.
+      const friendly = t("chat.toolPrefix", { name: formatToolName(step.toolName) });
+      const input = formatPayload(step.toolInput);
+      const result = formatPayload(step.toolResult);
       return (
         <div className="activity-step" key={step.id}>
           <details>
-            <summary>
+            <summary title={step.toolName || undefined}>
               {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
-              {step.content || t("chat.toolPrefix", { name: step.toolName || "tool" })}
+              {friendly}
             </summary>
-            {step.toolInput !== undefined && step.toolInput !== "" ? <pre>{JSON.stringify(step.toolInput, null, 2)}</pre> : null}
-            {step.toolResult !== undefined ? <pre>{JSON.stringify(step.toolResult, null, 2)}</pre> : null}
+            {input ? <pre>{input}</pre> : null}
+            {result ? <pre>{result}</pre> : null}
           </details>
         </div>
       );
@@ -410,7 +456,7 @@ function MessageStreamImpl({
   const activitySubtitle = (steps: ChatMessage[], streaming: boolean) => {
     if (!streaming) return t("chat.thinkingSteps", { count: steps.length });
     const last = steps[steps.length - 1];
-    if (last?.kind === "tool") return t("chat.toolCall", { name: last.toolName || "tool" });
+    if (last?.kind === "tool") return t("chat.toolCall", { name: formatToolName(last.toolName) });
     const text = (last?.reasoning || last?.content || "").trim();
     if (text) return text.length > 80 ? `${text.slice(0, 80)}…` : text;
     return t("chat.thinking");
