@@ -323,7 +323,16 @@ export const api = {
           }),
         }),
       );
-      return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);
+      // The runtime's POST /sessions returns the envelope `{ id, session }`
+      // (server.ts), unlike GET /sessions[/:id] which return the bare session.
+      // Unwrap `session` if present so normalizeSession reads the real `title`
+      // instead of falling back to `Session <id8>` (#96). Tolerate a bare
+      // object too (mock / future shape change).
+      const envelope = raw as { session?: unknown } | null;
+      const sessionRaw = envelope && typeof envelope === "object" && "session" in envelope
+        ? envelope.session
+        : raw;
+      return normalizeSession(sessionRaw as Parameters<typeof normalizeSession>[0]);
     },
 
     async update(sessionId: string, title: string): Promise<Session> {

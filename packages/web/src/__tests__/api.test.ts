@@ -78,6 +78,36 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
   });
 });
 
+describe("api.sessions.create — unwraps the { id, session } envelope (#96)", () => {
+  it("reads the real title from the runtime's { id, session } envelope", async () => {
+    // The runtime's POST /sessions returns `{ id, session }` (server.ts), unlike
+    // the GET routes which return the bare session. Before the fix the whole
+    // envelope was handed to normalizeSession, so `raw.title` was undefined and
+    // the sidebar/header fell back to `Session <id8>` until a reload.
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { id: "f8f35032", session: { id: "f8f35032", title: "请用两句话介绍 BrainPilot" } },
+      }),
+    );
+    const out = await api.sessions.create("请用两句话介绍 BrainPilot");
+    expect(out.id).toBe("f8f35032");
+    expect(out.title).toBe("请用两句话介绍 BrainPilot");
+  });
+
+  it("tolerates a bare session object (no envelope)", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { id: "abc", title: "bare title" },
+      }),
+    );
+    const out = await api.sessions.create("bare title");
+    expect(out.id).toBe("abc");
+    expect(out.title).toBe("bare title");
+  });
+});
+
 describe("api.sessions.getEvents — tolerates SSE / non-JSON responses", () => {
   it("returns the events array for a JSON { events } body", async () => {
     fetchMock.mockResolvedValueOnce(
