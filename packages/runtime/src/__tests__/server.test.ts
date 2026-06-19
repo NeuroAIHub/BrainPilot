@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "../server.js";
+import { createServer, startServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
 
@@ -314,3 +314,52 @@ async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 2000)
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+describe("startServer boot-time restore", () => {
+  it("rehydrates persisted sessions before serving the first request", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-boot-"));
+    // Seed two persisted session dirs the way the runtime writes them.
+    for (const seed of [
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        title: "Persisted A",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-02T00:00:00.000Z",
+        lastActivityAt: 1780000000000,
+      },
+      {
+        id: "22222222-2222-2222-2222-222222222222",
+        title: "Persisted B",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-04T00:00:00.000Z",
+        lastActivityAt: 1780100000000,
+      },
+    ]) {
+      const dir = join(dataRoot, ".bp", seed.id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "meta.json"), JSON.stringify(seed), "utf8");
+    }
+
+    // port: 0 → kernel-assigned; never collides with anything else
+    const handle = await startServer({
+      port: 0,
+      dataRoot,
+      persist: true,
+      agentFactory: mockAgentFactory,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/sessions`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sessions: Array<{ id: string; createdAt: string }> };
+      const ids = body.sessions.map((s) => s.id).sort();
+      expect(ids).toEqual([
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+      ]);
+      const a = body.sessions.find((s) => s.id === "11111111-1111-1111-1111-111111111111")!;
+      expect(a.createdAt).toBe("2026-06-01T00:00:00.000Z");
+    } finally {
+      await handle.close();
+    }
+  });
+});

@@ -452,6 +452,39 @@ export const api = {
       return Array.isArray(raw.events) ? (raw.events as RawAgUiEvent[]) : [];
     },
 
+    /**
+     * Persisted AG-UI event history from `events.jsonl` — used to rehydrate
+     * the chat list (and trace/agents seed) when a session is activated after
+     * a runtime restart. SSE only replays the in-memory ring buffer; this
+     * endpoint walks the on-disk log and returns the tail when long.
+     *
+     * Tolerates any non-200 / non-JSON response by returning an empty
+     * envelope, so callers can fall through to whatever live data the SSE
+     * stream eventually delivers.
+     */
+    async getHistory(
+      sessionId: string,
+      opts: { limit?: number } = {},
+    ): Promise<{ events: RawAgUiEvent[]; total: number; truncated: boolean }> {
+      if (runtimeConfig.useMockBackend) {
+        return { events: [], total: 0, truncated: false };
+      }
+      const qs = opts.limit !== undefined ? `?limit=${encodeURIComponent(opts.limit)}` : "";
+      const res = await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/history${qs}`,
+        { headers: authHeaders() },
+      );
+      if (!res.ok) return { events: [], total: 0, truncated: false };
+      const raw = (await res.json().catch(() => null)) as
+        | { events?: unknown[]; total?: number; truncated?: boolean }
+        | null;
+      return {
+        events: Array.isArray(raw?.events) ? (raw!.events as RawAgUiEvent[]) : [],
+        total: typeof raw?.total === "number" ? raw!.total : 0,
+        truncated: Boolean(raw?.truncated),
+      };
+    },
+
     async state(sessionId: string): Promise<SessionStateSnapshot> {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.state();

@@ -122,6 +122,10 @@ export function createApp(options: CreateAppOptions): Hono {
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
   api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
+  // Persisted event tail for chat rehydrate after a restart. SSE replays only
+  // the in-memory ring; this endpoint reads events.jsonl on disk. Carries the
+  // ?limit query verbatim.
+  api.get("/sessions/:id/history", forward("getSessionHistory", { idParam: "id", withQuery: true }));
   api.post("/sessions/:id/messages", forward("sendMessage", { idParam: "id", withBody: true }));
   api.post("/sessions/:id/interrupt", forward("interrupt", { idParam: "id", withBody: true }));
   api.get("/sessions/:id/agents", forward("listAgents", { idParam: "id" }));

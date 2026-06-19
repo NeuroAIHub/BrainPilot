@@ -157,11 +157,16 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
 
   onProgress?.("reading conversation timeline…");
   let timeline: DemoBundle["timeline"] = "timestamped";
-  let events = await api.sessions.getEvents(session.id);
+  // Pull the persisted event timeline from the new history endpoint (the
+  // legacy `/sessions/:id/events` path is an SSE alias and returns no JSON).
+  // Cap at 5000 — the endpoint enforces the same cap, but stating it here
+  // documents the bundle's max footprint.
+  const historyEnvelope = await api.sessions.getHistory(session.id, { limit: 5000 });
+  let events: typeof historyEnvelope.events | undefined = historyEnvelope.events;
   let messages: ChatMessage[] | undefined;
   if (!events || events.length === 0) {
     timeline = "ordered";
-    events = undefined as never;
+    events = undefined;
     messages = fallbackMessages ?? [];
   }
 

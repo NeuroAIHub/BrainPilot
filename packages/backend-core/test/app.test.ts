@@ -122,6 +122,39 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it("GET /api/sessions/:id/history forwards to the runtime (preserving ?limit)", async () => {
+    // Same class as the /trace regression: chat rehydrate after a runtime
+    // restart depends on this proxy. When it was missing, the SPA's
+    // api.sessions.getHistory call hit the static SPA fallback, returned 200
+    // text/html, and the SessionContext silently treated it as zero events —
+    // so restored sessions opened with an empty chat.
+    const body =
+      '{"events":[{"type":"TEXT_MESSAGE_START","messageId":"m1","role":"assistant"}],"total":1,"truncated":false}';
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/sessions/abc/history?limit=3");
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "bp-web-history-"));
+    await writeFile(path.join(root, "index.html"), "<!doctype html><title>BP</title>");
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      webRoot: root,
+    });
+    const res = await app.request("/api/sessions/abc/history?limit=3");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({
+      events: [{ type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" }],
+      total: 1,
+      truncated: false,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   // #29: session rename. The SPA PUTs /api/sessions/:id {title}; this must
   // proxy to the runtime's updateSession route (PUT /sessions/:id) with the
   // body intact — not the old forwardRename hack that PUT the GET path.

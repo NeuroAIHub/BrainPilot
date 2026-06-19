@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, ChatMessage, MessageFilterRule, Session, TraceGraph, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, ChatMessage, MessageFilterRule, Session, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
@@ -142,23 +142,87 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     void refreshSessions();
   }, [refreshSessions]);
 
+  // Sessions whose persisted history has already been pulled this page-load.
+  // Guards against re-hydrating on every tab switch — once SSE is attached we
+  // own the up-to-date state and don't want to refetch the .jsonl tail.
+  const hydratedSessionsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!currentSessionId) {
       return;
     }
     const sessionId = currentSessionId;
-    let cancelled = false;
-    async function loadMessages() {
-      setIsRefreshingMessages(true);
-      if (!cancelled) {
-        setMessagesBySession((current) => ({ ...current, [sessionId]: current[sessionId] ?? [] }));
-      }
-      setIsRefreshingMessages(false);
+    if (hydratedSessionsRef.current.has(sessionId)) {
+      return;
     }
-    void loadMessages();
-    return () => {
-      cancelled = true;
-    };
+    let cancelled = false;
+
+    async function loadHistory() {
+      setIsRefreshingMessages(true);
+      try {
+        const { events } = await api.sessions.getHistory(sessionId);
+        if (cancelled) return;
+
+        // Replay the persisted event stream through the same reducers SSE uses
+        // (messageReducer / traceReducer / agents seed via session_state). The
+        // SSE ring buffer that arrives next is deduped by messageId/toolCallId
+        // inside the reducer, so any overlap is a no-op.
+        let nextMessages: ChatMessage[] = [];
+        let nextTrace: TraceGraph | null = null;
+        let lastAgents: AgentStatus[] | null = null;
+
+        for (const raw of events) {
+          const ev = normalizeWebSocketEvent(raw);
+          if (!ev) continue;
+          nextMessages = reduceMessagesForEvent(nextMessages, ev);
+          nextTrace = reduceTraceForEvent(nextTrace, ev, sessionId);
+          if (ev.type === "CUSTOM" && ev.name === "session_state") {
+            const v = (ev.value ?? {}) as Record<string, unknown>;
+            if (Array.isArray(v.agents)) {
+              lastAgents = (v.agents as Array<Record<string, unknown>>).map((agent) => ({
+                name: String(agent.name ?? ""),
+                status: String(agent.status ?? "idle"),
+                task: String(agent.task ?? ""),
+                updatedAt:
+                  typeof agent.updatedAt === "string"
+                    ? agent.updatedAt
+                    : new Date().toISOString(),
+                alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
+              }));
+            }
+          }
+        }
+
+        if (cancelled) return;
+        hydratedSessionsRef.current.add(sessionId);
+
+        // Only seed the message list if the user hasn't already started typing
+        // / receiving live SSE for this session in the brief window before
+        // history arrived (otherwise we'd clobber their in-flight messages).
+        setMessagesBySession((current) => {
+          if ((current[sessionId]?.length ?? 0) > 0) return current;
+          return { ...current, [sessionId]: nextMessages };
+        });
+        if (nextTrace) {
+          setTraceBySession((current) =>
+            current[sessionId] ? current : { ...current, [sessionId]: nextTrace! },
+          );
+        }
+        // Only seed agents when the current panel is empty — live SSE may have
+        // already pushed an authoritative session_state since selection.
+        if (lastAgents && lastAgents.length > 0) {
+          setAgents((current) => (current.length === 0 ? lastAgents! : current));
+        }
+      } catch (err) {
+        // Best-effort. SSE will eventually drive the panel; we shouldn't surface
+        // a banner just because the history file was unreachable for a moment.
+        console.warn(`[SessionContext] history rehydrate failed for ${sessionId}:`, err);
+      } finally {
+        if (!cancelled) setIsRefreshingMessages(false);
+      }
+    }
+
+    void loadHistory();
     return () => {
       cancelled = true;
     };
@@ -213,6 +277,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Drop any unsent draft so re-creating a session with the same id (rare,
       // but possible) doesn't resurrect stale text.
       draftStore.delete(sessionId);
+      hydratedSessionsRef.current.delete(sessionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.deleteFailed"));
       throw err;

@@ -436,13 +436,22 @@ export class SessionManager {
 
   async createSession(
     input: { id?: string; title?: string; providerId?: string; modelId?: string } = {},
+    /**
+     * Internal restore path (see `restoreFromDisk`): when provided, the entry
+     * inherits the on-disk meta.json timestamps verbatim instead of stamping
+     * fresh ones, and `writeMeta` is skipped so the canonical file is not
+     * clobbered with boot-time values. Public callers should not pass this.
+     */
+    _restore?: { createdAt: string; updatedAt: string; lastActivityAt: number },
   ): Promise<Session> {
     if (this.memWatchdog?.isOverSoftLimit()) {
       throw new Error("memory budget exceeded: refusing new session");
     }
     const id = input.id ?? randomUUID();
     if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
-    const nowIso = new Date().toISOString();
+    const nowIso = _restore ? _restore.updatedAt : new Date().toISOString();
+    const createdAt = _restore ? _restore.createdAt : nowIso;
+    const lastActivityAt = _restore ? _restore.lastActivityAt : Date.now();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
 
     // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
@@ -470,9 +479,9 @@ export class SessionManager {
     const entry: SessionEntry = {
       id,
       title: input.title ?? "Untitled session",
-      createdAt: nowIso,
+      createdAt,
       updatedAt: nowIso,
-      lastActivityAt: Date.now(),
+      lastActivityAt,
       bus,
       mailbox,
       trace,
@@ -484,13 +493,15 @@ export class SessionManager {
       providerRef,
     };
     this.sessions.set(id, entry);
-    this.touch(entry);
+    if (!_restore) this.touch(entry);
+    else this.lastActivityAt = entry.lastActivityAt;
 
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
       await mkdir(this.sessionSkillsDir(id), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
-      await this.writeMeta(entry);
+      // On restore, meta.json on disk is the authority — do not write it back.
+      if (!_restore) await this.writeMeta(entry);
       // Only (re)write the ref when the caller chose one — restore must not
       // clobber an existing ref with an empty object.
       if (explicitRef) await this.writeProviderRef(entry);
@@ -1106,6 +1117,54 @@ export class SessionManager {
     return entry?.trace.getGraph();
   }
 
+  /**
+   * Read persisted AG-UI events for a session from `.bp/<sid>/events.jsonl`.
+   * Used by the web to rehydrate chat history after a runtime restart (the
+   * in-memory bus ring buffer only carries `recent()` for live SSE replay).
+   *
+   * The file is read line-by-line and unparseable lines are skipped so a
+   * single corrupt record doesn't poison the whole history.
+   *
+   * `limit` caps the returned array; when total > limit we return the **tail**
+   * (most recent events) since that's what users actually want for chat
+   * resume. Default 1000, capped at 5000.
+   *
+   * Returns `undefined` if the session id isn't in memory — this method is
+   * only useful for known sessions (call `restoreFromDisk` first if needed).
+   */
+  async readEventHistory(
+    sessionId: string,
+    opts: { limit?: number } = {},
+  ): Promise<{ events: AgUiEvent[]; total: number; truncated: boolean } | undefined> {
+    if (!this.sessions.has(sessionId)) return undefined;
+    const limit = Math.max(1, Math.min(opts.limit ?? 1000, 5000));
+    const path = join(this.bpDir(sessionId), "events.jsonl");
+    let raw: string;
+    try {
+      raw = await readFile(path, "utf8");
+    } catch {
+      // No events file yet — empty history is valid (newly created session).
+      return { events: [], total: 0, truncated: false };
+    }
+    const lines = raw.split("\n");
+    const events: AgUiEvent[] = [];
+    let total = 0;
+    for (const line of lines) {
+      if (!line) continue;
+      let parsed: unknown;
+      try {
+        parsed = JSON.parse(line);
+      } catch {
+        continue; // skip malformed line
+      }
+      total++;
+      events.push(parsed as AgUiEvent);
+    }
+    const truncated = events.length > limit;
+    const out = truncated ? events.slice(events.length - limit) : events;
+    return { events: out, total, truncated };
+  }
+
   metrics(): {
     activeSessions: number;
     runningAgents: number;
@@ -1233,7 +1292,18 @@ export class SessionManager {
     }
   }
 
-  /** Restore session list from disk (§10 策略A: agents start idle, lazily revived). */
+  /**
+   * Restore session list from disk. Reads `<dataRoot>/.bp/<id>/meta.json` for
+   * every directory and recreates the session entry with its original
+   * timestamps preserved (provider ref, mailbox, trace also rehydrate via the
+   * normal `createSession` restore path). §10 策略A: agents start idle and
+   * are lazily revived when the user actually sends a message.
+   *
+   * Idempotent — sessions already in memory are skipped, not reset.
+   *
+   * Returns the ids that were restored this call (i.e. excluding ones that
+   * were already loaded or whose meta.json was missing / malformed).
+   */
   async restoreFromDisk(): Promise<string[]> {
     const restored: string[] = [];
     const root = join(this.dataRoot, ".bp");
@@ -1241,18 +1311,41 @@ export class SessionManager {
     try {
       ids = await readdir(root);
     } catch {
-      return restored;
+      return restored; // .bp/ doesn't exist yet — fresh install
     }
     for (const id of ids) {
+      if (this.sessions.has(id)) continue;
+      const metaPath = join(root, id, "meta.json");
+      let raw: string;
       try {
-        const raw = await readFile(join(root, id, "meta.json"), "utf8");
-        const meta = JSON.parse(raw) as { id: string; title?: string };
-        if (!this.sessions.has(meta.id)) {
-          await this.createSession({ id: meta.id, title: meta.title });
-          restored.push(meta.id);
-        }
+        raw = await readFile(metaPath, "utf8");
       } catch {
-        /* skip non-session dirs */
+        continue; // not a session dir (no meta.json) — silent skip
+      }
+      try {
+        const meta = JSON.parse(raw) as {
+          id?: string;
+          title?: string;
+          createdAt?: string;
+          updatedAt?: string;
+          lastActivityAt?: number;
+        };
+        const sid = meta.id ?? id;
+        if (this.sessions.has(sid)) continue;
+        const now = new Date().toISOString();
+        await this.createSession(
+          { id: sid, title: meta.title },
+          {
+            createdAt: meta.createdAt ?? now,
+            updatedAt: meta.updatedAt ?? now,
+            lastActivityAt:
+              typeof meta.lastActivityAt === "number" ? meta.lastActivityAt : Date.now(),
+          },
+        );
+        restored.push(sid);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.warn(`[runtime] skipping ${id}: ${(err as Error).message}`);
       }
     }
     return restored;
