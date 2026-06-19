@@ -83,14 +83,16 @@ describe("runList", () => {
 describe("runDiff", () => {
   it("prints unified-ish diff for drifted agents", async () => {
     await writePrompt("trace", "line one\nUSER LINE\nline three\n");
-    // Inject a deterministic built-in body for the diff to compare against.
-    // Use a real persona body but with a known change so we control the lines.
     const out: string[] = [];
     await runDiff({ dir, env: {}, cwd: "/", agent: "trace", log: (m) => out.push(m) });
-    const joined = out.join("\n");
-    // Should include a +/- marker and the agent header.
-    expect(joined).toContain("trace");
-    expect(joined).toMatch(/^[+-] /m);
+    // Strip ANSI: picocolors emits colour codes on CI (TTY-detected) but not
+    // when stdout is piped locally, so the diff markers can be wrapped in
+    // `\x1b[31m…\x1b[39m`. Compare against the de-coloured text.
+    // eslint-disable-next-line no-control-regex
+    const plain = out.join("\n").replace(/\x1b\[[0-9;]*m/g, "");
+    expect(plain).toContain("trace");
+    // At least one removed or added line marker should be present.
+    expect(plain).toMatch(/[+-] /);
   });
 
   it("says 'no drift' when nothing diverges", async () => {
