@@ -276,12 +276,21 @@ export function createUpdateTraceNodeTool(deps: ToolDeps): SystemTool {
 export function createAddTraceRelationTool(deps: ToolDeps): SystemTool {
   return {
     name: "add_trace_relation",
-    description: "Add a relation (edge) between two trace nodes.",
+    description:
+      "Add a directed dependency edge between two trace nodes. DIRECTION MATTERS: " +
+      "`from_id` is the PREREQUISITE (the earlier source work that must exist first), " +
+      "`to_id` is the DEPENDENT (the later downstream work that relies on it). The " +
+      "edge points from_id ──▶ to_id, read as \"to_id depends_on from_id\". " +
+      "Example: a librarian survey is the prerequisite of an experimentalist synthesis, " +
+      "so call add_trace_relation(from_id=<survey>, to_id=<synthesis>) — NOT the reverse. " +
+      "Rule of thumb: the prerequisite (from_id) is almost always the node that was " +
+      "created earlier; if you find yourself pointing from a later node to an earlier " +
+      "one, you have the arguments backwards.",
     parameters: {
       type: "object",
       properties: {
-        from_id: { type: "string" },
-        to_id: { type: "string" },
+        from_id: { type: "string", description: "Prerequisite / earlier source node." },
+        to_id: { type: "string", description: "Dependent / later downstream node." },
         explanation: { type: "string" },
       },
       required: ["from_id", "to_id", "explanation"],

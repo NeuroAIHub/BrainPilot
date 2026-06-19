@@ -119,9 +119,25 @@ export class GraphOfTrace {
   }
 
   addRelation(fromId: string, toId: string, explanation: string, relation = "depends_on"): boolean {
-    const from = this.nodes.get(fromId);
-    const to = this.nodes.get(toId);
+    let from = this.nodes.get(fromId);
+    let to = this.nodes.get(toId);
     if (!from || !to) return false;
+    // Chronology guard (#110): a `depends_on` edge must point prerequisite → dependent,
+    // i.e. the source (`from`) is created no later than the dependent (`to`). The Trace
+    // agent (an LLM) sometimes passes the arguments reversed ("synthesis depends_on
+    // survey" written as from=synthesis,to=survey), producing edges that point backward
+    // in time. Time is a hard fact, so when a depends_on edge would run later→earlier we
+    // swap the endpoints to restore the semantic direction. Other relation kinds
+    // (parent/follows/produced/…) are left untouched.
+    if (
+      relation === "depends_on" &&
+      from.createdAt &&
+      to.createdAt &&
+      from.createdAt > to.createdAt
+    ) {
+      [from, to] = [to, from];
+      [fromId, toId] = [toId, fromId];
+    }
     if (!to.parents.some((p) => p.id === fromId)) {
       to.parents.push({ id: fromId, relation, explanation });
       to.parentIds.push(fromId);
