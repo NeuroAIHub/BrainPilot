@@ -930,10 +930,12 @@ export class SessionManager {
   /**
    * 意图二 fallback — the trace-reminder extension calls this (via the factory's
    * `onUnreplied`) when an expert was reminded once and STILL did not
-   * `send_message` the principal. We write a system note into the principal's
-   * mailbox and wake it, so the principal can re-delegate or proceed without the
-   * silent expert's output rather than dead-waiting. Best-effort: a failed write
-   * must never break the agent loop.
+   * `send_message` the principal (the "silence" path; a hard *error* run is
+   * handled separately). We write a NEUTRAL system note into the principal's
+   * mailbox and wake it so it never dead-waits. The note only states the fact —
+   * the expert ended without delivering a result — and deliberately gives NO
+   * directive ("re-delegate", "proceed without it"): the principal decides what
+   * to do. Best-effort: a failed write must never break the agent loop.
    */
   private writeFallbackToPrincipal(entry: SessionEntry, expert: string): void {
     void entry.mailbox
@@ -941,7 +943,7 @@ export class SessionManager {
         fromAgent: "system",
         toAgent: "principal",
         msgType: "system",
-        content: `专家 ${expert} 多次未回交结果。建议重新委派该任务，或不依赖其输出继续推进。`,
+        content: `[系统通知] 专家 "${expert}" 结束了本次任务但未回交结果。`,
       })
       .then(() => this.wakeAgent(entry.id, "principal"))
       .catch(() => {
