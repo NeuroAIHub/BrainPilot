@@ -18,6 +18,7 @@ import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } fro
 import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
+import { makeAgentStatusExt } from "./extensions/agent-status.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -76,6 +77,13 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     name: params.agentName,
     onUnreplied: params.onUnreplied ?? (() => {}),
   });
+  // #97: inject a fresh team-status block at the top of every turn, but only for
+  // the agent the host supplied a renderer for (the principal). The `context`
+  // hook recomputes per turn and the rewrite is ephemeral (never persisted).
+  const extensionFactories: unknown[] = [traceReminder];
+  if (params.renderAgentStatus) {
+    extensionFactories.push(makeAgentStatusExt({ renderStatus: params.renderAgentStatus }));
+  }
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
@@ -83,7 +91,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     noContextFiles: true,
     additionalSkillPaths: params.skillPaths,
     appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
-    extensionFactories: [traceReminder],
+    extensionFactories,
   });
   await resourceLoader.reload();
 

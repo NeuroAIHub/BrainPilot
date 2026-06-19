@@ -125,6 +125,14 @@ export type AgentSessionFactory = (params: {
    */
   onUnreplied?: (agentName: string) => void;
   /**
+   * #97: compute a fresh "team status" block to inject at the top of every turn
+   * (via the agent-status extension's Pi `context` hook). Called once per turn;
+   * returns "" when there is nothing to inject. Supplied only for the principal
+   * (the coordinator that benefits from the whole-team view); omitted for other
+   * roles and by the mock factory.
+   */
+  renderAgentStatus?: () => string;
+  /**
    * App-controlled skill directories loaded for this agent (template dir shared
    * by all sessions + this session's own dir). Replaces the host-global skill
    * discovery — see agent-factory `noSkills: true`.
