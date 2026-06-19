@@ -1,13 +1,17 @@
 /**
  * Graph of Trace — structural guarantees driven through the real SessionManager.
  *
- * The behavioural "reminder" hooks (nudge the agent to record_trace / report
- * back) now live in the Pi-native `trace-reminder` extension, which only loads
- * under the real Pi factory; per design §7 / T2 they are verified in real mode,
- * not here. What these tests still pin down is the host-side trace plumbing that
- * is independent of any prompt-compliance hook:
- *   - consecutive `record_trace` calls chain into a connected DAG (visible edges,
- *     not orphan dots);
+ * After the legacy-parity rewrite, `record_trace` does NOT mutate the graph
+ * directly. It dispatches a `[Trace Event]` envelope into the trace agent's
+ * mailbox; the trace agent (a real Pi AgentSession) is the editor that calls
+ * `create_trace_node` / `update_trace_node` / `add_trace_relation`. These tests
+ * pin down the host-side plumbing — independent of the Pi-native reminder hooks
+ * which only load under the real factory (verified separately per design §7/T2):
+ *   - the principal calling `record_trace` causes a trace agent to be spawned
+ *     and a `trace_event` envelope to land in its mailbox;
+ *   - when the trace agent runs and calls `create_trace_node` consecutively,
+ *     the resulting nodes are chained into a connected DAG via the
+ *     `getLastNodeId()` fallback (visible edges, not orphan dots);
  *   - every trace mutation is pushed to the SSE stream as CUSTOM:trace_node.
  */
 import { describe, it, expect } from "vitest";
@@ -81,15 +85,34 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 describe("Graph of Trace structural plumbing", () => {
-  it("chains consecutive record_trace nodes so the graph has edges (not orphans)", async () => {
-    // Regression: record_trace used to create orphan nodes (no parents), so the
-    // Graph of Trace rendered as disconnected dots with no visible edges.
-    let turn = 0;
+  it("chains consecutive trace agent nodes into a connected DAG (not orphans)", async () => {
+    // Regression: before the agent-driven rewrite, `record_trace` chained nodes
+    // itself; now the trace agent is the writer. The `create_trace_node` tool
+    // still falls back to `getLastNodeId()` when no explicit parent is given,
+    // so consecutive trace-agent decisions remain a connected chain.
+    let principalTurn = 0;
+    let traceTurn = 0;
     const factory = scriptedFactory({
       principal: {
         onPrompt: () => {
-          turn += 1;
-          return { tool: "record_trace", args: { description: `decision ${turn}` } };
+          principalTurn += 1;
+          return {
+            tool: "record_trace",
+            args: { description: `decision ${principalTurn}` },
+          };
+        },
+      },
+      trace: {
+        onPrompt: (text) => {
+          // The trace agent reads the [Trace Event] envelope and creates a
+          // node; it does NOT pass parent_id, so the chain is via the
+          // create_trace_node fallback to getLastNodeId.
+          if (!text.includes("[Trace Event]")) return undefined;
+          traceTurn += 1;
+          return {
+            tool: "create_trace_node",
+            args: { title: `decision ${traceTurn}`, type: "trace" },
+          };
         },
       },
     });
@@ -106,7 +129,6 @@ describe("Graph of Trace structural plumbing", () => {
     const second = nodes.find((n) => n.title === "decision 2")!;
     expect(first).toBeDefined();
     expect(second).toBeDefined();
-    // The second trace is linked to the first → at least one edge exists.
     expect(second.parentIds).toContain(first.id);
     expect(second.parents[0]!.relation).toBe("follows");
   });
@@ -117,6 +139,12 @@ describe("Graph of Trace structural plumbing", () => {
         onPrompt: (text) =>
           text.includes("TRACE")
             ? { tool: "record_trace", args: { description: "a decision" } }
+            : undefined,
+      },
+      trace: {
+        onPrompt: (text) =>
+          text.includes("[Trace Event]")
+            ? { tool: "create_trace_node", args: { title: "a decision", type: "trace" } }
             : undefined,
       },
     });

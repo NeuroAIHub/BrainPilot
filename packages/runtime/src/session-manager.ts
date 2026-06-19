@@ -1046,9 +1046,12 @@ export class SessionManager {
    * registered synchronously inside `send_message`, so this closes the await gap
    * between the sender finishing its turn and the delegated target starting —
    * without it the flag would flicker false in that window). The trace agent is
-   * excluded from the aggregate (it self-records continuously and shouldn't read
-   * as "the user's task is still running"), but it is still LISTED in `agents[]`
-   * with its own status, so the UI shows exactly which agents are running.
+   * a real spawned agent (record_trace dispatches `trace_event` envelopes into
+   * its mailbox and it owns the Graph of Trace as editor, see
+   * `system-tools.ts:createRecordTraceTool`), but it is excluded from the
+   * AGGREGATE: a trace recording isn't "the user's task is still running". It
+   * is still LISTED in `agents[]` with its own status so the Agents panel shows
+   * its idle/running transitions live.
    */
   private deriveRunActive(entry: SessionEntry): boolean {
     if (entry.runActive) return true;
