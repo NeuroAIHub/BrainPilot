@@ -48,7 +48,7 @@ describe("scaffold", () => {
   it("scaffolds prompt.md + manifest.json for every built-in agent", async () => {
     const root = join(dir, "brainpilot");
     const { paths } = await scaffold(root);
-    for (const name of ["principal", "librarian", "experimentalist", "engineer", "writer", "trace"]) {
+    for (const name of ["principal", "librarian", "experimentalist", "engineer", "writer", "auditor", "trace"]) {
       const agentDir = join(paths.bpTemplateAgents, name);
       expect(await exists(join(agentDir, "prompt.md")), `${name}/prompt.md`).toBe(true);
       expect(await exists(join(agentDir, "manifest.json")), `${name}/manifest.json`).toBe(true);
