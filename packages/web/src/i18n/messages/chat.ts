@@ -2,8 +2,9 @@ import { defineMessages } from "../types";
 
 export default defineMessages(
   {
-    "chat.generating": "正在生成...",
-    "chat.totalTime": "本轮对话用时 {time}",
+      "chat.generating": "正在生成...",
+      "chat.streamingPending": "正在组织回复…",
+      "chat.totalTime": "本轮对话用时 {time}",
     "chat.streaming": "生成中",
     "chat.toolPrefix": "工具：{name}",
     "chat.thinkingSteps": "思考过程 · {count} 步",
@@ -60,8 +61,9 @@ export default defineMessages(
     "chat.retry.cancelled": "已取消重试",
   },
   {
-    "chat.generating": "Generating...",
-    "chat.totalTime": "Total time: {time}",
+      "chat.generating": "Generating...",
+      "chat.streamingPending": "Preparing the response...",
+      "chat.totalTime": "Total time: {time}",
     "chat.streaming": "streaming",
     "chat.toolPrefix": "Tool: {name}",
     "chat.thinkingSteps": "Thinking · {count} steps",

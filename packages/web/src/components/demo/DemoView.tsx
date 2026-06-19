@@ -14,6 +14,7 @@ import { FilePreviewView, PreviewSource } from "../files/FilePreviewView";
 import { getPreviewKind, isMarkdown } from "../files/filePreview";
 import { IconButton } from "../primitives/IconButton";
 import { TraceGraphView } from "../session/TraceGraphView";
+import { getNodeKindLabelKey } from "../session/traceLayout";
 import { buildDemoBundle, parseDemoBundle } from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
 import { DemoFileTree } from "./DemoFileTree";
@@ -107,6 +108,10 @@ export function DemoView() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [pinnedFile, setPinnedFile] = useState<string | null>(null);
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
+  const formatNodeKind = (kind: string) => {
+    const key = getNodeKindLabelKey(kind);
+    return key ? t(key) : kind;
+  };
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const decodedRef = useRef<Map<string, DecodedFile>>(new Map());
@@ -596,6 +601,7 @@ export function DemoView() {
                 zoom={zoom}
                 onZoomChange={setZoom}
                 fitToken={revealedNodes.length}
+                formatKind={formatNodeKind}
               />
             </div>
             <div className="demo-transport">
@@ -658,9 +664,11 @@ export function DemoView() {
         node={modalNode}
         onClose={() => setModalNodeId(null)}
         onSelectNode={(id) => { setSelectedNodeId(id); setModalNodeId(id); }}
+        nodes={nodes}
         onSelectArtifact={selectFile}
         activeArtifactPath={currentArtifactPath}
         closeLabel={t("demo.node.modalClose")}
+        formatKind={formatNodeKind}
         t={t}
       />
     </main>

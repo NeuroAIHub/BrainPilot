@@ -11,6 +11,7 @@ import { TraceNodeDetail } from "./TraceNodeDetail";
 import {
   formatTime,
   getNodeKind,
+  getNodeKindLabelKey,
   getStatusLabelKey,
   normalizeStatus,
 } from "./traceLayout";
@@ -70,6 +71,10 @@ export function TracePanel() {
   const [fitToken, setFitToken] = useState(0);
   const wasUserAdjustedRef = useRef(false);
   const prevNodeCountRef = useRef(0);
+  const formatNodeKind = (kind: string) => {
+    const key = getNodeKindLabelKey(kind);
+    return key ? t(key) : kind;
+  };
 
   const allNodes = trace?.nodes ?? [];
   const playbackNodes = useMemo(() => allNodes.slice(0, playbackIndex), [allNodes, playbackIndex]);
@@ -219,18 +224,16 @@ export function TracePanel() {
           </div>
           <div className="trace-toolbar">
             <div className="trace-segmented" aria-label={t("trace.aria.layoutDir")}>
-              <button className={direction === "LR" ? "is-active" : ""} onClick={() => setDirection("LR")} type="button">LR</button>
-              <button className={direction === "TB" ? "is-active" : ""} onClick={() => setDirection("TB")} type="button">TB</button>
+              <button className={direction === "LR" ? "is-active" : ""} onClick={() => setDirection("LR")} type="button">
+                {t("trace.layout.horizontal")}
+              </button>
+              <button className={direction === "TB" ? "is-active" : ""} onClick={() => setDirection("TB")} type="button">
+                {t("trace.layout.vertical")}
+              </button>
             </div>
-            <div className="trace-refresh-group" aria-label={t("trace.aria.refreshControls")}>
-              <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
-                <RefreshCw size={15} />
-              </IconButton>
-              <span className="trace-live-indicator" title={t("trace.liveTitle")}>
-                <span aria-hidden="true" />
-                {t("trace.live")}
-              </span>
-            </div>
+            <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
+              <RefreshCw size={15} />
+            </IconButton>
           </div>
         </header>
 
@@ -240,7 +243,7 @@ export function TracePanel() {
           <>
             <div className="trace-meta">
               <span>{trace.meta.projectName || currentSession?.title || t("trace.untitled")}</span>
-              <span>{t("trace.focus", { focus: String(trace.meta.currentFocus || "-") })}</span>
+              {trace.meta.currentFocus ? <span>{t("trace.focus", { focus: String(trace.meta.currentFocus) })}</span> : null}
               <span>{t("trace.nodes", { visible: visibleNodes.length, total: trace.nodes.length })}</span>
               <span>{t("trace.created", { time: formatTime(trace.meta.createdAt) })}</span>
             </div>
@@ -279,7 +282,7 @@ export function TracePanel() {
                   onChange={setTypeFilter}
                   options={[
                     { label: t("trace.allTypes"), value: "all" },
-                    ...typeOptions.map((type) => ({ label: type, value: type })),
+                    ...typeOptions.map((type) => ({ label: formatNodeKind(type), value: type })),
                   ]}
                   value={typeFilter}
                 />
@@ -297,6 +300,7 @@ export function TracePanel() {
                   onZoomChange={setZoom}
                   fitToken={fitToken}
                   emptyLabel={t("trace.noMatch")}
+                  formatKind={formatNodeKind}
                   zoomLabels={{
                     controls: t("trace.aria.zoomControls"),
                     zoomIn: t("trace.aria.zoomIn"),
@@ -331,7 +335,7 @@ export function TracePanel() {
               </div>
 
               <article className="trace-detail">
-                <TraceNodeDetail node={selectedNode} onSelectNode={setSelectedNodeId} t={t} />
+                <TraceNodeDetail node={selectedNode} nodes={allNodes} onSelectNode={setSelectedNodeId} formatKind={formatNodeKind} t={t} />
               </article>
             </div>
           </>

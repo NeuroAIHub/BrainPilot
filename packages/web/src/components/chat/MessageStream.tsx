@@ -385,10 +385,19 @@ function MessageStreamImpl({
     const displayName = message.agent || (message.role === "system" ? "system" : "principal");
     const isLive = message.id === liveStreamingId;
     const timing = elapsedLabel(message);
-    const content = message.kind === "error" ? (
-      <p className="message-card__content--plain message-row__error">{message.content || (message.streaming ? t("chat.generating") : "")}</p>
-    ) : (
-      <MarkdownMessage content={message.content || (message.streaming ? t("chat.generating") : "")} />
+    const hasContent = !!message.content.trim();
+    const displayContent = hasContent ? message.content : (message.streaming ? t("chat.streamingPending") : "");
+    const content = (
+      <div className={`message-row__content ${message.streaming && !hasContent ? "message-row__content--pending" : ""}`}>
+        {message.kind === "error" ? (
+          <p className="message-card__content--plain message-row__error">{displayContent}</p>
+        ) : (
+          <MarkdownMessage content={displayContent} />
+        )}
+        {message.streaming && message.kind !== "error" ? (
+          <span className="message-row__streaming-cursor" aria-hidden="true" />
+        ) : null}
+      </div>
     );
     return (
       <div
@@ -446,7 +455,7 @@ function MessageStreamImpl({
     return (
       <div className="activity-step" key={step.id}>
         {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
-        <MarkdownMessage content={step.content || (step.streaming ? t("chat.generating") : "")} />
+        <MarkdownMessage content={step.content || (step.streaming ? t("chat.streamingPending") : "")} />
       </div>
     );
   };

@@ -486,7 +486,8 @@ export const api = {
      * Persisted AG-UI event history from `events.jsonl` — used to rehydrate
      * the chat list (and trace/agents seed) when a session is activated after
      * a runtime restart. SSE only replays the in-memory ring buffer; this
-     * endpoint walks the on-disk log and returns the tail when long.
+     * endpoint walks the on-disk log and returns the tail when long. Pass
+     * `limit: 0` to request the full log for lossless rehydrate.
      *
      * Tolerates any non-200 / non-JSON response by returning an empty
      * envelope, so callers can fall through to whatever live data the SSE
