@@ -50,6 +50,13 @@ export class MasAgent {
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
   private lastError: AgentState["lastError"];
+  /**
+   * The in-flight `prompt()` promise (its try/catch/finally inclusive), or
+   * undefined when idle. `abort()` awaits this so a caller can fence the old
+   * run — guaranteeing RUN_FINISHED is emitted and `status` has settled —
+   * before starting a new one (#101).
+   */
+  private currentPrompt: Promise<void> | undefined;
 
   constructor(private readonly opts: MasAgentOpts) {
     this.name = opts.name;
@@ -88,8 +95,18 @@ export class MasAgent {
 
   /**
    * Send a prompt and stream events. Error-isolated (§7 L2): never throws.
+   * The settled promise is tracked in `currentPrompt` so `abort()` can await it.
    */
-  async prompt(text: string): Promise<void> {
+  prompt(text: string): Promise<void> {
+    const p = this.runPrompt(text).finally(() => {
+      // Clear the tracker only if no newer prompt has replaced it.
+      if (this.currentPrompt === p) this.currentPrompt = undefined;
+    });
+    this.currentPrompt = p;
+    return p;
+  }
+
+  private async runPrompt(text: string): Promise<void> {
     this.currentRunId = newRunId();
     this.setStatus("running");
     this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }));
@@ -116,14 +133,31 @@ export class MasAgent {
     }
   }
 
+  /**
+   * Abort the active run and wait for it to fully settle (#101).
+   *
+   * `session.abort()` cancels the provider stream (and for the real Pi session
+   * already awaits the agent back to idle). We then await the in-flight
+   * `prompt()` promise so that by the time abort() resolves: the original run
+   * has emitted its terminal RUN_FINISHED/RUN_ERROR, `status` has settled, and
+   * no further assistant content can be appended. This lets `interrupt()` start
+   * the principal's interrupt-notice run WITHOUT racing the old run (which would
+   * otherwise throw "Agent is already processing a prompt").
+   */
   async abort(): Promise<void> {
     try {
       await this.session.abort();
     } catch {
       /* abort best-effort */
     }
+    // Wait for the interrupted prompt to unwind its try/finally (RUN_FINISHED,
+    // status settle) before returning — do NOT optimistically force idle here.
+    try {
+      await this.currentPrompt;
+    } catch {
+      /* prompt() is error-isolated; nothing to surface */
+    }
     this.activeToolExecutions.clear();
-    this.setStatus("idle");
   }
 
   stop(): void {

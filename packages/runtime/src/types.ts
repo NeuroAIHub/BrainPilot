@@ -23,7 +23,13 @@ export interface IAgentSession {
   subscribe(listener: (event: PiAgentEvent) => void): () => void;
   /** Send a prompt. Resolves when the run completes (or is aborted). */
   prompt(text: string): Promise<void>;
-  /** Hard-abort the active run. */
+  /**
+   * Hard-abort the active run. For the real Pi session this aborts the provider
+   * stream AND awaits the agent returning to idle (SDK `AgentSession.abort()`
+   * is itself `abort() + waitForIdle()`); the mock/test sessions signal their
+   * loop to stop. Callers that must fence the old stream before starting a new
+   * run should await this (see `MasAgent.abort`, #101).
+   */
   abort(): Promise<void>;
   /** Tear down; release resources. */
   dispose(): void;

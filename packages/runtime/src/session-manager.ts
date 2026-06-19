@@ -692,13 +692,19 @@ export class SessionManager {
     if (!entry) return false;
     const wholeSession = agentName === undefined;
     const targets = agentName ? [entry.agents.get(agentName)].filter(Boolean) : [...entry.agents.values()];
-    for (const a of targets) await a!.abort();
-    entry.runActive = false;
-    entry.activeRunId = null;
+    // Reject any pending ask_user FIRST: a prompt blocked awaiting user input
+    // would never settle, so abort()'s waitForIdle (#101) must not run before
+    // these are unblocked or it would deadlock.
     for (const [id, d] of entry.pendingInputs) {
       d.reject(new Error("interrupted"));
       entry.pendingInputs.delete(id);
     }
+    // Abort every target and WAIT for each in-flight run to fully settle (#101)
+    // — RUN_FINISHED emitted, status settled, provider stream fenced — so the
+    // interrupt-notice run below can't race the old run ("already processing").
+    await Promise.all(targets.map((a) => a!.abort()));
+    entry.runActive = false;
+    entry.activeRunId = null;
     if (wholeSession) {
       // Clear every inbox BEFORE notifying PI: otherwise a queued task_delegate
       // would re-wake the expert the user just stopped.
