@@ -1,22 +1,29 @@
 /**
  * scaffold.ts — materialize the `./brainpilot/` launch directory tree
- * (TS_PI_REFACTOR_DESIGN §11A.2). Creating a default editable `bp_template/`
- * (agents prompts + example settings/mcp config) and a default
- * `brainpilot.config.json`.
+ * (TS_PI_REFACTOR_DESIGN §11A.2).
  *
- * Idempotent: existing files are never overwritten, protecting user edits
- * (§11A.4 step 2 "幂等，已存在不覆盖").
+ * What gets written (idempotent — existing files are never overwritten):
+ *   - directory skeleton (bp_template/, bp_template/agents/, bp_template/skills/,
+ *     .bp/, workspaces/, .runtime/logs/)
+ *   - providers.json + providers.example.json
+ *   - mcp_servers.json + mcp_servers.example.json
+ *   - skills/README.md + skills/example.md
+ *   - brainpilot.config.json
+ *
+ * What is INTENTIONALLY NOT written (#102 fix):
+ *   - Per-agent prompt.md / manifest.json / settings.json under
+ *     bp_template/agents/<name>/. These used to be scaffolded as
+ *     user-editable copies of the built-in PERSONAS, but the writeIfAbsent
+ *     guard meant they never picked up upstream prompt updates after a user
+ *     ran `init` once — anyone who pulled new code kept silently running on
+ *     stale prompts. The runtime's `loadPersona` already falls back to the
+ *     in-code PERSONAS when the on-disk file is absent, so leaving the dir
+ *     empty by default is the correct behaviour. Users who want to override
+ *     a prompt can materialise one with `brainpilot template reset <agent>`.
  */
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { join } from "node:path";
-import {
-  PERSONAS,
-  BUILTIN_PERSONA_NAMES,
-  AGENT_TOOL_CONFIG,
-  BUILTIN_TOOL_CONFIG,
-  BUILTIN_TOOL_CONFIG_BY_NAME,
-} from "@brainpilot/runtime";
 import { dataPaths, type DataPaths } from "./paths.js";
 
 /** Default backend port (§11A.5 决策 D). Runtime uses port+1 (stride-2 §16). */
@@ -37,59 +44,6 @@ async function writeIfAbsent(path: string, content: string): Promise<boolean> {
   await writeFile(path, content, "utf8");
   return true;
 }
-
-/**
- * Per-agent persona text, sourced from the runtime's single-source-of-truth
- * `PERSONAS` registry so the scaffolded, user-editable copies never drift from
- * the built-in defaults the runtime falls back to.
- */
-const AGENT_PROMPTS: Record<string, string> = PERSONAS;
-
-/** Roles by agent name (mirrors `roleFor` in the runtime). */
-function roleForName(name: string): string {
-  if (name === "principal") return "principal";
-  if (name === "trace") return "trace";
-  return "expert";
-}
-
-/** Full tool allowlist (system + builtin) an agent is granted, for the manifest. */
-function allowedToolsForName(name: string): string[] {
-  const role = roleForName(name);
-  const sys =
-    role === "principal"
-      ? AGENT_TOOL_CONFIG.principal!
-      : role === "trace"
-        ? AGENT_TOOL_CONFIG.trace!
-        : (AGENT_TOOL_CONFIG[name] ?? AGENT_TOOL_CONFIG.expert!);
-  const builtin =
-    role === "expert"
-      ? (BUILTIN_TOOL_CONFIG_BY_NAME[name] ?? BUILTIN_TOOL_CONFIG.expert!)
-      : (BUILTIN_TOOL_CONFIG[role] ?? BUILTIN_TOOL_CONFIG._default!);
-  return [...sys, ...builtin];
-}
-
-function agentManifest(name: string): string {
-  return JSON.stringify(
-    {
-      role: roleForName(name),
-      parent: name === "principal" ? null : "principal",
-      allowedTools: allowedToolsForName(name),
-    },
-    null,
-    2,
-  );
-}
-
-const PRINCIPAL_SETTINGS = JSON.stringify(
-  {
-    provider: "anthropic",
-    model: "claude-sonnet-4-6",
-    timeoutMs: 120000,
-    maxRetries: 2,
-  },
-  null,
-  2,
-);
 
 /** Empty provider registry (the SSOT). Users add profiles via the Settings UI
  * or `brainpilot init --api-key …`. An empty registry is valid: resolveProvider
@@ -226,6 +180,42 @@ To create your own skill, copy this file, rename it, write a clear
 \`disable-model-invocation\` line, and put the instructions below the frontmatter.
 `;
 
+/**
+ * README dropped into the empty `bp_template/agents/` dir so users understand
+ * why it isn't pre-populated — and how to materialise an override when they
+ * actually want one.
+ */
+const AGENTS_README = `# Agent prompt overrides
+
+This directory is intentionally **empty by default** — BrainPilot loads agent
+system prompts from its built-in \`PERSONAS\` registry that ships with the
+runtime package, so a fresh install always uses the latest prompts after
+\`git pull\` without any extra step.
+
+Drop a file at \`agents/<name>/prompt.md\` to **override** a built-in agent's
+prompt. The runtime reads the on-disk file first and falls back to the built-in
+when the file is absent or empty.
+
+Easiest way to start customising an agent: materialise the current built-in
+prompt as a starting point, then edit it.
+
+\`\`\`bash
+npm run bp -- template reset <agent>      # writes built-in prompt to disk
+# now edit bp_template/agents/<agent>/prompt.md
+\`\`\`
+
+Other useful subcommands:
+
+\`\`\`bash
+npm run bp -- template list               # show drift status for every agent
+npm run bp -- template diff [<agent>]     # show local vs built-in diff
+npm run bp -- template reset [<agent>]    # overwrite local with built-in (backs up)
+\`\`\`
+
+Built-in agent names: principal, librarian, experimentalist, engineer, writer,
+auditor, trace.
+`;
+
 export interface ScaffoldOptions {
   /** Default backend port baked into brainpilot.config.json. */
   port?: number;
@@ -251,7 +241,8 @@ export async function scaffold(
   const p = dataPaths(dataDir);
   const created: string[] = [];
 
-  // ① Directory skeleton.
+  // ① Directory skeleton — bp_template/agents/ is created (empty) so users
+  //    have an obvious place to drop overrides; see AGENTS_README below.
   await mkdir(p.dataDir, { recursive: true });
   await mkdir(p.bpTemplateAgents, { recursive: true });
   await mkdir(p.bpTemplateSkills, { recursive: true });
@@ -259,32 +250,18 @@ export async function scaffold(
   await mkdir(p.workspaces, { recursive: true });
   await mkdir(p.logsDir, { recursive: true });
 
-  // ② Default bp_template/agents/<name>/* for every built-in agent
-  //    (user-editable; the runtime loads prompt.md when present, else falls
-  //    back to the same built-in persona this is sourced from).
-  const writes: Array<[string, string]> = [];
-  for (const name of BUILTIN_PERSONA_NAMES) {
-    const dir = join(p.bpTemplateAgents, name);
-    await mkdir(dir, { recursive: true });
-    writes.push([join(dir, "prompt.md"), AGENT_PROMPTS[name]!]);
-    writes.push([join(dir, "manifest.json"), agentManifest(name)]);
-    // Only the principal carries provider/model defaults; experts inherit the
-    // session-level template settings.
-    if (name === "principal") {
-      writes.push([join(dir, "settings.json"), PRINCIPAL_SETTINGS]);
-    }
-  }
-
-  writes.push(
-    // ③ provider registry (SSOT) + an annotated example to copy from.
+  const writes: Array<[string, string]> = [
+    // ② provider registry (SSOT) + an annotated example to copy from.
     [p.bpTemplateProviders, TEMPLATE_PROVIDERS_DEFAULT],
     [join(p.bpTemplate, "providers.example.json"), TEMPLATE_PROVIDERS_EXAMPLE],
     [p.bpTemplateMcpServers, TEMPLATE_MCP_DEFAULT],
     [join(p.bpTemplate, "mcp_servers.example.json"), TEMPLATE_MCP_EXAMPLE],
-    // ③a app-controlled skills (loaded instead of host-global ~/.pi/agent/skills).
+    // ③ app-controlled skills (loaded instead of host-global ~/.pi/agent/skills).
     [join(p.bpTemplateSkills, "README.md"), SKILLS_README],
     [join(p.bpTemplateSkills, "example.md"), EXAMPLE_SKILL],
-    // ④ CLI global config.
+    // ④ agents dir README — empty by design (#102 fix).
+    [join(p.bpTemplateAgents, "README.md"), AGENTS_README],
+    // ⑤ CLI global config.
     [
       p.brainpilotConfig,
       JSON.stringify(
@@ -298,7 +275,7 @@ export async function scaffold(
         2,
       ),
     ],
-  );
+  ];
 
   for (const [path, content] of writes) {
     if (await writeIfAbsent(path, content)) created.push(path);

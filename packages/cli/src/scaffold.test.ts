@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scaffold, isScaffolded } from "./scaffold.js";
@@ -28,9 +28,8 @@ describe("scaffold", () => {
     const { paths, created } = await scaffold(root);
 
     expect(await exists(paths.bpTemplate)).toBe(true);
-    expect(await exists(join(paths.bpTemplateAgents, "principal", "prompt.md"))).toBe(true);
-    expect(await exists(join(paths.bpTemplateAgents, "principal", "settings.json"))).toBe(true);
-    expect(await exists(join(paths.bpTemplateAgents, "principal", "manifest.json"))).toBe(true);
+    expect(await exists(paths.bpTemplateAgents)).toBe(true);
+    expect(await exists(join(paths.bpTemplateAgents, "README.md"))).toBe(true);
     expect(await exists(paths.bpTemplateProviders)).toBe(true);
     expect(await exists(paths.bpTemplateMcpServers)).toBe(true);
     expect(await exists(paths.bpTemplateSkills)).toBe(true);
@@ -45,30 +44,44 @@ describe("scaffold", () => {
     expect(await isScaffolded(root)).toBe(true);
   });
 
-  it("scaffolds prompt.md + manifest.json for every built-in agent", async () => {
-    const root = join(dir, "brainpilot");
-    const { paths } = await scaffold(root);
-    for (const name of ["principal", "librarian", "experimentalist", "engineer", "writer", "auditor", "trace"]) {
+  it("does NOT write per-agent prompt.md / manifest.json / settings.json (#102)", async () => {
+    // The scaffold used to materialise these for every built-in agent, but the
+    // writeIfAbsent guard meant prompt updates after `git pull` never reached
+    // existing users. The runtime now falls back to the in-code PERSONAS when
+    // no override file is present, so the dir starts empty by design.
+    const { paths } = await scaffold(join(dir, "brainpilot"));
+    for (const name of [
+      "principal",
+      "librarian",
+      "experimentalist",
+      "engineer",
+      "writer",
+      "auditor",
+      "trace",
+    ]) {
       const agentDir = join(paths.bpTemplateAgents, name);
-      expect(await exists(join(agentDir, "prompt.md")), `${name}/prompt.md`).toBe(true);
-      expect(await exists(join(agentDir, "manifest.json")), `${name}/manifest.json`).toBe(true);
-      const prompt = await readFile(join(agentDir, "prompt.md"), "utf8");
-      expect(prompt, name).not.toContain("mcp__builtin__");
+      expect(await exists(agentDir), `${name} dir should not exist`).toBe(false);
     }
+    // The only file under bp_template/agents/ is the README explaining why.
+    const entries = await readdir(paths.bpTemplateAgents);
+    expect(entries).toEqual(["README.md"]);
   });
 
-  it("engineer manifest grants write + bash; librarian does not", async () => {
-    const { paths } = await scaffold(join(dir, "bp"));
-    const eng = JSON.parse(
-      await readFile(join(paths.bpTemplateAgents, "engineer", "manifest.json"), "utf8"),
-    );
-    expect(eng.role).toBe("expert");
-    expect(eng.allowedTools).toEqual(expect.arrayContaining(["write", "bash", "send_message"]));
-    const lib = JSON.parse(
-      await readFile(join(paths.bpTemplateAgents, "librarian", "manifest.json"), "utf8"),
-    );
-    expect(lib.allowedTools).not.toContain("write");
-    expect(lib.allowedTools).not.toContain("bash");
+  it("agents/README.md points users at `template reset` to materialise overrides", async () => {
+    const { paths } = await scaffold(join(dir, "brainpilot"));
+    const md = await readFile(join(paths.bpTemplateAgents, "README.md"), "utf8");
+    expect(md).toContain("template reset");
+    expect(md).toContain("agents/<name>/prompt.md");
+  });
+
+  it("ships the built-in three-pack MCP servers in mcp_servers.json", async () => {
+    const { paths } = await scaffold(join(dir, "brainpilot"));
+    const mcp = JSON.parse(await readFile(paths.bpTemplateMcpServers, "utf8"));
+    expect(Object.keys(mcp.mcpServers).sort()).toEqual([
+      "bp_KB",
+      "bp_papersearch",
+      "bp_skills",
+    ]);
   });
 
   it("bakes the port into brainpilot.config.json", async () => {
@@ -81,31 +94,24 @@ describe("scaffold", () => {
     const root = join(dir, "bp");
     await scaffold(root);
 
-    const promptPath = join(root, "bp_template", "agents", "principal", "prompt.md");
-    await writeFile(promptPath, "USER EDITED", "utf8");
+    // mcp_servers.json IS scaffolded, so we use it (rather than prompt.md
+    // which we now intentionally never scaffold) to prove user edits survive
+    // a second `scaffold()` call.
+    const target = join(root, "bp_template", "mcp_servers.json");
+    await writeFile(target, '{"mcpServers":{"USER_EDIT":{}}}', "utf8");
 
     const second = await scaffold(root);
-    // Nothing new created on the second run.
     expect(second.created).toEqual([]);
-    // User edit preserved.
-    expect(await readFile(promptPath, "utf8")).toBe("USER EDITED");
+    expect(await readFile(target, "utf8")).toBe('{"mcpServers":{"USER_EDIT":{}}}');
   });
 
   it("isScaffolded is false before scaffolding", async () => {
     expect(await isScaffolded(join(dir, "nope"))).toBe(false);
   });
 
-  it("uses the current default model id (claude-sonnet-4-6) in settings", async () => {
+  it("provider registry starts empty (users fill via UI / init)", async () => {
     const { paths } = await scaffold(join(dir, "bp"));
-    // Provider registry scaffolds empty (users add profiles via UI / init).
     const providers = JSON.parse(await readFile(paths.bpTemplateProviders, "utf8"));
     expect(providers.profiles).toEqual([]);
-    const principal = JSON.parse(
-      await readFile(
-        join(paths.bpTemplateAgents, "principal", "settings.json"),
-        "utf8",
-      ),
-    );
-    expect(principal.model).toBe("claude-sonnet-4-6");
   });
 });
