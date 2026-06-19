@@ -28,6 +28,9 @@ export function DesktopShell() {
   const t = useT();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activePage, setActivePage] = useState<"workspace" | "demo">("workspace");
+  // Bumped on every sidebar "Live Demo" click so DemoView returns to its
+  // session-selection landing even when the demo page is already open (#111).
+  const [demoResetSignal, setDemoResetSignal] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(268);
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -110,7 +113,10 @@ export function DesktopShell() {
       <Sidebar
         isCollapsed={isSidebarCollapsed}
         activePage={activePage}
-        onOpenDemo={() => setActivePage("demo")}
+        onOpenDemo={() => {
+          setActivePage("demo");
+          setDemoResetSignal((n) => n + 1);
+        }}
         onGoWorkspace={() => setActivePage("workspace")}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
@@ -126,7 +132,7 @@ export function DesktopShell() {
       />
 
       {activePage === "demo" ? (
-        <DemoView />
+        <DemoView resetSignal={demoResetSignal} />
       ) : (
       <main
         className={`workspace ${isFilesOpen ? "workspace--files-open" : ""} ${

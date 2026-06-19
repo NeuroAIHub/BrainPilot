@@ -18,6 +18,7 @@ import { TraceGraphView } from "../session/TraceGraphView";
 import { getNodeKindLabelKey } from "../session/traceLayout";
 import { buildDemoBundle, parseDemoBundle } from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
+import { shouldResetDemo } from "./demoReset";
 import { DemoFileTree } from "./DemoFileTree";
 import { TraceNodeModal } from "./TraceNodeModal";
 
@@ -99,7 +100,19 @@ function pickDefaultFile(files: DemoFile[]): string | null {
 }
 
 
-export function DemoView() {
+export interface DemoViewProps {
+  /**
+   * Monotonic counter bumped by the shell each time the sidebar "Live Demo"
+   * entry is clicked. A *change* (not the initial value) returns the player to
+   * the session-selection / import landing — the same effect as the header
+   * "Reselect" button — so re-clicking the nav item while a demo is already
+   * open isn't a dead no-op (issue #111). Optional so standalone/test mounts
+   * work without it.
+   */
+  resetSignal?: number;
+}
+
+export function DemoView({ resetSignal }: DemoViewProps = {}) {
   const t = useT();
   const { sessions, currentSession, messages } = useSessions();
   const { currentSandbox } = useSandbox();
@@ -202,6 +215,21 @@ export function DemoView() {
     const nodeMs = nodes.map((_, j) => (nodes.length <= 1 ? 0 : (j / (nodes.length - 1)) * t1));
     return { t0: 0, t1, sorted: [], nodeMs, ordered };
   }, [bundle, nodes]);
+
+  // Return to the landing when the shell signals a sidebar "Live Demo" re-click
+  // (issue #111). Fires only on a *change* of resetSignal, never on the initial
+  // mount, so importing/packing a bundle isn't immediately undone. Clearing the
+  // bundle is enough — the "reset transport on new bundle" effect below re-inits
+  // cursor/zoom/etc. the next time a bundle is selected. The module-level
+  // demoCache keeps re-opening the same session instant.
+  const prevResetSignal = useRef(resetSignal);
+  useEffect(() => {
+    if (shouldResetDemo(prevResetSignal.current, resetSignal)) {
+      prevResetSignal.current = resetSignal;
+      setBundle(null);
+      setError(null);
+    }
+  }, [resetSignal]);
 
   // Reset transport on new bundle (start fully revealed, paused, default file).
   useEffect(() => {
