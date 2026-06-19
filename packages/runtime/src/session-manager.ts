@@ -24,7 +24,7 @@ import {
 import { EventBus } from "./event-bus.js";
 import { Mailbox, type MailboxMessage } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
-import { MasAgent, type TurnTrackers } from "./mas-agent.js";
+import { MasAgent } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
@@ -104,16 +104,6 @@ function roleFor(name: string): AgentRole {
   if (name === "principal") return "principal";
   if (name === "trace") return "trace";
   return "expert";
-}
-
-/** Builtin tools that mutate the workspace — a milestone worth tracing (#79). */
-const WORKSPACE_MUTATION_TOOLS = new Set(["write", "edit", "bash"]);
-function hasWorkspaceMutation(used: Set<string>): boolean {
-  for (const t of used) if (WORKSPACE_MUTATION_TOOLS.has(t)) return true;
-  return false;
-}
-function listTools(used: Set<string>): string {
-  return [...used].filter((t) => WORKSPACE_MUTATION_TOOLS.has(t)).join(", ") || "the workspace tools";
 }
 
 /**
@@ -891,6 +881,10 @@ export class SessionManager {
       systemPrompt: await this.loadPersona(name, role),
       skillPaths: [this.templateSkillsDir(), this.sessionSkillsDir(sessionId)],
       providerConfig,
+      // 意图二 fallback: the trace-reminder extension calls this when an expert
+      // was reminded once and still didn't report back, so the principal never
+      // dead-waits on a silent expert.
+      onUnreplied: (agentName) => this.writeFallbackToPrincipal(entry, agentName),
     });
 
     const agent = new MasAgent({
@@ -906,10 +900,6 @@ export class SessionManager {
         this.touch(entry);
         this.emitSessionState(entry);
       },
-      // #79: deterministic milestone capture. If a turn did meaningful work but
-      // the model never called record_trace, synthesize a chained node so the
-      // Graph of Trace is reliable without depending on prompt compliance.
-      onTurnEnd: (info) => this.captureMilestone(entry, info),
     });
     entry.agents.set(name, agent);
     if (!entry.tasks.has(name)) entry.tasks.set(name, "");
@@ -917,51 +907,25 @@ export class SessionManager {
   }
 
   /**
-   * §8 / #79 — deterministic post-turn trace capture. Called at every agent
-   * `turn_end`. When the model already recorded a trace this turn we stay quiet
-   * (the LLM's node, possibly refined by the trace agent, is authoritative). We
-   * only synthesize a node when a milestone clearly happened but went unrecorded:
-   *  - principal delegated work (`create_agent`) → "Delegated to <target>";
-   *  - principal mutated the workspace (write/edit/bash) → "Principal action";
-   *  - an expert delivered a result back (`send_message`) → "<name> delivered result".
-   * The synthesized node is chained to the previous node so the graph stays a DAG,
-   * and tagged `metadata.auto` so the UI can distinguish it from LLM traces.
-   * The `trace` agent itself is exempt (it IS the recorder).
+   * 意图二 fallback — the trace-reminder extension calls this (via the factory's
+   * `onUnreplied`) when an expert was reminded once and STILL did not
+   * `send_message` the principal. We write a system note into the principal's
+   * mailbox and wake it, so the principal can re-delegate or proceed without the
+   * silent expert's output rather than dead-waiting. Best-effort: a failed write
+   * must never break the agent loop.
    */
-  private captureMilestone(
-    entry: SessionEntry,
-    info: { name: string; role: AgentRole; trackers: TurnTrackers },
-  ): void {
-    const { name, role, trackers } = info;
-    if (role === "trace") return;
-    if (trackers.traced) return; // LLM already recorded — don't duplicate.
-
-    let title: string | undefined;
-    let description: string | undefined;
-    if (role === "principal" && trackers.delegated) {
-      const target = trackers.delegateTarget ?? "an expert";
-      title = `Delegated to ${target}`;
-      description = `Principal delegated work to ${target}.`;
-    } else if (role === "principal" && hasWorkspaceMutation(trackers.usedToolNames)) {
-      title = "Principal action";
-      description = `Principal acted directly using ${listTools(trackers.usedToolNames)}.`;
-    } else if (role !== "principal" && trackers.replied) {
-      title = `${name} delivered result`;
-      description = `${name} delivered a result back to the principal.`;
-    }
-    if (!title) return; // nothing milestone-worthy this turn.
-
-    try {
-      entry.trace.createChainedNode({
-        title,
-        agent: name,
-        description,
-        metadata: { auto: true, hook: role === "principal" ? "principal_trace" : "expert_reply" },
+  private writeFallbackToPrincipal(entry: SessionEntry, expert: string): void {
+    void entry.mailbox
+      .write({
+        fromAgent: "system",
+        toAgent: "principal",
+        msgType: "system",
+        content: `专家 ${expert} 多次未回交结果。建议重新委派该任务，或不依赖其输出继续推进。`,
+      })
+      .then(() => this.wakeAgent(entry.id, "principal"))
+      .catch(() => {
+        /* best-effort */
       });
-      this.touch(entry);
-    } catch {
-      // Best-effort — a trace write must never break the agent turn.
-    }
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {
@@ -1024,7 +988,7 @@ export class SessionManager {
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
-      await agent.prompt(this.renderEnvelopes(msgs));
+      await agent.prompt(this.renderEnvelopes(msgs, name));
     }
   }
 
@@ -1033,9 +997,14 @@ export class SessionManager {
    * persona (`personas.ts`) tells agents to expect, so the model knows who sent
    * each message and why. User-origin messages declare `<source type="user"/>`;
    * agent-origin ones name the sender.
+   *
+   * 意图一·触发点2 (Pi-native hooks): when the PRINCIPAL receives a message from
+   * another agent (not the user — i.e. an expert reporting back), append a single
+   * static line nudging it to record_trace any real decision it makes while
+   * processing the reply. Stateless, loop-free (at most one line per delivery).
    */
-  private renderEnvelopes(msgs: readonly MailboxMessage[]): string {
-    return msgs
+  private renderEnvelopes(msgs: readonly MailboxMessage[], toAgent: string): string {
+    const body = msgs
       .map((m) => {
         const source =
           m.msgType === "user_message"
@@ -1044,6 +1013,12 @@ export class SessionManager {
         return `<message_envelope>\n  ${source}\n  <type>${m.msgType}</type>\n</message_envelope>\n${m.content}`;
       })
       .join("\n\n");
+
+    const fromAgent = msgs.some((m) => m.msgType !== "user_message");
+    if (toAgent === "principal" && fromAgent) {
+      return `${body}\n\n[提醒：处理完这些消息后，如有实质决策请调用 record_trace 记录。]`;
+    }
+    return body;
   }
 
   /* -------------------------- state authority -------------------------- */

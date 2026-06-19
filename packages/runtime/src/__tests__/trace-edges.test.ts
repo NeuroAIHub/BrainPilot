@@ -1,12 +1,13 @@
 /**
- * #79 — deterministic post-turn trace capture.
+ * Graph of Trace — structural guarantees driven through the real SessionManager.
  *
- * The Graph of Trace must stay reliable even when the model never calls
- * `record_trace`. These tests drive scripted agent turns through the real
- * SessionManager and assert:
- *   - a principal that delegates without record_trace still gets an auto node;
- *   - an expert that delivers a result without record_trace gets an auto node;
- *   - a turn that DOES call record_trace produces no duplicate auto node;
+ * The behavioural "reminder" hooks (nudge the agent to record_trace / report
+ * back) now live in the Pi-native `trace-reminder` extension, which only loads
+ * under the real Pi factory; per design §7 / T2 they are verified in real mode,
+ * not here. What these tests still pin down is the host-side trace plumbing that
+ * is independent of any prompt-compliance hook:
+ *   - consecutive `record_trace` calls chain into a connected DAG (visible edges,
+ *     not orphan dots);
  *   - every trace mutation is pushed to the SSE stream as CUSTOM:trace_node.
  */
 import { describe, it, expect } from "vitest";
@@ -79,80 +80,35 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-describe("deterministic trace capture (#79)", () => {
-  it("auto-captures a milestone when principal delegates without record_trace", async () => {
+describe("Graph of Trace structural plumbing", () => {
+  it("chains consecutive record_trace nodes so the graph has edges (not orphans)", async () => {
+    // Regression: record_trace used to create orphan nodes (no parents), so the
+    // Graph of Trace rendered as disconnected dots with no visible edges.
+    let turn = 0;
     const factory = scriptedFactory({
       principal: {
-        onPrompt: (text) =>
-          text.includes("DELEGATE")
-            ? { tool: "create_agent", args: { agent_type: "librarian", task: "survey" } }
-            : undefined,
+        onPrompt: () => {
+          turn += 1;
+          return { tool: "record_trace", args: { description: `decision ${turn}` } };
+        },
       },
-      librarian: {},
     });
     const m = new SessionManager({ persist: false, agentFactory: factory });
     const s = await m.createSession();
 
-    await m.sendMessage(s.id, "please DELEGATE this");
-    await waitFor(() => m.getTrace(s.id)!.nodes.length > 0);
+    await m.sendMessage(s.id, "first");
+    await waitFor(() => m.getTrace(s.id)!.nodes.length >= 1);
+    await m.sendMessage(s.id, "second");
+    await waitFor(() => m.getTrace(s.id)!.nodes.length >= 2);
 
     const nodes = m.getTrace(s.id)!.nodes;
-    const auto = nodes.find((n) => n.metadata?.auto);
-    expect(auto).toBeDefined();
-    expect(auto!.title).toBe("Delegated to librarian");
-    expect(auto!.agent).toBe("principal");
-    expect(auto!.metadata?.hook).toBe("principal_trace");
-  });
-
-  it("auto-captures an expert delivery without record_trace", async () => {
-    const factory = scriptedFactory({
-      principal: {
-        onPrompt: (text) =>
-          text.includes("DELEGATE")
-            ? { tool: "send_message", args: { to: "librarian", content: "do work" } }
-            : undefined,
-      },
-      librarian: {
-        onPrompt: (text) =>
-          text.includes("do work")
-            ? { tool: "send_message", args: { to: "principal", content: "findings ready" } }
-            : undefined,
-      },
-    });
-    const m = new SessionManager({ persist: false, agentFactory: factory });
-    const s = await m.createSession();
-
-    await m.sendMessage(s.id, "please DELEGATE this");
-    await waitFor(() =>
-      m.getTrace(s.id)!.nodes.some((n) => n.agent === "librarian" && n.metadata?.auto),
-    );
-
-    const lib = m.getTrace(s.id)!.nodes.find((n) => n.agent === "librarian" && n.metadata?.auto)!;
-    expect(lib.title).toBe("librarian delivered result");
-    expect(lib.metadata?.hook).toBe("expert_reply");
-  });
-
-  it("does NOT add an auto node when the model already called record_trace", async () => {
-    const factory = scriptedFactory({
-      principal: {
-        onPrompt: (text) =>
-          text.includes("TRACE")
-            ? { tool: "record_trace", args: { description: "explicit decision" } }
-            : undefined,
-      },
-    });
-    const m = new SessionManager({ persist: false, agentFactory: factory });
-    const s = await m.createSession();
-
-    await m.sendMessage(s.id, "please TRACE this");
-    await waitFor(() => m.getTrace(s.id)!.nodes.length > 0);
-    // settle: let the turn_end hook run
-    await new Promise((r) => setTimeout(r, 20));
-
-    const nodes = m.getTrace(s.id)!.nodes;
-    expect(nodes).toHaveLength(1);
-    expect(nodes[0]!.metadata?.auto).toBeUndefined();
-    expect(nodes[0]!.title).toBe("explicit decision");
+    const first = nodes.find((n) => n.title === "decision 1")!;
+    const second = nodes.find((n) => n.title === "decision 2")!;
+    expect(first).toBeDefined();
+    expect(second).toBeDefined();
+    // The second trace is linked to the first → at least one edge exists.
+    expect(second.parentIds).toContain(first.id);
+    expect(second.parents[0]!.relation).toBe("follows");
   });
 
   it("pushes every trace mutation to the SSE stream as CUSTOM:trace_node", async () => {

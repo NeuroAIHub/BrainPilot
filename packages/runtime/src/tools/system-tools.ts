@@ -163,6 +163,9 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       required: ["description"],
     },
     execute: async (params: Record<string, unknown>) => {
+      // Chain to the most recent node so consecutive traces form a connected DAG
+      // (otherwise every record_trace is an orphan and the graph has no edges).
+      const parentId = deps.trace.getLastNodeId();
       const node = deps.trace.createNode({
         title: String(params.description ?? "trace"),
         type: "trace",
@@ -171,6 +174,7 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
         description: String(params.description ?? ""),
         content: String(params.context ?? ""),
         artifacts: ((params.artifacts as string[]) ?? []).map((p) => ({ path: p })),
+        parents: parentId ? [{ id: parentId, relation: "follows" }] : undefined,
       });
       return ok(`trace recorded: ${node.id}`);
     },
@@ -193,14 +197,18 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
       required: ["title"],
     },
     execute: async (params: Record<string, unknown>) => {
-      const parentId = params.parent_id ? String(params.parent_id) : undefined;
+      // Honour an explicit parent_id; otherwise chain to the most recent node so
+      // the graph stays connected instead of accumulating orphan nodes.
+      const explicitParent = params.parent_id ? String(params.parent_id) : undefined;
+      const parentId = explicitParent ?? deps.trace.getLastNodeId();
+      const relation = explicitParent ? "parent" : "follows";
       const node = deps.trace.createNode({
         title: String(params.title ?? ""),
         type: params.type ? String(params.type) : undefined,
         status: params.status ? String(params.status) : undefined,
         description: params.description ? String(params.description) : undefined,
         agent: deps.fromAgent,
-        parents: parentId ? [{ id: parentId, relation: "parent" }] : undefined,
+        parents: parentId ? [{ id: parentId, relation }] : undefined,
       });
       return ok(`node ${node.id} created`);
     },

@@ -1148,8 +1148,8 @@ button {
 
 .trace-edge path {
   fill: none;
-  stroke: var(--color-border-strong);
-  stroke-width: 1.35;
+  stroke: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-strong));
+  stroke-width: 2;
   marker-end: url("#trace-arrow");
 }
 
@@ -1160,6 +1160,10 @@ button {
 
 .trace-edge--produced path {
   stroke: var(--color-success);
+}
+
+.trace-edge--follows path {
+  stroke: color-mix(in srgb, var(--color-accent) 50%, var(--color-border-strong));
 }
 
 .trace-edge-label rect {
@@ -1179,7 +1183,7 @@ button {
 }
 
 #trace-arrow path {
-  fill: var(--color-border-strong);
+  fill: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-strong));
 }
 
 .trace-map-node {

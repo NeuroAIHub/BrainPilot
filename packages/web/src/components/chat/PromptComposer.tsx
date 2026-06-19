@@ -270,6 +270,7 @@ export function PromptComposer() {
           <MessageStream
             messages={visibleMessages}
             autoScroll
+            scrollKey={sessionId ?? undefined}
             showTiming
             runningAgents={runningAgents}
             onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
