@@ -12,35 +12,78 @@ describe("normalizeAgentError (#45)", () => {
 
   it("replaces the no-key SDK error with a Settings → Providers message", () => {
     const out = normalizeAgentError(noKeyRaw);
-    expect(out).toContain("设置 → Providers");
+    expect(out.message).toContain("设置 → Providers");
   });
 
   it("never leaks /login or node_modules paths for the no-key case", () => {
     const out = normalizeAgentError(noKeyRaw);
-    expect(out).not.toMatch(/\/login/i);
-    expect(out).not.toMatch(/node_modules/);
+    expect(out.message).not.toMatch(/\/login/i);
+    expect(out.message).not.toMatch(/node_modules/);
+    expect(out.details).toBeUndefined();
   });
 
   it("does not mention the BP_MOCK test switch", () => {
     const out = normalizeAgentError(noKeyRaw);
-    expect(out).not.toMatch(/BP_MOCK/i);
+    expect(out.message).not.toMatch(/BP_MOCK/i);
   });
 
   it("redacts paths/login from other errors while keeping the message", () => {
     const raw =
       "Tool failed: cannot read config.\nUse /login first.\n/srv/app/node_modules/pkg/docs/x.md";
     const out = normalizeAgentError(raw);
-    expect(out).toContain("Tool failed: cannot read config.");
-    expect(out).not.toMatch(/\/login/i);
-    expect(out).not.toMatch(/node_modules/);
+    expect(out.message).toContain("Tool failed: cannot read config.");
+    expect(out.message).not.toMatch(/\/login/i);
+    expect(out.message).not.toMatch(/node_modules/);
   });
 
   it("leaves a clean error untouched", () => {
     const raw = "Rate limit exceeded, retry in 30s.";
-    expect(normalizeAgentError(raw)).toBe(raw);
+    expect(normalizeAgentError(raw).message).toBe(raw);
   });
 
   it("handles empty input", () => {
-    expect(normalizeAgentError("")).toBe("");
+    expect(normalizeAgentError("").message).toBe("");
+  });
+});
+
+describe("normalizeAgentError — provider HTTP errors (#97)", () => {
+  const raw401 =
+    '401 {"error":{"message":"invalid api key (request id: req_abc123)","type":"authentication_error"}}';
+
+  it("produces a concise localized headline, not the raw blob", () => {
+    const out = normalizeAgentError(raw401);
+    expect(out.message).toContain("401");
+    expect(out.message).toContain("invalid api key");
+    // The primary message must not be the full escaped JSON dump.
+    expect(out.message).not.toContain('{"error"');
+  });
+
+  it("keeps the full raw error (incl. request id) in details", () => {
+    const out = normalizeAgentError(raw401);
+    expect(out.details).toBe(raw401);
+    expect(out.details).toContain("request id: req_abc123");
+  });
+
+  it("falls back to a code-only headline when no message is extractable", () => {
+    const raw = "429 {}";
+    const out = normalizeAgentError(raw);
+    expect(out.message).toContain("429");
+    expect(out.details).toBe(raw);
+  });
+
+  it("handles a 5xx with a string error field", () => {
+    const raw = '503 {"error":"service unavailable"}';
+    const out = normalizeAgentError(raw);
+    expect(out.message).toContain("503");
+    expect(out.message).toContain("service unavailable");
+    expect(out.details).toBe(raw);
+  });
+
+  it("does not echo a JSON-shaped extracted message into the headline", () => {
+    // Nested/odd shape where the naive pick would still contain braces.
+    const raw = '400 {"error":{"detail":{"x":1}}}';
+    const out = normalizeAgentError(raw);
+    expect(out.message).not.toMatch(/[{}]/);
+    expect(out.message).toContain("400");
   });
 });

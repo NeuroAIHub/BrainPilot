@@ -137,7 +137,10 @@ describe("SessionManager (mock mode)", () => {
     await sm.sendMessage(s.id, "hi");
     await waitFor(() => seen.length > 0);
 
-    expect(seen[0]).toBe("# Custom PI\nDo it my way.");
+    // The on-disk persona is used verbatim as the base, with the language
+    // directive appended at load time (#97) so it reaches pre-existing scaffolds.
+    expect(seen[0]).toContain("# Custom PI\nDo it my way.");
+    expect(seen[0]).toContain("## Response language");
     await rm(root, { recursive: true, force: true });
   });
 });
