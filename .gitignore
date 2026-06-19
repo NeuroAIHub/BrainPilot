@@ -70,6 +70,7 @@ legacy/
 # Local agent guidance (user-specific, not part of the open-source tree)
 AGENTS.md
 CLAUDE.md
+TemplateRevise.md
 
 # System
 .DS_Store
