@@ -413,8 +413,18 @@ function MessageStreamImpl({
               {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
               {friendly}
             </summary>
-            {input ? <pre>{input}</pre> : null}
-            {result ? <pre>{result}</pre> : null}
+            {input ? (
+              <div className="activity-step__io">
+                <span className="activity-step__io-label">{t("chat.toolArgs")}</span>
+                <pre>{input}</pre>
+              </div>
+            ) : null}
+            {result ? (
+              <div className="activity-step__io">
+                <span className="activity-step__io-label">{t("chat.toolResult")}</span>
+                <pre>{result}</pre>
+              </div>
+            ) : null}
           </details>
         </div>
       );

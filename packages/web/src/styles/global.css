@@ -2936,6 +2936,22 @@ button {
   font-size: 12px;
 }
 
+/* #84: label each tool payload as Args / Result so the two stacked <pre>
+   blocks are distinguishable. Label is intentionally low-weight — it's a
+   separator signal, not a heading. */
+.activity-step__io {
+  display: grid;
+  gap: 4px;
+}
+
+.activity-step__io-label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding-left: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
 .terminal-input {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
