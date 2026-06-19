@@ -77,11 +77,26 @@ export function buildStartServerOptions(
   } satisfies StartServerOptions;
 }
 
+/** Pick the right CLI invocation hint based on how the process was launched.
+ *  When started via `npm run <script>`, npm sets `npm_lifecycle_event` to the
+ *  script name — flags need `--` to reach the underlying command, so the hint
+ *  becomes `npm run <script> -- --port <n>` instead of the bare binary form. */
+export function portFlagHint(env: NodeJS.ProcessEnv = process.env): string {
+  const script = env.npm_lifecycle_event;
+  if (script && script !== "npx") {
+    return `npm run ${script} -- --port <n>`;
+  }
+  return "brainpilot up --port <n>";
+}
+
 export class PortInUseError extends Error {
-  constructor(public readonly port: number) {
+  constructor(
+    public readonly port: number,
+    hint: string = portFlagHint(),
+  ) {
     super(
       `Port ${port} is already in use.\n` +
-        "  Choose another with `brainpilot up --port <n>` " +
+        `  Choose another with \`${hint}\` ` +
         "(the runtime uses port+1).",
     );
     this.name = "PortInUseError";
