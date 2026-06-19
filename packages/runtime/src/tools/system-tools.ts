@@ -346,6 +346,8 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // evidence is restricted to the session workspace; the audit must not
   // dredge the trace graph or other agents' internal state.
   auditor: ["send_message", "record_trace"],
+  // Writer: needs ask_user to present format/style options before drafting.
+  writer: ["send_message", "record_trace", "ask_user"],
   // Default for any other expert-like agent.
   _default: ["send_message", "record_trace"],
 };
