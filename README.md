@@ -51,6 +51,35 @@ brainpilot logs      # tail backend log; add --runtime for runtime log
 brainpilot down      # stop the detached backend
 ```
 
+### Where your files live
+
+`brainpilot up` resolves a single **data directory** and keeps everything under
+it. Precedence: `--dir <path>` > `BP_DATA_DIR` env > `./brainpilot` under the
+current working directory. So a plain `brainpilot up` uses `./brainpilot/`.
+
+```
+brainpilot/                       # data root (default: ./brainpilot)
+├── workspaces/<sessionId>/       # the agent's working directory (cwd) — one per
+│                                 #   session; every file an agent reads/writes
+│                                 #   or generates lands here
+├── bp_template/                  # configuration (written by `brainpilot init`)
+│   ├── providers.json            #   API key / base URL / model (providers)
+│   ├── settings.json             #   runtime settings
+│   ├── mcp_servers.json          #   MCP server connections
+│   ├── agents/                   #   custom agent personas
+│   └── skills/                   #   custom skills
+├── .bp/<sessionId>/              # per-session state (metadata, trace graph)
+├── brainpilot.config.json        # local top-level config
+├── .env                          # environment variables
+└── .runtime/                     # process state: logs/, pid files, server.json
+```
+
+> **Trust boundary.** In local (non-Docker) mode there is **no container
+> isolation** — agents read and write directly on your machine, under
+> `brainpilot/workspaces/<sessionId>/`. The UI hides the *Sandbox* control in
+> this mode because there is no Docker sandbox to attach. If you need isolation,
+> use the Docker deployment below, which runs agents inside a sandbox container.
+
 ## 💻 Run from source (contributors)
 
 From a local BrainPilot checkout:

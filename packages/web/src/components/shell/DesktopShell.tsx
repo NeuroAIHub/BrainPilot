@@ -4,6 +4,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
+import { runtimeConfig } from "../../config";
 import { PromptComposer } from "../chat/PromptComposer";
 import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
@@ -201,7 +202,12 @@ export function DesktopShell() {
                 <RefreshCw size={14} />
               </IconButton>
             ) : null}
-            <SandboxStatus />
+            {/* #100: in local single-user mode there is no Docker sandbox to
+                inspect — the runtime IS the workspace, so the Sandbox status
+                popover would only show empty container metrics and read like a
+                fault. Hide it here; downstream multi-user Docker builds set
+                VITE_LOCAL_MODE=0 and keep the real container UI. */}
+            {runtimeConfig.localMode ? null : <SandboxStatus />}
             <IconButton
               aria-pressed={isFilesOpen}
               className={isFilesOpen ? "is-active" : ""}
