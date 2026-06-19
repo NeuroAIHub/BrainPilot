@@ -29,6 +29,7 @@ import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./to
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import { personaFor, withLanguageDirective } from "./personas.js";
+import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
@@ -906,6 +907,10 @@ export class SessionManager {
       // was reminded once and still didn't report back, so the principal never
       // dead-waits on a silent expert.
       onUnreplied: (agentName) => this.writeFallbackToPrincipal(entry, agentName),
+      // #97: only the principal gets the live team-status block injected each
+      // turn (it is the coordinator). Other roles run without it.
+      renderAgentStatus:
+        name === "principal" ? () => this.renderAgentStatus(entry) : undefined,
     });
 
     const agent = new MasAgent({
@@ -949,6 +954,23 @@ export class SessionManager {
       .catch(() => {
         /* best-effort */
       });
+  }
+
+  /**
+   * #97: snapshot the live team status for injection into the principal's turn
+   * (via the agent-status extension's Pi `context` hook). Lists every agent —
+   * INCLUDING the principal itself, so it sees its own inbox backlog — with its
+   * authoritative status and the number of messages still queued unread in its
+   * inbox (`mailbox.count`). Excludes the trace agent (an internal recorder) and
+   * any stopped agent (destroyed; irrelevant to current coordination). Returns
+   * "" when nothing is worth reporting so the extension injects nothing.
+   */
+  private renderAgentStatus(entry: SessionEntry): string {
+    const lines = collectAgentStatusLines(
+      entry.agents.values(),
+      (name) => entry.mailbox.count(name),
+    );
+    return renderAgentStatusBlock(lines);
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {
