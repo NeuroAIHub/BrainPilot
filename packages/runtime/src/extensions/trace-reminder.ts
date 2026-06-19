@@ -3,23 +3,32 @@
  *
  * Philosophy (vs. #79): the host no longer writes trace nodes on the agent's
  * behalf. Instead we REMIND the agent at the right moment and let it decide:
- *  - 意图一 (PI work leaves a trace): if a principal turn made a decision but
- *    never called record_trace, nudge it once to record (D).
- *  - 意图二 (expert results flow back): if an expert turn produced work but never
- *    send_message'd the principal, nudge once; if it still won't, the host writes
- *    a fallback note into the principal's mailbox so the PI never dead-waits.
+ *  - 意图一 (work leaves a trace): if a run ended without record_trace, nudge.
+ *    Applies to BOTH principal and expert (every non-trace role), not just PI.
+ *  - 意图二 (expert results flow back): if an expert run produced work but never
+ *    send_message'd the principal, nudge; if it still won't, the host writes a
+ *    fallback note into the principal's mailbox so the PI never dead-waits.
  *  - 意图三 (PI keeps to delegation): if the principal does substantive work
  *    directly without delegating, append a soft reminder to the tool result.
  *  - 意图四 (resource awareness): on a tool error, append a soft hint that the
  *    knowledge tools / record_trace exist. (Static identity lives in personas.)
  *
- * Mechanism (Pi SDK v0.79, verified against installed d.ts):
+ * 意图一 and 意图二 are ORTHOGONAL checks (B): an expert can owe both a trace
+ * and a reply. They limit independently (A — separate counters), but when BOTH
+ * lapse at the same run end they collapse into ONE merged reminder rather than
+ * two separate followUps (fewer round-trips).
+ *
+ * Mechanism (Pi SDK v0.79, verified against installed d.ts + real provider):
  *  - Registered per-AgentSession via DefaultResourceLoader.extensionFactories.
  *    Closure state is therefore naturally isolated per agent.
+ *  - One prompt() == one agent loop (agent_start…agent_end) spanning MANY turns.
+ *    "Did the work" flags are RUN-scoped (reset on agent_start, accumulated
+ *    across turns) — resetting them on turn_start was the false-report bug.
  *  - `agent_end` / `turn_*` are pure notifications (no return value, cannot
  *    block). The ONLY "force continue" lever is `pi.sendUserMessage(text,
  *    {deliverAs:"followUp"})` inside `agent_end`: it releases the current stop
- *    and injects a message that triggers a NEW turn.
+ *    and starts a NEW agent loop (a fresh agent_start) — which is why the
+ *    anti-loop counters must NOT reset on agent_start.
  *  - `tool_result` MAY return `{content}` to rewrite the result text — used for
  *    the soft reminders (意图三/四).
  */
@@ -27,7 +36,7 @@ import type { AgentRole } from "../types.js";
 
 /** Minimal structural surface of Pi's ExtensionAPI we depend on. */
 interface PiExtensionApi {
-  on(event: "turn_start", handler: () => void): void;
+  on(event: "agent_start", handler: () => void): void;
   on(event: "tool_execution_start", handler: (e: { toolName: string; args?: unknown }) => void): void;
   on(event: "tool_execution_end", handler: (e: { toolName: string; isError: boolean }) => void): void;
   on(
@@ -65,10 +74,14 @@ const MGMT_TOOLS = new Set([
   "get_trace_graph",
 ]);
 
-const PRINCIPAL_TRACE_REMINDER =
-  "你本轮做了实质决策但尚未调用 record_trace。如果这步值得留痕，请调用 record_trace 记录后再结束。";
+const TRACE_REMINDER =
+  "你本轮做了实质工作但尚未调用 record_trace。如果这步值得留痕，请调用 record_trace 记录后再结束。";
 const EXPERT_REPLY_REMINDER =
   "你尚未通过 send_message(to=\"principal\", ...) 把结果回交给 Principal。请回交结果，否则 Principal 收不到你的产出。";
+const MERGED_REMINDER =
+  "你本轮尚未回交结果，也未记录关键决策。结束前请：" +
+  "① 用 send_message(to=\"principal\", ...) 回交结果；" +
+  "② 用 record_trace 记录关键决策。";
 const DELEGATE_REMINDER = "[提醒：作为 Principal，实质工作应委派给专家，而不是自己埋头执行。]";
 const TOOL_FAILURE_REMINDER =
   "[提醒：该工具调用失败。可用 record_trace 记录这次失败，或借助知识库/检索工具寻找替代方案。]";
@@ -79,19 +92,28 @@ const TOOL_FAILURE_REMINDER =
  */
 export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionApi) => void {
   return (pi) => {
-    // Per-turn flags — reset on turn_start.
+    // Per-RUN flags — reset on agent_start (NOT turn_start). A single prompt()
+    // is one agent loop (agent_start…agent_end) spanning MANY turns, and a model
+    // naturally calls a tool in one turn then writes its closing sentence in the
+    // NEXT (tool-less) turn. Resetting on turn_start wiped the earlier turn's
+    // success, so agent_end only ever saw the last turn and falsely reported the
+    // work as undone. Keyed to the run, these accumulate across all its turns.
     let traced = false;
     let replied = false;
     let delegated = false;
     let delegateRemindCount = 0;
 
-    // ⚠️ Cross-run counter — MUST NOT reset on turn_start / at the top of
-    // agent_end. sendUserMessage(followUp) triggers a NEW run whose end re-enters
-    // agent_end; if this were cleared we would re-remind forever. It is reset
-    // ONLY at the two terminal exits below (goal met, or already reminded once).
-    let remindCount = 0;
+    // ⚠️ Cross-run-CHAIN counters — MUST NOT reset on agent_start/turn_start nor
+    // at the top of agent_end. sendUserMessage(followUp) starts a NEW agent loop
+    // (verified: a followUp fires a fresh agent_start) whose end re-enters
+    // agent_end; if these were cleared we would re-remind forever. They are reset
+    // ONLY at the terminal exits below (dimension satisfied, or already reminded
+    // once → fallback/let-go). Decoupled per dimension (A) so a trace reminder
+    // and a reply reminder limit independently.
+    let traceRemindCount = 0;
+    let replyRemindCount = 0;
 
-    pi.on("turn_start", () => {
+    pi.on("agent_start", () => {
       traced = false;
       replied = false;
       delegated = false;
@@ -135,36 +157,52 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
     pi.on("agent_end", () => {
       if (deps.role === "trace") return; // the recorder itself — never nudge.
 
-      if (deps.role === "principal") {
-        if (traced) {
-          remindCount = 0; // goal met — safe to reset.
-          return;
-        }
-        if (remindCount < 1) {
-          remindCount++;
-          pi.sendUserMessage(PRINCIPAL_TRACE_REMINDER, { deliverAs: "followUp" });
-          return;
-        }
-        // Already reminded once — let it go. PI is the top coordinator: no
-        // host-side fallback. ⚠️ reset only here (already-reminded exit).
-        remindCount = 0;
-        return;
-      }
+      // Two ORTHOGONAL checks (B). Both can be true for one expert (it produced
+      // work worth tracing AND owes the principal a reply).
+      //  - 留痕 (trace): every non-trace role is nudged unconditionally when it
+      //    ends a run without a record_trace.
+      //  - 回交 (reply): only an expert has a principal to report back to.
+      const needTrace = !traced;
+      const needReply = deps.role !== "principal" && !replied;
 
-      // expert branch (everything that isn't principal/trace).
-      if (replied) {
-        remindCount = 0; // goal met — safe to reset.
+      // A satisfied dimension resets its own counter (so a later real lapse is
+      // nudged afresh).
+      if (!needTrace) traceRemindCount = 0;
+      if (!needReply) replyRemindCount = 0;
+
+      const canTrace = needTrace && traceRemindCount < 1;
+      const canReply = needReply && replyRemindCount < 1;
+
+      // Both lapsed and both still nudge-able → ONE merged reminder, not two.
+      if (canTrace && canReply) {
+        traceRemindCount++;
+        replyRemindCount++;
+        pi.sendUserMessage(MERGED_REMINDER, { deliverAs: "followUp" });
         return;
       }
-      if (remindCount < 1) {
-        remindCount++;
+      if (canReply) {
+        replyRemindCount++;
         pi.sendUserMessage(EXPERT_REPLY_REMINDER, { deliverAs: "followUp" });
         return;
       }
-      // Reminded once and still no reply → host fallback so the PI never
-      // dead-waits. ⚠️ reset only here (already-reminded exit).
-      deps.onUnreplied(deps.name);
-      remindCount = 0;
+      if (canTrace) {
+        traceRemindCount++;
+        pi.sendUserMessage(TRACE_REMINDER, { deliverAs: "followUp" });
+        return;
+      }
+
+      // Nothing left to nudge (each lapsed dimension was already reminded once).
+      // Terminal handling per dimension:
+      //  - reply has a host fallback so the principal never dead-waits;
+      //  - trace has none (PI/expert self-decides) — just let it go.
+      // ⚠️ counters reset only here (the already-reminded terminal exit).
+      if (needReply) {
+        deps.onUnreplied(deps.name);
+        replyRemindCount = 0;
+      }
+      if (needTrace) {
+        traceRemindCount = 0;
+      }
     });
   };
 }
