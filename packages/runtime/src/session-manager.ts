@@ -28,7 +28,7 @@ import { MasAgent } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
-import { personaFor } from "./personas.js";
+import { personaFor, withLanguageDirective } from "./personas.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
@@ -423,13 +423,17 @@ export class SessionManager {
    * file is present or it's empty.
    */
   private async loadPersona(name: string, role: AgentRole): Promise<string> {
+    let base: string | undefined;
     try {
       const raw = (await readFile(this.agentPromptPath(name), "utf8")).trim();
-      if (raw) return raw;
+      if (raw) base = raw;
     } catch {
       // No on-disk override — fall through to the built-in persona.
     }
-    return personaFor(name, role);
+    // #97: append the language-following directive here (not in the persona text
+    // / on-disk prompt.md) so it also reaches users who scaffolded earlier, and
+    // applies whether the persona came from disk or the built-in constant.
+    return withLanguageDirective(base ?? personaFor(name, role));
   }
 
   /* ---------------------------- session CRUD ---------------------------- */

@@ -121,8 +121,8 @@ export class MasAgent {
       // issue #45: never surface raw SDK guidance (/login, node_modules paths)
       // — normalize to a product message / redact local paths before it hits
       // the event stream, events.jsonl, and lastError.
-      const message = normalizeAgentError(raw);
-      this.recordError(message);
+      const { message, details } = normalizeAgentError(raw);
+      this.recordError(message, details);
       this.bus.emit(
         ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
       );
@@ -219,8 +219,8 @@ export class MasAgent {
         const msg = end.message as { stopReason?: string; errorMessage?: string } | undefined;
         if (msg?.stopReason === "error") {
           const raw = msg.errorMessage || "provider request failed";
-          const message = normalizeAgentError(raw);
-          this.recordError(message);
+          const { message, details } = normalizeAgentError(raw);
+          this.recordError(message, details);
           this.setStatus("error");
         }
         if (this.currentMessageId) {
@@ -280,7 +280,8 @@ export class MasAgent {
       case "auto_retry_end": {
         const r = e as Extract<PiAgentEvent, { type: "auto_retry_end" }>;
         if (!r.success) {
-          this.recordError(r.finalError ?? "retry exhausted");
+          const { message, details } = normalizeAgentError(r.finalError ?? "retry exhausted");
+          this.recordError(message, details);
           this.setStatus("error");
         }
         return;
@@ -329,7 +330,8 @@ export class MasAgent {
           (typeof err.error === "string" ? err.error : undefined) ??
           err.reason ??
           "provider request failed";
-        this.recordError(normalizeAgentError(raw));
+        const { message, details } = normalizeAgentError(raw);
+        this.recordError(message, details);
         this.setStatus("error");
         return;
       }

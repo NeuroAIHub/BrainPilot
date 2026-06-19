@@ -26,6 +26,32 @@
 
 /* ----------------------------- shared blocks ----------------------------- */
 
+/**
+ * Language-following directive (#97). Appended to EVERY agent persona at load
+ * time (see SessionManager.loadPersona) — kept out of the per-role persona text
+ * and the user-editable on-disk `prompt.md` copies so it also reaches users who
+ * scaffolded before this existed. Authored in English (all personas are), but it
+ * instructs the agent to mirror the USER's language, and to switch on request —
+ * a follow rule, not a fixed lock, so a mid-conversation "switch to English"
+ * is honored. Experts inherit this naturally: the Principal's delegated task
+ * text is in the user's language, so the expert answers in kind.
+ */
+export const LANGUAGE_DIRECTIVE = `## Response language
+
+Respond in the same language the user is currently writing in. This applies to
+all user-visible output, including progress updates and status messages. If the
+user explicitly asks you to switch languages, comply immediately and keep using
+the requested language until they change it again. Do not lock to one language —
+follow the user.`;
+
+/**
+ * Append the language-following directive to a resolved persona (#97). Used at
+ * persona load time so both built-in and on-disk personas get it.
+ */
+export function withLanguageDirective(persona: string): string {
+  return `${persona}\n\n${LANGUAGE_DIRECTIVE}`;
+}
+
 /** A2A messaging contract — identical mechanics for every non-trace agent. */
 const A2A_EXPERT = `## Communicating back to the Principal
 
