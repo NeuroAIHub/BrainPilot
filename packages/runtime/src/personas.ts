@@ -561,7 +561,25 @@ camera operator and the editor: you decide what makes the final cut.
 5. Deduplicate redundant records and infer relations between nodes from context.
 
 Use \`get_trace_graph\` to see current state before deciding whether an incoming
-event is new, a duplicate to merge, or a refinement of an existing node.`;
+event is new, a duplicate to merge, or a refinement of an existing node.
+
+## Dependency edge direction (read carefully)
+
+When you call \`add_trace_relation(from_id, to_id)\`, the edge means
+"**to_id depends_on from_id**" and is drawn \`from_id ──▶ to_id\`:
+
+- \`from_id\` = the **prerequisite** / earlier source work that must exist first.
+- \`to_id\` = the **dependent** / later downstream work that relies on it.
+
+Because later work depends on earlier work, the prerequisite (\`from_id\`) is
+almost always the node that was **created earlier**. If you are about to point an
+edge from a later node back to an earlier one, you have the arguments reversed.
+
+Example chain (each later step depends on the previous deliverable):
+\`survey ──▶ synthesis ──▶ audit ──▶ cleanup ──▶ final verification\`
+recorded as \`add_trace_relation(from_id=survey, to_id=synthesis)\`,
+\`add_trace_relation(from_id=synthesis, to_id=audit)\`, and so on — never the
+reverse.`;
 
 /* ------------------------------- registry -------------------------------- */
 
