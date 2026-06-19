@@ -6,6 +6,7 @@ import {
   up,
   buildStartServerOptions,
   PortInUseError,
+  portFlagHint,
   type ResolvedUpConfig,
 } from "./up.js";
 import { readPid, readServerState } from "../process-control.js";
@@ -194,6 +195,46 @@ describe("up — detached start", () => {
     // issue #41: detached up persists resolved ports for `status`.
     const state = await readServerState(join(root, ".runtime", "server.json"));
     expect(state).toEqual({ pid: 4242, port: 9700, runtimePort: 9701, host: "127.0.0.1" });
+  });
+});
+
+describe("portFlagHint", () => {
+  it("returns the bare `brainpilot up --port <n>` form when not run via npm", () => {
+    expect(portFlagHint({})).toBe("brainpilot up --port <n>");
+  });
+
+  it("returns `npm run <script> -- up --port <n>` when npm_lifecycle_event is set", () => {
+    // The `up` subcommand has to come *after* `--`, since the npm script
+    // itself only runs `node bin.js` — without `up` the CLI defaults to a
+    // different command and never reaches the port path.
+    expect(portFlagHint({ npm_lifecycle_event: "bp" })).toBe(
+      "npm run bp -- up --port <n>",
+    );
+    expect(portFlagHint({ npm_lifecycle_event: "start" })).toBe(
+      "npm run start -- up --port <n>",
+    );
+  });
+
+  it("ignores the `npx` script name (npx sets npm_lifecycle_event=npx)", () => {
+    expect(portFlagHint({ npm_lifecycle_event: "npx" })).toBe(
+      "brainpilot up --port <n>",
+    );
+  });
+});
+
+describe("PortInUseError", () => {
+  it("includes the supplied hint in the message", () => {
+    const e = new PortInUseError(9001, "npm run bp -- up --port <n>");
+    expect(e.message).toContain("Port 9001 is already in use.");
+    expect(e.message).toContain("`npm run bp -- up --port <n>`");
+  });
+
+  it("falls back to the default hint when none supplied", () => {
+    const e = new PortInUseError(9001);
+    // Default form starts with either `brainpilot` or `npm run` — depends on
+    // the test runner's own env. Just assert the port and a backtick are there.
+    expect(e.message).toContain("Port 9001 is already in use.");
+    expect(e.message).toMatch(/`[^`]+--port <n>`/);
   });
 });
 

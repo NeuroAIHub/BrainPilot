@@ -77,11 +77,30 @@ export function buildStartServerOptions(
   } satisfies StartServerOptions;
 }
 
+/** Pick the right CLI invocation hint based on how the process was launched.
+ *
+ *  Direct binary call → `brainpilot up --port <n>`.
+ *
+ *  npm script call → `npm run <script> -- up --port <n>`. The `--` is required
+ *  to stop npm from swallowing flags (otherwise it warns "Unknown cli config
+ *  '--port'" and never passes them through), and the `up` subcommand has to
+ *  follow it because the script itself only invokes `node bin.js`. */
+export function portFlagHint(env: NodeJS.ProcessEnv = process.env): string {
+  const script = env.npm_lifecycle_event;
+  if (script && script !== "npx") {
+    return `npm run ${script} -- up --port <n>`;
+  }
+  return "brainpilot up --port <n>";
+}
+
 export class PortInUseError extends Error {
-  constructor(public readonly port: number) {
+  constructor(
+    public readonly port: number,
+    hint: string = portFlagHint(),
+  ) {
     super(
       `Port ${port} is already in use.\n` +
-        "  Choose another with `brainpilot up --port <n>` " +
+        `  Choose another with \`${hint}\` ` +
         "(the runtime uses port+1).",
     );
     this.name = "PortInUseError";
