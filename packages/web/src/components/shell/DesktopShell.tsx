@@ -23,7 +23,7 @@ const MAX_SIDEBAR_WIDTH = 420;
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
-  const { currentSession, currentView, messages, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
+  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
   const t = useT();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activePage, setActivePage] = useState<"workspace" | "demo">("workspace");
@@ -136,47 +136,60 @@ export function DesktopShell() {
       >
         <header className="workspace-toolbar" aria-label={t("shell.aria.toolbarActions")}>
           <div className="session-title" aria-label={t("shell.aria.activeSession")}>
-            <span className="session-title__label">{t("shell.sessionLabel")}</span>
+            {/* #105: foreground the human-readable session title (same source as
+                the sidebar). The id is debug-only metadata now — surfaced as a
+                hover tooltip + muted short id, never the primary label. Falls
+                back to `Session <id8>` when the title is missing. */}
+            <span
+              className="session-title__name"
+              title={currentSession?.id ?? undefined}
+            >
+              {currentSession?.title ||
+                (currentSession?.id
+                  ? `${t("shell.sessionLabel")} ${currentSession.id.slice(0, 8)}`
+                  : t("shell.defaultWorkspace"))}
+            </span>
             {currentSession?.id ? (
               <span className="session-title__id">{currentSession.id.slice(0, 8)}</span>
             ) : null}
-            {messages.length === 0 ? (
-              <span className="session-title__name">
-                {currentSession?.title || t("shell.defaultWorkspace")}
-              </span>
-            ) : null}
           </div>
           <div className="workspace-toolbar__actions">
-            <div className="workspace-view-tabs" role="tablist" aria-label={t("shell.aria.viewTabs")}>
+            {/* #104: icon-only nav. The label stays in the DOM (visually
+                hidden) so it remains the button's accessible name, and `title`
+                gives a hover/focus tooltip — no separate aria-label needed. */}
+            <div className="workspace-view-tabs workspace-view-tabs--icon-only" role="tablist" aria-label={t("shell.aria.viewTabs")}>
               <button
                 aria-selected={currentView === "chat"}
                 className={currentView === "chat" ? "is-active" : ""}
                 onClick={() => setCurrentView("chat")}
                 role="tab"
+                title={t("shell.view.chat")}
                 type="button"
               >
                 <MessageSquare size={14} />
-                <span>{t("shell.view.chat")}</span>
+                <span className="sr-only">{t("shell.view.chat")}</span>
               </button>
               <button
                 aria-selected={currentView === "agents"}
                 className={currentView === "agents" ? "is-active" : ""}
                 onClick={() => setCurrentView("agents")}
                 role="tab"
+                title={t("shell.view.agents")}
                 type="button"
               >
                 <Bot size={14} />
-                <span>{t("shell.view.agents")}</span>
+                <span className="sr-only">{t("shell.view.agents")}</span>
               </button>
               <button
                 aria-selected={currentView === "trace"}
                 className={currentView === "trace" ? "is-active" : ""}
                 onClick={() => setCurrentView("trace")}
                 role="tab"
+                title={t("shell.view.trace")}
                 type="button"
               >
                 <GitBranch size={14} />
-                <span>{t("shell.view.trace")}</span>
+                <span className="sr-only">{t("shell.view.trace")}</span>
               </button>
             </div>
             {currentView === "chat" ? (

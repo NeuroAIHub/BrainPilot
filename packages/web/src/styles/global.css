@@ -669,6 +669,15 @@ button {
   outline: none;
 }
 
+/* #104: icon-only nav — square buttons, no horizontal text weight. The label
+   lives in a .sr-only span so the accessible name is preserved. */
+.workspace-view-tabs--icon-only button {
+  width: 28px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
 .session-title {
   display: flex;
   min-width: 0;
@@ -691,9 +700,10 @@ button {
   white-space: nowrap;
 }
 
+/* #105: id demoted to muted secondary metadata beside the real title. */
 .session-title__id {
-  color: var(--color-text-muted);
-  font-size: 12px;
+  color: var(--color-text-subtle);
+  font-size: 11px;
   font-family: var(--font-mono);
 }
 
