@@ -3,6 +3,7 @@ import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from
 import type { ProviderProfile } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
+import { useTurnTimer } from "../../contexts/useTurnTimer";
 import { draftStore } from "../../contexts/draftStore";
 import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
@@ -39,7 +40,7 @@ export function PromptComposer() {
   const [uploading, setUploading] = useState(false);
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
@@ -211,6 +212,10 @@ export function PromptComposer() {
 
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
 
+  // #99: whole-turn timer — spans user input → every agent finished (runState
+  // settles false), debounced against hook/system re-wakes.
+  const turnTiming = useTurnTimer({ runActive, resetKey: currentSession?.id ?? null });
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!sessionId) return;
@@ -284,6 +289,7 @@ export function PromptComposer() {
             autoScroll
             scrollKey={sessionId ?? undefined}
             showTiming
+            turnTiming={turnTiming}
             runningAgents={runningAgents}
             onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
             onRetryCancel={() => void interruptCurrent()}

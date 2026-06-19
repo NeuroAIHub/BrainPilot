@@ -39,6 +39,13 @@ interface SessionContextValue {
   error: string | null;
   currentView: "chat" | "agents" | "trace";
   agents: AgentStatus[];
+  /**
+   * #99: authoritative whole-turn run-active signal from session_state.runState
+   * (trace agent excluded, delivery loops included), with the backend timestamp
+   * of the snapshot. null until the first session_state arrives. Drives the
+   * whole-turn timer in the Chat footer.
+   */
+  runActive: { active: boolean; atMs: number } | null;
   agentFilters: Record<string, AgentMessageFilter>;
   /** Live Graph of Trace for the current session (#79), or null if none/unloaded. */
   currentTrace: TraceGraph | null;
@@ -147,6 +154,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // so keystrokes don't re-render the whole chat subtree. Drafts are keyed by
   // session id and survive PromptComposer unmount (tab switches).
   const [agents, setAgents] = useState<AgentStatus[]>([]);
+  // #99: authoritative whole-turn run-active flag from session_state.runState
+  // (derived by the runtime: trace agent excluded, delivery loops included),
+  // paired with the backend ISO timestamp of the snapshot that carried it. The
+  // turn timer keys off transitions of this flag, not the per-agent list.
+  const [runActive, setRunActive] = useState<{ active: boolean; atMs: number } | null>(null);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
   const [messageFilters, setMessageFilters] = useState<MessageFilterRule[]>(defaultFilterRules);
   // #79: live Graph of Trace per session. Seeded by a fetch on session change,
@@ -270,6 +282,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setIsDraft(false);
     setCurrentSessionId(sessionId);
     setCurrentView("chat");
+    setRunActive(null); // #99: drop the previous session's turn-active signal
     connectSession(sessionId);
   }, [connectSession]);
 
@@ -469,7 +482,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           const stoppedMsg: ChatMessage = {
             id: generateUUID(),
             role: "system",
-            content: "Task stopped by user",
+            content: tg("chat.stoppedByUser"),
             createdAt: new Date().toISOString(),
             kind: "status",
           };
@@ -652,6 +665,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
         }));
         setAgents(nextAgents);
+        // #99: feed the whole-turn timer. runState.active is the authoritative
+        // "the user's task is still running" flag; lastActivityTs is the backend
+        // timestamp of this snapshot (fallback to now() if absent).
+        const rs = (value.runState ?? {}) as Record<string, unknown>;
+        const tsRaw = typeof value.lastActivityTs === "string" ? Date.parse(value.lastActivityTs) : NaN;
+        setRunActive({
+          active: rs.active === true,
+          atMs: Number.isNaN(tsRaw) ? Date.now() : tsRaw,
+        });
         // Apply default filters for newly discovered agents:
         // - trace agent: hide messages and tools by default
         // - all agents: hide hooks by default
@@ -790,6 +812,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       error,
       currentView,
       agents,
+      runActive,
       agentFilters,
       currentTrace,
       refreshTrace,
@@ -819,6 +842,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       error,
       currentView,
       agents,
+      runActive,
       agentFilters,
       currentTrace,
       refreshTrace,
