@@ -1126,8 +1126,10 @@ export class SessionManager {
    * single corrupt record doesn't poison the whole history.
    *
    * `limit` caps the returned array; when total > limit we return the **tail**
-   * (most recent events) since that's what users actually want for chat
-   * resume. Default 1000, capped at 5000.
+   * (most recent events) for lightweight callers. Default 1000, positive
+   * limits are capped at 5000. `limit <= 0` returns the full log and is used by
+   * the web rehydrate path so long sessions are not sliced through the middle
+   * of a streamed message.
    *
    * Returns `undefined` if the session id isn't in memory — this method is
    * only useful for known sessions (call `restoreFromDisk` first if needed).
@@ -1137,7 +1139,13 @@ export class SessionManager {
     opts: { limit?: number } = {},
   ): Promise<{ events: AgUiEvent[]; total: number; truncated: boolean } | undefined> {
     if (!this.sessions.has(sessionId)) return undefined;
-    const limit = Math.max(1, Math.min(opts.limit ?? 1000, 5000));
+    const requestedLimit = opts.limit;
+    const limit =
+      requestedLimit === undefined || !Number.isFinite(requestedLimit)
+        ? 1000
+        : requestedLimit <= 0
+          ? null
+          : Math.max(1, Math.min(requestedLimit, 5000));
     const path = join(this.bpDir(sessionId), "events.jsonl");
     let raw: string;
     try {
@@ -1160,8 +1168,8 @@ export class SessionManager {
       total++;
       events.push(parsed as AgUiEvent);
     }
-    const truncated = events.length > limit;
-    const out = truncated ? events.slice(events.length - limit) : events;
+    const truncated = limit !== null && events.length > limit;
+    const out = truncated ? events.slice(events.length - limit!) : events;
     return { events: out, total, truncated };
   }
 

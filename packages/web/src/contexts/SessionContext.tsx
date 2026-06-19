@@ -76,6 +76,53 @@ interface SessionContextValue {
 export const DRAFT_SESSION_ID = "__draft__";
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+// Runtime treats `limit=0` as "return the full persisted event log". Rehydrate
+// must not use a fixed tail size because slicing through TEXT_MESSAGE_START /
+// CONTENT / END leaves old long sessions looking empty.
+const HISTORY_REHYDRATE_LIMIT = 0;
+
+function foldSessionHistory(events: unknown[], sessionId: string): {
+  messages: ChatMessage[];
+  trace: TraceGraph | null;
+  agents: AgentStatus[] | null;
+} {
+  let messages: ChatMessage[] = [];
+  let trace: TraceGraph | null = null;
+  let lastAgents: AgentStatus[] | null = null;
+
+  for (const raw of events) {
+    const ev = normalizeWebSocketEvent(raw);
+    if (!ev) continue;
+    messages = reduceMessagesForEvent(messages, ev);
+    trace = reduceTraceForEvent(trace, ev, sessionId);
+    if (ev.type === "CUSTOM" && ev.name === "session_state") {
+      const v = (ev.value ?? {}) as Record<string, unknown>;
+      if (Array.isArray(v.agents)) {
+        lastAgents = (v.agents as Array<Record<string, unknown>>).map((agent) => ({
+          name: String(agent.name ?? ""),
+          status: String(agent.status ?? "idle"),
+          task: String(agent.task ?? ""),
+          updatedAt:
+            typeof agent.updatedAt === "string"
+              ? agent.updatedAt
+              : new Date().toISOString(),
+          alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
+        }));
+      }
+    }
+  }
+
+  return { messages, trace, agents: lastAgents };
+}
+
+function defaultAgentFilter(agentName: string): AgentMessageFilter {
+  const isTrace = agentName === "trace";
+  return {
+    hideMessages: isTrace,
+    hideTools: isTrace,
+    hideHooks: true,
+  };
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const { isAuthReady } = useAuth();
@@ -162,38 +209,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async function loadHistory() {
       setIsRefreshingMessages(true);
       try {
-        const { events } = await api.sessions.getHistory(sessionId);
+        const { events } = await api.sessions.getHistory(sessionId, { limit: HISTORY_REHYDRATE_LIMIT });
         if (cancelled) return;
 
         // Replay the persisted event stream through the same reducers SSE uses
         // (messageReducer / traceReducer / agents seed via session_state). The
         // SSE ring buffer that arrives next is deduped by messageId/toolCallId
         // inside the reducer, so any overlap is a no-op.
-        let nextMessages: ChatMessage[] = [];
-        let nextTrace: TraceGraph | null = null;
-        let lastAgents: AgentStatus[] | null = null;
-
-        for (const raw of events) {
-          const ev = normalizeWebSocketEvent(raw);
-          if (!ev) continue;
-          nextMessages = reduceMessagesForEvent(nextMessages, ev);
-          nextTrace = reduceTraceForEvent(nextTrace, ev, sessionId);
-          if (ev.type === "CUSTOM" && ev.name === "session_state") {
-            const v = (ev.value ?? {}) as Record<string, unknown>;
-            if (Array.isArray(v.agents)) {
-              lastAgents = (v.agents as Array<Record<string, unknown>>).map((agent) => ({
-                name: String(agent.name ?? ""),
-                status: String(agent.status ?? "idle"),
-                task: String(agent.task ?? ""),
-                updatedAt:
-                  typeof agent.updatedAt === "string"
-                    ? agent.updatedAt
-                    : new Date().toISOString(),
-                alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
-              }));
-            }
-          }
-        }
+        const { messages: nextMessages, trace: nextTrace, agents: lastAgents } =
+          foldSessionHistory(events, sessionId);
 
         if (cancelled) return;
         hydratedSessionsRef.current.add(sessionId);
@@ -214,6 +238,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // already pushed an authoritative session_state since selection.
         if (lastAgents && lastAgents.length > 0) {
           setAgents((current) => (current.length === 0 ? lastAgents! : current));
+          setAgentFilters((current) => {
+            let changed = false;
+            const next = { ...current };
+            for (const agent of lastAgents) {
+              if (!next[agent.name]) {
+                changed = true;
+                next[agent.name] = defaultAgentFilter(agent.name);
+              }
+            }
+            return changed ? next : current;
+          });
         }
       } catch (err) {
         // Best-effort. SSE will eventually drive the panel; we shouldn't surface
@@ -477,15 +512,39 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!currentSession) {
       return;
     }
-    console.log(`[SessionContext] refreshMessages: ${currentSession.id}`);
+      console.log(`[SessionContext] refreshMessages: ${currentSession.id}`);
     setIsRefreshingMessages(true);
     setError(null);
     try {
-      // Re-connect the SSE stream — the server will emit a fresh
-      // MESSAGES_SNAPSHOT as the first frame, replacing the local cache.
+      const { events } = await api.sessions.getHistory(currentSession.id, {
+        limit: HISTORY_REHYDRATE_LIMIT,
+      });
+      const { messages: nextMessages, trace: nextTrace, agents: nextAgents } =
+        foldSessionHistory(events, currentSession.id);
+
+      setMessagesBySession((current) => ({ ...current, [currentSession.id]: nextMessages }));
+      if (nextTrace) {
+        setTraceBySession((current) => ({ ...current, [currentSession.id]: nextTrace }));
+      }
+      if (nextAgents && nextAgents.length > 0) {
+        setAgents(nextAgents);
+        setAgentFilters((current) => {
+          let changed = false;
+          const next = { ...current };
+          for (const agent of nextAgents) {
+            if (!next[agent.name]) {
+              changed = true;
+              next[agent.name] = defaultAgentFilter(agent.name);
+            }
+          }
+          return changed ? next : current;
+        });
+      }
+      hydratedSessionsRef.current.add(currentSession.id);
+
+      // Re-connect the SSE stream so live updates continue after the disk
+      // history has refreshed the local cache.
       disconnectSession(currentSession.id);
-      // Clear local state so the snapshot becomes the authoritative source.
-      setMessagesBySession((current) => ({ ...current, [currentSession.id]: [] }));
       connectSession(currentSession.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.refreshFailed"));
@@ -603,12 +662,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             const existing = current[agent.name];
             if (!existing) {
               changed = true;
-              const isTrace = agent.name === "trace";
-              next[agent.name] = {
-                hideMessages: isTrace,
-                hideTools: isTrace,
-                hideHooks: true,
-              };
+              next[agent.name] = defaultAgentFilter(agent.name);
             }
           }
           return changed ? next : current;
@@ -665,12 +719,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           for (const agent of appended) {
             if (!cur[agent.name]) {
               changed = true;
-              const isTrace = agent.name === "trace";
-              nf[agent.name] = {
-                hideMessages: isTrace,
-                hideTools: isTrace,
-                hideHooks: true,
-              };
+              nf[agent.name] = defaultAgentFilter(agent.name);
             }
           }
           return changed ? nf : cur;

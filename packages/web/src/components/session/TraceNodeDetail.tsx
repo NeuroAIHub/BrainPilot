@@ -1,6 +1,7 @@
 import { AlertTriangle, ArrowRight, Box, Clock3, FileText, GitBranch, Timer, Wrench } from "lucide-react";
 import { TraceNode } from "../../contracts/backend";
 import { TranslateVars } from "../../i18n/translate";
+import { formatToolName } from "../../utils/toolDisplay";
 import {
   artifactLabels,
   formatDuration,
@@ -13,11 +14,13 @@ import {
 
 interface TraceNodeDetailProps {
   node: TraceNode | null;
+  nodes?: TraceNode[];
   onSelectNode: (id: string) => void;
   /** When provided, artifact rows become buttons that focus that file. */
   onSelectArtifact?: (path: string) => void;
   /** Currently focused artifact path (for highlight). */
   activeArtifactPath?: string | null;
+  formatKind?: (kind: string) => string;
   t: (key: string, vars?: TranslateVars) => string;
 }
 
@@ -26,11 +29,31 @@ interface TraceNodeDetailProps {
  * TracePanel so the live trace view and the demo replay share it. In the demo
  * an `onSelectArtifact` handler wires artifact rows to the file preview.
  */
-export function TraceNodeDetail({ node, onSelectNode, onSelectArtifact, activeArtifactPath, t }: TraceNodeDetailProps) {
+export function TraceNodeDetail({ node, nodes, onSelectNode, onSelectArtifact, activeArtifactPath, formatKind, t }: TraceNodeDetailProps) {
   if (!node) {
-    return <p>No trace node selected.</p>;
+    return <p>{t("trace.node.noneSelected")}</p>;
   }
   const statusKey = getStatusLabelKey(node.status);
+  const nodeById = new Map((nodes ?? []).map((item) => [item.id, item]));
+  const kind = getNodeKind(node);
+  const kindLabel = formatKind?.(kind) ?? kind;
+  const parentLabel = (id: string) =>
+    nodeById.get(id)?.title || t("trace.node.parentFallback");
+  const childNodes = node.childIds
+    .map((id) => ({ id, title: nodeById.get(id)?.title }))
+    .filter((item) => item.title);
+  const metrics = [
+    node.durationMs !== undefined
+      ? { key: "duration", icon: <Timer size={13} />, label: formatDuration(node.durationMs) }
+      : null,
+    node.toolCalls.length > 0
+      ? { key: "tools", icon: <Wrench size={13} />, label: t("trace.node.tools", { count: node.toolCalls.length }) }
+      : null,
+    node.artifacts.length > 0
+      ? { key: "artifacts", icon: <Box size={13} />, label: t("trace.node.artifacts", { count: node.artifacts.length }) }
+      : null,
+  ].filter((item): item is { key: string; icon: JSX.Element; label: string } => item !== null);
+
   return (
     <>
       <div className="trace-detail__title">
@@ -41,9 +64,8 @@ export function TraceNodeDetail({ node, onSelectNode, onSelectArtifact, activeAr
         </span>
       </div>
       <div className="trace-detail__badges">
-        <span>{node.id}</span>
-        <span>{getNodeKind(node)}</span>
-        <span>{node.agent || "agent unknown"}</span>
+        <span title={kind}>{kindLabel}</span>
+        {node.agent ? <span>{node.agent}</span> : null}
         {node.metadata?.auto ? (
           <span className="trace-detail__badge--auto" title={t("trace.node.autoTitle")}>
             {t("trace.node.auto")}
@@ -63,19 +85,21 @@ export function TraceNodeDetail({ node, onSelectNode, onSelectArtifact, activeAr
           <p>{node.context}</p>
         </section>
       ) : null}
-      <div className="trace-detail__metrics">
-        <span><Timer size={13} /> {formatDuration(node.durationMs)}</span>
-        <span><Wrench size={13} /> {node.toolCalls.length} tools</span>
-        <span><Box size={13} /> {node.artifacts.length} artifacts</span>
-      </div>
+      {metrics.length > 0 ? (
+        <div className="trace-detail__metrics">
+          {metrics.map((metric) => (
+            <span key={metric.key}>{metric.icon} {metric.label}</span>
+          ))}
+        </div>
+      ) : null}
       {node.parents.length > 0 ? (
         <section className="trace-detail__section">
-          <h4><GitBranch size={13} /> Dependencies</h4>
+          <h4><GitBranch size={13} /> {t("trace.node.dependencies")}</h4>
           <div className="trace-relation-list">
             {node.parents.map((parent) => (
-              <button key={parent.id} onClick={() => onSelectNode(parent.id)} type="button">
-                <strong>{parent.id}</strong>
-                <span>{relationLabels[parent.relation || ""] || parent.relation || "parent"}{parent.edgeType ? ` · ${parent.edgeType}` : ""}</span>
+              <button key={parent.id} onClick={() => onSelectNode(parent.id)} title={parent.id} type="button">
+                <strong>{parentLabel(parent.id)}</strong>
+                <span>{relationLabels[parent.relation || ""] || parent.relation || "parent"}</span>
                 {parent.explanation ? <small>{parent.explanation}</small> : null}
               </button>
             ))}
@@ -84,21 +108,21 @@ export function TraceNodeDetail({ node, onSelectNode, onSelectArtifact, activeAr
       ) : null}
       {node.toolCalls.length > 0 ? (
         <section className="trace-detail__section">
-          <h4><Wrench size={13} /> Tool Calls</h4>
+          <h4><Wrench size={13} /> {t("trace.node.toolCalls")}</h4>
           <div className="trace-chip-list">
-            {node.toolCalls.map((tool) => <span key={tool}>{tool}</span>)}
+            {node.toolCalls.map((tool) => <span key={tool} title={tool}>{formatToolName(tool)}</span>)}
           </div>
         </section>
       ) : null}
       {node.errorMessage ? (
         <section className="trace-detail__section trace-detail__section--error">
-          <h4><AlertTriangle size={13} /> Error</h4>
+          <h4><AlertTriangle size={13} /> {t("trace.node.error")}</h4>
           <p>{node.errorMessage}</p>
         </section>
       ) : null}
       {node.artifacts.length > 0 ? (
         <section className="trace-detail__section">
-          <h4><Box size={13} /> Artifacts</h4>
+          <h4><Box size={13} /> {t("trace.node.artifactsTitle")}</h4>
           <div className="trace-artifact-list">
             {node.artifacts.map((artifact) => {
               const label = artifactLabels[artifact.type || ""] || artifact.type || "file";
@@ -130,16 +154,24 @@ export function TraceNodeDetail({ node, onSelectNode, onSelectArtifact, activeAr
         </section>
       ) : null}
       <section className="trace-detail__section">
-        <h4><Clock3 size={13} /> Timeline</h4>
+        <h4><Clock3 size={13} /> {t("trace.node.timeline")}</h4>
         <dl>
           <div>
-            <dt>Created</dt>
+            <dt>{t("trace.node.created")}</dt>
             <dd>{formatTime(node.timestamp?.createdAt || node.createdAt)}</dd>
           </div>
-          <div>
-            <dt>Children</dt>
-            <dd>{node.childIds.join(", ") || "-"}</dd>
-          </div>
+          {childNodes.length > 0 ? (
+            <div>
+              <dt>{t("trace.node.children")}</dt>
+              <dd className="trace-detail__children">
+                {childNodes.map((child) => (
+                  <button key={child.id} onClick={() => onSelectNode(child.id)} title={child.id} type="button">
+                    {child.title}
+                  </button>
+                ))}
+              </dd>
+            </div>
+          ) : null}
         </dl>
       </section>
     </>

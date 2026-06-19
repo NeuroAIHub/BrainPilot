@@ -31,9 +31,7 @@ import {
 import {
   computeAgentActivity,
   computeAllAgentActivities,
-  computeAgentActivityPercentages,
   type AgentActivity,
-  type AgentActivityPercentages,
 } from "./agentAnalytics";
 import { NodeTooltip, NodeTooltipData } from "./NodeTooltip";
 import { GlobalOverview } from "./GlobalOverview";
@@ -68,6 +66,26 @@ const ACTIVE_EDGE_WINDOW_MS = 5_000;
 /** Translation key for a `statusKind` value, used as a display label. */
 function statusLabelKey(status: "running" | "idle" | "error" | "stopped"): string {
   return `network.status.${status}`;
+}
+
+function looksIdleTask(task?: string): boolean {
+  const normalized = (task ?? "").trim().toLowerCase();
+  return (
+    !normalized ||
+    normalized === "ready" ||
+    normalized === "idle" ||
+    normalized.includes("waiting for instructions") ||
+    normalized.includes("空闲") ||
+    normalized.includes("等待指令")
+  );
+}
+
+function taskLabelFor(agent: AgentStatus, status: "running" | "idle" | "error" | "stopped", t: (key: string) => string): string {
+  const task = agent.task?.trim();
+  if (status === "running" && looksIdleTask(task)) {
+    return t("network.detail.runningTask");
+  }
+  return task || t("network.detail.idleWaiting");
 }
 
 /* --------------------------------------------------------------------------
@@ -283,26 +301,30 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
 
   const edges = useMemo(() => buildEdges(messages), [messages]);
 
-  // Live agents from the session — anything sandboxed has spawned this entry.
-  const liveNames = useMemo(() => new Set(agents.map((a) => a.name)), [agents]);
-
-  // All node names: built-ins (always shown as dormant placeholders) ∪ live
-  // agents ∪ any names referenced in edges (defensive). Order is stable so
-  // the layout doesn't reflow when an agent comes/goes.
-  const nodeNames = useMemo(() => {
+  // Default view: only agents that actually participated in this session.
+  // Built-in agents that were not used are listed below as available, rather
+  // than drawn as equally important dormant graph nodes.
+  const activeNames = useMemo(() => {
     const set = new Set<string>();
-    BUILTIN_AGENT_NAMES.forEach((n) => set.add(n));
     agents.forEach((a) => set.add(a.name));
     edges.forEach((e) => {
       set.add(e.from);
       set.add(e.to);
     });
-    // Stable ordering: builtins first (in declared order), then custom names sorted.
-    const builtinSet = new Set<string>(BUILTIN_AGENT_NAMES);
-    const builtins = BUILTIN_AGENT_NAMES.filter((n) => set.has(n));
-    const customs = Array.from(set).filter((n) => !builtinSet.has(n)).sort();
-    return [...builtins, ...customs];
+    return set;
   }, [agents, edges]);
+
+  const nodeNames = useMemo(() => {
+    const builtinSet = new Set<string>(BUILTIN_AGENT_NAMES);
+    const builtins = BUILTIN_AGENT_NAMES.filter((n) => activeNames.has(n));
+    const customs = Array.from(activeNames).filter((n) => !builtinSet.has(n)).sort();
+    return [...builtins, ...customs];
+  }, [activeNames]);
+
+  const availableNames = useMemo(
+    () => BUILTIN_AGENT_NAMES.filter((name) => !activeNames.has(name)),
+    [activeNames],
+  );
 
   const positioned = useMemo(() => layoutNodes(nodeNames), [nodeNames]);
   const positionByName = useMemo(() => {
@@ -340,7 +362,7 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
 
   const now = Date.now();
   const totalMessages = edges.reduce((sum, edge) => sum + edge.messages.length, 0);
-  const liveCount = agents.length;
+  const liveCount = nodeNames.length;
   const runningCount = agents.filter((a) => statusKind(a.status) === "running").length;
 
   // Keep relative times / the Timeline "now" marker moving. Only tick while a
@@ -389,11 +411,6 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
     return allActivities.get(selectedAgent.name) ?? null;
   }, [selectedAgent, allActivities]);
 
-  const selectedAgentPercentages = useMemo<AgentActivityPercentages | null>(() => {
-    if (!selectedAgentActivity) return null;
-    return computeAgentActivityPercentages(selectedAgentActivity, allActivities);
-  }, [selectedAgentActivity, allActivities]);
-
   if (nodeNames.length === 0) {
     return (
       <div className="agent-network agent-network--empty">
@@ -411,7 +428,7 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
   const hoveredData: NodeTooltipData | null = hovered
     ? (() => {
         const agent = agentByName.get(hovered.name);
-        const isLive = liveNames.has(hovered.name);
+        const isLive = activeNames.has(hovered.name);
         const counts = countMessagesFor(hovered.name, edges);
         return {
           name: hovered.name,
@@ -436,9 +453,6 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
             <i className="agent-network__legend-dot agent-network__legend-dot--idle" /> {t("network.legend.live")}
           </span>
           <span className="agent-network__legend-item">
-            <i className="agent-network__legend-dot agent-network__legend-dot--dormant" /> {t("network.legend.dormant")}
-          </span>
-          <span className="agent-network__legend-item">
             <i className="agent-network__legend-dot agent-network__legend-dot--error" /> {t("network.legend.error")}
           </span>
           <span className="agent-network__legend-divider" aria-hidden="true" />
@@ -452,6 +466,16 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
             {t("network.legend.counter", { live: liveCount, total: nodeNames.length, running: runningCount, edges: edges.length, msgs: totalMessages })}
           </span>
         </div>
+        {availableNames.length > 0 ? (
+          <details className="agent-network__available">
+            <summary>{t("network.available.summary", { count: availableNames.length })}</summary>
+            <ul>
+              {availableNames.map((name) => (
+                <li key={name}>{name}</li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
 
         <div className="agent-network__viewport" aria-label={t("network.aria.viewport")} ref={viewportRef}>
           <svg
@@ -558,7 +582,7 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
                     const y1 = principal.y + uy * NODE_RADIUS;
                     const x2 = node.x - ux * NODE_RADIUS;
                     const y2 = node.y - uy * NODE_RADIUS;
-                    const isLive = liveNames.has(node.name);
+                    const isLive = activeNames.has(node.name);
                     return (
                       <line
                         className={`agent-network__scaffold-line ${
@@ -634,13 +658,15 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
             <g className="agent-network__nodes">
               {positioned.map((node) => {
                 const agent = agentByName.get(node.name);
-                const isLive = liveNames.has(node.name);
+                const isLive = activeNames.has(node.name);
                 const status = agent ? statusKind(agent.status) : "idle";
                 const presence = isLive ? "live" : "dormant";
                 const isSelected = selection?.kind === "node" && selection.id === node.name;
                 const Icon = getAgentIcon(node.name);
                 const accent = getAgentAccentVar(node.name);
                 const isPrincipal = node.name === "principal";
+                const fallbackAgent = agent ?? { name: node.name, status: "idle", task: "" };
+                const taskLabel = taskLabelFor(fallbackAgent, status, t);
                 return (
                   <g
                     aria-label={t("network.aria.node", { name: node.name, status: t(isLive ? statusLabelKey(status) : "network.status.dormant") })}
@@ -704,9 +730,9 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
                     <text className="agent-network__node-label" textAnchor="middle" y={NODE_RADIUS + 18}>
                       {node.name}
                     </text>
-                    {agent?.task ? (
+                    {isLive && (agent?.task || status === "running") ? (
                       <text className="agent-network__node-sublabel" textAnchor="middle" y={NODE_RADIUS + 32}>
-                        {agent.task.length > 32 ? `${agent.task.slice(0, 30)}…` : agent.task}
+                        {taskLabel.length > 32 ? `${taskLabel.slice(0, 30)}…` : taskLabel}
                       </text>
                     ) : !isLive ? (
                       <text className="agent-network__node-sublabel agent-network__node-sublabel--dormant" textAnchor="middle" y={NODE_RADIUS + 32}>
@@ -766,7 +792,7 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
             ) : selectedAgent ? (
               <AgentDetail
                 agent={selectedAgent}
-                isLive={liveNames.has(selectedAgent.name)}
+                isLive={activeNames.has(selectedAgent.name)}
                 filter={
                   agentFilters[selectedAgent.name] ?? {
                     hideMessages: false,
@@ -779,7 +805,6 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
                 received={messagesForAgent.received}
                 sent={messagesForAgent.sent}
                 activity={selectedAgentActivity}
-                activityPercentages={selectedAgentPercentages}
               />
             ) : (
               <GlobalOverview
@@ -819,7 +844,6 @@ function AgentDetail({
   sent,
   received,
   activity,
-  activityPercentages,
 }: {
   agent: AgentStatus;
   isLive: boolean;
@@ -834,7 +858,6 @@ function AgentDetail({
   sent: AgentEdgeMessage[];
   received: AgentEdgeMessage[];
   activity: AgentActivity | null;
-  activityPercentages: AgentActivityPercentages | null;
 }) {
   const Icon = getAgentIcon(agent.name);
   const status = statusKind(agent.status);
@@ -842,6 +865,7 @@ function AgentDetail({
   const presence = isLive ? "live" : "dormant";
   const t = useT();
   const statusLabel = isLive ? t(statusLabelKey(status)) : t("network.status.dormant");
+  const currentTask = isLive ? taskLabelFor(agent, status, t) : t("network.detail.notSpawnedByPrincipal");
 
   return (
     <>
@@ -881,12 +905,12 @@ function AgentDetail({
               </span>
             </dd>
           </div>
-          <div>
-            <dt>{t("network.detail.currentTask")}</dt>
-            <dd className="agent-network__keyvals-wrap">
-              {isLive ? (agent.task || t("network.detail.idleWaiting")) : t("network.detail.notSpawnedByPrincipal")}
-            </dd>
-          </div>
+            <div>
+              <dt>{t("network.detail.currentTask")}</dt>
+              <dd className="agent-network__keyvals-wrap">
+                {currentTask}
+              </dd>
+            </div>
           <div>
             <dt>{t("network.detail.updated")}</dt>
             <dd>{agent.updatedAt ? relativeTime(agent.updatedAt, now) : "—"}</dd>
@@ -899,18 +923,13 @@ function AgentDetail({
       </section>
 
       {/* ---- Activity Statistics ---- */}
-      {activity && activityPercentages ? (
+      {activity ? (
         <section className="agent-network__detail-section">
           <h4><MessageSquare size={13} /> {t("network.detail.activityStats")}</h4>
           <dl className="agent-network__keyvals">
             <div>
               <dt>{t("network.detail.totalMessages")}</dt>
-              <dd>
-                {activity.totalMessages}
-                <span style={{ fontSize: 11, opacity: 0.7, marginLeft: 6 }}>
-                  {t("network.detail.pctOfSession", { pct: activityPercentages.messagePercent.toFixed(1) })}
-                </span>
-              </dd>
+              <dd>{activity.totalMessages}</dd>
             </div>
             <div>
               <dt>{t("network.detail.messageBreakdown")}</dt>
@@ -918,38 +937,12 @@ function AgentDetail({
                 {t("network.detail.breakdownValue", { assistant: activity.assistantMessages, reasoning: activity.reasoningMessages, tool: activity.toolMessages })}
               </dd>
             </div>
-            <div>
-              <dt>{t("network.detail.toolCalls")}</dt>
-              <dd>
-                {activity.toolCalls}
-                {activity.toolCalls > 0 && (
-                  <span style={{ fontSize: 11, opacity: 0.7, marginLeft: 6 }}>
-                    {t("network.detail.pctOfSession", { pct: activityPercentages.toolCallPercent.toFixed(1) })}
-                  </span>
-                )}
-              </dd>
-            </div>
-            {activity.topTools.length > 0 && (
+            {activity.toolCalls > 0 ? (
               <div>
-                <dt>{t("network.detail.topTools")}</dt>
-                <dd className="agent-network__keyvals-wrap">
-                  {activity.topTools.map((t2, i) => (
-                    <span key={t2.name}>
-                      {t2.name} ({t2.count}){i < activity.topTools.length - 1 ? " · " : ""}
-                    </span>
-                  ))}
-                </dd>
+                <dt>{t("network.detail.toolCalls")}</dt>
+                <dd>{activity.toolCalls}</dd>
               </div>
-            )}
-            <div>
-              <dt>{t("network.detail.contentVolume")}</dt>
-              <dd>
-                {t("network.detail.volumeValue", { chars: activity.totalChars.toLocaleString(), tokens: activity.estimatedTokens.toLocaleString() })}
-                <span style={{ fontSize: 11, opacity: 0.7, marginLeft: 6 }}>
-                  {t("network.detail.pctOfSession", { pct: activityPercentages.tokenPercent.toFixed(1) })}
-                </span>
-              </dd>
-            </div>
+            ) : null}
             {activity.communicationPartners.length > 0 && (
               <div>
                 <dt>{t("network.detail.communicationPartners")}</dt>

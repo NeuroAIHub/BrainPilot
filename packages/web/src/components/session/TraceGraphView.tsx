@@ -26,6 +26,7 @@ interface TraceGraphViewProps {
   fitToken?: number | string;
   /** Shown when there are no nodes to display. */
   emptyLabel?: string;
+  formatKind?: (kind: string) => string;
   zoomLabels?: {
     controls?: string;
     zoomIn?: string;
@@ -49,6 +50,7 @@ export function TraceGraphView({
   onZoomChange,
   fitToken,
   emptyLabel,
+  formatKind,
   zoomLabels,
 }: TraceGraphViewProps) {
   const [nodeOffsets, setNodeOffsets] = useState<Map<string, { dx: number; dy: number }>>(new Map());
@@ -264,36 +266,40 @@ export function TraceGraphView({
               );
             }),
           )}
-          {adjustedLayout.positioned.map(({ node, x, y }) => (
-            <g
-              className={`trace-map-node trace-map-node--${getNodeKind(node)} trace-map-node--${normalizeStatus(node.status)} ${selectedNodeId === node.id ? "is-selected" : ""} ${draggingNodeRef.current?.nodeId === node.id ? "is-dragging" : ""}`}
-              key={node.id}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                const offset = nodeOffsets.get(node.id) || { dx: 0, dy: 0 };
-                draggingNodeRef.current = {
-                  nodeId: node.id,
-                  startClientX: e.clientX,
-                  startClientY: e.clientY,
-                  startDx: offset.dx,
-                  startDy: offset.dy,
-                };
-              }}
-              onClick={() => {
-                if (dragRef.current.hasPanned || draggingNodeRef.current) {
-                  return;
-                }
-                onSelectNode(node.id);
-              }}
-              style={{ transform: `translate(${x}px, ${y}px)` }}
-            >
-              <rect height={adjustedLayout.nodeHeight} rx="8" width={adjustedLayout.nodeWidth} />
-              <circle className={`trace-node__dot--${normalizeStatus(node.status)}`} cx="16" cy="24" r="4" />
-              <text className="trace-map-node__title" x="28" y="26">{truncateNodeTitle(node.title)}</text>
-              <text className="trace-map-node__meta" x="28" y="44">{node.agent || getNodeKind(node)}</text>
-              <text className="trace-map-node__kind" x="28" y="58">{getNodeKind(node)}</text>
-            </g>
-          ))}
+          {adjustedLayout.positioned.map(({ node, x, y }) => {
+            const kind = getNodeKind(node);
+            const kindLabel = formatKind?.(kind) ?? kind;
+            return (
+              <g
+                className={`trace-map-node trace-map-node--${kind} trace-map-node--${normalizeStatus(node.status)} ${selectedNodeId === node.id ? "is-selected" : ""} ${draggingNodeRef.current?.nodeId === node.id ? "is-dragging" : ""}`}
+                key={node.id}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  const offset = nodeOffsets.get(node.id) || { dx: 0, dy: 0 };
+                  draggingNodeRef.current = {
+                    nodeId: node.id,
+                    startClientX: e.clientX,
+                    startClientY: e.clientY,
+                    startDx: offset.dx,
+                    startDy: offset.dy,
+                  };
+                }}
+                onClick={() => {
+                  if (dragRef.current.hasPanned || draggingNodeRef.current) {
+                    return;
+                  }
+                  onSelectNode(node.id);
+                }}
+                style={{ transform: `translate(${x}px, ${y}px)` }}
+              >
+                <rect height={adjustedLayout.nodeHeight} rx="8" width={adjustedLayout.nodeWidth} />
+                <circle className={`trace-node__dot--${normalizeStatus(node.status)}`} cx="16" cy="24" r="4" />
+                <text className="trace-map-node__title" x="28" y="26">{truncateNodeTitle(node.title)}</text>
+                <text className="trace-map-node__meta" x="28" y="44">{node.agent || kindLabel}</text>
+                <text className="trace-map-node__kind" x="28" y="58">{kindLabel}</text>
+              </g>
+            );
+          })}
         </svg>
       </div>
     </>

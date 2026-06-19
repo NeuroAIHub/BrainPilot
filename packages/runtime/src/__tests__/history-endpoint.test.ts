@@ -73,13 +73,29 @@ describe("GET /sessions/:id/history", () => {
     expect(body.events[9]!.delta).toBe("msg-14");
   });
 
+  it("returns the full log when limit=0", async () => {
+    const lines = Array.from({ length: 15 }, (_, i) => mkEvent(i));
+    const { app, manager } = await appWithRestored("33333333-3333-3333-3333-333333333333", lines);
+
+    const direct = await manager.readEventHistory("33333333-3333-3333-3333-333333333333", { limit: 0 });
+    expect(direct?.events).toHaveLength(15);
+    expect(direct?.truncated).toBe(false);
+
+    const res = await app.request("/sessions/33333333-3333-3333-3333-333333333333/history?limit=0");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { events: Array<{ delta: string }>; total: number; truncated: boolean };
+    expect(body.total).toBe(15);
+    expect(body.truncated).toBe(false);
+    expect(body.events.map((e) => e.delta)).toEqual(lines.map((_, i) => `msg-${i}`));
+  });
+
   it("clamps an absurd limit down to 5000", async () => {
     const lines = Array.from({ length: 3 }, (_, i) => mkEvent(i));
-    const { app, manager } = await appWithRestored("33333333-3333-3333-3333-333333333333", lines);
+    const { app, manager } = await appWithRestored("66666666-6666-6666-6666-666666666666", lines);
     // verify clamping at the SessionManager layer too
-    const got = await manager.readEventHistory("33333333-3333-3333-3333-333333333333", { limit: 999999 });
+    const got = await manager.readEventHistory("66666666-6666-6666-6666-666666666666", { limit: 999999 });
     expect(got?.events).toHaveLength(3);
-    const res = await app.request("/sessions/33333333-3333-3333-3333-333333333333/history?limit=999999");
+    const res = await app.request("/sessions/66666666-6666-6666-6666-666666666666/history?limit=999999");
     expect(res.status).toBe(200);
   });
 

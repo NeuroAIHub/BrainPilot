@@ -31,6 +31,35 @@ export function getNodeKind(node: TraceNode): string {
   return node.nodeType || node.type || "step";
 }
 
+export function getNodeKindLabelKey(kind: string): string | null {
+  switch (kind) {
+    case "task":
+      return "trace.kind.task";
+    case "trace":
+      return "trace.kind.trace";
+    case "action":
+      return "trace.kind.action";
+    case "observation":
+      return "trace.kind.observation";
+    case "decision":
+      return "trace.kind.decision";
+    case "milestone":
+      return "trace.kind.milestone";
+    case "validation":
+      return "trace.kind.validation";
+    case "audit":
+      return "trace.kind.audit";
+    case "writing":
+      return "trace.kind.writing";
+    case "research":
+      return "trace.kind.research";
+    case "step":
+      return "trace.kind.step";
+    default:
+      return null;
+  }
+}
+
 export function truncateNodeTitle(title?: string, maxUnits = 26): string {
   if (!title) {
     return "";

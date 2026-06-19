@@ -7,12 +7,14 @@ import { TraceNodeDetail } from "../session/TraceNodeDetail";
 
 interface TraceNodeModalProps {
   node: TraceNode | null;
+  nodes?: TraceNode[];
   onClose: () => void;
   onSelectNode: (id: string) => void;
   /** Focus a produced file in the preview (closes the modal). */
   onSelectArtifact: (path: string) => void;
   activeArtifactPath: string | null;
   closeLabel: string;
+  formatKind?: (kind: string) => string;
   t: (key: string, vars?: TranslateVars) => string;
 }
 
@@ -22,7 +24,7 @@ interface TraceNodeModalProps {
  * (fixed backdrop + centered panel, click-outside / Escape to close) and the
  * shared TraceNodeDetail body.
  */
-export function TraceNodeModal({ node, onClose, onSelectNode, onSelectArtifact, activeArtifactPath, closeLabel, t }: TraceNodeModalProps) {
+export function TraceNodeModal({ node, nodes, onClose, onSelectNode, onSelectArtifact, activeArtifactPath, closeLabel, formatKind, t }: TraceNodeModalProps) {
   useEffect(() => {
     if (!node) {
       return;
@@ -52,7 +54,7 @@ export function TraceNodeModal({ node, onClose, onSelectNode, onSelectArtifact, 
         <div className="trace-node-modal__head">
           <span className="trace-node-modal__eyebrow">
             <GitBranch size={13} style={{ marginRight: 5, verticalAlign: "-2px" }} />
-            {node.id}
+            {node.agent || node.nodeType || node.type}
           </span>
           <IconButton label={closeLabel} onClick={onClose}>
             <X size={16} />
@@ -61,7 +63,9 @@ export function TraceNodeModal({ node, onClose, onSelectNode, onSelectArtifact, 
         <div className="trace-node-modal__body trace-detail">
           <TraceNodeDetail
             node={node}
+            nodes={nodes}
             onSelectNode={onSelectNode}
+            formatKind={formatKind}
             onSelectArtifact={(path) => {
               onSelectArtifact(path);
               onClose();
