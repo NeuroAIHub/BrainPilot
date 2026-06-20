@@ -120,10 +120,15 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
  * the test focused on the loop's error policy without scripting a full principal
  * delegation turn.
  */
-async function delegateToExpert(m: SessionManager, sid: string, expert: string): Promise<void> {
+async function delegateToExpert(
+  m: SessionManager,
+  sid: string,
+  expert: string,
+  from = "principal",
+): Promise<void> {
   const entry = (m as unknown as { sessions: Map<string, { mailbox: { write: (msg: unknown) => Promise<unknown> } }> }).sessions.get(sid)!;
   await entry.mailbox.write({
-    fromAgent: "principal",
+    fromAgent: from,
     toAgent: expert,
     msgType: "task_delegate",
     content: "survey X",
@@ -157,14 +162,14 @@ describe("delivery error path (#97)", () => {
     // It should retry twice (warning 1/3, 2/3) then escalate (error) on the 3rd.
     // (MasAgent also emits its own raw-provider-error bubble per attempt — the
     // #97-A behavior; we match OUR lifecycle messages specifically.)
-    await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已通知主管")));
+    await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已上报主管")));
 
     const warnings = sys.filter((x) => x.level === "warning" && x.text.includes("正在自动重试"));
     expect(warnings.length).toBe(2); // 1/3 and 2/3
     expect(warnings[0]!.text).toContain("(1/3)");
     expect(warnings[1]!.text).toContain("(2/3)");
 
-    const error = sys.find((x) => x.level === "error" && x.text.includes("已通知主管"));
+    const error = sys.find((x) => x.level === "error" && x.text.includes("已上报主管"));
     expect(error!.text).toContain("连续");
     expect(error!.text).toContain("librarian");
 
@@ -201,17 +206,81 @@ describe("delivery error path (#97)", () => {
 
     await delegateToExpert(m, s.id, "librarian");
 
-    await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已通知主管")));
+    await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已上报主管")));
 
     // No retry warnings — fatal escalates immediately.
     expect(sys.filter((x) => x.level === "warning" && x.text.includes("正在自动重试")).length).toBe(0);
-    const error = sys.find((x) => x.level === "error" && x.text.includes("已通知主管"));
+    const error = sys.find((x) => x.level === "error" && x.text.includes("已上报主管"));
     expect(error!.text).toContain("无法自动恢复");
 
     // librarian prompted exactly once (no self-retry).
     expect(observe.prompts.filter((p) => p.agent === "librarian").length).toBe(1);
     // Principal got the escalation note.
     await waitFor(() => observe.prompts.some((p) => p.agent === "principal" && p.text.includes("发生错误")));
+  });
+
+  it("escalates to the REAL delegator, not the principal, in a chain", async () => {
+    // auditor delegated to engineer; engineer fails fatally. The escalation note
+    // must go to the auditor (the real delegator), not the hardcoded principal.
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const factory = factoryWith(
+      { engineer: { outcome: () => "401 invalid api key" } },
+      observe,
+    );
+    const m = new SessionManager({ persist: false, agentFactory: factory });
+    const s = await m.createSession();
+
+    const sys: SystemMsg[] = [];
+    m.subscribe(s.id, (e) => {
+      if (e.type === "system_message") {
+        const v = e as { level?: string; message?: string };
+        sys.push({ level: v.level ?? "", text: v.message ?? "" });
+      }
+    });
+
+    // The auditor must be a LIVE agent for the escalation to target it (a
+    // destroyed delegator falls back to the principal).
+    await m.ensureAgent(s.id, "auditor");
+    await delegateToExpert(m, s.id, "engineer", "auditor");
+
+    await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已上报")));
+
+    // The user-facing escalation names the auditor, not the principal.
+    const error = sys.find((x) => x.level === "error" && x.text.includes("已上报"));
+    expect(error!.text).toContain('委派方 "auditor"');
+    expect(error!.text).not.toContain("主管");
+
+    // The auditor (not the principal) received the error note.
+    await waitFor(() => observe.prompts.some((p) => p.agent === "auditor" && p.text.includes("发生错误")));
+    expect(observe.prompts.some((p) => p.agent === "principal")).toBe(false);
+  });
+
+  it("falls back to the principal when the delegator was destroyed", async () => {
+    // engineer was delegated by a transient auditor that no longer exists; the
+    // escalation must fall back to the principal rather than resurrect it.
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const factory = factoryWith(
+      { engineer: { outcome: () => "401 invalid api key" } },
+      observe,
+    );
+    const m = new SessionManager({ persist: false, agentFactory: factory });
+    const s = await m.createSession();
+
+    const sys: SystemMsg[] = [];
+    m.subscribe(s.id, (e) => {
+      if (e.type === "system_message") {
+        const v = e as { level?: string; message?: string };
+        sys.push({ level: v.level ?? "", text: v.message ?? "" });
+      }
+    });
+
+    // Note: "ghost" is never created as a live agent.
+    await delegateToExpert(m, s.id, "engineer", "ghost");
+
+    await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已上报主管")));
+    // Principal got the escalation (fallback); ghost was never woken.
+    await waitFor(() => observe.prompts.some((p) => p.agent === "principal" && p.text.includes("发生错误")));
+    expect(observe.prompts.some((p) => p.agent === "ghost")).toBe(false);
   });
 
   it("recovers and does NOT escalate when a retry succeeds", async () => {
@@ -240,8 +309,8 @@ describe("delivery error path (#97)", () => {
 
     expect(sys.filter((x) => x.level === "warning" && x.text.includes("正在自动重试")).length).toBe(1);
     // No escalation lifecycle error (MasAgent's own per-attempt raw bubble may
-    // exist, but OUR "已通知主管" escalation must not).
-    expect(sys.some((x) => x.level === "error" && x.text.includes("已通知主管"))).toBe(false);
+    // exist, but OUR "已上报主管" escalation must not).
+    expect(sys.some((x) => x.level === "error" && x.text.includes("已上报主管"))).toBe(false);
     // No escalation note to the principal.
     expect(observe.prompts.some((p) => p.agent === "principal" && p.text.includes("发生错误"))).toBe(false);
   });
