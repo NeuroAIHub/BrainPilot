@@ -1,0 +1,34 @@
+# =============================================================================
+# brainpilot-gpu-base — GPU 依赖 base 镜像（CUDA 12.4 + PyTorch 2.6.0 + 科学栈）。
+#
+#   ⚠️ 这是「重依赖 base 镜像」，与 monorepo 代码解耦、低频更新：
+#     - 按依赖版本打 tag（如 cu124-torch2.6.0），torch/cuda 升级才换 tag。
+#     - runtime 代码镜像（docker/sandbox/Dockerfile 的 gpu stage）以
+#       `FROM ghcr.io/neuroaihub/brainpilot-gpu-base:<tag>` 引用本镜像，
+#       故 monorepo 代码变更只重建薄薄的业务层，绝不重装 ~2.7GB torch/cuda。
+#
+#   构建 / 推送由 scripts/release-gpu-base.sh 驱动（独立于迭代式 release-build）。
+#   ⚠️ 改这里的 torch/cuda 版本时，必须同步：
+#     1) scripts/release-images.sh 的 GPU_BASE_TAG
+#     2) docker/sandbox/Dockerfile 的 gpu stage `FROM ...:<tag>`
+#
+#   经典构建器专用（DOCKER_BUILDKIT=0）。脚本 _python-base.sh /
+#   extra-deps.gpu-libs.sh 与 cpu/runtime 共享、内容不改（SSOT）。
+# =============================================================================
+FROM node:22-slim AS gpu-base
+ARG APT_MIRROR=""
+ARG PIP_INDEX_URL=""
+ARG PIP_EXTRA_INDEX_URL=""
+ARG TORCH_WHEEL_BASE=""
+ENV APT_MIRROR=${APT_MIRROR} \
+    PIP_INDEX_URL=${PIP_INDEX_URL} \
+    PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL} \
+    TORCH_WHEEL_BASE=${TORCH_WHEEL_BASE}
+
+# python3 + pip + curl + 镜像源（与 cpu sandbox 共享同一段，curl 供 HEALTHCHECK 用）
+COPY docker/sandbox/_python-base.sh /tmp/_python-base.sh
+RUN bash /tmp/_python-base.sh
+
+# 科学栈 + CUDA 12.4 runtime wheels + PyTorch 2.6.0+cu124（重依赖，~2.7GB）
+COPY docker/sandbox/extra-deps.gpu-libs.sh /tmp/extra-deps.gpu-libs.sh
+RUN bash /tmp/extra-deps.gpu-libs.sh

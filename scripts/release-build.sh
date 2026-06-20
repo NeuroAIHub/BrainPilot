@@ -46,6 +46,23 @@ for entry in "${RELEASE_IMAGES[@]}"; do
     echo "==> skip $name (不匹配子集)"
     continue
   fi
+  # gpu runtime 镜像依赖外部 base 镜像 brainpilot-gpu-base 先就位（FROM 引用它）。
+  # 缺则尝试 docker pull（registry 已发布时可拉），再失败给清晰指引、跳过本镜像。
+  if [ "$target" = "gpu" ]; then
+    if ! sudo docker image inspect "${GPU_BASE_IMAGE}:${GPU_BASE_TAG}" >/dev/null 2>&1; then
+      echo "==> base 镜像 ${GPU_BASE_IMAGE}:${GPU_BASE_TAG} 本地缺失，尝试 pull…"
+      _ghcr_repo="$(remote_repo "$GPU_BASE_IMAGE" "ghcr.io/neuroaihub" "flat")"
+      if sudo docker pull "${_ghcr_repo}:${GPU_BASE_TAG}" 2>/dev/null; then
+        sudo docker tag "${_ghcr_repo}:${GPU_BASE_TAG}" "${GPU_BASE_IMAGE}:${GPU_BASE_TAG}"
+        echo "==> 已 pull 并 retag 为 ${GPU_BASE_IMAGE}:${GPU_BASE_TAG}"
+      else
+        echo "!!! 缺 GPU base 镜像且无法 pull。先构建 base：" >&2
+        echo "      bash scripts/release-gpu-base.sh build" >&2
+        echo "    然后重跑本命令。跳过 $name。" >&2
+        continue
+      fi
+    fi
+  fi
   target_arg=(); [ -n "$target" ] && target_arg=( --target "$target" )
   echo "==> building $name (tags: latest, $VERSION${target:+, target=$target})"
   sudo DOCKER_BUILDKIT=0 docker build "${COMMON[@]}" "${target_arg[@]}" \
