@@ -2796,7 +2796,13 @@ button {
   background: var(--color-surface-soft);
   border: 1px solid var(--color-border);
   border-radius: 4px;
-  padding: 1px 4px;
+  /* em-based padding scales with the (0.92em) code font; box-decoration-break
+     keeps the border/radius/background intact on every fragment when an inline
+     code span wraps across lines, instead of slicing into vertically-overflowing
+     boxes that overlap adjacent lines (#130). */
+  padding: 0.1em 0.35em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .message-card__content pre {
