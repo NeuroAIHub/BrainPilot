@@ -67,7 +67,6 @@ brainpilot/                       # data root (default: ./brainpilot)
 │   ├── settings.json             #   runtime settings
 │   ├── mcp_servers.json          #   MCP server connections
 │   ├── agents/                   #   custom agent personas
-│   └── skills/                   #   custom skills
 ├── .bp/<sessionId>/              # per-session state (metadata, trace graph)
 ├── brainpilot.config.json        # local top-level config
 ├── .env                          # environment variables
@@ -226,30 +225,89 @@ bridges every configured MCP server into the agents' toolset: each remote tool
 shows up namespaced as `mcp__<server>__<tool>`. Three transports are supported —
 **stdio** (spawned local process), **streamable-http**, and **sse** (remote).
 
-### What ships by default
+The built-in `skills_tool_local` MCP server (local skills retrieval with
+progressive disclosure) is auto-started via stdio for every agent — no
+configuration needed.
+
+### 📚 Built-in skills library
+
+Skills sources: 
+- [https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills.git](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills.git)
+- [https://github.com/Yuan1z0825/nature-skills.git](https://github.com/Yuan1z0825/nature-skills.git)
+
+Skills live in `packages/skills-mcp/skills/` inside the BrainPilot repo.
+They are organised as a two-level directory tree:
+
+```
+skills/
+├── <category>/                  # e.g. 05_EEG_ERP, 14_Writing
+│   ├── <skill-name>/            # one sub-folder per skill
+│   │   ├── SKILL.md             # required: YAML frontmatter + Markdown body
+│   │   └── references/          # optional: supplementary files
+│   │       └── <topic>.md
+```
+
+**Adding a new skill:**
+
+1. Pick (or create) a category folder under `packages/skills-mcp/skills/`.
+   Existing categories:
+
+   | Folder | Domain |
+   |--------|--------|
+   | `01_Meta-Skills` | Skill authoring & review |
+   | `02_Cross-Domain_Foundation` | Statistics, visualisation, research literacy |
+   | `03_Cognitive_Psychology` | Paradigms, scoring, DDM, SDT |
+   | `04_Psycholinguistics` | Reading time, SPR, stimulus norming |
+   | `05_EEG_ERP` | EEG preprocessing, ERP analysis, MNE-Python |
+   | `06_fMRI_Neuroimaging` | fMRI preprocessing, GLM, pycortex, decoding |
+   | `07_Computational_Modeling` | ACT-R, Bayesian modelling, parameter recovery |
+   | `08_Computational_Neuroscience` | Neural population analysis, spiking networks |
+   | `09_Cellular_Molecular_Neuroscience` | Calcium imaging, optogenetics |
+   | `10_Clinical_Neuropsychology` | Lesion-symptom mapping, battery selection |
+   | `11_Developmental_Cognition` | Infant looking-time design |
+   | `12_Social_Cognition` | Theory-of-mind task selection |
+   | `13_Visualization` | Nature-figure creation & chart design |
+   | `14_Writing` | Markdown report writing |
+   | `15_Others` | Neuroimaging power/sample-size guides |
+
+2. Create `<category>/<skill-name>/SKILL.md` with required YAML frontmatter:
+
+   ```yaml
+   ---
+   name: "<skill-name>"
+   description: "<one-line summary used for keyword matching>"
+   domain: "<domain>"
+   version: "1.0.0"
+   ---
+   ```
+
+   The `description` field is what `skills_tool_local` searches with
+   `mode='query'` and `keywords=[...]` — make it keyword-rich and specific.
+
+3. (Optional) Add reference files under `references/` for deeper detail
+   (parameter tables, API docs, worked examples, formula guides). These are
+   only accessible via `mode='browse'` — progressive disclosure keeps the
+   initial SKILL.md compact while drill-down material stays available.
+
+4. Build and restart: `npm run build -w packages/skills-mcp` then restart
+   the BrainPilot runtime. Agents discover the new skill on their next turn
+   by calling `skills_tool_local`.
+
+**Quality guidelines:** skills encode validated domain methodology — every
+numerical parameter needs a citation; keep SKILL.md under 500 lines; put raw
+reference material under `references/` rather than inline. See the
+`contribute-skills-via-pr` and `verify-skill` Meta-Skills for the full
+contributor workflow.
+
+### Configuring your own servers
 
 `brainpilot init` (and `brainpilot up`, which scaffolds on first launch) writes
-`mcp_servers.json` into your **data dir** — it is generated at runtime, not stored
-in the repo. The data dir is resolved as `--dir` > `$BP_DATA_DIR` > `./brainpilot`
-under the directory you run the command from, so the file lands at
-`<data-dir>/bp_template/mcp_servers.json`. It comes pre-wired to BrainPilot's three
-built-in remote services (streamable-http, no auth):
-
-| Server | Purpose | URL |
-|--------|---------|-----|
-| `bp_KB` | Knowledge base | `http://8.145.42.208:8005/mcp` |
-| `bp_skills` | Skills | `http://8.145.42.208:8006/mcp` |
-| `bp_papersearch` | Paper search | `http://8.145.42.208:8007/mcp` |
-
-These connect automatically on launch — no extra setup. Remove or edit any entry
-to opt out or point at your own deployment. A server is connected lazily and a
-failing one is logged and skipped, so it never blocks the others or aborts launch.
+an empty `mcp_servers.json` into your **data dir** — it is generated at runtime,
+not stored in the repo. The data dir is resolved as `--dir` > `$BP_DATA_DIR` >
+`./brainpilot` under the directory you run the command from, so the file lands at
+`<data-dir>/bp_template/mcp_servers.json`.
 
 > Scaffolding is idempotent: an existing `mcp_servers.json` is never overwritten.
-> If you initialized before these defaults existed, edit the file in your data dir
-> by hand (or delete it and re-run `brainpilot init`).
-
-### Adding your own server
 
 Edit `<data-dir>/bp_template/mcp_servers.json` (global, shared by every session)
 or `<data-dir>/.bp/<session-id>/mcp_servers.json` (per session) — where

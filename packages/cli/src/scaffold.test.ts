@@ -74,14 +74,10 @@ describe("scaffold", () => {
     expect(md).toContain("agents/<name>/prompt.md");
   });
 
-  it("ships the built-in three-pack MCP servers in mcp_servers.json", async () => {
+  it("ships an empty mcp_servers.json ready for user config", async () => {
     const { paths } = await scaffold(join(dir, "brainpilot"));
     const mcp = JSON.parse(await readFile(paths.bpTemplateMcpServers, "utf8"));
-    expect(Object.keys(mcp.mcpServers).sort()).toEqual([
-      "bp_KB",
-      "bp_papersearch",
-      "bp_skills",
-    ]);
+    expect(mcp.mcpServers).toEqual({});
   });
 
   it("bakes the port into brainpilot.config.json", async () => {

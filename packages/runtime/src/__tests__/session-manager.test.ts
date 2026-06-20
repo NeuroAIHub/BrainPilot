@@ -88,21 +88,21 @@ describe("SessionManager (mock mode)", () => {
     expect(chunk?.message_id).toBeTruthy();
   });
 
-  it("passes app-controlled skill dirs (template + session) to the factory", async () => {
-    const seen: string[][] = [];
+  it("merges built-in skills MCP tools for non-trace agents", async () => {
+    const seenTools: string[][] = [];
     const spyFactory: typeof mockAgentFactory = async (params) => {
-      seen.push(params.skillPaths);
+      seenTools.push(params.systemTools.map((t) => t.name));
       return mockAgentFactory(params);
     };
     const sm = new SessionManager({ persist: false, agentFactory: spyFactory });
     const s = await sm.createSession();
     await sm.sendMessage(s.id, "hi");
-    await waitFor(() => seen.length > 0);
+    await waitFor(() => seenTools.length > 0);
 
-    expect(seen[0]).toHaveLength(2);
-    // shared template dir + this session's own dir.
-    expect(seen[0][0]).toMatch(/bp_template[/\\]skills$/);
-    expect(seen[0][1]).toMatch(new RegExp(`\\.bp[/\\\\]${s.id}[/\\\\]skills$`));
+    // Principal is a non-trace agent — should have system tools.
+    const principalTools = seenTools[0]!;
+    expect(principalTools).toContain("send_message");
+    expect(principalTools).toContain("ask_user");
   });
 
   it("injects the built-in persona (not the old placeholder) for the principal", async () => {
