@@ -11,7 +11,8 @@
     "packages/backend-core",
     "packages/cli",
     "packages/client-cli",
-    "packages/web"
+    "packages/web",
+    "packages/skills-mcp"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",

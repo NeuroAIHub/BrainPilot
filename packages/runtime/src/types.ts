@@ -133,12 +133,6 @@ export type AgentSessionFactory = (params: {
    */
   renderAgentStatus?: () => string;
   /**
-   * App-controlled skill directories loaded for this agent (template dir shared
-   * by all sessions + this session's own dir). Replaces the host-global skill
-   * discovery — see agent-factory `noSkills: true`.
-   */
-  skillPaths: string[];
-  /**
    * Per-session LLM provider resolved from providers.json. When omitted, the
    * factory falls back to Pi's env-based default (Docker/static compat).
    */

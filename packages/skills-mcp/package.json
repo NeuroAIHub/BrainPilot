@@ -1,0 +1,36 @@
+{
+  "name": "@brainpilot/skills-mcp",
+  "version": "0.0.5",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "BrainPilot built-in MCP server for local skills retrieval (query + browse progressive disclosure)",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "brainpilot-skills-mcp": "./dist/index.js"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/skills-mcp"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b",
+    "test": "vitest run",
+    "start": "node ./dist/index.js"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  }
+}

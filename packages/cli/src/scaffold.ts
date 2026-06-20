@@ -71,27 +71,13 @@ const TEMPLATE_PROVIDERS_EXAMPLE = JSON.stringify(
 /**
  * Default `mcp_servers.json` written into `bp_template/` (§11A.2).
  *
- * Ships BrainPilot's three built-in remote MCP services (knowledge base, skills,
- * paper search) over streamable-http. Edit or remove these entries to point at
- * your own deployment; an entry whose `url` is blanked out is treated as an
- * unconfigured placeholder and skipped at startup.
+ * Starts empty — users add their own MCP servers (http/sse/stdio) as needed.
+ * The built-in `skills_tool_local` stdio MCP server is auto-started by the
+ * runtime and does not need an entry here.
  */
 const TEMPLATE_MCP_DEFAULT = JSON.stringify(
   {
-    mcpServers: {
-      bp_KB: {
-        type: "http",
-        url: "http://8.145.42.208:8005/mcp",
-      },
-      bp_skills: {
-        type: "http",
-        url: "http://8.145.42.208:8006/mcp",
-      },
-      bp_papersearch: {
-        type: "http",
-        url: "http://8.145.42.208:8007/mcp",
-      },
-    },
+    mcpServers: {},
   },
   null,
   2,

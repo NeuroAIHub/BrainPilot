@@ -12,6 +12,7 @@
 import { mkdir, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { fileURLToPath } from "node:url";
 import {
   CUSTOM_EVENT,
   type AgUiEvent,
@@ -81,6 +82,13 @@ export interface SessionManagerOptions {
   /** Override the external MCP bridge (default: real stdio bridge). Tests inject a fake. */
   mcpBridge?: McpBridge;
   /**
+   * Optional absolute path to the built-in skills MCP server entry point
+   * (`packages/skills-mcp/dist/index.js`). When omitted, resolved relative to
+   * the runtime package's own dist directory. The server is auto-started via
+   * stdio for every non-trace agent.
+   */
+  skillsMcpPath?: string;
+  /**
    * Memory budget in bytes (issue #20 / R-4). When set, an opt-in soft watchdog
    * refuses new work past ~85% of the budget. Defaults to `BP_MEM_LIMIT_MB`
    * (parsed to bytes); `null`/absent → feature disabled, no behavior change.
@@ -148,6 +156,12 @@ export class SessionManager {
   private mcpTools: SystemTool[] = [];
   private mcpLoaded = false;
 
+  // Built-in skills MCP server (local progressive-disclosure skills tool).
+  // Auto-started as a stdio child process on first agent creation.
+  private readonly skillsMcpPath: string;
+  private skillsTools: SystemTool[] = [];
+  private skillsLoaded = false;
+
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
   private readonly memWatchdog: MemWatchdog | null;
 
@@ -170,6 +184,12 @@ export class SessionManager {
         return 64000;
       })();
 
+    // Resolve the built-in skills MCP server path. Default: sibling to this
+    // runtime's dist/ dir — packages/skills-mcp/dist/index.js.
+    this.skillsMcpPath =
+      opts.skillsMcpPath ??
+      join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills-mcp", "dist", "index.js");
+
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
       limitBytes != null
@@ -180,6 +200,43 @@ export class SessionManager {
           })
         : null;
     this.memWatchdog?.start();
+  }
+
+  /**
+   * Start the built-in skills MCP server via stdio and load its `skills_tool_local`
+   * tool. Called once (lazily) when the first non-trace agent is created. Uses a
+   * fresh McpBridge child process — fire-and-forget, cleaned up by the OS on exit.
+   */
+  private async ensureBuiltinSkillsTools(): Promise<SystemTool[]> {
+    if (this.skillsLoaded) return this.skillsTools;
+    this.skillsLoaded = true;
+
+    if (isMockMode() && !this.mcpBridge) return this.skillsTools;
+
+    try {
+      const bridge = new McpBridge();
+      this.skillsTools = await bridge.connectAll({
+        mcpServers: {
+          bp_skills_local: {
+            type: "stdio",
+            command: "node",
+            args: [this.skillsMcpPath],
+          },
+        },
+      });
+      // eslint-disable-next-line no-console
+      console.info(
+        `[skills-mcp] built-in skills server ready (${this.skillsTools.length} tools)`,
+      );
+    } catch (err) {
+      // Best-effort — skills are a convenience, not a hard dependency.
+      // eslint-disable-next-line no-console
+      console.error(
+        `[skills-mcp] failed to start built-in skills server: ${(err as Error).message}`,
+      );
+    }
+
+    return this.skillsTools;
   }
 
   /**
@@ -220,14 +277,6 @@ export class SessionManager {
   private static readonly UPLOAD_STAGING_SID = "local";
   private historyPath(sid: string, agent: string): string {
     return join(this.bpDir(sid), "history", `${agent}.jsonl`);
-  }
-  /** Skills shared by every session (user-editable `bp_template/skills/`). */
-  private templateSkillsDir(): string {
-    return join(this.dataRoot, "bp_template", "skills");
-  }
-  /** This session's own skill dir (`.bp/<sid>/skills/`), overrides/augments the template. */
-  private sessionSkillsDir(sid: string): string {
-    return join(this.bpDir(sid), "skills");
   }
   /** User-editable persona override for an agent (`bp_template/agents/<name>/prompt.md`). */
   private agentPromptPath(name: string): string {
@@ -503,7 +552,6 @@ export class SessionManager {
 
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
-      await mkdir(this.sessionSkillsDir(id), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
       // On restore, meta.json on disk is the authority — do not write it back.
       if (!_restore) await this.writeMeta(entry);
@@ -881,7 +929,11 @@ export class SessionManager {
     };
     const systemTools = systemToolsForRole(role, name, deps);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
-    const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
+    // Built-in skills MCP tools are always included for non-trace agents.
+    const mcpTools =
+      role === "trace"
+        ? []
+        : [...(await this.ensureBuiltinSkillsTools()), ...(await this.ensureMcpTools())];
     const rawTools = [...systemTools, ...mcpTools];
     // #80: guard every tool result against context-window overflow.
     const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
@@ -901,7 +953,6 @@ export class SessionManager {
       systemTools: agentTools,
       allowedToolNames,
       systemPrompt: await this.loadPersona(name, role),
-      skillPaths: [this.templateSkillsDir(), this.sessionSkillsDir(sessionId)],
       providerConfig,
       // 意图二 fallback: the trace-reminder extension calls this when an expert
       // was reminded once and still didn't report back, so the principal never
