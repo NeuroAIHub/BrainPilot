@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
 import { SessionManager } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
+import { PERSONAS } from "../personas.js";
 
 function mgr(): SessionManager {
   // persist:false keeps tests hermetic; mock factory => no Pi SDK / API.
@@ -121,6 +122,19 @@ describe("SessionManager (mock mode)", () => {
     expect(seen[0]).not.toContain("mcp__builtin__");
   });
 
+  it("keeps high-impact action authorization in PI and expert personas", () => {
+    expect(PERSONAS.principal).toContain("## User authorization gate");
+    expect(PERSONAS.principal).toContain("Use `ask_user` first");
+    expect(PERSONAS.principal).toContain("## Incremental planning for heavy work");
+    expect(PERSONAS.principal).toContain("dry run, smoke test, tiny dataset");
+    expect(PERSONAS.engineer).toContain("## High-impact action gate");
+    expect(PERSONAS.engineer).toContain('send_message(to="principal", ...)');
+    expect(PERSONAS.engineer).toContain("## Execution discipline");
+    expect(PERSONAS.engineer).toContain("Prefer writing new outputs inside the session workspace");
+    expect(PERSONAS.experimentalist).toContain("## High-impact action gate");
+    expect(PERSONAS.experimentalist).toContain("long-running training");
+  });
+
   it("prefers an on-disk bp_template/agents/<name>/prompt.md override", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-persona-"));
     const promptDir = join(root, "bp_template", "agents", "principal");
@@ -197,4 +211,3 @@ describe("SessionManager memory watchdog (§R-4 / #20)", () => {
     expect(metrics.memRatio).toBeCloseTo(0.9);
   });
 });
-
