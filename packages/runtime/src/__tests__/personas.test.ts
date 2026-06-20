@@ -47,6 +47,17 @@ describe("personas", () => {
     expect(p).toContain("Final reports");
   });
 
+  it("PI and methodology agents enforce skills-first preflight", () => {
+    expect(PERSONAS.principal!).toContain("Skills-first preflight");
+    expect(PERSONAS.principal!).toContain("Check expert skill use");
+    expect(PERSONAS.experimentalist!).toContain("skills are not");
+    expect(PERSONAS.experimentalist!).toContain("Find relevant skills first");
+    expect(PERSONAS.writer!).toContain("Skills-first writing preflight");
+    expect(PERSONAS.writer!).toContain("Select the most relevant skill by default");
+    expect(PERSONAS.engineer!).toContain("Find relevant skills first");
+    expect(personaFor("statistician", "expert")).toContain("Skills-first preflight");
+  });
+
   it("expert personas carry the send_message-back contract", () => {
     for (const name of ["librarian", "engineer", "experimentalist", "writer", "auditor"]) {
       expect(PERSONAS[name], name).toContain('send_message(to="principal"');
