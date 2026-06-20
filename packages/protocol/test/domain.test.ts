@@ -44,6 +44,30 @@ describe("domain schemas", () => {
     ).toBeNull();
   });
 
+  it("SessionStateSnapshot carries optional tokenUsage", () => {
+    const parsed = SessionStateSnapshotSchema.parse({
+      runState: { active: false, runId: null },
+      agents: [],
+      lastActivityTs: "",
+      tokenUsage: {
+        total: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 },
+        byAgent: {
+          principal: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 },
+        },
+      },
+    });
+    expect(parsed.tokenUsage?.total.total).toBe(15);
+    expect(parsed.tokenUsage?.byAgent.principal?.input).toBe(10);
+    // tokenUsage is optional — a frame without it still validates.
+    expect(
+      SessionStateSnapshotSchema.parse({
+        runState: { active: false, runId: null },
+        agents: [],
+        lastActivityTs: "",
+      }).tokenUsage,
+    ).toBeUndefined();
+  });
+
   it("AgentState enforces the status enum", () => {
     expect(AgentStateSchema.parse({ name: "a", status: "idle" }).status).toBe("idle");
     expect(AgentStateSchema.safeParse({ name: "a", status: "weird" }).success).toBe(false);

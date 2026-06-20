@@ -59,6 +59,33 @@ export const AgentStateSchema = z.object({
 export type AgentState = z.infer<typeof AgentStateSchema>;
 
 /**
+ * Real token usage counters for one accounting unit (a whole session, or a
+ * single agent). Sourced from the provider's reported usage (Pi's
+ * `AssistantMessage.usage`), accumulated over every assistant turn — NOT a
+ * char-count estimate. `total` is the running sum the provider charges against
+ * the context window (`input + output + cacheRead + cacheWrite`); we keep it
+ * explicit rather than re-deriving so a consumer never has to know the formula.
+ */
+export const TokenUsageSchema = z.object({
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number(),
+  cacheWrite: z.number(),
+  total: z.number(),
+});
+export type TokenUsage = z.infer<typeof TokenUsageSchema>;
+
+/**
+ * Per-session token accounting: the whole-session `total` plus a per-agent
+ * breakdown keyed by agent name (`principal`, expert names, `trace`).
+ */
+export const SessionTokenUsageSchema = z.object({
+  total: TokenUsageSchema,
+  byAgent: z.record(z.string(), TokenUsageSchema),
+});
+export type SessionTokenUsage = z.infer<typeof SessionTokenUsageSchema>;
+
+/**
  * Authoritative live session state. Identical shape across SSE first frame
  * (`CUSTOM:session_state`), push events, and `GET /sessions/:id/state`.
  */
@@ -69,6 +96,12 @@ export const SessionStateSnapshotSchema = z.object({
   }),
   agents: z.array(AgentStatusSchema),
   lastActivityTs: z.string(),
+  /**
+   * Cumulative real token usage for this session (total + per-agent). Optional
+   * for forward/backward compat: a frame from an older runtime, or before the
+   * first assistant turn completes, simply omits it.
+   */
+  tokenUsage: SessionTokenUsageSchema.optional(),
 });
 export type SessionStateSnapshot = z.infer<typeof SessionStateSnapshotSchema>;
 

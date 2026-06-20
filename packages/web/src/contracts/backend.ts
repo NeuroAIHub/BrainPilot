@@ -14,6 +14,8 @@ import type {
   Session,
   AgentStatus,
   SessionStateSnapshot,
+  SessionTokenUsage,
+  TokenUsage,
   SettingsData,
   McpServerEntry,
   ModelHealth,
@@ -36,6 +38,8 @@ export type {
   Session,
   AgentStatus,
   SessionStateSnapshot,
+  SessionTokenUsage,
+  TokenUsage,
   SettingsData,
   McpServerEntry,
   ModelHealth,
@@ -771,7 +775,7 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
       alive: typeof a.alive === "boolean" ? a.alive : undefined,
     };
   });
-  return {
+  const out: SessionStateSnapshot = {
     runState: {
       active: rs.active === true,
       runId: optionalString(rs.runId) ?? null,
@@ -779,6 +783,34 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     agents,
     lastActivityTs: stringValue(camelized.lastActivityTs, ""),
   };
+  const tokenUsage = normalizeSessionTokenUsage(camelized.tokenUsage);
+  if (tokenUsage) out.tokenUsage = tokenUsage;
+  return out;
+}
+
+/** Coerce one wire token-usage record into the numeric TokenUsage shape. */
+function normalizeTokenUsage(rawValue: unknown): TokenUsage {
+  const u = asDict(rawValue);
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    input: num(u.input),
+    output: num(u.output),
+    cacheRead: num(u.cacheRead),
+    cacheWrite: num(u.cacheWrite),
+    total: num(u.total),
+  };
+}
+
+/** Parse the optional per-session token usage (total + per-agent breakdown). */
+function normalizeSessionTokenUsage(rawValue: unknown): SessionTokenUsage | undefined {
+  if (rawValue == null) return undefined;
+  const raw = asDict(rawValue);
+  const byAgentRaw = asDict(raw.byAgent);
+  const byAgent: Record<string, TokenUsage> = {};
+  for (const [name, value] of Object.entries(byAgentRaw)) {
+    byAgent[name] = normalizeTokenUsage(value);
+  }
+  return { total: normalizeTokenUsage(raw.total), byAgent };
 }
 
 

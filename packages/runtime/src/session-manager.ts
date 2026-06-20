@@ -20,12 +20,14 @@ import {
   type FileContent,
   type FileEntry,
   type Session,
+  type SessionTokenUsage,
+  type TokenUsage,
   type TraceGraph,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import { Mailbox, type MailboxMessage } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
-import { MasAgent } from "./mas-agent.js";
+import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
@@ -85,6 +87,12 @@ interface SessionEntry {
   pendingInputs: Map<string, Deferred<string>>;
   /** This session's chosen provider/model (resolved against providers.json). */
   providerRef: SessionProviderRef;
+  /**
+   * Cumulative real token usage for this session: whole-session `total` plus a
+   * per-agent breakdown (keyed by agent name). Fed by each MasAgent's `onUsage`
+   * callback, surfaced in `session_state` frames, and persisted to usage.json.
+   */
+  tokenUsage: SessionTokenUsage;
 }
 
 export interface SessionManagerOptions {
@@ -138,6 +146,19 @@ function roleFor(name: string): AgentRole {
  */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3.5);
+}
+
+/** Sum a per-agent token usage breakdown into a single session total. */
+function sumAgentUsage(byAgent: Record<string, TokenUsage>): TokenUsage {
+  const total = emptyTokenUsage();
+  for (const u of Object.values(byAgent)) {
+    total.input += u.input;
+    total.output += u.output;
+    total.cacheRead += u.cacheRead;
+    total.cacheWrite += u.cacheWrite;
+    total.total += u.total;
+  }
+  return total;
 }
 
 /** Filesystem-safe form of a tool name (for saving truncated results). */
@@ -569,6 +590,7 @@ export class SessionManager {
       activeRunId: null,
       pendingInputs: new Map(),
       providerRef,
+      tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
     };
     this.sessions.set(id, entry);
     if (!_restore) this.touch(entry);
@@ -584,6 +606,8 @@ export class SessionManager {
       if (explicitRef) await this.writeProviderRef(entry);
       await mailbox.recover();
       await this.loadTrace(entry);
+      // Rehydrate cumulative token usage so the running total survives restarts.
+      await this.loadUsage(entry);
     }
     return this.toSession(entry);
   }
@@ -1001,7 +1025,19 @@ export class SessionManager {
         this.touch(entry);
         this.emitSessionState(entry);
       },
+      // Roll the agent's running total into the per-session breakdown, push a
+      // live session_state frame, and persist usage.json. Total is recomputed
+      // as the sum across agents so it can never drift from the breakdown.
+      onUsage: (agentName, _delta, cumulative) => {
+        entry.tokenUsage.byAgent[agentName] = cumulative;
+        entry.tokenUsage.total = sumAgentUsage(entry.tokenUsage.byAgent);
+        this.touch(entry);
+        this.emitSessionState(entry);
+        void this.writeUsage(entry);
+      },
     });
+    // Continue this agent's cumulative count across restarts / lazy revival.
+    agent.seedUsage(entry.tokenUsage.byAgent[name]);
     entry.agents.set(name, agent);
     if (!entry.tasks.has(name)) entry.tasks.set(name, "");
     return agent;
@@ -1331,6 +1367,7 @@ export class SessionManager {
         runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
         agents: this.listAgents(entry.id),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
+        tokenUsage: entry.tokenUsage,
       }),
     );
   }
@@ -1339,6 +1376,7 @@ export class SessionManager {
     runState: { active: boolean; runId: string | null };
     agents: AgentStatus[];
     lastActivityTs: string;
+    tokenUsage: SessionTokenUsage;
   } | undefined {
     const entry = this.sessions.get(sessionId);
     if (!entry) return undefined;
@@ -1346,6 +1384,7 @@ export class SessionManager {
       runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
       agents: this.listAgents(sessionId),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
+      tokenUsage: entry.tokenUsage,
     };
   }
 
@@ -1535,6 +1574,36 @@ export class SessionManager {
       entry.trace.load(JSON.parse(raw));
     } catch {
       /* no trace yet */
+    }
+  }
+
+  private usagePath(sid: string): string {
+    return join(this.bpDir(sid), "usage.json");
+  }
+
+  /** Persist cumulative token usage (best-effort; never throws). */
+  private async writeUsage(entry: SessionEntry): Promise<void> {
+    if (!this.persist) return;
+    await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
+    await writeFile(
+      this.usagePath(entry.id),
+      JSON.stringify(entry.tokenUsage, null, 2),
+      "utf8",
+    ).catch(() => {});
+  }
+
+  /** Rehydrate cumulative token usage from disk (restore path). */
+  private async loadUsage(entry: SessionEntry): Promise<void> {
+    try {
+      const raw = await readFile(this.usagePath(entry.id), "utf8");
+      const parsed = JSON.parse(raw) as Partial<SessionTokenUsage>;
+      const byAgent: Record<string, TokenUsage> = {};
+      for (const [name, u] of Object.entries(parsed.byAgent ?? {})) {
+        byAgent[name] = addUsage(emptyTokenUsage(), u as TokenUsage);
+      }
+      entry.tokenUsage = { byAgent, total: sumAgentUsage(byAgent) };
+    } catch {
+      /* no usage yet — keep the zeroed default */
     }
   }
 

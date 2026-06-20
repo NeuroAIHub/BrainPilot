@@ -84,7 +84,19 @@ export class MockAgentSession implements IAgentSession {
     }
     this.emit({
       type: "message_end",
-      message: { role: "assistant", content: [{ type: "text", text: script }] },
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: script }],
+        // Deterministic token usage so token-stats tests can assert exact
+        // numbers without a real provider. Derived from the reply length.
+        usage: {
+          input: 10,
+          output: Math.max(1, Math.ceil(script.length / 4)),
+          cacheRead: 0,
+          cacheWrite: 0,
+          totalTokens: 10 + Math.max(1, Math.ceil(script.length / 4)),
+        },
+      },
     });
 
     // Optional tool invocation driven by the prompt.

@@ -6,13 +6,14 @@
  * ------------------------------------------------------------------------ */
 import { useMemo } from "react";
 import { Inbox } from "lucide-react";
-import { AgentStatus, ChatMessage } from "../../contracts/backend";
+import { AgentStatus, ChatMessage, TokenUsage } from "../../contracts/backend";
 import { AgentEdge, getAgentAccentVar } from "./agentNetworkShared";
 import {
   computeAgentLoad,
   computeLifecycleHeatmap,
   estimateTokens,
 } from "./agentAnalytics";
+import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
 
 interface AnalyticsTabProps {
@@ -22,14 +23,31 @@ interface AnalyticsTabProps {
   now: number;
 }
 
+/** Compact number formatting for token counts (1.2k, 3.4M). */
+function fmtTokens(n: number): string {
+  if (n < 1000) return String(n);
+  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
+  return `${(n / 1_000_000).toFixed(1)}M`;
+}
+
 export function AnalyticsTab({ agents, messages, edges, now }: AnalyticsTabProps) {
   const t = useT();
+  const { tokenUsage } = useSessions();
   const load = useMemo(() => computeAgentLoad(edges), [edges]);
   const lengthRows = useMemo(() => estimateTokens(messages), [messages]);
   const heatmap = useMemo(
     () => computeLifecycleHeatmap(messages, agents.map((a) => a.name), now),
     [messages, agents, now],
   );
+
+  // Per-agent real-usage rows, sorted by total desc. Empty when no provider
+  // usage has been reported yet (e.g. a freshly restored session pre-turn).
+  const usageRows = useMemo(() => {
+    if (!tokenUsage) return [] as Array<{ name: string } & TokenUsage>;
+    return Object.entries(tokenUsage.byAgent)
+      .map(([name, u]) => ({ name, ...u }))
+      .sort((a, b) => b.total - a.total);
+  }, [tokenUsage]);
 
   const totalMessages = edges.reduce((s, e) => s + e.messages.length, 0);
 
@@ -44,6 +62,40 @@ export function AnalyticsTab({ agents, messages, edges, now }: AnalyticsTabProps
 
   return (
     <div className="agent-analytics">
+      {tokenUsage && tokenUsage.total.total > 0 ? (
+        <section className="agent-analytics__chart">
+          <h4 className="agent-analytics__chart-title">{t("analytics.chart.tokens")}</h4>
+          <div className="agent-analytics__token-total">
+            {fmtTokens(tokenUsage.total.total)}{" "}
+            <span className="agent-analytics__token-total-label">
+              {t("analytics.tokens.total")}
+            </span>
+          </div>
+          <table className="agent-analytics__table">
+            <thead>
+              <tr>
+                <th>{t("analytics.table.agent")}</th>
+                <th>{t("analytics.tokens.input")}</th>
+                <th>{t("analytics.tokens.output")}</th>
+                <th>{t("analytics.tokens.cache")}</th>
+                <th>{t("analytics.tokens.total")}</th>
+              </tr>
+            </thead>
+            <tbody>
+              {usageRows.map((row) => (
+                <tr key={row.name}>
+                  <td>{row.name}</td>
+                  <td>{fmtTokens(row.input)}</td>
+                  <td>{fmtTokens(row.output)}</td>
+                  <td>{fmtTokens(row.cacheRead + row.cacheWrite)}</td>
+                  <td>{fmtTokens(row.total)}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      ) : null}
+
       <section className="agent-analytics__chart">
         <h4 className="agent-analytics__chart-title">{t("analytics.chart.load")}</h4>
         <BarChart rows={load} />

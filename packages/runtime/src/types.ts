@@ -90,6 +90,23 @@ export type PiAssistantMessageEvent =
 export interface PiMessage {
   role: string;
   content?: PiContentBlock[];
+  /**
+   * Provider-reported token usage, present on finalized assistant messages
+   * (Pi's `AssistantMessage.usage`). The runtime reads this on `message_end`
+   * to accumulate real per-session/per-agent token stats. Optional + loose
+   * because user/tool messages and mock feeds may omit it.
+   */
+  usage?: PiUsage;
+  [k: string]: unknown;
+}
+
+/** Pi/provider token usage counters (mirrors `@earendil-works/pi-ai` Usage). */
+export interface PiUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
   [k: string]: unknown;
 }
 
