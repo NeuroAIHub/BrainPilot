@@ -47,8 +47,33 @@ interface PiExtensionApi {
       content: Array<{ type: string; text?: string }>;
     }) => { content: Array<{ type: "text"; text: string }> } | void,
   ): void;
-  on(event: "agent_end", handler: () => void): void;
+  on(event: "agent_end", handler: (e: AgentEndLike) => void): void;
   sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
+}
+
+/**
+ * Structural slice of Pi's `AgentEndEvent` we read: the run's message list, used
+ * only to detect whether the run ENDED IN AN ERROR (last assistant message's
+ * `stopReason`). A provider failure (401, retry exhausted, mid-stream error) is
+ * encoded by Pi as a final AssistantMessage with `stopReason: "error" |
+ * "aborted"` — it does NOT throw. When that's the case the host owns recovery
+ * (#97 self-retry / escalation), so this extension must NOT also nudge/followUp.
+ */
+interface AgentEndLike {
+  messages?: Array<{ role?: string; stopReason?: string }>;
+}
+
+/** True when the run's last assistant message ended in an error/abort. */
+function endedInError(e: AgentEndLike): boolean {
+  const msgs = e.messages;
+  if (!Array.isArray(msgs)) return false;
+  for (let i = msgs.length - 1; i >= 0; i--) {
+    const m = msgs[i];
+    if (m?.role === "assistant") {
+      return m.stopReason === "error" || m.stopReason === "aborted";
+    }
+  }
+  return false;
 }
 
 export interface TraceReminderDeps {
@@ -154,8 +179,14 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       return { content: [{ type: "text", text: `${text}${suffix}` }] };
     });
 
-    pi.on("agent_end", () => {
+    pi.on("agent_end", (e) => {
       if (deps.role === "trace") return; // the recorder itself — never nudge.
+
+      // #97: if THIS run ended in an error (provider 401 / retry exhausted /
+      // mid-stream failure), bail entirely. A followUp here would just re-hit the
+      // broken provider, and onUnreplied would mislabel an error as silence. The
+      // host's delivery-loop error path owns recovery (self-retry / escalation).
+      if (endedInError(e)) return;
 
       // Two ORTHOGONAL checks (B). Both can be true for one expert (it produced
       // work worth tracing AND owes the principal a reply).

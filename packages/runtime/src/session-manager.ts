@@ -63,6 +63,12 @@ interface SessionEntry {
   agents: Map<string, MasAgent>;
   /** agent name → task description (for AgentStatus.task). */
   tasks: Map<string, string>;
+  /**
+   * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
+   * when a delegated run ends in `error`, reset to 0 on any successful (non-error)
+   * delivery run. Drives self-retry vs escalation in `runDeliveryLoop`.
+   */
+  deliveryErrors: Map<string, number>;
   runActive: boolean;
   activeRunId: string | null;
   /** Outstanding ask_user requests, keyed by request_id (§ ask_user). */
@@ -218,6 +224,13 @@ export class SessionManager {
    * workspace right before the agent runs (see drainLocalUploads).
    */
   private static readonly UPLOAD_STAGING_SID = "local";
+  /**
+   * #97: max CONSECUTIVE failed delivery runs for one expert before the failure
+   * is escalated to the principal instead of self-retried. Matches the legacy
+   * circuit-breaker threshold (3). Only `retryable` errors consume retries;
+   * a `fatal` error escalates on the first failure regardless of this cap.
+   */
+  private static readonly MAX_DELIVERY_RETRIES = 3;
   private historyPath(sid: string, agent: string): string {
     return join(this.bpDir(sid), "history", `${agent}.jsonl`);
   }
@@ -492,6 +505,7 @@ export class SessionManager {
       trace,
       agents: new Map(),
       tasks: new Map(),
+      deliveryErrors: new Map(),
       runActive: false,
       activeRunId: null,
       pendingInputs: new Map(),
@@ -1034,7 +1048,103 @@ export class SessionManager {
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
       await agent.prompt(this.renderEnvelopes(msgs, name));
+
+      // #97 error path. A delegated run that ended in `error` is handled here
+      // (the trace-reminder extension bails on an errored run, leaving the host
+      // the sole owner of error recovery). Transient errors self-retry up to a
+      // cap; fatal errors (auth/config) and the exhausted cap escalate to the
+      // principal. A clean run resets the agent's consecutive-error count.
+      if (agent.status === "error" && agent.role === "expert") {
+        if (this.handleDeliveryError(entry, agent)) continue; // self-retry queued
+        return; // escalated — nothing more to drain for this agent
+      }
+      entry.deliveryErrors.delete(name); // clean run → reset the streak
     }
+  }
+
+  /**
+   * #97: react to a failed delegated expert run. Returns true when a self-retry
+   * was queued (the loop should continue and re-drain the agent's own inbox),
+   * false when the failure was escalated to the principal (the loop should stop).
+   *
+   * Policy:
+   *  - `retryable` (rate limit / 5xx / network) AND under the retry cap →
+   *    re-wake the SAME expert with a neutral system nudge in its own inbox, and
+   *    surface a `warning` to the user ("retrying n/N"). Re-running may succeed.
+   *  - `fatal` (auth / missing key / forbidden), OR the cap is reached →
+   *    escalate: write a NEUTRAL error note to the principal's mailbox + wake it,
+   *    surface an `error` to the user, and reset the streak so a future task to
+   *    this expert starts fresh.
+   */
+  private handleDeliveryError(entry: SessionEntry, agent: MasAgent): boolean {
+    const name = agent.name;
+    const count = (entry.deliveryErrors.get(name) ?? 0) + 1;
+    entry.deliveryErrors.set(name, count);
+    const kind = agent.lastErrorKind ?? "retryable";
+    const headline = agent.state().lastError?.message ?? "未知错误";
+
+    if (kind === "retryable" && count < SessionManager.MAX_DELIVERY_RETRIES) {
+      entry.bus.emit(
+        ev.systemMessage(
+          entry.id,
+          "warning",
+          `专家 "${name}" 执行任务时出错，正在自动重试 (${count}/${SessionManager.MAX_DELIVERY_RETRIES})…`,
+          { agent: name, recoverable: true },
+        ),
+      );
+      // Re-wake the SAME expert via its own inbox: a neutral, directive-free
+      // nudge. The expert retains its prior conversation context, so it knows
+      // what it was attempting; we only signal "the last attempt failed, try
+      // again". Returning true lets the loop re-drain this note immediately.
+      void entry.mailbox
+        .write({
+          fromAgent: "system",
+          toAgent: name,
+          msgType: "system",
+          content: `[系统通知] 上一次任务执行出错（${headline}）。请重试。`,
+        })
+        .catch(() => {
+          /* best-effort */
+        });
+      return true;
+    }
+
+    // Fatal, or retries exhausted → escalate to the principal and stop.
+    entry.bus.emit(
+      ev.systemMessage(
+        entry.id,
+        "error",
+        kind === "fatal"
+          ? `专家 "${name}" 发生无法自动恢复的错误，已通知主管。`
+          : `专家 "${name}" 连续 ${count} 次执行失败，已通知主管。`,
+        { agent: name, recoverable: true },
+      ),
+    );
+    this.writeErrorToPrincipal(entry, name, headline);
+    entry.deliveryErrors.delete(name); // reset streak for a future task
+    return false;
+  }
+
+  /**
+   * #97 error escalation: write a NEUTRAL, error-flavored system note into the
+   * principal's mailbox and wake it, so the PI learns an expert failed rather
+   * than dead-waiting. Distinct from `writeFallbackToPrincipal` (the "silence"
+   * path): this one states an ERROR occurred and carries the error headline as
+   * context, but — like the silence note — gives NO directive ("re-delegate" /
+   * "proceed"): the principal decides. Best-effort; never breaks the loop.
+   */
+  private writeErrorToPrincipal(entry: SessionEntry, expert: string, headline: string): void {
+    void entry.mailbox
+      .write({
+        fromAgent: "system",
+        toAgent: "principal",
+        msgType: "system",
+        content: `[系统通知] 专家 "${expert}" 在执行任务时发生错误，未能产出结果。错误：${headline}`,
+      })
+      .then(() => this.wakeAgent(entry.id, "principal"))
+      .catch(() => {
+        /* best-effort */
+      });
   }
 
   /**
