@@ -1,16 +1,20 @@
 {
-  "name": "@brainpilot/skills-mcp",
+  "name": "@brainpilot/skills",
   "version": "0.0.5",
   "engines": {
     "node": ">=22"
   },
   "license": "Apache-2.0",
   "type": "module",
-  "description": "BrainPilot built-in MCP server for local skills retrieval (query + browse progressive disclosure)",
+  "description": "BrainPilot built-in Agent Skills content (neuroscience / cognitive-science / writing), loaded via Pi's native skill pipeline",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
-  "bin": {
-    "brainpilot-skills-mcp": "./dist/index.js"
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
   },
   "files": [
     "dist",
@@ -19,18 +23,13 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
-    "directory": "packages/skills-mcp"
+    "directory": "packages/skills"
   },
   "publishConfig": {
     "access": "public"
   },
   "scripts": {
     "build": "tsc -b",
-    "typecheck": "tsc -b",
-    "test": "vitest run",
-    "start": "node ./dist/index.js"
-  },
-  "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.0"
+    "typecheck": "tsc -b"
   }
 }

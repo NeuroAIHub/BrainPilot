@@ -56,10 +56,13 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // Skills: Pi's DefaultResourceLoader otherwise auto-discovers skills from the
   // HOST machine's global dirs (~/.pi/agent/skills, ~/.agents/skills), which
   // makes agent behaviour depend on whoever runs the runtime — not reproducible.
-  // We set `noSkills: true` to drop that implicit discovery. Skills are now
-  // served by the built-in `skills_tool_local` MCP tool (see packages/skills-mcp)
-  // instead of being loaded through Pi's skill paths — this gives agents progressive
-  // disclosure (query → browse) rather than bulk prompt injection.
+  // We set `noSkills: true` to drop that implicit discovery, then load ONLY our
+  // controlled skill dir(s) via `additionalSkillPaths` (honored even with
+  // noSkills, verified against Pi v0.79 source). Pi's native skill pipeline
+  // already does progressive disclosure: each skill's name+description goes into
+  // the system prompt and the body is read on demand. The built-in skill content
+  // (@brainpilot/skills) is materialized into `<dataRoot>/bp_template/skills`,
+  // which the SessionManager passes here as `params.skillPaths`.
   // Context files: for the SAME reproducibility reason we set `noContextFiles: true`.
   // Pi would otherwise walk cwd→root collecting every AGENTS.md / CLAUDE.md and
   // inject them as project context. Agents run with cwd under the host repo, so
@@ -87,6 +90,9 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     agentDir,
     noSkills: true,
     noContextFiles: true,
+    ...(params.skillPaths && params.skillPaths.length > 0
+      ? { additionalSkillPaths: params.skillPaths }
+      : {}),
     appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
     extensionFactories,
   });

@@ -50,6 +50,9 @@ export type { StartServerOptions } from "./server.js";
 export { McpBridge, loadMcpServersConfig, defaultMcpConnect } from "./mcp-bridge.js";
 export type { McpServersConfig, McpServerSpec, McpClientLike, McpConnectFn } from "./mcp-bridge.js";
 
+export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
+export type { MaterializeSkillsResult } from "./materialize-skills.js";
+
 export type {
   AgentRole,
   IAgentSession,

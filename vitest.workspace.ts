@@ -8,5 +8,4 @@ export default defineWorkspace([
   "packages/backend-core",
   "packages/cli",
   "packages/client-cli",
-  "packages/skills-mcp",
 ]);

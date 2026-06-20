@@ -135,6 +135,13 @@ export type AgentSessionFactory = (params: {
   /** System prompt for the agent. */
   systemPrompt: string;
   /**
+   * Explicit skill directories to load through Pi's native skill pipeline
+   * (`additionalSkillPaths`). Host-global auto-discovery stays disabled
+   * (`noSkills: true`); these dirs are loaded on top of that. Typically a single
+   * entry: `<dataRoot>/bp_template/skills`. Omitted by the mock factory.
+   */
+  skillPaths?: string[];
+  /**
    * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
    * when an expert was reminded once and STILL did not report back, so the host
    * can write a fallback note into the principal's mailbox (the PI never

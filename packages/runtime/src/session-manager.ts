@@ -12,7 +12,6 @@
 import { mkdir, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
-import { fileURLToPath } from "node:url";
 import {
   CUSTOM_EVENT,
   type AgUiEvent,
@@ -34,6 +33,7 @@ import { selectFactory, isMockMode } from "./agent-factory.js";
 import { personaFor, withLanguageDirective } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
@@ -105,12 +105,12 @@ export interface SessionManagerOptions {
   /** Override the external MCP bridge (default: real stdio bridge). Tests inject a fake. */
   mcpBridge?: McpBridge;
   /**
-   * Optional absolute path to the built-in skills MCP server entry point
-   * (`packages/skills-mcp/dist/index.js`). When omitted, resolved relative to
-   * the runtime package's own dist directory. The server is auto-started via
-   * stdio for every non-trace agent.
+   * Absolute path to the directory of user-editable skills loaded through Pi's
+   * native skill pipeline (`additionalSkillPaths`). When omitted, defaults to
+   * `<dataRoot>/bp_template/skills`. The built-in skill content is materialized
+   * here on first use (see `materializeSkills`).
    */
-  skillsMcpPath?: string;
+  skillsDir?: string;
   /**
    * Memory budget in bytes (issue #20 / R-4). When set, an opt-in soft watchdog
    * refuses new work past ~85% of the budget. Defaults to `BP_MEM_LIMIT_MB`
@@ -192,11 +192,11 @@ export class SessionManager {
   private mcpTools: SystemTool[] = [];
   private mcpLoaded = false;
 
-  // Built-in skills MCP server (local progressive-disclosure skills tool).
-  // Auto-started as a stdio child process on first agent creation.
-  private readonly skillsMcpPath: string;
-  private skillsTools: SystemTool[] = [];
-  private skillsLoaded = false;
+  // Built-in skills directory, loaded through Pi's native skill pipeline
+  // (`additionalSkillPaths`). The bundled @brainpilot/skills content is
+  // materialized here once (lazily) on first agent creation.
+  private readonly skillsDir: string;
+  private skillsMaterialized = false;
 
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
   private readonly memWatchdog: MemWatchdog | null;
@@ -220,11 +220,8 @@ export class SessionManager {
         return 64000;
       })();
 
-    // Resolve the built-in skills MCP server path. Default: sibling to this
-    // runtime's dist/ dir — packages/skills-mcp/dist/index.js.
-    this.skillsMcpPath =
-      opts.skillsMcpPath ??
-      join(dirname(fileURLToPath(import.meta.url)), "..", "..", "skills-mcp", "dist", "index.js");
+    // Skills are loaded by Pi from this dir (default <dataRoot>/bp_template/skills).
+    this.skillsDir = opts.skillsDir ?? join(this.dataRoot, "bp_template", "skills");
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -239,40 +236,28 @@ export class SessionManager {
   }
 
   /**
-   * Start the built-in skills MCP server via stdio and load its `skills_tool_local`
-   * tool. Called once (lazily) when the first non-trace agent is created. Uses a
-   * fresh McpBridge child process — fire-and-forget, cleaned up by the OS on exit.
+   * Materialize the bundled @brainpilot/skills content into `this.skillsDir`
+   * (skip-if-exists) so Pi's native skill pipeline can load it. Idempotent —
+   * runs at most once per manager. Called at server startup (so skills exist and
+   * are user-visible before any agent runs, incl. Docker pure-compose where no
+   * CLI scaffold ran) AND lazily before the first non-trace agent. Best-effort:
+   * skills are a convenience, not a hard dependency, so failures are swallowed.
    */
-  private async ensureBuiltinSkillsTools(): Promise<SystemTool[]> {
-    if (this.skillsLoaded) return this.skillsTools;
-    this.skillsLoaded = true;
-
-    if (isMockMode() && !this.mcpBridge) return this.skillsTools;
+  async ensureSkillsMaterialized(): Promise<void> {
+    if (this.skillsMaterialized) return;
+    this.skillsMaterialized = true;
 
     try {
-      const bridge = new McpBridge();
-      this.skillsTools = await bridge.connectAll({
-        mcpServers: {
-          bp_skills_local: {
-            type: "stdio",
-            command: "node",
-            args: [this.skillsMcpPath],
-          },
-        },
-      });
+      const res = await materializeSkills(this.dataRoot);
       // eslint-disable-next-line no-console
       console.info(
-        `[skills-mcp] built-in skills server ready (${this.skillsTools.length} tools)`,
+        `[skills] ${res.copied} skill file(s) materialized into ${res.dest}` +
+          (res.skipped ? ` (${res.skipped} preserved)` : ""),
       );
     } catch (err) {
-      // Best-effort — skills are a convenience, not a hard dependency.
       // eslint-disable-next-line no-console
-      console.error(
-        `[skills-mcp] failed to start built-in skills server: ${(err as Error).message}`,
-      );
+      console.error(`[skills] failed to materialize built-in skills: ${(err as Error).message}`);
     }
-
-    return this.skillsTools;
   }
 
   /**
@@ -977,12 +962,16 @@ export class SessionManager {
     };
     const systemTools = systemToolsForRole(role, name, deps);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
-    // Built-in skills MCP tools are always included for non-trace agents.
-    const mcpTools =
-      role === "trace"
-        ? []
-        : [...(await this.ensureBuiltinSkillsTools()), ...(await this.ensureMcpTools())];
+    const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
     const rawTools = [...systemTools, ...mcpTools];
+    // Built-in skills are loaded by Pi natively (not as tools). Materialize the
+    // bundled content into bp_template/skills once, then hand the dir to the
+    // factory as additionalSkillPaths. Trace agent is skill-less (graph-only).
+    let skillPaths: string[] | undefined;
+    if (role !== "trace") {
+      await this.ensureSkillsMaterialized();
+      skillPaths = [this.skillsDir];
+    }
     // #80: guard every tool result against context-window overflow.
     const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
     const builtins = builtinToolNamesForRole(role, name);
@@ -1001,6 +990,7 @@ export class SessionManager {
       systemTools: agentTools,
       allowedToolNames,
       systemPrompt: await this.loadPersona(name, role),
+      skillPaths,
       providerConfig,
       // 意图二 fallback: the trace-reminder extension calls this when an expert
       // was reminded once and still didn't report back, so the principal never

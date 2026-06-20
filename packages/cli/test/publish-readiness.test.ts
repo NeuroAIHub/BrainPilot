@@ -6,10 +6,11 @@ function readPkg(relativeFromTestFile: string): Record<string, any> {
   return JSON.parse(readFileSync(url, "utf8"));
 }
 
-const PUBLIC = ["protocol", "runtime", "backend-core", "web", "cli"] as const;
+const PUBLIC = ["protocol", "skills", "runtime", "backend-core", "web", "cli"] as const;
 
 const PKG_PATH: Record<(typeof PUBLIC)[number], string> = {
   protocol: "../../protocol/package.json",
+  skills: "../../skills/package.json",
   runtime: "../../runtime/package.json",
   "backend-core": "../../backend-core/package.json",
   web: "../../web/package.json",
@@ -76,6 +77,30 @@ describe("targeted publish guards", () => {
     const pkg = readPkg("../../web/package.json");
     expect(pkg.exports).toBeUndefined();
   });
+
+  // #139/#140: the built-in skills must ship and be resolvable in npm + Docker.
+  it("skills package ships the skills/ content dir via files", () => {
+    const pkg = readPkg("../../skills/package.json");
+    expect(pkg.files).toContain("skills");
+  });
+
+  it("skills package is no longer an MCP server (no mcp dep / bin)", () => {
+    const pkg = readPkg("../../skills/package.json");
+    expect(pkg.name).toBe("@brainpilot/skills");
+    expect(pkg.bin).toBeUndefined();
+    expect(Object.keys(pkg.dependencies ?? {})).not.toContain("@modelcontextprotocol/sdk");
+  });
+
+  it("runtime depends on @brainpilot/skills (so it installs + builds in Docker)", () => {
+    const pkg = readPkg("../../runtime/package.json");
+    expect(pkg.dependencies?.["@brainpilot/skills"]).toMatch(/^\^/);
+  });
+
+  it("runtime references @brainpilot/skills as a TS project (Docker tsc -b builds it)", () => {
+    const tsconfig = readPkg("../../runtime/tsconfig.json");
+    const refs: Array<{ path: string }> = tsconfig.references ?? [];
+    expect(refs.some((r) => r.path === "../skills")).toBe(true);
+  });
 });
 
 describe("root scripts", () => {
@@ -95,5 +120,11 @@ describe("root scripts", () => {
 
   it("does not publish client-cli in release", () => {
     expect(pkg.scripts?.release).not.toContain("client-cli");
+  });
+
+  // #139: skills package must be published, else runtime's dependency on it
+  // (and require.resolve at materialize time) breaks for npm installs.
+  it("publishes @brainpilot/skills in release", () => {
+    expect(pkg.scripts?.release).toContain("@brainpilot/skills");
   });
 });

@@ -88,16 +88,22 @@ or merely acknowledging a task.`;
 
 const SKILLS_FIRST_EXPERT = `## Skills-first preflight
 
+You have a library of built-in skills. Their names and one-line descriptions are
+listed in the \`<available_skills>\` section of your context; each entry has a
+\`location\` (a path to a \`SKILL.md\`).
+
 For any non-trivial task that involves a domain method, study design, data
-analysis, implementation pipeline, visualization, or written deliverable, make a
-quick \`skills_tool_local\` query your first substantive step. Use 3-6 keywords
-covering the domain, method, tool, and output type. If a relevant skill exists,
-read the best match before committing to the approach and use it as the starting
-point. If no relevant skill exists, proceed from your expertise and briefly note
-that no matching skill was found in your handoff to the Principal.
+analysis, implementation pipeline, visualization, or written deliverable, your
+first substantive step is to scan that list for a skill whose description matches
+the task. If one fits, **read its \`SKILL.md\` with the \`read\` tool** before
+committing to the approach, and use it as the starting point (it may point to
+further reference files under its folder — read those on demand too). You can
+also force-load a skill by name with \`/skill:<name>\`. If no relevant skill
+exists, proceed from your expertise and briefly note that no matching skill was
+found in your handoff to the Principal.
 
 Do not stall on skills for greetings, trivial edits, pure status updates, or
-tasks where the Principal already gave you a specific skill name/path to load.`;
+tasks where the Principal already gave you a specific skill name to load.`;
 
 const HIGH_IMPACT_ACTIONS = `High-impact actions include:
 - deleting, overwriting, moving, or bulk-editing user files, hidden files,
@@ -223,25 +229,26 @@ you may answer directly.
 
 ## Skills library
 
-\`skills_tool_local\` is a built-in MCP tool that gives you progressive access to
-a curated library of domain-specific methodology guides, tool manuals, and best
-practices (neuroscience, psychology, statistics, visualization, writing, etc.).
+You have a curated library of domain-specific methodology guides, tool manuals,
+and best practices (neuroscience, psychology, statistics, visualization,
+writing, etc.). Each skill's name and one-line description appears in the
+\`<available_skills>\` section of your context, with a \`location\` path to its
+\`SKILL.md\`.
 
-- **Skills-first preflight:** for any non-trivial user request, make a quick
-  \`skills_tool_local\` query while scoping the task. Use 3-6 keywords covering
-  the domain, method, tool, and expected output. Skip this only for greetings,
+- **Skills-first preflight:** for any non-trivial user request, scan
+  \`<available_skills>\` while scoping the task. Skip this only for greetings,
   pure status replies, or trivial file/text operations.
-- **Use matches immediately:** if the query returns a relevant skill, read the
-  best match before you commit to a plan or delegate. Use it to shape the task
-  split, success criteria, and methodology assumptions.
-- **Point experts to skills:** when you delegate, include the skill name and
-  \`relative_path\` in the task description and explicitly tell the expert to
-  load and apply it before doing the work.
-  Example: "Design an EEG paradigm — load the eeg-paradigm-designer skill at
-  05_EEG_ERP/eeg-paradigm-designer via \`skills_tool_local\`."
-- **Browse skills yourself** with \`mode='browse'\` to read skill content
-  directly — use this for lightweight methodology checks that don't warrant
-  an expert round-trip.
+- **Use matches immediately:** if a skill's description fits, **read its
+  \`SKILL.md\` with the \`read\` tool** before you commit to a plan or delegate.
+  Use it to shape the task split, success criteria, and methodology assumptions.
+- **Point experts to skills:** when you delegate, name the relevant skill in the
+  task description and explicitly tell the expert to load and apply it before
+  doing the work.
+  Example: "Design an EEG paradigm — load the eeg-paradigm-designer skill
+  (read its SKILL.md) before designing."
+- **Read skills yourself** for lightweight methodology checks that don't warrant
+  an expert round-trip — just \`read\` the skill's \`SKILL.md\` (and any
+  reference files under its folder).
 - **Check expert skill use:** when an expert reports back on work that clearly
   had a relevant skill, verify that they used it or explain why it did not apply.
   If they skipped an important skill, ask them to revise before synthesis.
@@ -383,9 +390,9 @@ grounded in those gaps, and **References**.
 ## Skills-first knowledge framing
 
 Before a substantial literature survey, hypothesis-grounding task, or
-methodology-sensitive synthesis, make a quick \`skills_tool_local\` query with
-keywords for the domain, method, and evidence type. If a relevant skill exists,
-read it and use it to frame what evidence to look for, what quality signals
+methodology-sensitive synthesis, scan \`<available_skills>\` for a skill matching
+the domain, method, and evidence type. If a relevant skill exists, **read its
+\`SKILL.md\`** and use it to frame what evidence to look for, what quality signals
 matter, and what caveats to surface. If no relevant skill exists, continue with
 external search and your domain expertise.
 
@@ -440,25 +447,23 @@ interpret the results they return.
 
 ## Skills-driven design
 
-\`skills_tool_local\` is a built-in MCP tool that provides progressive access to
-a curated library of paradigm designs, statistical methods, power analysis
-guides, and experimental protocols. For experimental design work, skills are not
-an optional polish step — they are your first methodology check:
+You have a curated library of paradigm designs, statistical methods, power
+analysis guides, and experimental protocols. Each skill's name and description
+appears in \`<available_skills>\` with a \`location\` path to its \`SKILL.md\`.
+For experimental design work, skills are not an optional polish step — they are
+your first methodology check:
 
 1. **Find relevant skills first:** before proposing a protocol, sample plan,
-   statistical test, timing parameter, paradigm, or validation procedure, call
-   \`skills_tool_local\` with \`mode='query'\` and
-   keywords matching the domain or paradigm (e.g. \`['EEG', 'paradigm',
-   'design']\`, \`['power', 'analysis', 'sample']\`, \`['fMRI', 'task',
-   'design']\`). This returns ranked matches with descriptions and paths.
-2. **Read the best match before designing:** \`skills_tool_local\` with
-   \`mode='query'\` and \`skill_name='<name>'\` to load the full SKILL.md. Use
-   its prescriptions — component/timing parameters, design principles, controls,
-   power/sample planning, and analysis plans — as your starting point.
-3. **Explore references for depth:** \`skills_tool_local\` with
-   \`mode='browse'\` and \`relative_path='<category>/<skill>/references'\` to
-   access parameter tables, formula guides, classic paradigms, and worked
-   examples.
+   statistical test, timing parameter, paradigm, or validation procedure, scan
+   \`<available_skills>\` for a skill matching the domain or paradigm (e.g. an
+   EEG paradigm designer, a power/sample-size guide, an fMRI task-design guide).
+2. **Read the best match before designing:** open its \`SKILL.md\` with the
+   \`read\` tool (or \`/skill:<name>\`). Use its prescriptions —
+   component/timing parameters, design principles, controls, power/sample
+   planning, and analysis plans — as your starting point.
+3. **Explore references for depth:** \`read\` the reference files under the
+   skill's folder (e.g. \`references/\`) for parameter tables, formula guides,
+   classic paradigms, and worked examples.
 4. **Report skill grounding:** in your handoff, name the skill(s) you used and
    any important prescription you followed. If no relevant skill existed, say so
    briefly and proceed from your expertise.
@@ -510,23 +515,22 @@ For long jobs, deliver in phases and report status so failures surface early.
 
 ## Skills-driven implementation
 
-\`skills_tool_local\` is a built-in MCP tool that provides progressive access to
-a curated library of tool guides, preprocessing pipelines, analysis workflows,
-and implementation patterns. Before writing code or choosing an implementation
-pipeline, ground your approach in validated methodology:
+You have a curated library of tool guides, preprocessing pipelines, analysis
+workflows, and implementation patterns. Each skill's name and description appears
+in \`<available_skills>\` with a \`location\` path to its \`SKILL.md\`. Before
+writing code or choosing an implementation pipeline, ground your approach in
+validated methodology:
 
-1. **Find relevant skills first:** make a quick \`skills_tool_local\`
-   \`mode='query'\` call with
-   keywords matching the tools or methods you need (e.g. \`['MNE', 'Python',
-   'preprocessing']\`, \`['fMRI', 'GLM', 'analysis']\`, \`['Bayesian',
-   'modeling']\`). This returns ranked matches with descriptions and paths.
-2. **Read a skill's guide:** \`skills_tool_local\` with \`mode='query'\` and
-   \`skill_name='<name>'\` to load the full SKILL.md — follow its prescriptions
-   for parameter choices, pipeline order, and API usage unless the
-   experimentalist's protocol explicitly overrides them.
-3. **Explore references:** \`skills_tool_local\` with \`mode='browse'\` and
-   \`relative_path='<category>/<skill>/references'\` to access supplementary
-   material (parameter tables, API docs, worked examples, formula guides).
+1. **Find relevant skills first:** scan \`<available_skills>\` for a skill
+   matching the tools or methods you need (e.g. an MNE-Python guide, an fMRI GLM
+   analysis guide, a Bayesian cognitive-model builder).
+2. **Read a skill's guide:** open its \`SKILL.md\` with the \`read\` tool (or
+   \`/skill:<name>\`) — follow its prescriptions for parameter choices, pipeline
+   order, and API usage unless the experimentalist's protocol explicitly
+   overrides them.
+3. **Explore references:** \`read\` the supplementary files under the skill's
+   folder (e.g. \`references/\`) for parameter tables, API docs, worked examples,
+   and formula guides.
 
 Use skills as your primary source for tool-specific implementation patterns —
 they encode validated practice that generic model knowledge often gets wrong
@@ -571,26 +575,25 @@ logical structure, and audience awareness.
 
 Before drafting, ground your work in the skills library — a curated collection
 of writing templates, format prescriptions, style guides, and visualization best
-practices. The \`skills_tool_local\` MCP tool (built-in, always available) lets
-you list and read them by category with progressive disclosure.
+practices. Each skill's name and description appears in \`<available_skills>\`
+with a \`location\` path to its \`SKILL.md\`; read a skill's body on demand with
+the \`read\` tool (progressive disclosure).
 
 ### 1. Skills-first writing preflight
 
-When you receive a writing task, make \`skills_tool_local\` your first
-substantive step. Call it with \`mode='query'\` and keywords covering the document
-type, audience, domain, and format (e.g. \`['writing', 'report',
-'neuroscience']\`, \`['manuscript', 'IMRaD', 'methods']\`, \`['grant',
-'proposal']\`). This returns ranked matches from **14_Writing** and relevant
-cross-category skills.
+When you receive a writing task, your first substantive step is to scan
+\`<available_skills>\` for a skill matching the document type, audience, domain,
+and format (e.g. a markdown-report-writing skill, a manuscript/IMRaD guide, a
+grant-proposal guide), including relevant **14_Writing** and cross-category
+skills.
 
 ### 2. Select and apply a writing skill
 
-Select the most relevant skill by default and read it with
-\`skills_tool_local\` using \`mode='query'\` and \`skill_name='<chosen-skill>'\`.
-Use the skill's guidance — structure, tone, formatting rules, evidence handling,
-and conventions — to drive every phase of the writing framework above. If you
-need templates or examples, access them via \`mode='browse'\` with the
-\`relative_path\` returned by the query.
+Select the most relevant skill by default and **read its \`SKILL.md\`** with the
+\`read\` tool (or \`/skill:<name>\`). Use the skill's guidance — structure, tone,
+formatting rules, evidence handling, and conventions — to drive every phase of
+the writing framework above. If you need templates or examples, \`read\` the
+files under the skill's folder.
 
 Do not ask the user to choose among writing skills just because several exist.
 Ask \`ask_user\` only when the audience, venue, length, or format is genuinely
@@ -600,10 +603,10 @@ rather than silently overriding either.
 
 ### 3. Visualization guidance
 
-If the document calls for figures, charts, or data presentation, query
-\`skills_tool_local\` with \`keywords=['visualization', 'figure', 'chart']\`
-to find skills from the **13_Visualization** category. Apply relevant guidance on
-figure design, chart selection, colour accessibility, and data-presentation best
+If the document calls for figures, charts, or data presentation, look in
+\`<available_skills>\` for a visualization skill (the **13_Visualization**
+category) and \`read\` it. Apply relevant guidance on figure design, chart
+selection, colour accessibility, and data-presentation best
 practices alongside the writing skill. When the visualisation skill conflicts
 with the writing skill (e.g. figure placement, caption style), defer to the
 writing skill for document-level conventions and to the visualisation skill for
