@@ -69,6 +69,15 @@ interface SessionEntry {
    * delivery run. Drives self-retry vs escalation in `runDeliveryLoop`.
    */
   deliveryErrors: Map<string, number>;
+  /**
+   * #97 directed escalation: per-agent record of who LAST delegated a task to it
+   * (the `fromAgent` of the most recent `task_delegate` it drained). When a
+   * delegated run fails or ends silently, the escalation note is routed to this
+   * real delegator (supporting chains like auditor→engineer) instead of always
+   * the principal. Cleared on a clean delivery so a stale delegator never targets
+   * an unrelated later run; falls back to `principal` when absent/unreachable.
+   */
+  delegators: Map<string, string>;
   runActive: boolean;
   activeRunId: string | null;
   /** Outstanding ask_user requests, keyed by request_id (§ ask_user). */
@@ -506,6 +515,7 @@ export class SessionManager {
       agents: new Map(),
       tasks: new Map(),
       deliveryErrors: new Map(),
+      delegators: new Map(),
       runActive: false,
       activeRunId: null,
       pendingInputs: new Map(),
@@ -920,7 +930,7 @@ export class SessionManager {
       // 意图二 fallback: the trace-reminder extension calls this when an expert
       // was reminded once and still didn't report back, so the principal never
       // dead-waits on a silent expert.
-      onUnreplied: (agentName) => this.writeFallbackToPrincipal(entry, agentName),
+      onUnreplied: (agentName) => this.writeFallbackToDelegator(entry, agentName),
       // #97: only the principal gets the live team-status block injected each
       // turn (it is the coordinator). Other roles run without it.
       renderAgentStatus:
@@ -949,22 +959,27 @@ export class SessionManager {
   /**
    * 意图二 fallback — the trace-reminder extension calls this (via the factory's
    * `onUnreplied`) when an expert was reminded once and STILL did not
-   * `send_message` the principal (the "silence" path; a hard *error* run is
-   * handled separately). We write a NEUTRAL system note into the principal's
-   * mailbox and wake it so it never dead-waits. The note only states the fact —
-   * the expert ended without delivering a result — and deliberately gives NO
-   * directive ("re-delegate", "proceed without it"): the principal decides what
-   * to do. Best-effort: a failed write must never break the agent loop.
+   * `send_message` its delegator (the "silence" path; a hard *error* run is
+   * handled separately). We write a NEUTRAL system note into the REAL delegator's
+   * mailbox and wake it so it never dead-waits. The delegator is whoever last
+   * delegated to this expert (#97 directed escalation), falling back to the
+   * principal. This fires during the expert's run (before the clean-run cleanup
+   * in `runDeliveryLoop`), so the delegator record is still present. The note
+   * only states the fact — the expert ended without delivering a result — and
+   * deliberately gives NO directive ("re-delegate", "proceed without it"): the
+   * delegator decides what to do. Best-effort: a failed write must never break
+   * the agent loop.
    */
-  private writeFallbackToPrincipal(entry: SessionEntry, expert: string): void {
+  private writeFallbackToDelegator(entry: SessionEntry, expert: string): void {
+    const to = this.delegatorFor(entry, expert);
     void entry.mailbox
       .write({
         fromAgent: "system",
-        toAgent: "principal",
+        toAgent: to,
         msgType: "system",
         content: `[系统通知] 专家 "${expert}" 结束了本次任务但未回交结果。`,
       })
-      .then(() => this.wakeAgent(entry.id, "principal"))
+      .then(() => this.wakeAgent(entry.id, to))
       .catch(() => {
         /* best-effort */
       });
@@ -1044,6 +1059,11 @@ export class SessionManager {
       if (msgs.length === 0) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
+      // #97 directed escalation: remember who delegated this work (the last
+      // task_delegate in the batch). Self-retry nudges are msgType "system", so
+      // they never overwrite a real delegator recorded on the original task.
+      const delegated = [...msgs].reverse().find((m) => m.msgType === "task_delegate");
+      if (delegated) entry.delegators.set(name, delegated.fromAgent);
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
@@ -1059,6 +1079,7 @@ export class SessionManager {
         return; // escalated — nothing more to drain for this agent
       }
       entry.deliveryErrors.delete(name); // clean run → reset the streak
+      entry.delegators.delete(name); // and forget the delegator (task done)
     }
   }
 
@@ -1109,39 +1130,61 @@ export class SessionManager {
       return true;
     }
 
-    // Fatal, or retries exhausted → escalate to the principal and stop.
+    // Fatal, or retries exhausted → escalate to the real delegator and stop.
+    const delegator = this.delegatorFor(entry, name);
+    const target = delegator === "principal" ? "主管" : `委派方 "${delegator}"`;
     entry.bus.emit(
       ev.systemMessage(
         entry.id,
         "error",
         kind === "fatal"
-          ? `专家 "${name}" 发生无法自动恢复的错误，已通知主管。`
-          : `专家 "${name}" 连续 ${count} 次执行失败，已通知主管。`,
+          ? `专家 "${name}" 发生无法自动恢复的错误，已上报${target}。`
+          : `专家 "${name}" 连续 ${count} 次执行失败，已上报${target}。`,
         { agent: name, recoverable: true },
       ),
     );
-    this.writeErrorToPrincipal(entry, name, headline);
+    this.writeErrorToDelegator(entry, name, headline);
     entry.deliveryErrors.delete(name); // reset streak for a future task
+    entry.delegators.delete(name); // delegator notified; forget it
     return false;
   }
 
   /**
-   * #97 error escalation: write a NEUTRAL, error-flavored system note into the
-   * principal's mailbox and wake it, so the PI learns an expert failed rather
-   * than dead-waiting. Distinct from `writeFallbackToPrincipal` (the "silence"
-   * path): this one states an ERROR occurred and carries the error headline as
-   * context, but — like the silence note — gives NO directive ("re-delegate" /
-   * "proceed"): the principal decides. Best-effort; never breaks the loop.
+   * #97 directed escalation: resolve who an expert's failure/silence should be
+   * reported to. Returns the recorded delegator ONLY when it is a still-live,
+   * non-trace agent other than the expert itself (a destroyed/stopped delegator
+   * would be wrongly resurrected by the wake, and a self/system target is
+   * nonsensical). Otherwise falls back to `principal`, the root coordinator,
+   * which always exists and owns un-rooted work.
    */
-  private writeErrorToPrincipal(entry: SessionEntry, expert: string, headline: string): void {
+  private delegatorFor(entry: SessionEntry, expert: string): string {
+    const d = entry.delegators.get(expert);
+    if (!d || d === expert || d === "system" || d === "principal") return "principal";
+    const agent = entry.agents.get(d);
+    if (!agent || agent.status === "stopped" || agent.role === "trace") return "principal";
+    return d;
+  }
+
+  /**
+   * #97 error escalation: write a NEUTRAL, error-flavored system note into the
+   * REAL delegator's mailbox and wake it, so whoever delegated the work (the
+   * principal, or another agent in a chain like auditor→engineer) learns the
+   * expert failed rather than dead-waiting. Distinct from
+   * `writeFallbackToDelegator` (the "silence" path): this one states an ERROR
+   * occurred and carries the error headline as context, but — like the silence
+   * note — gives NO directive ("re-delegate" / "proceed"): the delegator decides.
+   * Best-effort; never breaks the loop.
+   */
+  private writeErrorToDelegator(entry: SessionEntry, expert: string, headline: string): void {
+    const to = this.delegatorFor(entry, expert);
     void entry.mailbox
       .write({
         fromAgent: "system",
-        toAgent: "principal",
+        toAgent: to,
         msgType: "system",
         content: `[系统通知] 专家 "${expert}" 在执行任务时发生错误，未能产出结果。错误：${headline}`,
       })
-      .then(() => this.wakeAgent(entry.id, "principal"))
+      .then(() => this.wakeAgent(entry.id, to))
       .catch(() => {
         /* best-effort */
       });
