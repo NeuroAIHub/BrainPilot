@@ -6534,6 +6534,17 @@ button {
 .agent-analytics__chart-title svg {
   color: var(--color-text-subtle);
 }
+.agent-analytics__token-total {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 2px 0 8px;
+}
+.agent-analytics__token-total-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
 .agent-analytics__svg {
   width: 100%;
   height: auto;

@@ -14,7 +14,7 @@
  * (`extensions/trace-reminder.ts`), registered per AgentSession by the real
  * factory. MasAgent is back to a pure Pi→AG-UI translator.
  */
-import type { AgUiEvent, AgentState } from "@brainpilot/protocol";
+import type { AgUiEvent, AgentState, TokenUsage } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
 import { normalizeAgentError, classifyAgentError, type AgentErrorKind } from "./agent-error.js";
@@ -23,9 +23,35 @@ import type {
   IAgentSession,
   PiAgentEvent,
   PiAssistantMessageEvent,
+  PiUsage,
 } from "./types.js";
 
 export type AgentStatus = "idle" | "running" | "error" | "stopped";
+
+/** Zeroed token counters — the identity element for accumulation. */
+export function emptyTokenUsage(): TokenUsage {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+}
+
+/**
+ * Fold a provider-reported `PiUsage` into a running `TokenUsage` total
+ * (mutates and returns `acc`). Missing fields count as 0. `total` is summed
+ * from the components rather than trusting the provider's `totalTokens` so the
+ * per-agent breakdown always sums to the session total under one definition.
+ */
+export function addUsage(acc: TokenUsage, u: PiUsage | undefined): TokenUsage {
+  if (!u) return acc;
+  const input = u.input ?? 0;
+  const output = u.output ?? 0;
+  const cacheRead = u.cacheRead ?? 0;
+  const cacheWrite = u.cacheWrite ?? 0;
+  acc.input += input;
+  acc.output += output;
+  acc.cacheRead += cacheRead;
+  acc.cacheWrite += cacheWrite;
+  acc.total += input + output + cacheRead + cacheWrite;
+  return acc;
+}
 
 export interface MasAgentOpts {
   sessionId: string;
@@ -34,6 +60,13 @@ export interface MasAgentOpts {
   session: IAgentSession;
   bus: EventBus;
   onStatusChange?: (name: string, status: AgentStatus) => void;
+  /**
+   * Invoked after each assistant turn whose `message_end` carried provider
+   * token usage. `delta` is just-added usage for this turn; `cumulative` is the
+   * agent's running total. The SessionManager uses this to roll up the
+   * per-session total, push a session_state frame, and persist usage.json.
+   */
+  onUsage?: (name: string, delta: TokenUsage, cumulative: TokenUsage) => void;
 }
 
 export class MasAgent {
@@ -50,6 +83,12 @@ export class MasAgent {
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
   private lastError: AgentState["lastError"];
+  /**
+   * Cumulative real token usage for THIS agent across every assistant turn,
+   * summed from provider-reported `usage` on `message_end`. Read by `usage()`;
+   * fed to `onUsage` so the SessionManager can roll up the per-session total.
+   */
+  private cumulativeUsage: TokenUsage = emptyTokenUsage();
   /**
    * #97 error path: recoverability class of the most recent error, or undefined
    * when the last run did not error. The delivery loop reads this after a run to
@@ -85,6 +124,23 @@ export class MasAgent {
    */
   get lastErrorKind(): AgentErrorKind | undefined {
     return this._lastErrorKind;
+  }
+
+  /**
+   * Cumulative real token usage for this agent (a copy, safe to mutate). Used
+   * by the SessionManager when rebuilding the per-session breakdown and when
+   * persisting usage.json.
+   */
+  usage(): TokenUsage {
+    return { ...this.cumulativeUsage };
+  }
+
+  /**
+   * Restore this agent's cumulative usage from persisted state (restore path,
+   * before any new turn). No-op if `u` is undefined.
+   */
+  seedUsage(u: TokenUsage | undefined): void {
+    if (u) this.cumulativeUsage = { ...u };
   }
 
   /** §10 authoritative state snapshot. */
@@ -243,12 +299,22 @@ export class MasAgent {
         // finalizes the assistant message with stopReason "error" + errorMessage
         // and emits it here. Surface it as a visible error instead of letting the
         // run end with an empty assistant bubble.
-        const msg = end.message as { stopReason?: string; errorMessage?: string } | undefined;
+        const msg = end.message as
+          | { role?: string; stopReason?: string; errorMessage?: string; usage?: PiUsage }
+          | undefined;
         if (msg?.stopReason === "error") {
           const raw = msg.errorMessage || "provider request failed";
           const { message, details } = normalizeAgentError(raw);
           this.recordError(message, details, raw);
           this.setStatus("error");
+        }
+        // Accumulate real provider token usage for this assistant turn. Pi
+        // attaches `usage` to the finalized assistant message; user/tool
+        // messages and mock feeds may omit it (addUsage no-ops on undefined).
+        if (msg?.role === "assistant" && msg.usage) {
+          const delta = addUsage(emptyTokenUsage(), msg.usage);
+          addUsage(this.cumulativeUsage, msg.usage);
+          this.opts.onUsage?.(this.name, delta, { ...this.cumulativeUsage });
         }
         if (this.currentMessageId) {
           if (this.inReasoning) {

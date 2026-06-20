@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, ChatMessage, MessageFilterRule, Session, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, ChatMessage, MessageFilterRule, Session, SessionTokenUsage, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
@@ -46,6 +46,12 @@ interface SessionContextValue {
    * whole-turn timer in the Chat footer.
    */
   runActive: { active: boolean; atMs: number } | null;
+  /**
+   * Cumulative real token usage for the current session (total + per-agent),
+   * fed live from `session_state` frames. null until the first frame carrying
+   * usage arrives.
+   */
+  tokenUsage: SessionTokenUsage | null;
   agentFilters: Record<string, AgentMessageFilter>;
   /** Live Graph of Trace for the current session (#79), or null if none/unloaded. */
   currentTrace: TraceGraph | null;
@@ -92,10 +98,12 @@ function foldSessionHistory(events: unknown[], sessionId: string): {
   messages: ChatMessage[];
   trace: TraceGraph | null;
   agents: AgentStatus[] | null;
+  tokenUsage: SessionTokenUsage | null;
 } {
   let messages: ChatMessage[] = [];
   let trace: TraceGraph | null = null;
   let lastAgents: AgentStatus[] | null = null;
+  let lastUsage: SessionTokenUsage | null = null;
 
   for (const raw of events) {
     const ev = normalizeWebSocketEvent(raw);
@@ -116,10 +124,37 @@ function foldSessionHistory(events: unknown[], sessionId: string): {
           alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
         }));
       }
+      const usage = parseTokenUsageValue(v.tokenUsage);
+      if (usage) lastUsage = usage;
     }
   }
 
-  return { messages, trace, agents: lastAgents };
+  return { messages, trace, agents: lastAgents, tokenUsage: lastUsage };
+}
+
+/**
+ * Coerce a wire `session_state.tokenUsage` value into SessionTokenUsage, or
+ * null when absent/malformed. Mirrors `normalizeSessionTokenUsage` in the
+ * backend contract but works off the already-shaped CUSTOM event value.
+ */
+function parseTokenUsageValue(rawValue: unknown): SessionTokenUsage | null {
+  if (rawValue == null || typeof rawValue !== "object") return null;
+  const raw = rawValue as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const one = (x: unknown) => {
+    const u = (x ?? {}) as Record<string, unknown>;
+    return {
+      input: num(u.input),
+      output: num(u.output),
+      cacheRead: num(u.cacheRead),
+      cacheWrite: num(u.cacheWrite),
+      total: num(u.total),
+    };
+  };
+  const byAgentRaw = (raw.byAgent ?? {}) as Record<string, unknown>;
+  const byAgent: SessionTokenUsage["byAgent"] = {};
+  for (const [name, value] of Object.entries(byAgentRaw)) byAgent[name] = one(value);
+  return { total: one(raw.total), byAgent };
 }
 
 function defaultAgentFilter(agentName: string): AgentMessageFilter {
@@ -159,6 +194,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // paired with the backend ISO timestamp of the snapshot that carried it. The
   // turn timer keys off transitions of this flag, not the per-agent list.
   const [runActive, setRunActive] = useState<{ active: boolean; atMs: number } | null>(null);
+  // Cumulative real token usage for the current session, fed from session_state.
+  const [tokenUsage, setTokenUsage] = useState<SessionTokenUsage | null>(null);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
   const [messageFilters, setMessageFilters] = useState<MessageFilterRule[]>(defaultFilterRules);
   // #79: live Graph of Trace per session. Seeded by a fetch on session change,
@@ -228,11 +265,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // (messageReducer / traceReducer / agents seed via session_state). The
         // SSE ring buffer that arrives next is deduped by messageId/toolCallId
         // inside the reducer, so any overlap is a no-op.
-        const { messages: nextMessages, trace: nextTrace, agents: lastAgents } =
+        const { messages: nextMessages, trace: nextTrace, agents: lastAgents, tokenUsage: lastUsage } =
           foldSessionHistory(events, sessionId);
 
         if (cancelled) return;
         hydratedSessionsRef.current.add(sessionId);
+        if (lastUsage) setTokenUsage(lastUsage);
 
         // Only seed the message list if the user hasn't already started typing
         // / receiving live SSE for this session in the brief window before
@@ -283,6 +321,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setCurrentSessionId(sessionId);
     setCurrentView("chat");
     setRunActive(null); // #99: drop the previous session's turn-active signal
+    setTokenUsage(null); // drop the previous session's token totals
     connectSession(sessionId);
   }, [connectSession]);
 
@@ -532,9 +571,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const { events } = await api.sessions.getHistory(currentSession.id, {
         limit: HISTORY_REHYDRATE_LIMIT,
       });
-      const { messages: nextMessages, trace: nextTrace, agents: nextAgents } =
+      const { messages: nextMessages, trace: nextTrace, agents: nextAgents, tokenUsage: nextUsage } =
         foldSessionHistory(events, currentSession.id);
 
+      if (nextUsage) setTokenUsage(nextUsage);
       setMessagesBySession((current) => ({ ...current, [currentSession.id]: nextMessages }));
       if (nextTrace) {
         setTraceBySession((current) => ({ ...current, [currentSession.id]: nextTrace }));
@@ -674,6 +714,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           active: rs.active === true,
           atMs: Number.isNaN(tsRaw) ? Date.now() : tsRaw,
         });
+        // Cumulative real token usage rides on the same frame (optional).
+        const usage = parseTokenUsageValue(value.tokenUsage);
+        if (usage) setTokenUsage(usage);
         // Apply default filters for newly discovered agents:
         // - trace agent: hide messages and tools by default
         // - all agents: hide hooks by default
@@ -813,6 +856,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       currentView,
       agents,
       runActive,
+      tokenUsage,
       agentFilters,
       currentTrace,
       refreshTrace,
@@ -843,6 +887,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       currentView,
       agents,
       runActive,
+      tokenUsage,
       agentFilters,
       currentTrace,
       refreshTrace,
