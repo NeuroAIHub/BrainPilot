@@ -82,3 +82,7 @@ packages/*/dist/
 
 # BrainPilot runtime data dir (default BP_DATA_DIR=./brainpilot, created by CLI/compose)
 brainpilot/
+# SessionManager fallback data dir (cwd/.bp-data when BP_DATA_DIR unset)
+.bp-data/
+# Playwright MCP scratch output
+.playwright-mcp/

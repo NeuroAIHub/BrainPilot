@@ -24,6 +24,7 @@
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { join } from "node:path";
+import { materializeSkills } from "@brainpilot/runtime";
 import { dataPaths, type DataPaths } from "./paths.js";
 
 /** Default backend port (§11A.5 决策 D). Runtime uses port+1 (stride-2 §16). */
@@ -72,8 +73,8 @@ const TEMPLATE_PROVIDERS_EXAMPLE = JSON.stringify(
  * Default `mcp_servers.json` written into `bp_template/` (§11A.2).
  *
  * Starts empty — users add their own MCP servers (http/sse/stdio) as needed.
- * The built-in `skills_tool_local` stdio MCP server is auto-started by the
- * runtime and does not need an entry here.
+ * The built-in skills library is NOT an MCP server — it is loaded through Pi's
+ * native skill pipeline from `bp_template/skills/`, so it needs no entry here.
  */
 const TEMPLATE_MCP_DEFAULT = JSON.stringify(
   {
@@ -265,6 +266,17 @@ export async function scaffold(
 
   for (const [path, content] of writes) {
     if (await writeIfAbsent(path, content)) created.push(path);
+  }
+
+  // ⑥ Materialize the built-in skills content (@brainpilot/skills) into
+  //    bp_template/skills/ for Pi's native skill pipeline. Skip-if-exists at the
+  //    file level, so user edits and the README/example above are preserved.
+  //    Best-effort: a missing skills package never fails the scaffold.
+  try {
+    const res = await materializeSkills(p.dataDir);
+    if (res.copied > 0) created.push(`${p.bpTemplateSkills} (+${res.copied} skill files)`);
+  } catch {
+    /* skills are a convenience — never block scaffolding on them */
   }
 
   return { paths: p, created };

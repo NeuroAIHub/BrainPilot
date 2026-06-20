@@ -262,6 +262,12 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
     }
   }
 
+  // Materialize the built-in skills into <dataRoot>/bp_template/skills before we
+  // accept requests, so they are loadable AND user-visible/editable from the
+  // first agent on — including a pure `docker compose up` where no CLI scaffold
+  // ever ran. Best-effort (the method swallows its own errors).
+  await manager.ensureSkillsMaterialized();
+
   const port =
     opts.port ??
     (process.env.PORT ? Number(process.env.PORT) : undefined) ??

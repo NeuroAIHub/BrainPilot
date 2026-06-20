@@ -225,9 +225,9 @@ bridges every configured MCP server into the agents' toolset: each remote tool
 shows up namespaced as `mcp__<server>__<tool>`. Three transports are supported —
 **stdio** (spawned local process), **streamable-http**, and **sse** (remote).
 
-The built-in `skills_tool_local` MCP server (local skills retrieval with
-progressive disclosure) is auto-started via stdio for every agent — no
-configuration needed.
+The built-in skills library (see below) is separate from MCP — it is loaded
+through Pi's native skill pipeline, not as an MCP server, and needs no
+configuration.
 
 ### 📚 Built-in skills library
 
@@ -235,7 +235,15 @@ Skills sources:
 - [https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills.git](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills.git)
 - [https://github.com/Yuan1z0825/nature-skills.git](https://github.com/Yuan1z0825/nature-skills.git)
 
-Skills live in `packages/skills-mcp/skills/` inside the BrainPilot repo.
+The built-in skills ship in the `@brainpilot/skills` content package
+(`packages/skills/skills/` inside the BrainPilot repo). At deploy time they are
+**materialized into your data dir** at `<data-dir>/bp_template/skills/` (a
+user-editable copy; an existing skill is never overwritten). The runtime loads
+skills from there through **Pi's native skill pipeline** — each skill's
+`name` + `description` is placed in the agent's system prompt, and the full
+`SKILL.md` body is read on demand (progressive disclosure). Agents can also
+force-load a skill with `/skill:<name>`.
+
 They are organised as a two-level directory tree:
 
 ```
@@ -249,7 +257,7 @@ skills/
 
 **Adding a new skill:**
 
-1. Pick (or create) a category folder under `packages/skills-mcp/skills/`.
+1. Pick (or create) a category folder under `packages/skills/skills/`.
    Existing categories:
 
    | Folder | Domain |
@@ -281,17 +289,22 @@ skills/
    ---
    ```
 
-   The `description` field is what `skills_tool_local` searches with
-   `mode='query'` and `keywords=[...]` — make it keyword-rich and specific.
+   The `description` field is placed in every agent's system prompt and is how
+   the model decides when a skill is relevant — make it keyword-rich and
+   specific. (`name` + `description` are required; a skill with no description
+   is not loaded.)
 
 3. (Optional) Add reference files under `references/` for deeper detail
-   (parameter tables, API docs, worked examples, formula guides). These are
-   only accessible via `mode='browse'` — progressive disclosure keeps the
-   initial SKILL.md compact while drill-down material stays available.
+   (parameter tables, API docs, worked examples, formula guides). The agent
+   reads these on demand with its `read` tool — progressive disclosure keeps the
+   system prompt compact while drill-down material stays available.
 
-4. Build and restart: `npm run build -w packages/skills-mcp` then restart
-   the BrainPilot runtime. Agents discover the new skill on their next turn
-   by calling `skills_tool_local`.
+4. Build and restart: `npm run build -w packages/skills` then restart the
+   BrainPilot runtime. The new skill is materialized into
+   `<data-dir>/bp_template/skills/` on next launch (existing files are not
+   overwritten — copy it in manually or remove the stale copy to refresh), and
+   agents discover it on their next turn. You can also drop a skill directly
+   into `<data-dir>/bp_template/skills/` without rebuilding the package.
 
 **Quality guidelines:** skills encode validated domain methodology — every
 numerical parameter needs a citation; keep SKILL.md under 500 lines; put raw
