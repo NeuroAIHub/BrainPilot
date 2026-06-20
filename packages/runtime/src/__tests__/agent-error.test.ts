@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { normalizeAgentError } from "../agent-error.js";
+import { normalizeAgentError, classifyAgentError } from "../agent-error.js";
 
 describe("normalizeAgentError (#45)", () => {
   const noKeyRaw = [
@@ -85,5 +85,35 @@ describe("normalizeAgentError — provider HTTP errors (#97)", () => {
     const out = normalizeAgentError(raw);
     expect(out.message).not.toMatch(/[{}]/);
     expect(out.message).toContain("400");
+  });
+});
+
+describe("classifyAgentError (#97)", () => {
+  it("classifies auth/401/403 as fatal", () => {
+    expect(classifyAgentError('401 {"error":{"message":"invalid api key"}}')).toBe("fatal");
+    expect(classifyAgentError("403 forbidden")).toBe("fatal");
+    expect(classifyAgentError("No API key found for the selected model.")).toBe("fatal");
+    expect(classifyAgentError("authentication failed")).toBe("fatal");
+    expect(classifyAgentError("permission denied")).toBe("fatal");
+  });
+
+  it("classifies rate-limit / 5xx / timeout / network as retryable", () => {
+    expect(classifyAgentError("429 too many requests")).toBe("retryable");
+    expect(classifyAgentError('503 {"error":"service unavailable"}')).toBe("retryable");
+    expect(classifyAgentError("request timed out")).toBe("retryable");
+    expect(classifyAgentError("model is overloaded")).toBe("retryable");
+    expect(classifyAgentError("ECONNRESET")).toBe("retryable");
+    expect(classifyAgentError("fetch failed")).toBe("retryable");
+  });
+
+  it("treats fatal patterns as fatal even when a retryable word co-occurs", () => {
+    // A 401 blob that also mentions a rate limit must stay fatal (no point
+    // retrying a bad key).
+    expect(classifyAgentError("401 unauthorized — also rate limited")).toBe("fatal");
+  });
+
+  it("defaults unknown and empty errors to retryable", () => {
+    expect(classifyAgentError("something weird happened")).toBe("retryable");
+    expect(classifyAgentError("")).toBe("retryable");
   });
 });

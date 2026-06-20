@@ -17,7 +17,7 @@
 import type { AgUiEvent, AgentState } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
-import { normalizeAgentError } from "./agent-error.js";
+import { normalizeAgentError, classifyAgentError, type AgentErrorKind } from "./agent-error.js";
 import type {
   AgentRole,
   IAgentSession,
@@ -51,6 +51,13 @@ export class MasAgent {
   private activeToolExecutions = new Set<string>();
   private lastError: AgentState["lastError"];
   /**
+   * #97 error path: recoverability class of the most recent error, or undefined
+   * when the last run did not error. The delivery loop reads this after a run to
+   * decide self-retry (retryable) vs immediate escalation to the principal
+   * (fatal). Reset to undefined whenever a run completes without error.
+   */
+  private _lastErrorKind: AgentErrorKind | undefined;
+  /**
    * The in-flight `prompt()` promise (its try/catch/finally inclusive), or
    * undefined when idle. `abort()` awaits this so a caller can fence the old
    * run — guaranteeing RUN_FINISHED is emitted and `status` has settled —
@@ -69,6 +76,15 @@ export class MasAgent {
 
   get status(): AgentStatus {
     return this._status;
+  }
+
+  /**
+   * #97: the recoverability class of the last error (`retryable`/`fatal`), or
+   * undefined if the last run did not error. Read by the delivery loop to choose
+   * self-retry vs escalation. The headline of that error is in `lastError`.
+   */
+  get lastErrorKind(): AgentErrorKind | undefined {
+    return this._lastErrorKind;
   }
 
   /** §10 authoritative state snapshot. */
@@ -115,14 +131,21 @@ export class MasAgent {
       this.bus.emit(
         ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
       );
-      if (this._status !== "error") this.setStatus("idle");
+      // A run that reached here without an in-stream error (message_end /
+      // auto_retry_end / delta error all flip status to "error") completed
+      // cleanly — clear the error class so the delivery loop's retry counter
+      // resets on the next success.
+      if (this._status !== "error") {
+        this._lastErrorKind = undefined;
+        this.setStatus("idle");
+      }
     } catch (err) {
       const raw = (err as Error)?.message ?? String(err);
       // issue #45: never surface raw SDK guidance (/login, node_modules paths)
       // — normalize to a product message / redact local paths before it hits
       // the event stream, events.jsonl, and lastError.
       const { message, details } = normalizeAgentError(raw);
-      this.recordError(message, details);
+      this.recordError(message, details, raw);
       this.bus.emit(
         ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
       );
@@ -166,9 +189,13 @@ export class MasAgent {
     this.setStatus("stopped");
   }
 
-  private recordError(message: string, details?: string): void {
+  private recordError(message: string, details?: string, raw?: string): void {
     const prev = this.lastError?.consecutiveCount ?? 0;
     this.lastError = { message, timestamp: new Date().toISOString(), consecutiveCount: prev + 1 };
+    // #97: classify from the rawest signal we have (raw provider blob when the
+    // caller has it, else the normalized headline) so the delivery loop can pick
+    // self-retry vs escalation.
+    this._lastErrorKind = classifyAgentError(raw ?? message);
     this.bus.emit(
       ev.systemMessage(this.sessionId, "error", `⚠️ Agent ${this.name} 遇到错误: ${message}`, {
         agent: this.name,
@@ -220,7 +247,7 @@ export class MasAgent {
         if (msg?.stopReason === "error") {
           const raw = msg.errorMessage || "provider request failed";
           const { message, details } = normalizeAgentError(raw);
-          this.recordError(message, details);
+          this.recordError(message, details, raw);
           this.setStatus("error");
         }
         if (this.currentMessageId) {
@@ -280,8 +307,9 @@ export class MasAgent {
       case "auto_retry_end": {
         const r = e as Extract<PiAgentEvent, { type: "auto_retry_end" }>;
         if (!r.success) {
-          const { message, details } = normalizeAgentError(r.finalError ?? "retry exhausted");
-          this.recordError(message, details);
+          const raw = r.finalError ?? "retry exhausted";
+          const { message, details } = normalizeAgentError(raw);
+          this.recordError(message, details, raw);
           this.setStatus("error");
         }
         return;
@@ -331,7 +359,7 @@ export class MasAgent {
           err.reason ??
           "provider request failed";
         const { message, details } = normalizeAgentError(raw);
-        this.recordError(message, details);
+        this.recordError(message, details, raw);
         this.setStatus("error");
         return;
       }

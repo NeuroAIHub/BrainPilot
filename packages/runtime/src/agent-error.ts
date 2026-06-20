@@ -29,6 +29,42 @@ export interface NormalizedAgentError {
   details?: string;
 }
 
+/**
+ * #97 error path — coarse recoverability class for an agent/provider error.
+ *  - `retryable`: transient (rate limit, 5xx, timeout, network reset). Re-running
+ *    the same prompt may succeed, so the delivery loop self-retries the expert.
+ *  - `fatal`: re-running is pointless (auth/401/403, missing key/provider,
+ *    permission denied). Escalate to the principal immediately, no retry.
+ */
+export type AgentErrorKind = "retryable" | "fatal";
+
+/**
+ * Auth / configuration failures where a retry cannot help: a wrong or missing
+ * key, a forbidden/unauthorized response, or no provider configured. Matched
+ * BEFORE the retryable set so a "401 ... rate limit ..." blob is fatal.
+ */
+const FATAL_RE =
+  /\b(401|403)\b|invalid api key|no api key|api key (?:found|for)|no provider|unauthor|forbidden|authentication|permission denied/i;
+
+/**
+ * Transient failures worth a retry: explicit 408/429/5xx status codes, timeouts,
+ * overload, and the common Node socket/network error codes.
+ */
+const RETRYABLE_RE =
+  /\b(408|429|5\d{2})\b|timeout|timed out|temporar|overloaded|rate.?limit|econnreset|etimedout|enotfound|econnrefused|network|fetch failed|socket hang up|connection/i;
+
+/**
+ * Classify a raw agent/SDK error string for the delivery-loop error path (#97).
+ * Defaults to `retryable` for the unknown case so a transient failure we didn't
+ * pattern-match still gets the benefit of a retry before escalation.
+ */
+export function classifyAgentError(raw: string): AgentErrorKind {
+  if (!raw) return "retryable";
+  if (FATAL_RE.test(raw)) return "fatal";
+  if (RETRYABLE_RE.test(raw)) return "retryable";
+  return "retryable";
+}
+
 /** Product-level recovery message for a missing provider/key. */
 const NO_PROVIDER_MESSAGE =
   "未配置任何 provider。请打开 设置 → Providers 添加一个 provider。";
