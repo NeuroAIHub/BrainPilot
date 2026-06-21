@@ -1,0 +1,23 @@
+# GPU override —— 让 sandbox 用 GPU 镜像并把宿主机 GPU 挂进容器。用法:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml up
+# 可与 host 网络叠加:
+#   docker compose -f docker-compose.yml -f docker-compose.gpu.yml -f docker-compose.host.yml up
+#
+# 前置(不满足则 `up` 直接报错,故 GPU 接线单独放本 override，不污染主 compose):
+#   1) 宿主机有 NVIDIA GPU + 驱动（nvidia-smi 可用）。
+#   2) 已装 NVIDIA Container Toolkit 并 `nvidia-ctk runtime configure` 接入 docker。
+#      没装时本 override 的 devices 段会让 docker compose 报错——这是预期，无 GPU 就别用本文件。
+#
+# 镜像:brainpilot-sandbox-gpu 由 `bash scripts/release-build.sh sandbox-gpu` 构建，
+#       它 FROM 独立的 brainpilot-gpu-base（见 scripts/release-gpu-base.sh）。
+services:
+  sandbox:
+    image: brainpilot-sandbox-gpu:latest
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              # 默认整机所有 GPU；只要部分卡可改成 count: 1 或用 device_ids: ["0"]。
+              count: all
+              capabilities: [gpu]

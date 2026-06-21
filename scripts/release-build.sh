@@ -46,20 +46,24 @@ for entry in "${RELEASE_IMAGES[@]}"; do
     echo "==> skip $name (不匹配子集)"
     continue
   fi
-  # gpu runtime 镜像依赖外部 base 镜像 brainpilot-gpu-base 先就位（FROM 引用它）。
-  # 缺则尝试 docker pull（registry 已发布时可拉），再失败给清晰指引、跳过本镜像。
+  # gpu runtime 镜像的 Dockerfile gpu stage `FROM <ghcr 全路径>:<tag>` 引用 base。
+  # 故必须保证「ghcr 全路径」的 base 镜像在本地存在，FROM 才命中本地、不去拉远端。
+  # 优先用本地构建的短名 base（release-gpu-base.sh build 产物）retag；否则 pull ghcr。
   if [ "$target" = "gpu" ]; then
-    if ! sudo docker image inspect "${GPU_BASE_IMAGE}:${GPU_BASE_TAG}" >/dev/null 2>&1; then
-      echo "==> base 镜像 ${GPU_BASE_IMAGE}:${GPU_BASE_TAG} 本地缺失，尝试 pull…"
-      _ghcr_repo="$(remote_repo "$GPU_BASE_IMAGE" "ghcr.io/neuroaihub" "flat")"
-      if sudo docker pull "${_ghcr_repo}:${GPU_BASE_TAG}" 2>/dev/null; then
-        sudo docker tag "${_ghcr_repo}:${GPU_BASE_TAG}" "${GPU_BASE_IMAGE}:${GPU_BASE_TAG}"
-        echo "==> 已 pull 并 retag 为 ${GPU_BASE_IMAGE}:${GPU_BASE_TAG}"
+    _ghcr_base="$(remote_repo "$GPU_BASE_IMAGE" "ghcr.io/neuroaihub" "flat"):${GPU_BASE_TAG}"
+    if ! sudo docker image inspect "$_ghcr_base" >/dev/null 2>&1; then
+      if sudo docker image inspect "${GPU_BASE_IMAGE}:${GPU_BASE_TAG}" >/dev/null 2>&1; then
+        # 本地有短名 base（刚 build 出、未推）→ retag 成 FROM 用的 ghcr 路径
+        sudo docker tag "${GPU_BASE_IMAGE}:${GPU_BASE_TAG}" "$_ghcr_base"
+        echo "==> 用本地 base retag 为 $_ghcr_base（供 FROM 命中本地）"
       else
-        echo "!!! 缺 GPU base 镜像且无法 pull。先构建 base：" >&2
-        echo "      bash scripts/release-gpu-base.sh build" >&2
-        echo "    然后重跑本命令。跳过 $name。" >&2
-        continue
+        echo "==> base 镜像本地缺失，尝试 pull $_ghcr_base …"
+        if ! sudo docker pull "$_ghcr_base" 2>/dev/null; then
+          echo "!!! 缺 GPU base 镜像且无法 pull。先构建 base：" >&2
+          echo "      bash scripts/release-gpu-base.sh build" >&2
+          echo "    然后重跑本命令。跳过 $name。" >&2
+          continue
+        fi
       fi
     fi
   fi
