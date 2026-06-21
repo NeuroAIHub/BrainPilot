@@ -124,6 +124,15 @@ Host networking instead of bridge:
 docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build
 ```
 
+GPU sandbox (needs an NVIDIA GPU + driver and the
+[NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+This override points `sandbox` at the `brainpilot-sandbox-gpu` image (CUDA +
+PyTorch, see Publishing below) and reserves the host GPUs into the container.
+Without a GPU + toolkit, omit this file — the default `sandbox` is CPU-only.
+
 ### 3. Stop
 ```bash
 docker compose down
@@ -131,8 +140,10 @@ docker compose down
 
 ### 🧩 Customizing sandbox dependencies
 
-The `brainpilot-sandbox` image ships a **lightweight baseline** (Node + runtime
-only — no Python, no GPU, no terminal). To add dependencies, edit
+The `brainpilot-sandbox` (cpu) image ships a **lightweight baseline** (Node +
+Python3 + runtime only — no sci stack, no GPU). For CUDA + PyTorch use the
+`brainpilot-sandbox-gpu` image instead (see the GPU launch above and Publishing
+below). To add dependencies to the cpu image, edit
 **`docker/sandbox/extra-deps.sh`** — a build-time hook with worked examples for:
 - installing Python3 + pip packages,
 - installing system packages (apt),
@@ -381,18 +392,35 @@ npm run release           # version-sync, build, then publish protocol→runtime
 
 ### Docker 镜像发布
 
-镜像版本号与 npm 版本一致（根 `package.json` 的 `version`）。三个镜像：`brainpilot-main`、
-`brainpilot-sandbox`（cpu）、`brainpilot-sandbox-gpu`（CUDA torch）。
+**两层模型**：重依赖（CUDA + PyTorch + 科学栈，~9GB）住在 *独立发布* 的 base 镜像
+`brainpilot-gpu-base`，按依赖版本打 tag（如 `cu124-torch2.6.0`），**低频更新**；随版本
+迭代的代码镜像有三个：`brainpilot-main`、`brainpilot-sandbox`（cpu）、
+`brainpilot-sandbox-gpu`（`FROM` 上述 base + 业务层）。GPU runtime 镜像因此只重建薄薄的
+业务层，发版不再重装 torch。
 
 ```bash
 # 一次性：复制示范配置，填入国内镜像源 / 私有 registry 地址（两个 .local 文件均不提交）
 cp scripts/release-mirrors.example.sh scripts/release-mirrors.local.sh   # pip/apt 镜像源
 cp scripts/release-targets.example.sh scripts/release-targets.local.sh   # ACR/内网 registry
+```
 
-# 构建（默认全部；可传子串只建子集）
-bash scripts/release-build.sh                # 全部三个镜像
+**① GPU base 镜像**（仅在 torch/cuda 升级时重建；其余发版跳过本步）：
+```bash
+bash scripts/release-gpu-base.sh build         # 构建（下载 ~2.7GB torch，慢；打 <tag> + latest）
+bash scripts/release-gpu-base.sh push          # 推到全部 registry（ghcr + 私有）
+bash scripts/release-gpu-base.sh push --registry acr,intranet   # 体积大，可跳过公网 ghcr
+```
+升级 torch/cuda 时改三处保持一致：`docker/sandbox/Dockerfile.gpu-base` 的版本、
+`docker/sandbox/Dockerfile` 的 `gpu` stage `FROM ...:<tag>`、`scripts/release-images.sh`
+的 `GPU_BASE_TAG`。
+
+**② 随版本迭代的代码镜像**（镜像版本号 = 根 `package.json` 的 `version`）：
+```bash
+# 构建（默认全部；可传子串只建子集）。构建 sandbox-gpu 前 base 须已就位
+# （本地有或 ghcr 可拉，否则脚本会提示先跑 release-gpu-base.sh build）。
+bash scripts/release-build.sh                # 全部三个代码镜像
 bash scripts/release-build.sh main           # 只建 main
-bash scripts/release-build.sh sandbox-gpu    # 只建 GPU 变体（体积大、慢）
+bash scripts/release-build.sh sandbox-gpu    # 只建 GPU 变体（薄业务层，秒级）
 
 # 推送（需先 docker login 各 registry）
 bash scripts/release-push.sh --dry-run                       # 先看计划
@@ -401,7 +429,9 @@ bash scripts/release-push.sh --image sandbox-gpu --registry acr,intranet  # GPU 
 ```
 
 推送目标 registry 在 `scripts/release-images.sh`（ghcr，公开）+ `release-targets.local.sh`
-（ACR / 内网，私有）声明。GPU 镜像约 6GB，推公网 ghcr 可能超时，建议 `--registry acr,intranet`。
+（ACR / 内网，私有）声明。base 与 GPU runtime 镜像较大，推公网 ghcr 可能超时，建议
+`--registry acr,intranet`。runtime 的 `gpu` stage 只 `FROM` base 的版本 tag（绝不 `latest`，
+避免静默漂移）。
 
 ## 🧪 Testing
 
