@@ -1,6 +1,6 @@
 {
   "name": "@brainpilot/app",
-  "version": "0.0.5",
+  "version": "0.0.6",
   "engines": {
     "node": ">=22"
   },
@@ -32,10 +32,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@brainpilot/backend-core": "^0.0.5",
-    "@brainpilot/protocol": "^0.0.5",
-    "@brainpilot/runtime": "^0.0.5",
-    "@brainpilot/web": "^0.0.5",
+    "@brainpilot/backend-core": "^0.0.6",
+    "@brainpilot/protocol": "^0.0.6",
+    "@brainpilot/runtime": "^0.0.6",
+    "@brainpilot/web": "^0.0.6",
     "commander": "^12.1.0",
     "picocolors": "^1.1.0"
   }
