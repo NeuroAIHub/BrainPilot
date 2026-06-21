@@ -166,6 +166,11 @@ function MessageStreamImpl({
     const apply = () => {
       const n = stackRef.current;
       if (!n) return;
+      // #133 — force an instant jump for the restore. The container CSS no
+      // longer sets `scroll-behavior: smooth`, but pin it locally too so a
+      // future global rule (or an inherited one) can never turn this restore
+      // into a visible top-to-bottom replay through the history.
+      n.style.scrollBehavior = "auto";
       n.scrollTop = resolveScrollTop(mem, n.scrollHeight);
     };
     apply();
@@ -190,6 +195,8 @@ function MessageStreamImpl({
     if (!node || !isPinnedRef.current) {
       return;
     }
+    // #133 — pinned-bottom live append also jumps instantly (no smooth replay).
+    node.style.scrollBehavior = "auto";
     node.scrollTop = node.scrollHeight;
   }, [messages, autoScroll]);
 
