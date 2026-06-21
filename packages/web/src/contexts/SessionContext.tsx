@@ -55,6 +55,14 @@ interface SessionContextValue {
   agentFilters: Record<string, AgentMessageFilter>;
   /** Live Graph of Trace for the current session (#79), or null if none/unloaded. */
   currentTrace: TraceGraph | null;
+  /**
+   * #134 — whether the current session has trace updates the user hasn't seen
+   * since last opening the Trace view. Drives a quiet dot on the Trace tab so
+   * trace stays a transparency layer instead of noisy chat output. Per-session:
+   * switching sessions reflects that session's unread state. False on initial
+   * hydration (only live post-open trace_node events set it).
+   */
+  traceUnread: boolean;
   /** Re-seed the trace graph from the HTTP route (manual refresh). */
   refreshTrace: (sessionId: string) => Promise<void>;
   selectSession: (sessionId: string) => void;
@@ -185,6 +193,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<"chat" | "agents" | "trace">("chat");
+  // #134 — read currentView inside the SSE queue-drain effect (keyed on
+  // session/tick, not view) to decide whether an incoming trace update should
+  // raise the unread dot. A live trace_node that arrives while the user is
+  // already on the Trace view is "seen", so it must not flag unread.
+  const currentViewRef = useRef<"chat" | "agents" | "trace">("chat");
+  useEffect(() => {
+    currentViewRef.current = currentView;
+  }, [currentView]);
   // Unsent textarea drafts live in a module-level store (see contexts/draftStore.ts)
   // so keystrokes don't re-render the whole chat subtree. Drafts are keyed by
   // session id and survive PromptComposer unmount (tab switches).
@@ -201,6 +217,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // #79: live Graph of Trace per session. Seeded by a fetch on session change,
   // then kept live by CUSTOM:trace_node SSE events (see the queue drain below).
   const [traceBySession, setTraceBySession] = useState<Record<string, TraceGraph>>({});
+  // #134 — per-session "trace changed since you last looked" flag. Set only by
+  // live CUSTOM:trace_node events while the user is NOT on the Trace view;
+  // cleared when they open Trace for that session. Hydration/seed paths never
+  // set it, so a freshly-opened session with existing trace shows no false dot.
+  const [traceUnreadBySession, setTraceUnreadBySession] = useState<Record<string, boolean>>({});
 
 
   const currentSession = useMemo(
@@ -802,7 +823,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       for (const event of queue) {
         graph = reduceTraceForEvent(graph, event, sid);
       }
-      return graph && graph !== start ? { ...current, [sid]: graph } : current;
+      if (graph && graph !== start) {
+        // #134 — a live trace update landed. Raise the per-session unread dot
+        // unless the user is already looking at this session's Trace view (then
+        // it's seen). Hydration/seed go through other code paths, so this only
+        // ever fires for genuine post-open SSE trace_node events.
+        if (currentViewRef.current !== "trace") {
+          setTraceUnreadBySession((u) => (u[sid] ? u : { ...u, [sid]: true }));
+        }
+        return { ...current, [sid]: graph };
+      }
+      return current;
     });
 
     // Process all events through the message reducer.
@@ -842,6 +873,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [currentSessionId, traceBySession],
   );
 
+  // #134 — opening the Trace view for a session marks its trace as seen, so the
+  // tab dot clears. Keyed on (session, view) so it also clears when a trace
+  // update arrives while already on the view (the drain guards that case too).
+  useEffect(() => {
+    if (currentView !== "trace" || !currentSessionId) return;
+    setTraceUnreadBySession((u) => (u[currentSessionId] ? { ...u, [currentSessionId]: false } : u));
+  }, [currentView, currentSessionId]);
+
+  const traceUnread = currentSessionId ? (traceUnreadBySession[currentSessionId] ?? false) : false;
+
   const value = useMemo(
     () => ({
       sessions,
@@ -859,6 +900,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       tokenUsage,
       agentFilters,
       currentTrace,
+      traceUnread,
       refreshTrace,
       selectSession,
       createSession,
@@ -890,6 +932,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       tokenUsage,
       agentFilters,
       currentTrace,
+      traceUnread,
       refreshTrace,
       selectSession,
       createSession,

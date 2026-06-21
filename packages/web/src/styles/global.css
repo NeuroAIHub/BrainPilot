@@ -678,6 +678,24 @@ button {
   padding: 0;
 }
 
+/* #134: a tab that can carry a quiet unread dot (Trace). Positioned so the dot
+   sits at the top-right corner of the icon without affecting layout. */
+.workspace-view-tab--badged {
+  position: relative;
+}
+
+.workspace-view-tab__badge {
+  position: absolute;
+  top: 3px;
+  right: 3px;
+  width: 6px;
+  height: 6px;
+  border-radius: 999px;
+  background: var(--color-danger, #e5484d);
+  box-shadow: 0 0 0 2px var(--color-surface-soft);
+  pointer-events: none;
+}
+
 .session-title {
   display: flex;
   min-width: 0;
@@ -1849,20 +1867,11 @@ button {
 }
 
 @media (max-width: 860px) {
-  .desktop-shell {
-    grid-template-columns: 64px minmax(0, 1fr);
-  }
-
-  .sidebar {
-    gap: 16px;
-  }
-
-  .section-heading,
-  .conversation-stack,
-  .nav-item span {
-    display: none;
-  }
-
+  /* #131 — the rail layout at narrow widths is now driven by React
+     (DesktopShell auto-collapses below this breakpoint and applies
+     .desktop-shell--sidebar-collapsed), so the sidebar styling lives in those
+     class rules and the session list is reachable via the rail popover instead
+     of being hidden outright. Only non-sidebar responsive tweaks remain here. */
   .prompt-home {
     padding-inline: 18px;
   }
@@ -2091,7 +2100,12 @@ button {
   overscroll-behavior: contain;
   padding: 4px 14px 20px 4px;
   scrollbar-gutter: stable;
-  scroll-behavior: smooth;
+  /* #133: NO `scroll-behavior: smooth` here. The chat stream restores its
+     position imperatively (`scrollTop = …`) on tab-switch remount and on
+     pinned-bottom live append; a global smooth behavior turns those instant
+     jumps into a visible top-to-bottom replay through the history. Smooth
+     scrolling, if ever wanted, must be opt-in around an explicit
+     user-triggered jump, never the default for the container. */
   scrollbar-color: var(--color-border) transparent;
   scrollbar-width: thin;
 }
@@ -3011,6 +3025,62 @@ button {
 
 .desktop-shell--sidebar-collapsed .nav-item span {
   opacity: 0;
+}
+
+/* #131 — collapsed icon-rail session popover. The rail hides the inline session
+   section (rule above) and squeezes nav labels to opacity:0; the popover is a
+   floating panel anchored to the Sessions icon that restores the full list. */
+.sidebar__sessions-popover-anchor {
+  position: relative;
+}
+
+.sidebar__sessions-popover {
+  position: absolute;
+  top: 0;
+  left: calc(100% + 10px);
+  z-index: 40;
+  display: flex;
+  width: 300px;
+  max-height: min(70vh, 560px);
+  flex-direction: column;
+  gap: 8px;
+  padding: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised, var(--color-surface));
+  box-shadow: var(--shadow-md, 0 12px 32px rgba(0, 0, 0, 0.18));
+}
+
+.sidebar__sessions-popover .conversation-stack {
+  display: grid;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+.sidebar__sessions-popover-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sidebar__sessions-popover-head h2 {
+  margin: 0;
+  color: var(--color-text-subtle);
+  font-size: 13px;
+  font-weight: 500;
+}
+
+/* The popover lives inside the collapsed rail, so undo the rail's label
+   squeeze/hide for everything inside it — its content is fully expanded. */
+.desktop-shell--sidebar-collapsed .sidebar__sessions-popover .nav-item span,
+.desktop-shell--sidebar-collapsed .sidebar__sessions-popover .conversation-row span,
+.desktop-shell--sidebar-collapsed .sidebar__sessions-popover .conversation-row small {
+  opacity: 1;
+}
+
+.desktop-shell--sidebar-collapsed .sidebar__sessions-popover .conversation-stack {
+  display: grid;
 }
 
 .sandbox-status {

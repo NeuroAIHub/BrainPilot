@@ -24,9 +24,15 @@ const MAX_SIDEBAR_WIDTH = 420;
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
-  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
+  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView, traceUnread } = useSessions();
   const t = useT();
-  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
+  // #131 — the sidebar collapses to an icon rail either manually (user toggle)
+  // or automatically at narrow widths. Both feed the same `isCollapsed` state so
+  // the collapsed rail's session popover trigger is available in both cases. A
+  // manual toggle wins until the viewport crosses the breakpoint again.
+  const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
+  const [isNarrow, setIsNarrow] = useState(false);
+  const isSidebarCollapsed = userCollapsed ?? isNarrow;
   const [activePage, setActivePage] = useState<"workspace" | "demo">("workspace");
   // Bumped on every sidebar "Live Demo" click so DemoView returns to its
   // session-selection landing even when the demo page is already open (#111).
@@ -48,6 +54,21 @@ export function DesktopShell() {
       setSandboxOverlayDismissed(false);
     }
   }, [operation]);
+
+  // #131 — track the narrow breakpoint. Crossing it resets the manual override
+  // so the layout follows the viewport again (a user who manually expanded on a
+  // wide screen still gets the auto-rail when they shrink the window, and vice
+  // versa). 860px matches the existing responsive rail breakpoint in global.css.
+  useEffect(() => {
+    const mql = window.matchMedia("(max-width: 860px)");
+    const apply = () => {
+      setIsNarrow(mql.matches);
+      setUserCollapsed(null);
+    };
+    setIsNarrow(mql.matches);
+    mql.addEventListener("change", apply);
+    return () => mql.removeEventListener("change", apply);
+  }, []);
 
   // Show warning dialog once per page session when disk usage is >= 90% but < 100%
   useEffect(() => {
@@ -128,7 +149,7 @@ export function DesktopShell() {
           sidebarResizeRef.current = { pointerX, width: sidebarWidth };
           setIsSidebarResizing(true);
         }}
-        onToggle={() => setIsSidebarCollapsed((current) => !current)}
+        onToggle={() => setUserCollapsed(!isSidebarCollapsed)}
       />
 
       {activePage === "demo" ? (
@@ -189,7 +210,7 @@ export function DesktopShell() {
               </button>
               <button
                 aria-selected={currentView === "trace"}
-                className={currentView === "trace" ? "is-active" : ""}
+                className={`workspace-view-tab--badged ${currentView === "trace" ? "is-active" : ""}`}
                 onClick={() => setCurrentView("trace")}
                 role="tab"
                 title={t("shell.view.trace")}
@@ -197,6 +218,15 @@ export function DesktopShell() {
               >
                 <GitBranch size={14} />
                 <span className="sr-only">{t("shell.view.trace")}</span>
+                {/* #134 — quiet unread dot: trace changed for this session and
+                    the user hasn't opened the Trace view since. Cleared on open. */}
+                {traceUnread && currentView !== "trace" ? (
+                  <span
+                    className="workspace-view-tab__badge"
+                    aria-label={t("shell.view.traceUpdated")}
+                    role="status"
+                  />
+                ) : null}
               </button>
             </div>
             {currentView === "chat" ? (
