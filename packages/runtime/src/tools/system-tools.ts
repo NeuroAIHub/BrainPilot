@@ -10,6 +10,7 @@
 import type { AgentRole, SystemTool } from "../types.js";
 import { MailboxFullError, type Mailbox, type MsgType } from "../mailbox.js";
 import type { GraphOfTrace } from "../trace.js";
+import { createSkillSearchTool } from "./skill-search.js";
 
 export interface ToolDeps {
   sessionId: string;
@@ -32,6 +33,14 @@ export interface ToolDeps {
     options?: string[];
     allow_free_text?: boolean;
   }) => Promise<string>;
+  /**
+   * Absolute path to the router skill base directory
+   * (`<dataRoot>/bp_template/skills-router`). Backs the `skill_search` tool —
+   * a Pi-native custom tool that lazily loads skills NOT exposed via Pi's
+   * native `<available_skills>` block. Distinct from the always-on
+   * `bp_template/skills/` dir loaded through `additionalSkillPaths`.
+   */
+  routerSkillsDir: string;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -329,6 +338,7 @@ export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
     createUpdateTraceNodeTool(deps),
     createAddTraceRelationTool(deps),
     createGetTraceGraphTool(deps),
+    createSkillSearchTool(deps),
   ];
   return new Map(tools.map((t) => [t.name, t]));
 }
@@ -339,17 +349,28 @@ export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
  * tools (read/bash/grep/...) are controlled separately via `builtinToolsForRole`.
  */
 export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
-  principal: ["send_message", "create_agent", "destroy_agent", "record_trace", "ask_user"],
+  // skill_search opens the router skill library (the long-tail domain catalog
+  // not in <available_skills>). Trace is deliberately excluded: it is a
+  // graph-only recorder, not a domain reasoner.
+  principal: [
+    "send_message",
+    "create_agent",
+    "destroy_agent",
+    "record_trace",
+    "ask_user",
+    "skill_search",
+  ],
   trace: ["create_trace_node", "update_trace_node", "add_trace_relation", "get_trace_graph"],
-  expert: ["send_message", "record_trace"],
+  expert: ["send_message", "record_trace", "skill_search"],
   // Auditor: comms + self-trace only. Deliberately NO `get_trace_graph` —
   // evidence is restricted to the session workspace; the audit must not
-  // dredge the trace graph or other agents' internal state.
-  auditor: ["send_message", "record_trace"],
+  // dredge the trace graph or other agents' internal state. skill_search is
+  // included so an audit can resolve a methodology skill referenced in a draft.
+  auditor: ["send_message", "record_trace", "skill_search"],
   // Writer: needs ask_user to present format/style options before drafting.
-  writer: ["send_message", "record_trace", "ask_user"],
+  writer: ["send_message", "record_trace", "ask_user", "skill_search"],
   // Default for any other expert-like agent.
-  _default: ["send_message", "record_trace"],
+  _default: ["send_message", "record_trace", "skill_search"],
 };
 
 /**

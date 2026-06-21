@@ -58,6 +58,28 @@ describe("personas", () => {
     expect(personaFor("statistician", "expert")).toContain("Skills-first preflight");
   });
 
+  it("non-trace personas advertise the router (skill_search) library path", () => {
+    // Every non-trace persona must mention the router tool and its name, so the
+    // model knows <available_skills> is NOT the full library.
+    for (const name of [
+      "principal",
+      "librarian",
+      "experimentalist",
+      "engineer",
+      "writer",
+      "auditor",
+    ]) {
+      const p = PERSONAS[name]!;
+      expect(p, name).toContain("skill_search");
+      expect(p, name).toContain("Router skill library");
+    }
+    // Generic fallback expert (no curated persona) inherits the router hint
+    // through SKILLS_FIRST_EXPERT.
+    expect(personaFor("statistician", "expert")).toContain("skill_search");
+    // Trace agent is graph-only and must not be told about skill_search.
+    expect(PERSONAS.trace!).not.toContain("skill_search");
+  });
+
   it("expert personas carry the send_message-back contract", () => {
     for (const name of ["librarian", "engineer", "experimentalist", "writer", "auditor"]) {
       expect(PERSONAS[name], name).toContain('send_message(to="principal"');

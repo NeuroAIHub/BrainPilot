@@ -1,35 +1,64 @@
 /**
  * materialize-skills.ts — copy the bundled `@brainpilot/skills` content into a
- * data dir's `bp_template/skills/`, so Pi's native skill pipeline can load
- * user-editable skills from there.
+ * data dir, splitting it across TWO physically separate skill libraries:
+ *
+ *   <dataRoot>/bp_template/skills/         (always-on, Pi-native)
+ *     Loaded through Pi's `additionalSkillPaths`. Every SKILL.md's name +
+ *     description appears in the agent's `<available_skills>` block. Reserved
+ *     for high-frequency Meta-Skills so the prompt does not bloat.
+ *
+ *   <dataRoot>/bp_template/skills-router/  (router-only)
+ *     Pi never sees this directory; it is reachable only via the `skill_search`
+ *     custom tool. Holds the long tail of domain skills.
+ *
+ * Distribution rule (purely physical):
+ *   - bundled `01_Meta-Skills/*` → always-on
+ *   - everything else            → router
+ *
+ * Both libraries accept user-added skills with the SAME on-disk format
+ * (`<category>/<skill_name>/SKILL.md` + optional `references/` / `scripts/`),
+ * so the user can drop a directory into either side and it just works.
  *
  * Pipeline (three stages, see issues #139/#140):
  *   - package time: skills ship read-only inside `@brainpilot/skills`.
- *   - deploy time:  this fn copies them into `<dataRoot>/bp_template/skills/`.
- *   - runtime:      Pi loads from `bp_template/skills/` via `additionalSkillPaths`.
+ *   - deploy time:  this fn copies them into the two destinations above.
+ *   - runtime:      Pi loads from `bp_template/skills/` via additionalSkillPaths;
+ *                   `skill_search` reads `bp_template/skills-router/`.
  *
- * Idempotent and edit-preserving: a file that already exists at the destination
- * is NEVER overwritten (so user edits and per-skill customisations survive).
- *
- * Called from BOTH the CLI `scaffold` and the runtime server startup. It lives
- * in `@brainpilot/runtime` (not the CLI) because the dependency direction is
- * cli → runtime; putting it in the CLI would make runtime depend on the CLI.
+ * Idempotent and edit-preserving: a file that already exists at either
+ * destination is NEVER overwritten (so user edits and per-skill customisations
+ * survive). Called from BOTH the CLI `scaffold` and the runtime server startup.
+ * It lives in `@brainpilot/runtime` (not the CLI) because the dependency
+ * direction is cli → runtime.
  */
 import { createRequire } from "node:module";
 import { mkdir, readdir, copyFile, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { dirname, join } from "node:path";
 
+/**
+ * Source category whose contents go into the always-on library. Anything else
+ * ends up in the router library. Kept as a constant so a test can pin the
+ * distribution rule explicitly.
+ */
+export const ALWAYS_ON_CATEGORY = "01_Meta-Skills";
+
 /** Result of a materialize run. */
 export interface MaterializeSkillsResult {
-  /** Absolute destination dir (`<dataRoot>/bp_template/skills`). */
+  /** Absolute always-on destination dir (`<dataRoot>/bp_template/skills`). */
   dest: string;
+  /** Absolute router destination dir (`<dataRoot>/bp_template/skills-router`). */
+  routerDest: string;
   /** Absolute source dir (the bundled `@brainpilot/skills` skills/). */
   source: string | null;
-  /** Number of files freshly copied (absent before). */
+  /** Files freshly copied into the always-on dir. */
   copied: number;
-  /** Number of files skipped because they already existed. */
+  /** Files skipped (already existed) in the always-on dir. */
   skipped: number;
+  /** Files freshly copied into the router dir. */
+  routerCopied: number;
+  /** Files skipped (already existed) in the router dir. */
+  routerSkipped: number;
 }
 
 /**
@@ -88,23 +117,49 @@ async function copyTreeSkipExisting(
 }
 
 /**
- * Materialize the bundled skills into `<dataRoot>/bp_template/skills/`.
- *
- * Skip-if-exists at the file level: existing files are preserved, missing ones
- * are filled in. Safe to call on every launch. A no-op (copied=0) when the
- * package can't be resolved or the source dir is empty/absent.
+ * Materialize the bundled skills, splitting by source category:
+ * `01_Meta-Skills/*` → always-on dir, every other top-level category → router
+ * dir. Skip-if-exists at the file level on BOTH destinations: existing files
+ * are preserved, missing ones are filled in. Safe to call on every launch. A
+ * no-op (all counts 0) when the package can't be resolved or the source is
+ * empty/absent.
  */
 export async function materializeSkills(dataRoot: string): Promise<MaterializeSkillsResult> {
   const dest = join(dataRoot, "bp_template", "skills");
+  const routerDest = join(dataRoot, "bp_template", "skills-router");
   const source = resolveBundledSkillsDir();
-  const counters = { copied: 0, skipped: 0 };
+  const alwaysOn = { copied: 0, skipped: 0 };
+  const router = { copied: 0, skipped: 0 };
+
+  // Always ensure both destination dirs exist so loaders / the router tool
+  // have a stable path even when the source is missing or empty.
+  await mkdir(dest, { recursive: true });
+  await mkdir(routerDest, { recursive: true });
 
   if (source && (await exists(source))) {
-    await copyTreeSkipExisting(source, dest, counters);
-  } else {
-    // Still ensure the destination dir exists so loaders have a stable path.
-    await mkdir(dest, { recursive: true });
+    const topLevel = await readdir(source, { withFileTypes: true });
+    for (const entry of topLevel) {
+      if (!entry.isDirectory()) continue; // skip stray files at the source root
+      const from = join(source, entry.name);
+      if (entry.name === ALWAYS_ON_CATEGORY) {
+        // Mount the meta-skills directory at the SAME relative path inside the
+        // always-on library so a user-added meta-skill drops in identically.
+        const to = join(dest, entry.name);
+        await copyTreeSkipExisting(from, to, alwaysOn);
+      } else {
+        const to = join(routerDest, entry.name);
+        await copyTreeSkipExisting(from, to, router);
+      }
+    }
   }
 
-  return { dest, source: source && (await exists(source)) ? source : null, ...counters };
+  return {
+    dest,
+    routerDest,
+    source: source && (await exists(source)) ? source : null,
+    copied: alwaysOn.copied,
+    skipped: alwaysOn.skipped,
+    routerCopied: router.copied,
+    routerSkipped: router.skipped,
+  };
 }
