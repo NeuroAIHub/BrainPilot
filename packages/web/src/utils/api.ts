@@ -39,9 +39,28 @@ const API_BASE = "/api";
 // Trust-front: the hosted gateway authenticates via an httpOnly cookie that the
 // browser carries automatically. The frontend never reads, stores, or attaches a
 // token — it just makes credentialed requests.
-function apiFetch(input: RequestInfo | URL, init: RequestInit = {}): Promise<Response> {
-  return fetch(input, { credentials: "include", ...init });
+//
+// #106: callers that drive composer state (postMessage / create) pass a
+// `timeoutMs`. A hung request used to leave `isSending` true forever (the
+// `finally` that resets it never ran), permanently disabling the composer and
+// silently dropping the user's input. With a timeout the request rejects, the
+// caller's catch surfaces a recoverable error, and `isSending` is released.
+function apiFetch(
+  input: RequestInfo | URL,
+  init: RequestInit & { timeoutMs?: number } = {},
+): Promise<Response> {
+  const { timeoutMs, signal, ...rest } = init;
+  if (timeoutMs == null) {
+    return fetch(input, { credentials: "include", signal, ...rest });
+  }
+  const timeoutSignal = AbortSignal.timeout(timeoutMs);
+  // Honour an upstream signal too, if one was supplied.
+  const merged = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  return fetch(input, { credentials: "include", signal: merged, ...rest });
 }
+
+/** #106: default ceiling for composer-driving requests (create / postMessage). */
+const SEND_TIMEOUT_MS = 30_000;
 
 function authHeaders(json = true): Record<string, string> {
   return json ? { "Content-Type": "application/json" } : {};
@@ -67,6 +86,21 @@ async function handleJson<T>(res: Response): Promise<T> {
     return undefined as T;
   }
   return (await res.json()) as T;
+}
+
+/** #47: encode a Blob/File as base64 (without the data: prefix) for upload. */
+function blobToBase64(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onerror = () => reject(reader.error ?? new Error("file read failed"));
+    reader.onload = () => {
+      const result = reader.result as string;
+      // strip the "data:<mime>;base64," prefix
+      const comma = result.indexOf(",");
+      resolve(comma >= 0 ? result.slice(comma + 1) : result);
+    };
+    reader.readAsDataURL(blob);
+  });
 }
 
 export function getSSEUrl(sessionId: string): string {
@@ -246,6 +280,20 @@ export const api = {
         throw new Error(await parseError(res));
       }
     },
+
+    // #47: upload a file into the workspace (base64 over the JSON byte chain).
+    async uploadFile(sandboxId: string, path: string, file: Blob): Promise<{ path: string; size: number }> {
+      const contentBase64 = await blobToBase64(file);
+      const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files`, {
+        method: "POST",
+        headers: { ...authHeaders(), "content-type": "application/json" },
+        body: JSON.stringify({ path, contentBase64 }),
+      });
+      if (!res.ok) {
+        throw new Error(await parseError(res));
+      }
+      return handleJson(res);
+    },
   },
 
   sessions: {
@@ -287,6 +335,7 @@ export const api = {
         await apiFetch(`${API_BASE}/sessions`, {
           method: "POST",
           headers: authHeaders(),
+          timeoutMs: SEND_TIMEOUT_MS,
           body: JSON.stringify({
             title,
             ...(opts.providerId ? { providerId: opts.providerId } : {}),
@@ -294,7 +343,16 @@ export const api = {
           }),
         }),
       );
-      return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);
+      // The runtime's POST /sessions returns the envelope `{ id, session }`
+      // (server.ts), unlike GET /sessions[/:id] which return the bare session.
+      // Unwrap `session` if present so normalizeSession reads the real `title`
+      // instead of falling back to `Session <id8>` (#96). Tolerate a bare
+      // object too (mock / future shape change).
+      const envelope = raw as { session?: unknown } | null;
+      const sessionRaw = envelope && typeof envelope === "object" && "session" in envelope
+        ? envelope.session
+        : raw;
+      return normalizeSession(sessionRaw as Parameters<typeof normalizeSession>[0]);
     },
 
     async update(sessionId: string, title: string): Promise<Session> {
@@ -323,15 +381,19 @@ export const api = {
       );
     },
 
-    async interrupt(sessionId: string): Promise<{ status: string }> {
+    async interrupt(sessionId: string): Promise<{ interrupted: boolean }> {
       if (runtimeConfig.useMockBackend) {
-        return { status: "ok" };
+        return { interrupted: true };
       }
-      return handleJson<{ status: string }>(
-        await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+      // #90: Stop = whole-session interrupt. Hit the dedicated interrupt route
+      // (RUNTIME_ROUTES.interrupt), NOT /messages — the messages endpoint's body
+      // schema rejects {type:"interrupt"} so the agent was never actually
+      // stopped. Empty body = interrupt every agent in the session.
+      return handleJson<{ interrupted: boolean }>(
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/interrupt`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({ type: "interrupt", session_id: sessionId }),
+          body: JSON.stringify({}),
         }),
       );
     },
@@ -348,6 +410,7 @@ export const api = {
         await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
+          timeoutMs: SEND_TIMEOUT_MS,
           body: JSON.stringify({
             type: payload.type ?? "user_message",
             content: payload.content,
@@ -417,6 +480,40 @@ export const api = {
       if (!contentType.includes("application/json")) return [];
       const raw = (await res.json().catch(() => ({}))) as { events?: unknown[] };
       return Array.isArray(raw.events) ? (raw.events as RawAgUiEvent[]) : [];
+    },
+
+    /**
+     * Persisted AG-UI event history from `events.jsonl` — used to rehydrate
+     * the chat list (and trace/agents seed) when a session is activated after
+     * a runtime restart. SSE only replays the in-memory ring buffer; this
+     * endpoint walks the on-disk log and returns the tail when long. Pass
+     * `limit: 0` to request the full log for lossless rehydrate.
+     *
+     * Tolerates any non-200 / non-JSON response by returning an empty
+     * envelope, so callers can fall through to whatever live data the SSE
+     * stream eventually delivers.
+     */
+    async getHistory(
+      sessionId: string,
+      opts: { limit?: number } = {},
+    ): Promise<{ events: RawAgUiEvent[]; total: number; truncated: boolean }> {
+      if (runtimeConfig.useMockBackend) {
+        return { events: [], total: 0, truncated: false };
+      }
+      const qs = opts.limit !== undefined ? `?limit=${encodeURIComponent(opts.limit)}` : "";
+      const res = await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/history${qs}`,
+        { headers: authHeaders() },
+      );
+      if (!res.ok) return { events: [], total: 0, truncated: false };
+      const raw = (await res.json().catch(() => null)) as
+        | { events?: unknown[]; total?: number; truncated?: boolean }
+        | null;
+      return {
+        events: Array.isArray(raw?.events) ? (raw!.events as RawAgUiEvent[]) : [],
+        total: typeof raw?.total === "number" ? raw!.total : 0,
+        truncated: Boolean(raw?.truncated),
+      };
     },
 
     async state(sessionId: string): Promise<SessionStateSnapshot> {

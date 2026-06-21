@@ -278,6 +278,22 @@ export const CustomEventSchema = z
   .passthrough();
 export type CustomEvent = z.infer<typeof CustomEventSchema>;
 
+/**
+ * CUSTOM `name` discriminators emitted by the runtime. Shared so producer
+ * (runtime) and consumers (web) reference one string, never a literal.
+ * - `session_state` — authoritative live agent/run snapshot (#70).
+ * - `session_title` — title update.
+ * - `session_heartbeat` — liveness timestamp.
+ * - `trace_node` — a Graph-of-Trace node was created/updated (#79); `value` is
+ *   `{ op: "created" | "updated", node: TraceNode }`.
+ */
+export const CUSTOM_EVENT = {
+  SESSION_STATE: "session_state",
+  SESSION_TITLE: "session_title",
+  SESSION_HEARTBEAT: "session_heartbeat",
+  TRACE_NODE: "trace_node",
+} as const;
+
 /* ------------------------------------------------------------------ *
  * agent_status_update  (§10 state authority)
  * ------------------------------------------------------------------ */

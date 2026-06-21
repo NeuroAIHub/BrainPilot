@@ -14,10 +14,14 @@ import type {
   Session,
   AgentStatus,
   SessionStateSnapshot,
+  SessionTokenUsage,
+  TokenUsage,
   SettingsData,
   McpServerEntry,
   ModelHealth,
   ProviderProfile,
+  ProviderApi,
+  ProviderAdapter,
   FileEntry,
   FileContent,
   TraceNode,
@@ -34,10 +38,14 @@ export type {
   Session,
   AgentStatus,
   SessionStateSnapshot,
+  SessionTokenUsage,
+  TokenUsage,
   SettingsData,
   McpServerEntry,
   ModelHealth,
   ProviderProfile,
+  ProviderApi,
+  ProviderAdapter,
   FileEntry,
   FileContent,
   TraceNode,
@@ -195,6 +203,8 @@ export interface MessageFilterConfig {
 export interface ProviderCreate {
   name: string;
   baseUrl: string;
+  api?: ProviderApi;
+  adapter?: ProviderAdapter;
   apiKey: string;
   models?: string[];
   icon?: string;
@@ -205,6 +215,8 @@ export interface ProviderCreate {
 export interface ProviderUpdate {
   name?: string;
   baseUrl?: string;
+  api?: ProviderApi;
+  adapter?: ProviderAdapter;
   apiKey?: string;
   models?: string[];
   icon?: string;
@@ -400,6 +412,8 @@ interface RawProviderProfile {
   name?: string;
   base_url?: string;
   baseUrl?: string;
+  api?: string;
+  adapter?: string;
   models?: string[];
   icon?: string;
   icon_color?: string;
@@ -407,6 +421,8 @@ interface RawProviderProfile {
   notes?: string;
   is_active?: boolean;
   isActive?: boolean;
+  is_shared?: boolean;
+  isShared?: boolean;
   api_key_masked?: string;
   apiKeyMasked?: string;
   created_at?: number;
@@ -639,6 +655,9 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     id: stringValue(raw.id),
     name: stringValue(raw.name),
     baseUrl: stringValue(raw.baseUrl ?? raw.base_url),
+    api: (raw.api ?? "anthropic-messages") as ProviderApi,
+    adapter: (raw.adapter ?? "auto") as ProviderAdapter,
+    isShared: Boolean(raw.isShared ?? raw.is_shared),
     models: Array.isArray(raw.models) ? raw.models : [],
     icon: stringValue(raw.icon, "circle"),
     iconColor: stringValue(raw.iconColor ?? raw.icon_color, "#111111"),
@@ -657,6 +676,8 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
   return {
     name: data.name,
     base_url: data.baseUrl,
+    api: data.api,
+    adapter: data.adapter,
     api_key: data.apiKey,
     models: data.models,
     icon: data.icon,
@@ -669,6 +690,8 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
   return {
     ...(data.name !== undefined ? { name: data.name } : {}),
     ...(data.baseUrl !== undefined ? { base_url: data.baseUrl } : {}),
+    ...(data.api !== undefined ? { api: data.api } : {}),
+    ...(data.adapter !== undefined ? { adapter: data.adapter } : {}),
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),
@@ -677,7 +700,7 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
   };
 }
 
-function normalizeTraceNode(rawValue: unknown): TraceNode {
+export function normalizeTraceNode(rawValue: unknown): TraceNode {
   const raw = asDict(rawValue);
   const parents = Array.isArray(raw.parents)
     ? raw.parents.map((parent) => {
@@ -752,7 +775,7 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
       alive: typeof a.alive === "boolean" ? a.alive : undefined,
     };
   });
-  return {
+  const out: SessionStateSnapshot = {
     runState: {
       active: rs.active === true,
       runId: optionalString(rs.runId) ?? null,
@@ -760,6 +783,34 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     agents,
     lastActivityTs: stringValue(camelized.lastActivityTs, ""),
   };
+  const tokenUsage = normalizeSessionTokenUsage(camelized.tokenUsage);
+  if (tokenUsage) out.tokenUsage = tokenUsage;
+  return out;
+}
+
+/** Coerce one wire token-usage record into the numeric TokenUsage shape. */
+function normalizeTokenUsage(rawValue: unknown): TokenUsage {
+  const u = asDict(rawValue);
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  return {
+    input: num(u.input),
+    output: num(u.output),
+    cacheRead: num(u.cacheRead),
+    cacheWrite: num(u.cacheWrite),
+    total: num(u.total),
+  };
+}
+
+/** Parse the optional per-session token usage (total + per-agent breakdown). */
+function normalizeSessionTokenUsage(rawValue: unknown): SessionTokenUsage | undefined {
+  if (rawValue == null) return undefined;
+  const raw = asDict(rawValue);
+  const byAgentRaw = asDict(raw.byAgent);
+  const byAgent: Record<string, TokenUsage> = {};
+  for (const [name, value] of Object.entries(byAgentRaw)) {
+    byAgent[name] = normalizeTokenUsage(value);
+  }
+  return { total: normalizeTokenUsage(raw.total), byAgent };
 }
 
 

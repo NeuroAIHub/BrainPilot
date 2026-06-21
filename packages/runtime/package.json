@@ -1,6 +1,9 @@
 {
   "name": "@brainpilot/runtime",
-  "version": "0.0.5",
+  "version": "0.0.6",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "description": "BrainPilot Runtime — Pi SDK orchestration, SessionManager, Mailbox, GoT, state authority, HTTP server",
@@ -34,7 +37,8 @@
     "start": "node ./dist/server.js"
   },
   "dependencies": {
-    "@brainpilot/protocol": "^0.0.5",
+    "@brainpilot/protocol": "^0.0.6",
+    "@brainpilot/skills": "^0.0.6",
     "@earendil-works/pi-coding-agent": "^0.79.0",
     "@hono/node-server": "^1.19.0",
     "@modelcontextprotocol/sdk": "^1.0.0",

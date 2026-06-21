@@ -5,6 +5,7 @@ import path from "node:path";
 import {
   resolveProvider,
   writeLocalSettings,
+  bootstrapEnvProvider,
   parseDotenv,
   describeProviderConfig,
   formatProviderGuidance,
@@ -224,5 +225,104 @@ describe("providers registry (CRUD + selection)", () => {
     const dir = await tmp();
     const resolved = await resolveProvider({ dataDir: dir, env: { ANTHROPIC_API_KEY: "sk-env" } });
     expect(resolved.apiKey).toBe("sk-env");
+  });
+});
+
+// #51: ANTHROPIC_MODEL must be honored wherever ANTHROPIC_BASE_URL is, and an
+// env-only launch must surface a real selected provider profile.
+describe("#51 env model resolution", () => {
+  it("honors ANTHROPIC_MODEL", async () => {
+    const dir = await tmp();
+    const r = await resolveProvider({
+      dataDir: dir,
+      env: { ANTHROPIC_API_KEY: "sk", ANTHROPIC_BASE_URL: "https://gw", ANTHROPIC_MODEL: "env-anthropic-model" },
+    });
+    expect(r.model).toBe("env-anthropic-model");
+  });
+
+  it("BP_MODEL takes priority over ANTHROPIC_MODEL", async () => {
+    const dir = await tmp();
+    const r = await resolveProvider({
+      dataDir: dir,
+      env: { ANTHROPIC_API_KEY: "sk", BP_MODEL: "bp-m", ANTHROPIC_MODEL: "anthropic-m" },
+    });
+    expect(r.model).toBe("bp-m");
+  });
+});
+
+describe("#51 bootstrapEnvProvider", () => {
+  it("creates a selected Environment profile from env on first launch", async () => {
+    const dir = await tmp();
+    const created = await bootstrapEnvProvider(dir, {
+      ANTHROPIC_API_KEY: "sk-env-test",
+      ANTHROPIC_BASE_URL: "https://gateway.example.com/api",
+      ANTHROPIC_MODEL: "env-anthropic-model",
+    });
+    expect(created).not.toBeNull();
+    const { profiles, selectedProfileId } = await readProviders(dir);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0].name).toBe("Environment");
+    expect(profiles[0].baseUrl).toBe("https://gateway.example.com/api");
+    expect(profiles[0].models).toEqual(["env-anthropic-model"]);
+    expect(selectedProfileId).toBe(profiles[0].id);
+  });
+
+  // #65: the plaintext env key must never be copied into providers.json. The
+  // profile records only the env var *name* (apiKeyEnv) with an empty apiKey;
+  // the runtime falls back to its env gateway path at request time.
+  it("does not persist the plaintext env key (records apiKeyEnv instead)", async () => {
+    const dir = await tmp();
+    await bootstrapEnvProvider(dir, {
+      ANTHROPIC_API_KEY: "sk-SECRET-do-not-store",
+      ANTHROPIC_BASE_URL: "https://gateway.example.com/api",
+      ANTHROPIC_MODEL: "env-anthropic-model",
+    });
+    const { profiles } = await readProviders(dir);
+    expect(profiles[0].apiKey).toBe("");
+    expect(profiles[0].apiKeyEnv).toBe("ANTHROPIC_API_KEY");
+
+    // The strongest guarantee: the secret appears nowhere in the file on disk.
+    const raw = await readFile(path.join(dir, "bp_template", "providers.json"), "utf8");
+    expect(raw).not.toContain("sk-SECRET-do-not-store");
+  });
+
+  it("records the matching env var name for non-Anthropic keys", async () => {
+    const dir = await tmp();
+    await bootstrapEnvProvider(dir, { BP_API_KEY: "sk-bp-secret" });
+    const { profiles } = await readProviders(dir);
+    expect(profiles[0].apiKey).toBe("");
+    expect(profiles[0].apiKeyEnv).toBe("BP_API_KEY");
+    const raw = await readFile(path.join(dir, "bp_template", "providers.json"), "utf8");
+    expect(raw).not.toContain("sk-bp-secret");
+  });
+
+  it("clears apiKeyEnv when the user later saves a real key in Settings", async () => {
+    const dir = await tmp();
+    const created = await bootstrapEnvProvider(dir, {
+      ANTHROPIC_API_KEY: "sk-env",
+      ANTHROPIC_BASE_URL: "https://g/api",
+      ANTHROPIC_MODEL: "m",
+    });
+    await updateProfile(dir, created!.id, { apiKey: "sk-user-typed" });
+    const { profiles } = await readProviders(dir);
+    expect(profiles[0].apiKey).toBe("sk-user-typed");
+    expect(profiles[0].apiKeyEnv).toBeUndefined();
+  });
+
+  it("does nothing when there is no env key", async () => {
+    const dir = await tmp();
+    const created = await bootstrapEnvProvider(dir, {});
+    expect(created).toBeNull();
+    expect((await readProviders(dir)).profiles).toHaveLength(0);
+  });
+
+  it("does not clobber an existing profile (one-time seed)", async () => {
+    const dir = await tmp();
+    await createProfile(dir, { name: "Local", apiKey: "sk-user", models: ["user-m"] });
+    const created = await bootstrapEnvProvider(dir, { ANTHROPIC_API_KEY: "sk-env" });
+    expect(created).toBeNull();
+    const { profiles } = await readProviders(dir);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0].name).toBe("Local");
   });
 });

@@ -17,6 +17,8 @@
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
+import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
+import { makeAgentStatusExt } from "./extensions/agent-status.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -54,17 +56,45 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // Skills: Pi's DefaultResourceLoader otherwise auto-discovers skills from the
   // HOST machine's global dirs (~/.pi/agent/skills, ~/.agents/skills), which
   // makes agent behaviour depend on whoever runs the runtime — not reproducible.
-  // We set `noSkills: true` to drop that implicit discovery and load skills ONLY
-  // from BrainPilot's own app-controlled dirs (`bp_template/skills/` shared +
-  // `.bp/<sid>/skills/` per-session, passed as `skillPaths`). `additionalSkillPaths`
-  // bypasses Pi's project-trust gate, so this works in our non-interactive runtime.
-  // Custom loaders are NOT auto-reloaded by the SDK, so we must reload() before use.
+  // We set `noSkills: true` to drop that implicit discovery, then load ONLY our
+  // controlled skill dir(s) via `additionalSkillPaths` (honored even with
+  // noSkills, verified against Pi v0.79 source). Pi's native skill pipeline
+  // already does progressive disclosure: each skill's name+description goes into
+  // the system prompt and the body is read on demand. The built-in skill content
+  // (@brainpilot/skills) is materialized into `<dataRoot>/bp_template/skills`,
+  // which the SessionManager passes here as `params.skillPaths`.
+  // Context files: for the SAME reproducibility reason we set `noContextFiles: true`.
+  // Pi would otherwise walk cwd→root collecting every AGENTS.md / CLAUDE.md and
+  // inject them as project context. Agents run with cwd under the host repo, so
+  // they'd absorb whatever AGENTS.md/CLAUDE.md happen to sit in the ancestry —
+  // e.g. the legacy "MAS Platform Phase 1" doc — and mis-identify themselves.
+  // Agent identity must come ONLY from the per-role persona below.
+  // Pi-native hooks: register the trace-reminder extension per AgentSession (its
+  // closure state is naturally per-agent). Only the real factory loads it — the
+  // mock factory has no Pi event loop, so behavioural hooks are verified in real
+  // mode (design §7 / T2).
+  const traceReminder = makeTraceReminderExt({
+    role: params.role,
+    name: params.agentName,
+    onUnreplied: params.onUnreplied ?? (() => {}),
+  });
+  // #97: inject a fresh team-status block at the top of every turn, but only for
+  // the agent the host supplied a renderer for (the principal). The `context`
+  // hook recomputes per turn and the rewrite is ephemeral (never persisted).
+  const extensionFactories: unknown[] = [traceReminder];
+  if (params.renderAgentStatus) {
+    extensionFactories.push(makeAgentStatusExt({ renderStatus: params.renderAgentStatus }));
+  }
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
     noSkills: true,
-    additionalSkillPaths: params.skillPaths,
+    noContextFiles: true,
+    ...(params.skillPaths && params.skillPaths.length > 0
+      ? { additionalSkillPaths: params.skillPaths }
+      : {}),
     appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
+    extensionFactories,
   });
   await resourceLoader.reload();
 
@@ -163,8 +193,12 @@ interface PiSdk {
     systemPrompt?: string;
     /** Drop host-global skill auto-discovery (~/.pi/agent/skills, etc.). */
     noSkills?: boolean;
+    /** Drop the AGENTS.md/CLAUDE.md cwd→root context-file walk (host-dependent identity). */
+    noContextFiles?: boolean;
     /** Explicit skill dirs/files; loaded even when noSkills is true, and not trust-gated. */
     additionalSkillPaths?: string[];
+    /** Inline Pi extensions: each is called with the per-session ExtensionAPI. */
+    extensionFactories?: unknown[];
   }) => { reload(): Promise<void> };
   getAgentDir(): string;
   AuthStorage: {

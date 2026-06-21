@@ -1,13 +1,18 @@
 {
   "name": "@brainpilot/app",
-  "version": "0.0.5",
+  "version": "0.0.6",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "Apache-2.0",
   "type": "module",
   "description": "BrainPilot CLI — Docker-free local one-click launch (bin: brainpilot / bnpt)",
+  "homepage": "https://github.com/NeuroAIHub/BrainPilot#readme",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "README.md"
   ],
   "repository": {
     "type": "git",
@@ -27,10 +32,10 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@brainpilot/backend-core": "^0.0.5",
-    "@brainpilot/protocol": "^0.0.5",
-    "@brainpilot/runtime": "^0.0.5",
-    "@brainpilot/web": "^0.0.5",
+    "@brainpilot/backend-core": "^0.0.6",
+    "@brainpilot/protocol": "^0.0.6",
+    "@brainpilot/runtime": "^0.0.6",
+    "@brainpilot/web": "^0.0.6",
     "commander": "^12.1.0",
     "picocolors": "^1.1.0"
   }

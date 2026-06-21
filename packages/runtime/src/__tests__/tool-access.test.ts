@@ -16,6 +16,9 @@ function deps(name: string): ToolDeps {
     trace: new GraphOfTrace("s"),
     ensureAgent: async () => {},
     destroyAgent: async () => {},
+    wakeAgent: () => {},
+    requestUserInput: async () => "stub-answer",
+    routerSkillsDir: "/tmp/bp-test-router",
   };
 }
 
@@ -27,6 +30,12 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("get_trace_graph");
   });
 
+  it("principal can ask_user; experts and trace cannot", () => {
+    expect(systemToolNamesForRole("principal", "principal")).toContain("ask_user");
+    expect(systemToolNamesForRole("expert", "librarian")).not.toContain("ask_user");
+    expect(systemToolNamesForRole("trace", "trace")).not.toContain("ask_user");
+  });
+
   it("trace agent gets ONLY graph tools", () => {
     const names = systemToolNamesForRole("trace", "trace");
     expect(names.sort()).toEqual(
@@ -36,10 +45,20 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("create_agent");
   });
 
-  it("expert gets send_message + record_trace only", () => {
+  it("expert gets send_message + record_trace + skill_search", () => {
     const names = systemToolNamesForRole("expert", "librarian");
-    expect(names.sort()).toEqual(["record_trace", "send_message"].sort());
+    expect(names.sort()).toEqual(["record_trace", "send_message", "skill_search"].sort());
     expect(names).not.toContain("create_agent");
+  });
+
+  it("skill_search reaches every non-trace role (router-skill discovery)", () => {
+    expect(systemToolNamesForRole("principal", "principal")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "librarian")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "writer")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "auditor")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "statistician")).toContain("skill_search");
+    // Trace is graph-only — no skill discovery surface.
+    expect(systemToolNamesForRole("trace", "trace")).not.toContain("skill_search");
   });
 
   it("resolves the actual SystemTool objects for a role (filtered)", () => {
@@ -51,7 +70,11 @@ describe("tool access control (§9)", () => {
   });
 
   it("builtin tool allowlist differs by role", () => {
-    expect(builtinToolNamesForRole("principal")).toEqual([]);
+    // PI gets the full builtin set so it can inspect/touch the workspace directly
+    // (its persona promises file inspection + "just do X"); it is no longer `[]`.
+    expect(builtinToolNamesForRole("principal")).toEqual(
+      expect.arrayContaining(["read", "write", "edit", "bash", "grep", "find"]),
+    );
     expect(builtinToolNamesForRole("expert")).toContain("read");
     expect(builtinToolNamesForRole("trace")).toEqual(["read"]);
   });
@@ -80,5 +103,24 @@ describe("tool access control (§9)", () => {
     expect(builtinToolNamesForRole("expert", "statistician").sort()).toEqual(
       ["find", "grep", "read"].sort(),
     );
+  });
+
+  it("auditor gets send_message + record_trace + skill_search, but NO trace-graph access", () => {
+    const names = systemToolNamesForRole("expert", "auditor");
+    expect(names.sort()).toEqual(["record_trace", "send_message", "skill_search"].sort());
+    // Audit evidence is restricted to the workspace — no graph reads, no
+    // create/destroy, no graph mutation.
+    expect(names).not.toContain("get_trace_graph");
+    expect(names).not.toContain("create_trace_node");
+    expect(names).not.toContain("create_agent");
+    expect(names).not.toContain("destroy_agent");
+  });
+
+  it("auditor builtins include read+grep+bash+write but NOT edit", () => {
+    const a = builtinToolNamesForRole("expert", "auditor");
+    // Read-only inspection + write for its own audit report.
+    expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash", "write"]));
+    // Must NOT be able to modify other agents' artefacts.
+    expect(a).not.toContain("edit");
   });
 });

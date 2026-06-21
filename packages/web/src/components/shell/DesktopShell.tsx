@@ -4,6 +4,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
+import { runtimeConfig } from "../../config";
 import { PromptComposer } from "../chat/PromptComposer";
 import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
@@ -23,10 +24,13 @@ const MAX_SIDEBAR_WIDTH = 420;
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
-  const { currentSession, currentView, messages, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
+  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView } = useSessions();
   const t = useT();
   const [isSidebarCollapsed, setIsSidebarCollapsed] = useState(false);
   const [activePage, setActivePage] = useState<"workspace" | "demo">("workspace");
+  // Bumped on every sidebar "Live Demo" click so DemoView returns to its
+  // session-selection landing even when the demo page is already open (#111).
+  const [demoResetSignal, setDemoResetSignal] = useState(0);
   const [sidebarWidth, setSidebarWidth] = useState(268);
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
@@ -109,7 +113,10 @@ export function DesktopShell() {
       <Sidebar
         isCollapsed={isSidebarCollapsed}
         activePage={activePage}
-        onOpenDemo={() => setActivePage("demo")}
+        onOpenDemo={() => {
+          setActivePage("demo");
+          setDemoResetSignal((n) => n + 1);
+        }}
         onGoWorkspace={() => setActivePage("workspace")}
         onOpenSettings={() => setIsSettingsOpen(true)}
         onOpenSearch={() => setIsSearchOpen(true)}
@@ -125,7 +132,7 @@ export function DesktopShell() {
       />
 
       {activePage === "demo" ? (
-        <DemoView />
+        <DemoView resetSignal={demoResetSignal} />
       ) : (
       <main
         className={`workspace ${isFilesOpen ? "workspace--files-open" : ""} ${
@@ -136,47 +143,60 @@ export function DesktopShell() {
       >
         <header className="workspace-toolbar" aria-label={t("shell.aria.toolbarActions")}>
           <div className="session-title" aria-label={t("shell.aria.activeSession")}>
-            <span className="session-title__label">{t("shell.sessionLabel")}</span>
+            {/* #105: foreground the human-readable session title (same source as
+                the sidebar). The id is debug-only metadata now — surfaced as a
+                hover tooltip + muted short id, never the primary label. Falls
+                back to `Session <id8>` when the title is missing. */}
+            <span
+              className="session-title__name"
+              title={currentSession?.id ?? undefined}
+            >
+              {currentSession?.title ||
+                (currentSession?.id
+                  ? `${t("shell.sessionLabel")} ${currentSession.id.slice(0, 8)}`
+                  : t("shell.defaultWorkspace"))}
+            </span>
             {currentSession?.id ? (
               <span className="session-title__id">{currentSession.id.slice(0, 8)}</span>
             ) : null}
-            {messages.length === 0 ? (
-              <span className="session-title__name">
-                {currentSession?.title || t("shell.defaultWorkspace")}
-              </span>
-            ) : null}
           </div>
           <div className="workspace-toolbar__actions">
-            <div className="workspace-view-tabs" role="tablist" aria-label={t("shell.aria.viewTabs")}>
+            {/* #104: icon-only nav. The label stays in the DOM (visually
+                hidden) so it remains the button's accessible name, and `title`
+                gives a hover/focus tooltip — no separate aria-label needed. */}
+            <div className="workspace-view-tabs workspace-view-tabs--icon-only" role="tablist" aria-label={t("shell.aria.viewTabs")}>
               <button
                 aria-selected={currentView === "chat"}
                 className={currentView === "chat" ? "is-active" : ""}
                 onClick={() => setCurrentView("chat")}
                 role="tab"
+                title={t("shell.view.chat")}
                 type="button"
               >
                 <MessageSquare size={14} />
-                <span>{t("shell.view.chat")}</span>
+                <span className="sr-only">{t("shell.view.chat")}</span>
               </button>
               <button
                 aria-selected={currentView === "agents"}
                 className={currentView === "agents" ? "is-active" : ""}
                 onClick={() => setCurrentView("agents")}
                 role="tab"
+                title={t("shell.view.agents")}
                 type="button"
               >
                 <Bot size={14} />
-                <span>{t("shell.view.agents")}</span>
+                <span className="sr-only">{t("shell.view.agents")}</span>
               </button>
               <button
                 aria-selected={currentView === "trace"}
                 className={currentView === "trace" ? "is-active" : ""}
                 onClick={() => setCurrentView("trace")}
                 role="tab"
+                title={t("shell.view.trace")}
                 type="button"
               >
                 <GitBranch size={14} />
-                <span>{t("shell.view.trace")}</span>
+                <span className="sr-only">{t("shell.view.trace")}</span>
               </button>
             </div>
             {currentView === "chat" ? (
@@ -188,7 +208,12 @@ export function DesktopShell() {
                 <RefreshCw size={14} />
               </IconButton>
             ) : null}
-            <SandboxStatus />
+            {/* #100: in local single-user mode there is no Docker sandbox to
+                inspect — the runtime IS the workspace, so the Sandbox status
+                popover would only show empty container metrics and read like a
+                fault. Hide it here; downstream multi-user Docker builds set
+                VITE_LOCAL_MODE=0 and keep the real container UI. */}
+            {runtimeConfig.localMode ? null : <SandboxStatus />}
             <IconButton
               aria-pressed={isFilesOpen}
               className={isFilesOpen ? "is-active" : ""}

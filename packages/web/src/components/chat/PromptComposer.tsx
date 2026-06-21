@@ -1,10 +1,12 @@
-import { Bot, Mic, Paperclip, Plus, Square } from "lucide-react";
+import { Bot, Paperclip, Square, X } from "lucide-react";
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProviderProfile } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
+import { useTurnTimer } from "../../contexts/useTurnTimer";
 import { draftStore } from "../../contexts/draftStore";
 import { applyMessageFilters } from "../../contexts/messageFilters";
+import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
@@ -21,15 +23,24 @@ export function PromptComposer() {
   // 可用命令（已通过真实 API 测试 /context ✅ /cost ✅；/compact 由 SDK 内置 ✅）
   // 不可用命令（已移除）：/usage ❌ /clear ❌ /init ❌
   const DEFAULT_SLASH_COMMANDS = ["/compact", "/context", "/cost"];
+  // issue #43: temporarily hide the whole slash-command button until the
+  // dynamic command list (GET /sessions/:id/commands) is implemented backend
+  // side. Flip to true to restore. Code below is kept intact for that.
+  const SHOW_SLASH_COMMANDS = false;
   const [slashCommands, setSlashCommands] = useState<string[]>(DEFAULT_SLASH_COMMANDS);
 
   const [showCommands, setShowCommands] = useState(false);
   const commandsRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  // #47: file upload — names of files uploaded into the workspace this turn,
+  // shown as removable chips and announced to the agent on send.
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
@@ -65,6 +76,14 @@ export function PromptComposer() {
     [agents],
   );
 
+  // Names of agents actively working, for the "X 正在工作" toast. Excludes the
+  // trace agent (it self-records continuously and isn't "the user's task"),
+  // matching the runtime's run-active aggregation (#76).
+  const workingAgentNames = useMemo(
+    () => agents.filter((a) => a.status === "running" && a.name !== "trace").map((a) => a.name),
+    [agents],
+  );
+
   useEffect(() => {
     let cancelled = false;
     void api.ui.promptSuggestions().then((suggestions) => {
@@ -77,29 +96,10 @@ export function PromptComposer() {
     };
   }, []);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!currentSession) {
-      setSlashCommands(DEFAULT_SLASH_COMMANDS);
-      return;
-    }
-    void api.sessions.commands(currentSession.id).then((res) => {
-      if (!cancelled) {
-        // Only override defaults when the backend actually returned commands
-        if (res.commands.length > 0) {
-          setSlashCommands(res.commands);
-        }
-      }
-    }).catch(() => {
-      if (!cancelled) {
-        // Keep defaults on API failure so the button stays visible
-        setSlashCommands(DEFAULT_SLASH_COMMANDS);
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, [currentSession?.id]);
+  // issue #43: the dynamic slash-command list (GET /sessions/:id/commands) is
+  // not implemented on the backend yet — fetching it 404'd on every selected
+  // session. The whole slash-command button is hidden below until that lands,
+  // so we no longer fetch and just keep the local DEFAULT_SLASH_COMMANDS.
 
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -212,6 +212,10 @@ export function PromptComposer() {
 
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
 
+  // #99: whole-turn timer — spans user input → every agent finished (runState
+  // settles false), debounced against hook/system re-wakes.
+  const turnTiming = useTurnTimer({ runActive, resetKey: currentSession?.id ?? null });
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     if (!sessionId) return;
@@ -220,12 +224,51 @@ export function PromptComposer() {
       return;
     }
     draftStore.set(sessionId, "");
+    // #47: if files were uploaded this turn, prepend a notice so the agent knows
+    // they exist in its workspace and can `read` them. Cleared after send.
+    const notice =
+      attachments.length > 0 ? `${t("chat.upload.notice", { names: attachments.join(", ") })}\n\n` : "";
+    const sentAttachments = attachments;
+    if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
-    await sendPrompt(content, {
+    const ok = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
     });
+    // #106: a failed/timed-out send must not silently eat the user's input.
+    // Restore the draft (and attachment chips) so they can retry without
+    // retyping. Only restore if they haven't already started typing again.
+    if (!ok) {
+      if (draftStore.get(sessionId).trim().length === 0) {
+        draftStore.set(sessionId, content);
+      }
+      if (sentAttachments.length > 0) {
+        setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
+      }
+    }
+  };
+
+  // #47: upload the chosen files into the session workspace, then track their
+  // names as chips. Uses the current sandbox/session id (single-user: same id).
+  const handleFilesChosen = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const sandboxId = currentSandbox?.id;
+    if (!sandboxId) return;
+    setUploading(true);
+    setComposerError(null);
+    try {
+      for (const file of Array.from(files)) {
+        await api.sandbox.uploadFile(sandboxId, file.name, file);
+        setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setComposerError(t("chat.upload.failed", { msg }));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-selecting the same file
+    }
   };
 
   // Writes to the draft store from non-text controls (slash command picks,
@@ -244,7 +287,9 @@ export function PromptComposer() {
           <MessageStream
             messages={visibleMessages}
             autoScroll
+            scrollKey={sessionId ?? undefined}
             showTiming
+            turnTiming={turnTiming}
             runningAgents={runningAgents}
             onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
             onRetryCancel={() => void interruptCurrent()}
@@ -254,7 +299,12 @@ export function PromptComposer() {
         {isAgentRunning || lastAssistantStreaming ? (
           <div className="agent-running-toast" role="status" aria-live="polite">
             <span className="agent-running-toast__dot" />
-            <span className="agent-running-toast__label">{t("chat.agentThinking")}</span>
+            <span className="agent-running-toast__label">
+              {(() => {
+                const label = runningToastLabel(workingAgentNames);
+                return t(label.key, label.vars);
+              })()}
+            </span>
             <button
               className="agent-running-toast__stop"
               type="button"
@@ -275,12 +325,37 @@ export function PromptComposer() {
             ariaLabel={t("chat.srAsk")}
           />
 
+          {attachments.length > 0 || uploading ? (
+            <div className="composer__attachments" aria-label={t("chat.aria.attachFile")}>
+              {attachments.map((name) => (
+                <span className="composer__chip" key={name}>
+                  <Paperclip size={12} />
+                  <span className="composer__chip-name">{name}</span>
+                  <button
+                    type="button"
+                    className="composer__chip-remove"
+                    aria-label={t("chat.aria.removeAttachment")}
+                    onClick={() => setAttachments((prev) => prev.filter((n) => n !== name))}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              {uploading ? <span className="composer__chip composer__chip--pending">{t("chat.upload.uploading")}</span> : null}
+            </div>
+          ) : null}
+
           <div className="composer__toolbar">
             <div className="composer__tools">
+              {/*
+                issue #47: 添加上下文 (Plus) has no picker yet — hidden until the
+                context-attachment flow exists. The chat.aria.attachContext i18n
+                key is kept. Re-add the Plus lucide import when restoring this.
               <IconButton label={t("chat.aria.attachContext")}>
                 <Plus size={18} />
               </IconButton>
-              {slashCommands.length > 0 && (
+              */}
+              {SHOW_SLASH_COMMANDS && slashCommands.length > 0 && (
                 <div className="command-picker" ref={commandsRef}>
                   <IconButton
                     label={t("chat.command")}
@@ -356,10 +431,26 @@ export function PromptComposer() {
                 title={activeProvider ? t("chat.providerTitle", { name: activeProvider.name }) : t("chat.noActiveProvider")}
                 value={selectedModel}
               />
+              {/*
+                issue #47: 语音输入 (Mic) has no capture/permission flow yet —
+                hidden until implemented. The chat.aria.voice i18n key is kept.
+                Re-add the Mic lucide import when restoring this.
               <IconButton label={t("chat.aria.voice")}>
                 <Mic size={17} />
               </IconButton>
-              <IconButton label={t("chat.aria.attachFile")}>
+              */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => void handleFilesChosen(e.target.files)}
+              />
+              <IconButton
+                label={t("chat.aria.attachFile")}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || !currentSandbox}
+              >
                 <Paperclip size={17} />
               </IconButton>
               <ComposerSendButton

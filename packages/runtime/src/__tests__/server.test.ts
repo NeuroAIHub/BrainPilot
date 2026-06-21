@@ -1,8 +1,8 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { createServer } from "../server.js";
+import { createServer, startServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
 
@@ -137,6 +137,47 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     });
     expect(put.status).toBe(404);
   });
+
+  it("POST /messages with user_input_response resolves or reports stale", async () => {
+    const a = app();
+    const created = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "T" }),
+    });
+    const { id } = (await created.json()) as { id: string };
+
+    // No outstanding request → stale, but still 200.
+    const res = await a.request(`/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "user_input_response",
+        session_id: id,
+        request_id: "req_missing",
+        answer: "x",
+      }),
+    });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ status: "stale" });
+  });
+
+  it("POST /messages still accepts a normal content body", async () => {
+    const a = app();
+    const created = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "T" }),
+    });
+    const { id } = (await created.json()) as { id: string };
+    const res = await a.request(`/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ content: "hello" }),
+    });
+    expect(res.status).toBe(200);
+    expect((await res.json()).accepted).toBe(true);
+  });
 });
 
 describe("workspace file routes", () => {
@@ -193,6 +234,77 @@ describe("workspace file routes", () => {
     expect(res.status).toBe(200);
     expect((await res.json()) as unknown[]).toEqual([]);
   });
+
+  // #47: file upload (base64) into the workspace.
+  it("uploads a file via POST and makes it readable", async () => {
+    const { app: a } = await appWithWorkspace();
+    const contentBase64 = Buffer.from("uploaded content").toString("base64");
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/workspace/upload/notes.txt", contentBase64 }),
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { path: string; size: number };
+    expect(body.path).toBe(join("upload", "notes.txt"));
+    expect(body.size).toBe(Buffer.byteLength("uploaded content"));
+    // readable back through the read route
+    const txt = await a.request("/sessions/s1/files/content?path=/workspace/upload/notes.txt");
+    expect((await txt.json()) as { content: string }).toMatchObject({ content: "uploaded content" });
+  });
+
+  it("rejects an upload that escapes the workspace with 400", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "../../../etc/evil", contentBase64: "eA==" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a malformed upload body with 400", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // #60: a composer upload staged under workspaces/local/ (the draft sandbox id)
+  // must be drained into the real session workspace before the agent runs, so
+  // the agent's cwd (workspaces/<sid>/) contains the file the user attached.
+  it("drains a staged local upload into the session workspace on sendMessage (#60)", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-drain-"));
+    const manager = new SessionManager({ persist: true, dataRoot, agentFactory: mockAgentFactory });
+
+    // Simulate the draft-composer upload: web POSTs against the "local" sandbox
+    // id because the real session does not exist yet.
+    await manager.writeSessionFile(
+      "local",
+      "/workspace/attachment-probe.txt",
+      Buffer.from("probe payload").toString("base64"),
+    );
+
+    // The real session is created when the prompt is sent.
+    const session = await manager.createSession({ title: "Draft" });
+    await manager.sendMessage(session.id, "Please summarize the uploaded attachment.");
+
+    // The file now lives in the agent's cwd (the session workspace)...
+    const inSession = await readFile(
+      join(dataRoot, "workspaces", session.id, "attachment-probe.txt"),
+      "utf8",
+    );
+    expect(inSession).toBe("probe payload");
+
+    // ...and the staging area was drained so it can't leak into a later session.
+    const staged = await readdir(join(dataRoot, "workspaces", "local"));
+    expect(staged).toEqual([]);
+
+    manager.shutdown();
+  });
 });
 
 async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 2000): Promise<void> {
@@ -202,3 +314,52 @@ async function waitFor(pred: () => boolean | Promise<boolean>, timeoutMs = 2000)
     await new Promise((r) => setTimeout(r, 5));
   }
 }
+
+describe("startServer boot-time restore", () => {
+  it("rehydrates persisted sessions before serving the first request", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-boot-"));
+    // Seed two persisted session dirs the way the runtime writes them.
+    for (const seed of [
+      {
+        id: "11111111-1111-1111-1111-111111111111",
+        title: "Persisted A",
+        createdAt: "2026-06-01T00:00:00.000Z",
+        updatedAt: "2026-06-02T00:00:00.000Z",
+        lastActivityAt: 1780000000000,
+      },
+      {
+        id: "22222222-2222-2222-2222-222222222222",
+        title: "Persisted B",
+        createdAt: "2026-06-03T00:00:00.000Z",
+        updatedAt: "2026-06-04T00:00:00.000Z",
+        lastActivityAt: 1780100000000,
+      },
+    ]) {
+      const dir = join(dataRoot, ".bp", seed.id);
+      await mkdir(dir, { recursive: true });
+      await writeFile(join(dir, "meta.json"), JSON.stringify(seed), "utf8");
+    }
+
+    // port: 0 → kernel-assigned; never collides with anything else
+    const handle = await startServer({
+      port: 0,
+      dataRoot,
+      persist: true,
+      agentFactory: mockAgentFactory,
+    });
+    try {
+      const res = await fetch(`http://127.0.0.1:${handle.port}/sessions`);
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { sessions: Array<{ id: string; createdAt: string }> };
+      const ids = body.sessions.map((s) => s.id).sort();
+      expect(ids).toEqual([
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+      ]);
+      const a = body.sessions.find((s) => s.id === "11111111-1111-1111-1111-111111111111")!;
+      expect(a.createdAt).toBe("2026-06-01T00:00:00.000Z");
+    } finally {
+      await handle.close();
+    }
+  });
+});

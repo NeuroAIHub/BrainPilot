@@ -6,6 +6,7 @@
 import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
+import { bootstrapEnvProvider } from "./config.js";
 import type { Orchestrator } from "./orchestrator.js";
 
 export interface StartServerOptions extends Partial<CreateAppOptions> {
@@ -48,6 +49,16 @@ export async function startServer(
     serveWeb: options.serveWeb,
     env: options.env,
   });
+
+  // #51: seed a provider profile from env on first launch so an env-only
+  // quick-start (ANTHROPIC_API_KEY etc.) surfaces an active provider in the Web
+  // UI. No-op once providers.json has any profile. Best-effort: a failure here
+  // must not block the server from starting.
+  try {
+    await bootstrapEnvProvider(options.dataDir ?? process.env.BP_DATA_DIR ?? "./brainpilot", options.env);
+  } catch {
+    // ignore — env projection is a convenience, not a startup gate
+  }
 
   if (options.eager) {
     await orchestrator.ensureRuntime();

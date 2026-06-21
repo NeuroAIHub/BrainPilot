@@ -5,6 +5,7 @@ import {
   FileEntrySchema,
   McpServerEntrySchema,
   ProviderProfileSchema,
+  ProviderProfileCreateSchema,
   SessionSchema,
   SessionStateSnapshotSchema,
   SettingsDataSchema,
@@ -43,6 +44,30 @@ describe("domain schemas", () => {
     ).toBeNull();
   });
 
+  it("SessionStateSnapshot carries optional tokenUsage", () => {
+    const parsed = SessionStateSnapshotSchema.parse({
+      runState: { active: false, runId: null },
+      agents: [],
+      lastActivityTs: "",
+      tokenUsage: {
+        total: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 },
+        byAgent: {
+          principal: { input: 10, output: 5, cacheRead: 0, cacheWrite: 0, total: 15 },
+        },
+      },
+    });
+    expect(parsed.tokenUsage?.total.total).toBe(15);
+    expect(parsed.tokenUsage?.byAgent.principal?.input).toBe(10);
+    // tokenUsage is optional — a frame without it still validates.
+    expect(
+      SessionStateSnapshotSchema.parse({
+        runState: { active: false, runId: null },
+        agents: [],
+        lastActivityTs: "",
+      }).tokenUsage,
+    ).toBeUndefined();
+  });
+
   it("AgentState enforces the status enum", () => {
     expect(AgentStateSchema.parse({ name: "a", status: "idle" }).status).toBe("idle");
     expect(AgentStateSchema.safeParse({ name: "a", status: "weird" }).success).toBe(false);
@@ -74,23 +99,46 @@ describe("domain schemas", () => {
       McpServerEntrySchema.parse({ name: "x", type: "http", url: "http://h" }).type,
     ).toBe("http");
     expect(McpServerEntrySchema.safeParse({ name: "x", type: "grpc" }).success).toBe(false);
+    const profile = ProviderProfileSchema.parse({
+      id: "p1",
+      name: "OpenAI",
+      baseUrl: "u",
+      api: "openai-responses",
+      adapter: "openai",
+      isShared: false,
+      models: ["m"],
+      icon: "circle",
+      iconColor: "#000",
+      notes: "",
+      isActive: true,
+      apiKeyMasked: "sk-***",
+      createdAt: 1,
+      updatedAt: 2,
+      healthStatus: "healthy",
+      modelHealth: [{ model: "m", status: "healthy" }],
+    });
+    expect(profile.healthStatus).toBe("healthy");
+    expect(profile.api).toBe("openai-responses");
+    // #68: adapter + isShared surface on the response shape.
+    expect(profile.adapter).toBe("openai");
+    expect(profile.isShared).toBe(false);
+    // #63: an unknown api value is rejected.
     expect(
-      ProviderProfileSchema.parse({
-        id: "p1",
-        name: "OpenAI",
-        baseUrl: "u",
-        models: ["m"],
-        icon: "circle",
-        iconColor: "#000",
-        notes: "",
-        isActive: true,
-        apiKeyMasked: "sk-***",
-        createdAt: 1,
-        updatedAt: 2,
-        healthStatus: "healthy",
-        modelHealth: [{ model: "m", status: "healthy" }],
-      }).healthStatus,
-    ).toBe("healthy");
+      ProviderProfileCreateSchema.safeParse({ name: "x", api: "nope", models: ["m"] }).success,
+    ).toBe(false);
+    // #63: a known api value on create is accepted; omitting it is allowed.
+    expect(
+      ProviderProfileCreateSchema.safeParse({ name: "x", api: "azure-openai-responses", models: ["m"] })
+        .success,
+    ).toBe(true);
+    expect(ProviderProfileCreateSchema.safeParse({ name: "x", models: ["m"] }).success).toBe(true);
+    // #68: adapter on create is accepted; an unknown adapter is rejected.
+    expect(
+      ProviderProfileCreateSchema.safeParse({ name: "x", adapter: "openai", models: ["m"] }).success,
+    ).toBe(true);
+    expect(
+      ProviderProfileCreateSchema.safeParse({ name: "x", adapter: "nope", models: ["m"] }).success,
+    ).toBe(false);
   });
 
   it("validates FileEntry / FileContent", () => {

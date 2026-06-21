@@ -23,7 +23,13 @@ export interface IAgentSession {
   subscribe(listener: (event: PiAgentEvent) => void): () => void;
   /** Send a prompt. Resolves when the run completes (or is aborted). */
   prompt(text: string): Promise<void>;
-  /** Hard-abort the active run. */
+  /**
+   * Hard-abort the active run. For the real Pi session this aborts the provider
+   * stream AND awaits the agent returning to idle (SDK `AgentSession.abort()`
+   * is itself `abort() + waitForIdle()`); the mock/test sessions signal their
+   * loop to stop. Callers that must fence the old stream before starting a new
+   * run should await this (see `MasAgent.abort`, #101).
+   */
   abort(): Promise<void>;
   /** Tear down; release resources. */
   dispose(): void;
@@ -74,12 +80,33 @@ export type PiAssistantMessageEvent =
   | { type: "reasoning_delta"; delta: string }
   | { type: "reasoning_start" }
   | { type: "reasoning_end" }
+  // #63: provider/HTTP failure surfaced mid-stream (e.g. a protocol mismatch
+  // 404). Pi emits this instead of throwing, so the runtime must route it to an
+  // error event rather than dropping it (which produced an empty reply).
+  | { type: "error"; error?: unknown; reason?: string }
   | { type: string; [k: string]: unknown };
 
 /** Pi message (assistant/user/tool). We read `role` + `content` blocks. */
 export interface PiMessage {
   role: string;
   content?: PiContentBlock[];
+  /**
+   * Provider-reported token usage, present on finalized assistant messages
+   * (Pi's `AssistantMessage.usage`). The runtime reads this on `message_end`
+   * to accumulate real per-session/per-agent token stats. Optional + loose
+   * because user/tool messages and mock feeds may omit it.
+   */
+  usage?: PiUsage;
+  [k: string]: unknown;
+}
+
+/** Pi/provider token usage counters (mirrors `@earendil-works/pi-ai` Usage). */
+export interface PiUsage {
+  input?: number;
+  output?: number;
+  cacheRead?: number;
+  cacheWrite?: number;
+  totalTokens?: number;
   [k: string]: unknown;
 }
 
@@ -108,11 +135,27 @@ export type AgentSessionFactory = (params: {
   /** System prompt for the agent. */
   systemPrompt: string;
   /**
-   * App-controlled skill directories loaded for this agent (template dir shared
-   * by all sessions + this session's own dir). Replaces the host-global skill
-   * discovery — see agent-factory `noSkills: true`.
+   * Explicit skill directories to load through Pi's native skill pipeline
+   * (`additionalSkillPaths`). Host-global auto-discovery stays disabled
+   * (`noSkills: true`); these dirs are loaded on top of that. Typically a single
+   * entry: `<dataRoot>/bp_template/skills`. Omitted by the mock factory.
    */
-  skillPaths: string[];
+  skillPaths?: string[];
+  /**
+   * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
+   * when an expert was reminded once and STILL did not report back, so the host
+   * can write a fallback note into the principal's mailbox (the PI never
+   * dead-waits). Omitted by the mock factory.
+   */
+  onUnreplied?: (agentName: string) => void;
+  /**
+   * #97: compute a fresh "team status" block to inject at the top of every turn
+   * (via the agent-status extension's Pi `context` hook). Called once per turn;
+   * returns "" when there is nothing to inject. Supplied only for the principal
+   * (the coordinator that benefits from the whole-team view); omitted for other
+   * roles and by the mock factory.
+   */
+  renderAgentStatus?: () => string;
   /**
    * Per-session LLM provider resolved from providers.json. When omitted, the
    * factory falls back to Pi's env-based default (Docker/static compat).
@@ -120,6 +163,10 @@ export type AgentSessionFactory = (params: {
   providerConfig?: {
     providerId: string;
     baseUrl?: string;
+    /** #63: wire protocol (Pi models.json api). Defaults to anthropic-messages. */
+    api?: string;
+    /** #68: coarse adapter family (auto/openai/anthropic); derives api when api unset. */
+    adapter?: string;
     apiKey: string;
     modelId?: string;
   };

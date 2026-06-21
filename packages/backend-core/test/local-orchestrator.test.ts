@@ -189,6 +189,85 @@ describe("LocalProcessOrchestrator restart logic", () => {
   });
 });
 
+describe("LocalProcessOrchestrator single-flight + first-start failure (#58)", () => {
+  it("is single-flight: concurrent ensureRuntime() spawns the runtime only once", async () => {
+    const proc = makeFakeProc();
+    const spawnFn = vi.fn(() => proc);
+    // Health gated on a switch we flip after the concurrent calls are in flight,
+    // so all callers must share the one in-flight startup promise.
+    let healthy = false;
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js",
+      spawnFn,
+      healthProbe: async () => healthy,
+      sleep: async () => {},
+      healthTimeoutMs: 1000,
+    });
+
+    const calls = Array.from({ length: 12 }, () => orch.ensureRuntime());
+    // Let the first call spawn + start polling, then become healthy.
+    await Promise.resolve();
+    healthy = true;
+    const handles = await Promise.all(calls);
+
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    for (const h of handles) {
+      expect(h.baseUrl).toBe(handles[0]!.baseUrl);
+    }
+  });
+
+  it("does NOT enter the restart loop when a first-start child exits before ever being healthy", async () => {
+    const procs: ReturnType<typeof makeFakeProc>[] = [];
+    const spawnFn = vi.fn(() => {
+      const p = makeFakeProc();
+      procs.push(p);
+      return p;
+    });
+    // Never healthy: simulates a duplicate that lost the port race (EADDRINUSE)
+    // and exits. waitForHealth should time out; the exit must not restart.
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js",
+      spawnFn,
+      healthProbe: async () => false,
+      sleep: async () => {},
+      healthTimeoutMs: 0,
+    });
+
+    await expect(orch.ensureRuntime()).rejects.toThrow(/did not become healthy/);
+    // The child "crashes" after the failed startup — must not trigger a restart.
+    procs[0]!.emitExit(1, null);
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("can retry a fresh startup after a first-start failure", async () => {
+    const procs: ReturnType<typeof makeFakeProc>[] = [];
+    const spawnFn = vi.fn(() => {
+      const p = makeFakeProc();
+      procs.push(p);
+      return p;
+    });
+    let healthy = false;
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js",
+      spawnFn,
+      healthProbe: async () => healthy,
+      sleep: async () => {},
+      healthTimeoutMs: 0,
+    });
+
+    await expect(orch.ensureRuntime()).rejects.toThrow(/did not become healthy/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+
+    // starting was cleared, so a later call retries with a fresh spawn.
+    healthy = true;
+    const handle = await orch.ensureRuntime();
+    expect(handle.baseUrl).toBe("http://127.0.0.1:8081");
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+});
+
 describe("Orchestrator interface conformance", () => {
   it("LocalProcessOrchestrator implements ensureRuntime/health/stopRuntime", () => {
     const orch = new LocalProcessOrchestrator();

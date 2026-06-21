@@ -59,6 +59,33 @@ export const AgentStateSchema = z.object({
 export type AgentState = z.infer<typeof AgentStateSchema>;
 
 /**
+ * Real token usage counters for one accounting unit (a whole session, or a
+ * single agent). Sourced from the provider's reported usage (Pi's
+ * `AssistantMessage.usage`), accumulated over every assistant turn — NOT a
+ * char-count estimate. `total` is the running sum the provider charges against
+ * the context window (`input + output + cacheRead + cacheWrite`); we keep it
+ * explicit rather than re-deriving so a consumer never has to know the formula.
+ */
+export const TokenUsageSchema = z.object({
+  input: z.number(),
+  output: z.number(),
+  cacheRead: z.number(),
+  cacheWrite: z.number(),
+  total: z.number(),
+});
+export type TokenUsage = z.infer<typeof TokenUsageSchema>;
+
+/**
+ * Per-session token accounting: the whole-session `total` plus a per-agent
+ * breakdown keyed by agent name (`principal`, expert names, `trace`).
+ */
+export const SessionTokenUsageSchema = z.object({
+  total: TokenUsageSchema,
+  byAgent: z.record(z.string(), TokenUsageSchema),
+});
+export type SessionTokenUsage = z.infer<typeof SessionTokenUsageSchema>;
+
+/**
  * Authoritative live session state. Identical shape across SSE first frame
  * (`CUSTOM:session_state`), push events, and `GET /sessions/:id/state`.
  */
@@ -69,6 +96,12 @@ export const SessionStateSnapshotSchema = z.object({
   }),
   agents: z.array(AgentStatusSchema),
   lastActivityTs: z.string(),
+  /**
+   * Cumulative real token usage for this session (total + per-agent). Optional
+   * for forward/backward compat: a frame from an older runtime, or before the
+   * first assistant turn completes, simply omits it.
+   */
+  tokenUsage: SessionTokenUsageSchema.optional(),
 });
 export type SessionStateSnapshot = z.infer<typeof SessionStateSnapshotSchema>;
 
@@ -166,6 +199,38 @@ export const McpServerEntrySchema = z.object({
 });
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
 
+/**
+ * #49: validation SSOT for an MCP server *config* (the on-disk spec, without the
+ * `name` key). A discriminated union by `type` enforces the cross-field rules
+ * the flat `McpServerEntrySchema` above can't: http/sse require a non-empty
+ * `url`; stdio requires a non-empty `command`; any other `type` is rejected.
+ * The CRUD routes safeParse against this before persisting, so invalid configs
+ * 400 and never reach disk.
+ */
+const nonEmpty = z.string().trim().min(1);
+export const McpServerConfigSchema = z.discriminatedUnion("type", [
+  z.object({
+    type: z.literal("stdio"),
+    command: nonEmpty,
+    args: z.array(z.string()).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    timeout: z.number().optional(),
+  }),
+  z.object({
+    type: z.literal("http"),
+    url: nonEmpty,
+    headers: z.record(z.string(), z.string()).optional(),
+    timeout: z.number().optional(),
+  }),
+  z.object({
+    type: z.literal("sse"),
+    url: nonEmpty,
+    headers: z.record(z.string(), z.string()).optional(),
+    timeout: z.number().optional(),
+  }),
+]);
+export type McpServerConfig = z.infer<typeof McpServerConfigSchema>;
+
 export const HealthStatusSchema = z.enum(["healthy", "degraded", "unavailable", "unknown"]);
 export type HealthStatus = z.infer<typeof HealthStatusSchema>;
 
@@ -178,10 +243,64 @@ export const ModelHealthSchema = z.object({
 });
 export type ModelHealth = z.infer<typeof ModelHealthSchema>;
 
+/**
+ * #63: the wire protocol BrainPilot speaks to a provider's gateway. These map
+ * 1:1 to Pi's models.json `providers.<id>.api` values; the runtime writes the
+ * selected value into the per-session models.json instead of hardcoding
+ * `anthropic-messages`. Azure needs only this + the Azure base URL (Pi derives
+ * api-version/deployment), so all four configure identically from the UI.
+ */
+export const ProviderApiSchema = z.enum([
+  "anthropic-messages",
+  "openai-completions",
+  "openai-responses",
+  "azure-openai-responses",
+]);
+export type ProviderApi = z.infer<typeof ProviderApiSchema>;
+
+/**
+ * #68 (R-10): coarse provider family the UI/hosted layer declares — "which kind
+ * of endpoint is this base URL". This is the user-facing intent; `api` (above)
+ * is the precise Pi wire value the runtime executes. `auto` means "infer"
+ * (the runtime derives `api` from the base URL / falls back to the default).
+ * Optional so single-user / open-source deploys can omit it (defaults to
+ * `auto` semantically). When `api` is unset, the runtime derives it from
+ * `adapter`: anthropic→anthropic-messages, openai→openai-completions,
+ * auto→default.
+ */
+export const ProviderAdapterSchema = z.enum(["auto", "openai", "anthropic"]);
+export type ProviderAdapter = z.infer<typeof ProviderAdapterSchema>;
+
+/**
+ * #75: single source of truth for adapter→api derivation, shared by the backend
+ * (so create/echo never persist a default that contradicts the adapter) and the
+ * runtime (so the wire value it writes matches). `anthropic`→anthropic-messages,
+ * `openai`→openai-completions; `auto`/undefined → undefined (caller falls back
+ * to its own default). Keeping this in protocol prevents the two layers from
+ * drifting (the footgun #75 surfaced: backend defaulting api to
+ * anthropic-messages short-circuited the runtime's adapter fallback).
+ */
+export function deriveProviderApi(adapter?: ProviderAdapter): ProviderApi | undefined {
+  switch (adapter) {
+    case "anthropic":
+      return "anthropic-messages";
+    case "openai":
+      return "openai-completions";
+    default:
+      return undefined;
+  }
+}
+
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
   baseUrl: z.string(),
+  api: ProviderApiSchema,
+  // #68 (R-10): coarse family + hosted-layer sharing flag. `adapter` optional
+  // (defaults to "auto" semantically); `isShared` is always false in
+  // single-user/open-source mode, true for globally-shared hosted profiles.
+  adapter: ProviderAdapterSchema.optional(),
+  isShared: z.boolean(),
   models: z.array(z.string()),
   icon: z.string(),
   iconColor: z.string(),
@@ -195,6 +314,54 @@ export const ProviderProfileSchema = z.object({
   modelHealth: z.array(ModelHealthSchema),
 });
 export type ProviderProfile = z.infer<typeof ProviderProfileSchema>;
+/**
+ * #50 / #61: validation SSOT for the provider-profile create/update *wire body*
+ * (the snake_case shape the SPA POSTs/PUTs). The backend safeParses against
+ * these before persisting, so malformed input 400s instead of silently
+ * producing an unusable active profile (empty name, `models:"m"` coerced to
+ * `[]`, or — #61 — an empty `models: []` that becomes the active provider with
+ * no selectable model).
+ *
+ * `models` must be a non-empty array of non-empty strings: a non-array value
+ * (e.g. the string "m") is a hard error, and an empty list `[]` is rejected
+ * too. On *create* the field is required — a fresh install's first profile is
+ * auto-selected as active, so it must carry at least one usable model. On
+ * *update* (the `.partial()` schema) the field may be omitted to leave models
+ * unchanged, but when present it still must be non-empty.
+ */
+const modelsField = z
+  .array(z.string().trim().min(1), {
+    message: "models must be an array of non-empty strings",
+  })
+  .min(1, "models must not be empty");
+
+export const ProviderProfileCreateSchema = z.object({
+  name: z.string().trim().min(1, "name is required"),
+  base_url: z.string().optional(),
+  baseUrl: z.string().optional(),
+  // #63: provider wire protocol. Optional on create (defaults to
+  // anthropic-messages downstream); on update, omit to leave unchanged.
+  api: ProviderApiSchema.optional(),
+  // #68: coarse adapter family (auto/openai/anthropic). Optional; when set
+  // without an explicit `api`, the runtime derives the precise wire value.
+  adapter: ProviderAdapterSchema.optional(),
+  api_key: z.string().optional(),
+  apiKey: z.string().optional(),
+  models: modelsField,
+  icon: z.string().optional(),
+  icon_color: z.string().optional(),
+  iconColor: z.string().optional(),
+  notes: z.string().optional(),
+});
+export type ProviderProfileCreate = z.infer<typeof ProviderProfileCreateSchema>;
+
+/**
+ * Update is a partial patch: every field optional (omitting `models` leaves it
+ * unchanged), but each field keeps its create-time rule when present — so a
+ * supplied `models` must still be a non-empty array (#61).
+ */
+export const ProviderProfileUpdateSchema = ProviderProfileCreateSchema.partial();
+export type ProviderProfileUpdate = z.infer<typeof ProviderProfileUpdateSchema>;
 
 /* ------------------------------------------------------------------ *
  * Files

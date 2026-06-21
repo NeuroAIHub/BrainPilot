@@ -1,5 +1,5 @@
 import { Check, ChevronDown, Copy } from "lucide-react";
-import { memo, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../contracts/backend";
 import { buildRenderItems } from "../../contexts/messageGroups";
 import { useT } from "../../i18n/useT";
@@ -7,16 +7,31 @@ import { MarkdownMessage } from "./MarkdownMessage";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { AskUserCard } from "./AskUserCard";
 import { AutoRetryIndicator } from "./AutoRetryIndicator";
+import { formatToolName, formatPayload } from "../../utils/toolDisplay";
+import { getChatScroll, setChatScroll, resolveScrollTop } from "./chatScrollMemory";
 
 interface MessageStreamProps {
   /** Already filtered / time-sliced by the host. */
   messages: ChatMessage[];
   /** Pin to bottom as new messages arrive (live chat). Default false. */
   autoScroll?: boolean;
+  /**
+   * #89 — session id used to remember scroll position/pinned intent across
+   * tab switches (Chat is unmounted when Agents/Trace is active). When set, the
+   * stream restores its prior position on mount instead of replaying a visible
+   * top-to-bottom scroll. Omit in read-only contexts (demo replay).
+   */
+  scrollKey?: string;
   /** Show the "N messages" toolbar row. Default true. */
   showToolbarCount?: boolean;
   /** Show per-agent elapsed timers + total conversation time. Live chat only. */
   showTiming?: boolean;
+  /**
+   * #99: whole-turn timing (user input → all agents finished). When provided,
+   * the footer shows this authoritative turn duration instead of a per-message
+   * span estimate. `running` drives a live ticking display.
+   */
+  turnTiming?: { running: boolean; elapsedMs: number | null; lastDurationMs: number | null };
   className?: string;
   ariaLabel?: string;
   /** 修正6 — submit an ask_user answer. Omitted in read-only contexts (demo). */
@@ -66,8 +81,10 @@ function formatElapsed(ms: number): string {
 function MessageStreamImpl({
   messages,
   autoScroll = false,
+  scrollKey,
   showToolbarCount = true,
   showTiming = false,
+  turnTiming,
   className,
   ariaLabel,
   onAskUserSubmit,
@@ -115,59 +132,55 @@ function MessageStreamImpl({
     return null;
   }, [messages]);
 
-  // Per-message timing. start = createdAt; end is stamped the first time a
-  // message is observed no longer streaming. A 1s tick drives live re-render
-  // while anything is streaming so running timers advance.
-  const timingRef = useRef<Map<string, { start: number; end: number | null }>>(new Map());
-  const [, setNow] = useState(0);
+  // #99: per-message timer is shown ONLY on the live streaming message — it is a
+  // live "this run has been going for Ns" indicator, never attached to a
+  // completed message or a user bubble (which previously drifted with wall-clock
+  // age). The authoritative whole-turn duration lives in the footer (turnTiming).
   const anyStreaming = liveStreamingId !== null;
-
-  useEffect(() => {
-    if (!showTiming) return;
-    const map = timingRef.current;
-    for (const m of messages) {
-      if (m.role === "user" || m.kind === "hook") continue;
-      const startMs = m.createdAt ? Date.parse(m.createdAt) : NaN;
-      const existing = map.get(m.id);
-      if (!existing) {
-        map.set(m.id, { start: Number.isNaN(startMs) ? Date.now() : startMs, end: m.streaming ? null : Date.now() });
-      } else if (existing.end === null && !m.streaming) {
-        existing.end = Date.now();
-      }
-    }
-  }, [messages, showTiming]);
-
+  const [, setNow] = useState(0);
   useEffect(() => {
     if (!showTiming || !anyStreaming) return;
     const id = window.setInterval(() => setNow((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [showTiming, anyStreaming]);
 
-  // Total conversation time: span from the earliest tracked start to the
-  // latest finish, shown only once the turn is idle and at least one message
-  // has completed.
-  const totalElapsed = useMemo(() => {
-    if (!showTiming || anyStreaming) return null;
-    let min = Infinity;
-    let max = -Infinity;
-    for (const m of messages) {
-      const entry = timingRef.current.get(m.id);
-      if (!entry || entry.end === null) continue;
-      if (entry.start < min) min = entry.start;
-      if (entry.end > max) max = entry.end;
-    }
-    if (min === Infinity || max <= min) return null;
-    return max - min;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [messages, showTiming, anyStreaming]);
-
   const elapsedLabel = (message: ChatMessage): string | null => {
     if (!showTiming) return null;
-    const entry = timingRef.current.get(message.id);
-    if (!entry) return null;
-    const end = entry.end ?? Date.now();
-    return formatElapsed(end - entry.start);
+    // Only the currently-streaming message carries a live timer.
+    if (message.id !== liveStreamingId) return null;
+    const startMs = message.createdAt ? Date.parse(message.createdAt) : NaN;
+    if (Number.isNaN(startMs)) return null;
+    return formatElapsed(Date.now() - startMs);
   };
+
+  // #89 — restore scroll position on (re)mount BEFORE the browser paints, so
+  // returning to Chat from another tab lands at the right place with no visible
+  // top-to-bottom replay. Reads the per-session memory: pinned/fresh → bottom,
+  // otherwise the saved history position. A double rAF re-applies after async
+  // layout (Markdown, images) settles, in case scrollHeight grew post-mount.
+  useLayoutEffect(() => {
+    const node = stackRef.current;
+    if (!node) return;
+    const mem = getChatScroll(scrollKey);
+    isPinnedRef.current = mem ? mem.pinned : true;
+    const apply = () => {
+      const n = stackRef.current;
+      if (!n) return;
+      n.scrollTop = resolveScrollTop(mem, n.scrollHeight);
+    };
+    apply();
+    let raf2 = 0;
+    const raf1 = window.requestAnimationFrame(() => {
+      apply();
+      raf2 = window.requestAnimationFrame(apply);
+    });
+    return () => {
+      window.cancelAnimationFrame(raf1);
+      if (raf2) window.cancelAnimationFrame(raf2);
+    };
+    // Mount-only restore; live append is handled by the autoScroll effect below.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [scrollKey]);
 
   useEffect(() => {
     if (!autoScroll) {
@@ -187,6 +200,8 @@ function MessageStreamImpl({
     }
     const distanceFromBottom = node.scrollHeight - node.scrollTop - node.clientHeight;
     isPinnedRef.current = distanceFromBottom < 24;
+    // #89 — persist intent so a tab switch (which unmounts Chat) can restore it.
+    setChatScroll(scrollKey, { scrollTop: node.scrollTop, pinned: isPinnedRef.current });
   };
 
   const handleCopy = async (id: string, text: string) => {
@@ -344,10 +359,19 @@ function MessageStreamImpl({
     const displayName = message.agent || (message.role === "system" ? "system" : "principal");
     const isLive = message.id === liveStreamingId;
     const timing = elapsedLabel(message);
-    const content = message.kind === "error" ? (
-      <p className="message-card__content--plain message-row__error">{message.content || (message.streaming ? t("chat.generating") : "")}</p>
-    ) : (
-      <MarkdownMessage content={message.content || (message.streaming ? t("chat.generating") : "")} />
+    const hasContent = !!message.content.trim();
+    const displayContent = hasContent ? message.content : (message.streaming ? t("chat.streamingPending") : "");
+    const content = (
+      <div className={`message-row__content ${message.streaming && !hasContent ? "message-row__content--pending" : ""}`}>
+        {message.kind === "error" ? (
+          <p className="message-card__content--plain message-row__error">{displayContent}</p>
+        ) : (
+          <MarkdownMessage content={displayContent} />
+        )}
+        {message.streaming && message.kind !== "error" ? (
+          <span className="message-row__streaming-cursor" aria-hidden="true" />
+        ) : null}
+      </div>
     );
     return (
       <div
@@ -377,15 +401,30 @@ function MessageStreamImpl({
   const renderActivityStep = (step: ChatMessage) => {
     const isExpert = !!step.agent && step.agent !== "principal";
     if (step.kind === "tool") {
+      // #84: render a friendly tool name (mcp__server__tool → server · tool) and
+      // un-escaped payloads. The raw name stays in `title` for debugging/copy.
+      const friendly = t("chat.toolPrefix", { name: formatToolName(step.toolName) });
+      const input = formatPayload(step.toolInput);
+      const result = formatPayload(step.toolResult);
       return (
         <div className="activity-step" key={step.id}>
           <details>
-            <summary>
+            <summary title={step.toolName || undefined}>
               {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
-              {step.content || t("chat.toolPrefix", { name: step.toolName || "tool" })}
+              {friendly}
             </summary>
-            {step.toolInput !== undefined && step.toolInput !== "" ? <pre>{JSON.stringify(step.toolInput, null, 2)}</pre> : null}
-            {step.toolResult !== undefined ? <pre>{JSON.stringify(step.toolResult, null, 2)}</pre> : null}
+            {input ? (
+              <div className="activity-step__io">
+                <span className="activity-step__io-label">{t("chat.toolArgs")}</span>
+                <pre>{input}</pre>
+              </div>
+            ) : null}
+            {result ? (
+              <div className="activity-step__io">
+                <span className="activity-step__io-label">{t("chat.toolResult")}</span>
+                <pre>{result}</pre>
+              </div>
+            ) : null}
           </details>
         </div>
       );
@@ -400,7 +439,7 @@ function MessageStreamImpl({
     return (
       <div className="activity-step" key={step.id}>
         {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
-        <MarkdownMessage content={step.content || (step.streaming ? t("chat.generating") : "")} />
+        <MarkdownMessage content={step.content || (step.streaming ? t("chat.streamingPending") : "")} />
       </div>
     );
   };
@@ -410,7 +449,7 @@ function MessageStreamImpl({
   const activitySubtitle = (steps: ChatMessage[], streaming: boolean) => {
     if (!streaming) return t("chat.thinkingSteps", { count: steps.length });
     const last = steps[steps.length - 1];
-    if (last?.kind === "tool") return t("chat.toolCall", { name: last.toolName || "tool" });
+    if (last?.kind === "tool") return t("chat.toolCall", { name: formatToolName(last.toolName) });
     const text = (last?.reasoning || last?.content || "").trim();
     if (text) return text.length > 80 ? `${text.slice(0, 80)}…` : text;
     return t("chat.thinking");
@@ -448,9 +487,11 @@ function MessageStreamImpl({
           </div>
         ),
       )}
-      {totalElapsed !== null ? (
+      {showTiming && turnTiming && turnTiming.elapsedMs !== null ? (
         <div className="message-stack__total" role="status">
-          {t("chat.totalTime", { time: formatElapsed(totalElapsed) })}
+          {t(turnTiming.running ? "chat.turnTimeRunning" : "chat.totalTime", {
+            time: formatElapsed(turnTiming.elapsedMs),
+          })}
         </div>
       ) : null}
     </div>

@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, ChatMessage, MessageFilterRule, Session, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, ChatMessage, MessageFilterRule, Session, SessionTokenUsage, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
@@ -14,6 +14,8 @@ import {
   generateUUID,
   reduceMessagesForEvent,
 } from "./messageReducer";
+import { reduceAgentsForEvent } from "./agentsReducer";
+import { reduceTraceForEvent } from "./traceReducer";
 
 export interface AgentMessageFilter {
   hideMessages: boolean;
@@ -37,7 +39,24 @@ interface SessionContextValue {
   error: string | null;
   currentView: "chat" | "agents" | "trace";
   agents: AgentStatus[];
+  /**
+   * #99: authoritative whole-turn run-active signal from session_state.runState
+   * (trace agent excluded, delivery loops included), with the backend timestamp
+   * of the snapshot. null until the first session_state arrives. Drives the
+   * whole-turn timer in the Chat footer.
+   */
+  runActive: { active: boolean; atMs: number } | null;
+  /**
+   * Cumulative real token usage for the current session (total + per-agent),
+   * fed live from `session_state` frames. null until the first frame carrying
+   * usage arrives.
+   */
+  tokenUsage: SessionTokenUsage | null;
   agentFilters: Record<string, AgentMessageFilter>;
+  /** Live Graph of Trace for the current session (#79), or null if none/unloaded. */
+  currentTrace: TraceGraph | null;
+  /** Re-seed the trace graph from the HTTP route (manual refresh). */
+  refreshTrace: (sessionId: string) => Promise<void>;
   selectSession: (sessionId: string) => void;
   createSession: (title?: string, opts?: { providerId?: string; modelId?: string }) => Promise<Session | null>;
   /**
@@ -48,7 +67,9 @@ interface SessionContextValue {
   startDraftSession: () => void;
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string }) => Promise<void>;
+  /** Resolves true when the message was accepted, false on validation/timeout/
+   *  error — the composer uses this to restore the draft so input isn't lost. */
+  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string }) => Promise<boolean>;
   interruptCurrent: () => Promise<void>;
   /**
    * 修正6 — answer an ask_user (user_input_request) card. Optimistically
@@ -68,6 +89,82 @@ interface SessionContextValue {
 export const DRAFT_SESSION_ID = "__draft__";
 
 const SessionContext = createContext<SessionContextValue | null>(null);
+// Runtime treats `limit=0` as "return the full persisted event log". Rehydrate
+// must not use a fixed tail size because slicing through TEXT_MESSAGE_START /
+// CONTENT / END leaves old long sessions looking empty.
+const HISTORY_REHYDRATE_LIMIT = 0;
+
+function foldSessionHistory(events: unknown[], sessionId: string): {
+  messages: ChatMessage[];
+  trace: TraceGraph | null;
+  agents: AgentStatus[] | null;
+  tokenUsage: SessionTokenUsage | null;
+} {
+  let messages: ChatMessage[] = [];
+  let trace: TraceGraph | null = null;
+  let lastAgents: AgentStatus[] | null = null;
+  let lastUsage: SessionTokenUsage | null = null;
+
+  for (const raw of events) {
+    const ev = normalizeWebSocketEvent(raw);
+    if (!ev) continue;
+    messages = reduceMessagesForEvent(messages, ev);
+    trace = reduceTraceForEvent(trace, ev, sessionId);
+    if (ev.type === "CUSTOM" && ev.name === "session_state") {
+      const v = (ev.value ?? {}) as Record<string, unknown>;
+      if (Array.isArray(v.agents)) {
+        lastAgents = (v.agents as Array<Record<string, unknown>>).map((agent) => ({
+          name: String(agent.name ?? ""),
+          status: String(agent.status ?? "idle"),
+          task: String(agent.task ?? ""),
+          updatedAt:
+            typeof agent.updatedAt === "string"
+              ? agent.updatedAt
+              : new Date().toISOString(),
+          alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
+        }));
+      }
+      const usage = parseTokenUsageValue(v.tokenUsage);
+      if (usage) lastUsage = usage;
+    }
+  }
+
+  return { messages, trace, agents: lastAgents, tokenUsage: lastUsage };
+}
+
+/**
+ * Coerce a wire `session_state.tokenUsage` value into SessionTokenUsage, or
+ * null when absent/malformed. Mirrors `normalizeSessionTokenUsage` in the
+ * backend contract but works off the already-shaped CUSTOM event value.
+ */
+function parseTokenUsageValue(rawValue: unknown): SessionTokenUsage | null {
+  if (rawValue == null || typeof rawValue !== "object") return null;
+  const raw = rawValue as Record<string, unknown>;
+  const num = (v: unknown): number => (typeof v === "number" && Number.isFinite(v) ? v : 0);
+  const one = (x: unknown) => {
+    const u = (x ?? {}) as Record<string, unknown>;
+    return {
+      input: num(u.input),
+      output: num(u.output),
+      cacheRead: num(u.cacheRead),
+      cacheWrite: num(u.cacheWrite),
+      total: num(u.total),
+    };
+  };
+  const byAgentRaw = (raw.byAgent ?? {}) as Record<string, unknown>;
+  const byAgent: SessionTokenUsage["byAgent"] = {};
+  for (const [name, value] of Object.entries(byAgentRaw)) byAgent[name] = one(value);
+  return { total: one(raw.total), byAgent };
+}
+
+function defaultAgentFilter(agentName: string): AgentMessageFilter {
+  const isTrace = agentName === "trace";
+  return {
+    hideMessages: isTrace,
+    hideTools: isTrace,
+    hideHooks: true,
+  };
+}
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const { isAuthReady } = useAuth();
@@ -92,8 +189,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // so keystrokes don't re-render the whole chat subtree. Drafts are keyed by
   // session id and survive PromptComposer unmount (tab switches).
   const [agents, setAgents] = useState<AgentStatus[]>([]);
+  // #99: authoritative whole-turn run-active flag from session_state.runState
+  // (derived by the runtime: trace agent excluded, delivery loops included),
+  // paired with the backend ISO timestamp of the snapshot that carried it. The
+  // turn timer keys off transitions of this flag, not the per-agent list.
+  const [runActive, setRunActive] = useState<{ active: boolean; atMs: number } | null>(null);
+  // Cumulative real token usage for the current session, fed from session_state.
+  const [tokenUsage, setTokenUsage] = useState<SessionTokenUsage | null>(null);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
   const [messageFilters, setMessageFilters] = useState<MessageFilterRule[]>(defaultFilterRules);
+  // #79: live Graph of Trace per session. Seeded by a fetch on session change,
+  // then kept live by CUSTOM:trace_node SSE events (see the queue drain below).
+  const [traceBySession, setTraceBySession] = useState<Record<string, TraceGraph>>({});
 
 
   const currentSession = useMemo(
@@ -133,23 +240,76 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     void refreshSessions();
   }, [refreshSessions]);
 
+  // Sessions whose persisted history has already been pulled this page-load.
+  // Guards against re-hydrating on every tab switch — once SSE is attached we
+  // own the up-to-date state and don't want to refetch the .jsonl tail.
+  const hydratedSessionsRef = useRef<Set<string>>(new Set());
+
   useEffect(() => {
     if (!currentSessionId) {
       return;
     }
     const sessionId = currentSessionId;
-    let cancelled = false;
-    async function loadMessages() {
-      setIsRefreshingMessages(true);
-      if (!cancelled) {
-        setMessagesBySession((current) => ({ ...current, [sessionId]: current[sessionId] ?? [] }));
-      }
-      setIsRefreshingMessages(false);
+    if (hydratedSessionsRef.current.has(sessionId)) {
+      return;
     }
-    void loadMessages();
-    return () => {
-      cancelled = true;
-    };
+    let cancelled = false;
+
+    async function loadHistory() {
+      setIsRefreshingMessages(true);
+      try {
+        const { events } = await api.sessions.getHistory(sessionId, { limit: HISTORY_REHYDRATE_LIMIT });
+        if (cancelled) return;
+
+        // Replay the persisted event stream through the same reducers SSE uses
+        // (messageReducer / traceReducer / agents seed via session_state). The
+        // SSE ring buffer that arrives next is deduped by messageId/toolCallId
+        // inside the reducer, so any overlap is a no-op.
+        const { messages: nextMessages, trace: nextTrace, agents: lastAgents, tokenUsage: lastUsage } =
+          foldSessionHistory(events, sessionId);
+
+        if (cancelled) return;
+        hydratedSessionsRef.current.add(sessionId);
+        if (lastUsage) setTokenUsage(lastUsage);
+
+        // Only seed the message list if the user hasn't already started typing
+        // / receiving live SSE for this session in the brief window before
+        // history arrived (otherwise we'd clobber their in-flight messages).
+        setMessagesBySession((current) => {
+          if ((current[sessionId]?.length ?? 0) > 0) return current;
+          return { ...current, [sessionId]: nextMessages };
+        });
+        if (nextTrace) {
+          setTraceBySession((current) =>
+            current[sessionId] ? current : { ...current, [sessionId]: nextTrace! },
+          );
+        }
+        // Only seed agents when the current panel is empty — live SSE may have
+        // already pushed an authoritative session_state since selection.
+        if (lastAgents && lastAgents.length > 0) {
+          setAgents((current) => (current.length === 0 ? lastAgents! : current));
+          setAgentFilters((current) => {
+            let changed = false;
+            const next = { ...current };
+            for (const agent of lastAgents) {
+              if (!next[agent.name]) {
+                changed = true;
+                next[agent.name] = defaultAgentFilter(agent.name);
+              }
+            }
+            return changed ? next : current;
+          });
+        }
+      } catch (err) {
+        // Best-effort. SSE will eventually drive the panel; we shouldn't surface
+        // a banner just because the history file was unreachable for a moment.
+        console.warn(`[SessionContext] history rehydrate failed for ${sessionId}:`, err);
+      } finally {
+        if (!cancelled) setIsRefreshingMessages(false);
+      }
+    }
+
+    void loadHistory();
     return () => {
       cancelled = true;
     };
@@ -160,6 +320,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setIsDraft(false);
     setCurrentSessionId(sessionId);
     setCurrentView("chat");
+    setRunActive(null); // #99: drop the previous session's turn-active signal
+    setTokenUsage(null); // drop the previous session's token totals
     connectSession(sessionId);
   }, [connectSession]);
 
@@ -204,6 +366,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Drop any unsent draft so re-creating a session with the same id (rare,
       // but possible) doesn't resurrect stale text.
       draftStore.delete(sessionId);
+      hydratedSessionsRef.current.delete(sessionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.deleteFailed"));
       throw err;
@@ -247,26 +410,30 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const trimmed = content.trim();
       console.log(`[SessionContext] sendPrompt: "${trimmed.slice(0, 40)}...", isConnected=${isConnected}, isDraft=${isDraft}`);
       if (!trimmed) {
-        return;
+        return false;
       }
       // A draft has no SSE connection yet — the session is created and
       // connected below. Only block on connection for an already-persisted
       // session.
       if (!currentSession && !isDraft) {
         setError(tg("ctx.session.noConnection"));
-        return;
+        return false;
       }
       if (currentSession && !isConnected) {
         setError(tg("ctx.session.noConnection"));
-        return;
+        return false;
       }
 
       setIsSending(true);
       setError(null);
+      // Tracked so we can roll back the optimistic user message if the post
+      // fails/times out (#106) — otherwise the bubble lingers and a retry
+      // duplicates it.
+      let optimistic: { sessionId: string; messageId: string } | null = null;
       try {
         const session = currentSession ?? (await createSession(trimmed.slice(0, 48), opts));
         if (!session) {
-          return;
+          return false;
         }
         // Freshly created (draft → persisted): open the SSE stream so the
         // assistant's streamed reply is received.
@@ -286,6 +453,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           createdAt: timestamp,
           agent: "user",
         };
+        optimistic = { sessionId: session.id, messageId: uuid };
         setMessagesBySession((current) => ({
           ...current,
           [session.id]: [...(current[session.id] ?? []), userMessage],
@@ -293,9 +461,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         console.log(`[SessionContext] posting message to ${session.id}`);
         await api.sessions.postMessage(session.id, { content: trimmed, uuid, timestamp });
         console.log(`[SessionContext] postMessage success`);
+        return true;
       } catch (err) {
         console.error(`[SessionContext] sendPrompt error:`, err);
-        setError(err instanceof Error ? err.message : tg("ctx.session.sendFailed"));
+        // #106: roll back the optimistic bubble so the failed send doesn't
+        // leave a ghost message (and a retry doesn't duplicate it).
+        if (optimistic) {
+          const { sessionId: sid, messageId } = optimistic;
+          setMessagesBySession((current) => ({
+            ...current,
+            [sid]: (current[sid] ?? []).filter((m) => m.id !== messageId),
+          }));
+        }
+        // AbortSignal.timeout() rejects with a TimeoutError (and a hard abort
+        // with AbortError). Surface a clear, retryable message instead of the
+        // raw DOMException text, and let `finally` release isSending so the
+        // composer never stays stuck on "正在准备发送".
+        const isTimeout =
+          err instanceof DOMException &&
+          (err.name === "TimeoutError" || err.name === "AbortError");
+        setError(
+          isTimeout
+            ? tg("ctx.session.sendTimeout")
+            : err instanceof Error
+              ? err.message
+              : tg("ctx.session.sendFailed"),
+        );
+        return false;
       } finally {
         setIsSending(false);
       }
@@ -307,24 +499,34 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async () => {
       if (!currentSession) return;
       const sid = currentSession.id;
-      // Optimistic update: immediately stop the spinner so the user can type
-      // the next message without waiting for the backend RUN_FINISHED round-trip.
-      setMessagesBySession((current) => {
-        const msgs = current[sid] ?? [];
-        const stoppedMsg: ChatMessage = {
-          id: generateUUID(),
-          role: "system",
-          content: "Task stopped by user",
-          createdAt: new Date().toISOString(),
-          kind: "status",
-        };
-        return { ...current, [sid]: [...finalizeAssistant(msgs), stoppedMsg] };
-      });
-      setAgents((current) =>
-        current.map((a) => ({ ...a, status: "idle", task: "" })),
-      );
+      // #90: NOT optimistic. Wait for the interrupt to actually land before
+      // touching the UI — the old code optimistically forced every agent idle
+      // and inserted a "stopped" message even when the request hit the wrong
+      // endpoint and failed, permanently masking the failure while the runtime
+      // kept the agent running. We never speculatively mutate agent state now, so
+      // a failed interrupt leaves the true (still-running) state visible via the
+      // authoritative SSE session_state stream.
       try {
-        await api.sessions.interrupt(sid);
+        const { interrupted } = await api.sessions.interrupt(sid);
+        if (!interrupted) {
+          // Nothing was running to interrupt (or the session is gone). Surface it
+          // rather than pretending the task stopped.
+          setError(tg("ctx.session.interruptFailed"));
+          return;
+        }
+        // Confirmed stopped: insert the status line. Agent state (incl. the PI
+        // interrupt-acknowledgement run the runtime now fires) flows in via SSE.
+        setMessagesBySession((current) => {
+          const msgs = current[sid] ?? [];
+          const stoppedMsg: ChatMessage = {
+            id: generateUUID(),
+            role: "system",
+            content: tg("chat.stoppedByUser"),
+            createdAt: new Date().toISOString(),
+            kind: "status",
+          };
+          return { ...current, [sid]: [...finalizeAssistant(msgs), stoppedMsg] };
+        });
       } catch (err) {
         setError(err instanceof Error ? err.message : tg("ctx.session.interruptFailed"));
       }
@@ -362,15 +564,40 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!currentSession) {
       return;
     }
-    console.log(`[SessionContext] refreshMessages: ${currentSession.id}`);
+      console.log(`[SessionContext] refreshMessages: ${currentSession.id}`);
     setIsRefreshingMessages(true);
     setError(null);
     try {
-      // Re-connect the SSE stream — the server will emit a fresh
-      // MESSAGES_SNAPSHOT as the first frame, replacing the local cache.
+      const { events } = await api.sessions.getHistory(currentSession.id, {
+        limit: HISTORY_REHYDRATE_LIMIT,
+      });
+      const { messages: nextMessages, trace: nextTrace, agents: nextAgents, tokenUsage: nextUsage } =
+        foldSessionHistory(events, currentSession.id);
+
+      if (nextUsage) setTokenUsage(nextUsage);
+      setMessagesBySession((current) => ({ ...current, [currentSession.id]: nextMessages }));
+      if (nextTrace) {
+        setTraceBySession((current) => ({ ...current, [currentSession.id]: nextTrace }));
+      }
+      if (nextAgents && nextAgents.length > 0) {
+        setAgents(nextAgents);
+        setAgentFilters((current) => {
+          let changed = false;
+          const next = { ...current };
+          for (const agent of nextAgents) {
+            if (!next[agent.name]) {
+              changed = true;
+              next[agent.name] = defaultAgentFilter(agent.name);
+            }
+          }
+          return changed ? next : current;
+        });
+      }
+      hydratedSessionsRef.current.add(currentSession.id);
+
+      // Re-connect the SSE stream so live updates continue after the disk
+      // history has refreshed the local cache.
       disconnectSession(currentSession.id);
-      // Clear local state so the snapshot becomes the authoritative source.
-      setMessagesBySession((current) => ({ ...current, [currentSession.id]: [] }));
       connectSession(currentSession.id);
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.refreshFailed"));
@@ -404,6 +631,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       cancelled = true;
     };
   }, [currentSession?.id]);
+
+  // #79: seed the Graph of Trace once per session. Live updates thereafter
+  // arrive incrementally via CUSTOM:trace_node (queue drain below), so no poll.
+  const refreshTrace = useCallback(async (sessionId: string) => {
+    try {
+      const graph = await api.sessions.getTrace(sessionId);
+      setTraceBySession((current) => ({ ...current, [sessionId]: graph }));
+    } catch {
+      // Non-fatal — the panel shows an empty graph until events arrive.
+    }
+  }, []);
+
+  useEffect(() => {
+    const sid = currentSession?.id;
+    if (!sid) return;
+    void refreshTrace(sid);
+  }, [currentSession?.id, refreshTrace]);
 
   // Auto-connect SSE whenever the current session changes. Other connections
   // are kept open so background sessions continue receiving events.
@@ -461,6 +705,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
         }));
         setAgents(nextAgents);
+        // #99: feed the whole-turn timer. runState.active is the authoritative
+        // "the user's task is still running" flag; lastActivityTs is the backend
+        // timestamp of this snapshot (fallback to now() if absent).
+        const rs = (value.runState ?? {}) as Record<string, unknown>;
+        const tsRaw = typeof value.lastActivityTs === "string" ? Date.parse(value.lastActivityTs) : NaN;
+        setRunActive({
+          active: rs.active === true,
+          atMs: Number.isNaN(tsRaw) ? Date.now() : tsRaw,
+        });
+        // Cumulative real token usage rides on the same frame (optional).
+        const usage = parseTokenUsageValue(value.tokenUsage);
+        if (usage) setTokenUsage(usage);
         // Apply default filters for newly discovered agents:
         // - trace agent: hide messages and tools by default
         // - all agents: hide hooks by default
@@ -471,12 +727,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             const existing = current[agent.name];
             if (!existing) {
               changed = true;
-              const isTrace = agent.name === "trace";
-              next[agent.name] = {
-                hideMessages: isTrace,
-                hideTools: isTrace,
-                hideHooks: true,
-              };
+              next[agent.name] = defaultAgentFilter(agent.name);
             }
           }
           return changed ? next : current;
@@ -506,6 +757,53 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         continue;
       }
     }
+
+    // #70: keep the Agents panel live between session_state snapshots by merging
+    // standalone agent_status_update events. session_state (above) remains the
+    // wholesale authority; this applies single-agent deltas on top so the panel
+    // updates on the first run without a reload/reselect. The queue is already
+    // scoped to the current session (queueRef.get(sid)), so background-session
+    // events don't leak in here.
+    setAgents((current) => {
+      let nextAgents = current;
+      const appended: AgentStatus[] = [];
+      for (const event of queue) {
+        if (event.type !== "agent_status_update") continue;
+        const before = nextAgents;
+        nextAgents = reduceAgentsForEvent(nextAgents, event);
+        if (nextAgents.length > before.length) {
+          appended.push(nextAgents[nextAgents.length - 1]!);
+        }
+      }
+      if (appended.length > 0) {
+        // Apply the same default filters session_state uses for newly seen
+        // agents (trace: hide messages/tools; all: hide hooks).
+        setAgentFilters((cur) => {
+          let changed = false;
+          const nf = { ...cur };
+          for (const agent of appended) {
+            if (!cur[agent.name]) {
+              changed = true;
+              nf[agent.name] = defaultAgentFilter(agent.name);
+            }
+          }
+          return changed ? nf : cur;
+        });
+      }
+      return nextAgents;
+    });
+
+    // #79: fold CUSTOM:trace_node events into the live Graph of Trace. The queue
+    // is already scoped to the current session, so only this session's graph
+    // updates. reduceTraceForEvent ignores non-trace events (same reference).
+    setTraceBySession((current) => {
+      const start = current[sid] ?? null;
+      let graph: TraceGraph | null = start;
+      for (const event of queue) {
+        graph = reduceTraceForEvent(graph, event, sid);
+      }
+      return graph && graph !== start ? { ...current, [sid]: graph } : current;
+    });
 
     // Process all events through the message reducer.
     setMessagesBySession((current) => {
@@ -539,6 +837,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  const currentTrace = useMemo(
+    () => (currentSessionId ? (traceBySession[currentSessionId] ?? null) : null),
+    [currentSessionId, traceBySession],
+  );
+
   const value = useMemo(
     () => ({
       sessions,
@@ -552,7 +855,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       error,
       currentView,
       agents,
+      runActive,
+      tokenUsage,
       agentFilters,
+      currentTrace,
+      refreshTrace,
       selectSession,
       createSession,
       startDraftSession,
@@ -579,7 +886,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       error,
       currentView,
       agents,
+      runActive,
+      tokenUsage,
       agentFilters,
+      currentTrace,
+      refreshTrace,
       selectSession,
       createSession,
       startDraftSession,

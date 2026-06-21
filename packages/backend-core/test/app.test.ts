@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
-import { mkdtemp, mkdir, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
+import { createRequire } from "node:module";
 import path from "node:path";
 import { createApp } from "../src/app.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
@@ -121,6 +122,39 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it("GET /api/sessions/:id/history forwards to the runtime (preserving ?limit)", async () => {
+    // Same class as the /trace regression: chat rehydrate after a runtime
+    // restart depends on this proxy. When it was missing, the SPA's
+    // api.sessions.getHistory call hit the static SPA fallback, returned 200
+    // text/html, and the SessionContext silently treated it as zero events —
+    // so restored sessions opened with an empty chat.
+    const body =
+      '{"events":[{"type":"TEXT_MESSAGE_START","messageId":"m1","role":"assistant"}],"total":1,"truncated":false}';
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/sessions/abc/history?limit=3");
+      return new Response(body, {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const root = await mkdtemp(path.join(tmpdir(), "bp-web-history-"));
+    await writeFile(path.join(root, "index.html"), "<!doctype html><title>BP</title>");
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      webRoot: root,
+    });
+    const res = await app.request("/api/sessions/abc/history?limit=3");
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    expect(await res.json()).toEqual({
+      events: [{ type: "TEXT_MESSAGE_START", messageId: "m1", role: "assistant" }],
+      total: 1,
+      truncated: false,
+    });
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
   // #29: session rename. The SPA PUTs /api/sessions/:id {title}; this must
   // proxy to the runtime's updateSession route (PUT /sessions/:id) with the
   // body intact — not the old forwardRename hack that PUT the GET path.
@@ -177,6 +211,24 @@ describe("Hono app — REST forwarding", () => {
     });
     const res = await app.request("/api/health");
     expect(await res.json()).toEqual({ status: "ok" });
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  // #46: /version must report the real package version, not a hardcoded
+  // literal. Assert it matches this package's own package.json so the value
+  // can never drift from the published version again.
+  it("GET /api/version reports the real package version (not a hardcoded literal)", async () => {
+    const require = createRequire(import.meta.url);
+    const pkg = require("../package.json") as { name: string; version: string };
+    const fetchFn = vi.fn();
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/version");
+    expect(await res.json()).toEqual({ name: pkg.name, version: pkg.version });
+    expect(pkg.version).not.toBe("0.1.0"); // the old hardcoded drift value
     expect(fetchFn).not.toHaveBeenCalled();
   });
 });
@@ -341,5 +393,279 @@ describe("Hono app — local config routes", () => {
     const del = await app.request(`/api/provider/profiles/${profile.id}`, { method: "DELETE" });
     expect(del.status).toBe(200);
     expect((await del.json()) as { deleted: boolean }).toEqual({ deleted: true });
+  });
+
+  // #50: malformed provider profiles must 400, not silently create an unusable
+  // active profile.
+  describe("#50 provider profile validation", () => {
+    async function provApp() {
+      const dir = await mkdtemp(path.join(tmpdir(), "bp-prov50-"));
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: vi.fn() as never,
+        serveWeb: false,
+        dataDir: dir,
+        env: {},
+      });
+      return { app, dir };
+    }
+    const postProfile = (app: ReturnType<typeof createApp>, body: unknown) =>
+      app.request("/api/provider/profiles", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body),
+      });
+
+    it("rejects an empty name with 400", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "", base_url: "https://x", api_key: "sk-x", models: ["m"] });
+      expect(res.status).toBe(400);
+      expect(res.headers.get("content-type")).toContain("application/json");
+    });
+
+    it("rejects whitespace-only name with 400", async () => {
+      const { app } = await provApp();
+      expect((await postProfile(app, { name: "   ", models: ["m"] })).status).toBe(400);
+    });
+
+    it("rejects a non-array models with 400 (not a silent empty list)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Bad Models Type", base_url: "https://x", api_key: "sk-x", models: "m" });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects an empty models array with 400 (#61)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "empty-first", base_url: "", api_key: "sk-empty", models: [] });
+      expect(res.status).toBe(400);
+      // The empty-models profile must not have been persisted or activated.
+      expect((await app.request("/api/provider/profiles/active")).status).toBe(204);
+      const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+      expect(list).toHaveLength(0);
+    });
+
+    it("rejects a create with no models field at all with 400 (#61)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "no-models", base_url: "https://x", api_key: "sk-x" });
+      expect(res.status).toBe(400);
+    });
+
+    it("does not persist or activate an invalid profile", async () => {
+      const { app } = await provApp();
+      await postProfile(app, { name: "", base_url: "https://x", api_key: "sk-x", models: ["m"] });
+      // no profile was created → active returns 204
+      const active = await app.request("/api/provider/profiles/active");
+      expect(active.status).toBe(204);
+      const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+      expect(list).toHaveLength(0);
+    });
+
+    it("still accepts a valid profile (201) and selects it active", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Good", base_url: "https://x", api_key: "sk-x", models: ["m1", "m2"] });
+      expect(res.status).toBe(201);
+      const p = (await res.json()) as { is_active: boolean; models: string[] };
+      expect(p.is_active).toBe(true);
+      expect(p.models).toEqual(["m1", "m2"]);
+    });
+
+    it("persists and echoes the selected api protocol (#63)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "Azure",
+        base_url: "https://r.openai.azure.com/openai",
+        api: "azure-openai-responses",
+        api_key: "sk-az",
+        models: ["gpt-5.5"],
+      });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { api: string }).api).toBe("azure-openai-responses");
+    });
+
+    it("defaults api to anthropic-messages when omitted (#63 back-compat)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Legacy", base_url: "https://x", api_key: "sk-x", models: ["m"] });
+      expect(res.status).toBe(201);
+      expect(((await res.json()) as { api: string }).api).toBe("anthropic-messages");
+    });
+
+    // #68 (R-10): adapter + is_shared on the wire.
+    it("persists and echoes the adapter, defaulting to auto; is_shared is always false (#68)", async () => {
+      const { app } = await provApp();
+      const withAdapter = await postProfile(app, {
+        name: "OpenAI-ish",
+        base_url: "https://x",
+        adapter: "openai",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(withAdapter.status).toBe(201);
+      const a = (await withAdapter.json()) as { adapter: string; is_shared: boolean };
+      expect(a.adapter).toBe("openai");
+      expect(a.is_shared).toBe(false);
+
+      // omitted adapter → "auto"
+      const noAdapter = await postProfile(app, { name: "Plain", base_url: "https://y", api_key: "sk-y", models: ["m"] });
+      const b = (await noAdapter.json()) as { adapter: string; is_shared: boolean };
+      expect(b.adapter).toBe("auto");
+      expect(b.is_shared).toBe(false);
+    });
+
+    // #75: adapter without an explicit api must NOT be overridden by a default
+    // anthropic-messages — the echoed api derives from the adapter, and the
+    // stored profile carries no contradictory api.
+    it("derives api from adapter when api is omitted, no contradictory default (#75)", async () => {
+      const { app, dir } = await provApp();
+      const res = await postProfile(app, {
+        name: "adapter-openai-no-api",
+        adapter: "openai",
+        base_url: "https://example.invalid/v1",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(res.status).toBe(201);
+      const body = (await res.json()) as { api: string; adapter: string };
+      // echo reflects the derived wire value, not anthropic-messages
+      expect(body.adapter).toBe("openai");
+      expect(body.api).toBe("openai-completions");
+
+      // the stored profile must not contain the contradictory default
+      const stored = JSON.parse(
+        await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
+      ) as { profiles: Array<{ adapter?: string; api?: string }> };
+      expect(stored.profiles[0].adapter).toBe("openai");
+      expect(stored.profiles[0].api).toBe("openai-completions");
+    });
+
+    it("adapter=anthropic derives anthropic-messages; auto falls back to default (#75)", async () => {
+      const { app } = await provApp();
+      const ant = await postProfile(app, { name: "A", adapter: "anthropic", base_url: "https://x", api_key: "k", models: ["m"] });
+      expect(((await ant.json()) as { api: string }).api).toBe("anthropic-messages");
+      const auto = await postProfile(app, { name: "B", adapter: "auto", base_url: "https://x", api_key: "k", models: ["m"] });
+      expect(((await auto.json()) as { api: string }).api).toBe("anthropic-messages");
+    });
+
+    it("explicit api still wins over adapter (#75)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "explicit",
+        adapter: "anthropic",
+        api: "openai-responses",
+        base_url: "https://x",
+        api_key: "k",
+        models: ["m"],
+      });
+      expect(((await res.json()) as { api: string }).api).toBe("openai-responses");
+    });
+
+    it("rejects an unknown adapter value with 400 (#68)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "Bad Adapter",
+        base_url: "https://x",
+        adapter: "totally-made-up",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(res.status).toBe(400);
+    });
+
+    it("rejects an unknown api value with 400 (#63)", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, {
+        name: "Bad Api",
+        base_url: "https://x",
+        api: "totally-made-up",
+        api_key: "sk-x",
+        models: ["m"],
+      });
+      expect(res.status).toBe(400);
+    });
+  });
+
+  // #55: the Test button must do a real connectivity probe, not echo unknown.
+  describe("#55 provider test endpoint", () => {
+    async function makeProfile(fetchFn: unknown) {
+      const dir = await mkdtemp(path.join(tmpdir(), "bp-prov55-"));
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: fetchFn as never,
+        serveWeb: false,
+        dataDir: dir,
+        env: {},
+        providerProbeTimeoutMs: 50,
+      });
+      const created = await app.request("/api/provider/profiles", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ name: "Gw", base_url: "https://gw.example.com/api", api_key: "sk-x", models: ["m"] }),
+      });
+      const { id } = (await created.json()) as { id: string };
+      return { app, id };
+    }
+
+    it("reports unavailable for an unreachable gateway", async () => {
+      const fetchFn = vi.fn(async () => {
+        throw new TypeError("fetch failed");
+      });
+      const { app, id } = await makeProfile(fetchFn);
+      const res = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      expect(res.status).toBe(200);
+      const body = (await res.json()) as { health_status: string };
+      expect(body.health_status).toBe("unavailable");
+    });
+
+    it("reports healthy for a 2xx gateway", async () => {
+      const fetchFn = vi.fn(async () => new Response("{}", { status: 200 }));
+      const { app, id } = await makeProfile(fetchFn);
+      const res = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      const body = (await res.json()) as { health_status: string };
+      expect(body.health_status).toBe("healthy");
+    });
+
+    it("404s for an unknown profile id", async () => {
+      const fetchFn = vi.fn();
+      const { app } = await makeProfile(fetchFn);
+      const res = await app.request("/api/provider/profiles/nope/test", { method: "POST" });
+      expect(res.status).toBe(404);
+    });
+
+    // #69: the probe result must be persisted, so a later GET (card refresh /
+    // reopen) keeps the tested status instead of reverting to "unknown".
+    it("persists the probe result across list + health reads", async () => {
+      const fetchFn = vi.fn(async () => new Response("forbidden", { status: 403 }));
+      const { app, id } = await makeProfile(fetchFn);
+
+      // before any test: unknown
+      const before = (await (await app.request("/api/provider/profiles")).json()) as Array<{
+        id: string;
+        health_status: string;
+      }>;
+      expect(before.find((p) => p.id === id)?.health_status).toBe("unknown");
+
+      // test → 403 maps to "unavailable"
+      const test = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      const tested = (await test.json()) as { health_status: string; health_checked_at: number; health_message: string };
+      expect(tested.health_status).toBe("unavailable");
+      expect(tested.health_checked_at).toBeGreaterThan(0);
+      expect(tested.health_message).toContain("403");
+
+      // list still reflects the tested status (no longer unknown)
+      const list = (await (await app.request("/api/provider/profiles")).json()) as Array<{
+        id: string;
+        health_status: string;
+        health_checked_at?: number;
+      }>;
+      const fromList = list.find((p) => p.id === id);
+      expect(fromList?.health_status).toBe("unavailable");
+      expect(fromList?.health_checked_at).toBeGreaterThan(0);
+
+      // and the dedicated health endpoint too
+      const health = (await (await app.request("/api/provider/profiles/health")).json()) as Array<{
+        id: string;
+        health_status: string;
+      }>;
+      expect(health.find((p) => p.id === id)?.health_status).toBe("unavailable");
+    });
   });
 });

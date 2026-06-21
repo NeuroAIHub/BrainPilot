@@ -11,6 +11,8 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import type { ProviderApi, ProviderAdapter, HealthStatus } from "@brainpilot/protocol";
+import { deriveProviderApi } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -115,11 +117,31 @@ export interface StoredProviderProfile {
   id: string;
   name: string;
   baseUrl: string;
+  /** #63: wire protocol. Optional for back-compat with pre-#63 profiles
+   *  (read as anthropic-messages). createProfile defaults it. */
+  api?: ProviderApi;
+  /** #68 (R-10): coarse adapter family declared by the UI (auto/openai/
+   *  anthropic). When set without an explicit `api`, the runtime derives the
+   *  precise wire value. Optional; absent → treated as "auto". */
+  adapter?: ProviderAdapter;
   apiKey: string;
+  /** #65: name of an env var the key is read from at request time, instead of
+   *  persisting the plaintext secret. Set by the env bootstrap so a self-hosted
+   *  user who supplies ANTHROPIC_API_KEY via the environment never has it copied
+   *  into providers.json. When set, apiKey is left empty on disk and the runtime
+   *  falls back to its env gateway path (which reads the same env var). */
+  apiKeyEnv?: string;
   models: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
+  /** #69: last connectivity-probe result, persisted so the Settings card
+   *  reflects the test outcome across reads/reopens instead of "unknown".
+   *  Written by POST /provider/profiles/:id/test. */
+  healthStatus?: HealthStatus;
+  healthCheckedAt?: number;
+  healthMessage?: string;
+  healthLatencyMs?: number | null;
   createdAt: number;
   updatedAt: number;
 }
@@ -176,7 +198,15 @@ export async function createProfile(
     id: input.id ?? newId(),
     name: input.name ?? "Provider",
     baseUrl: input.baseUrl ?? "",
+    // #75: do not unconditionally default api to anthropic-messages — that
+    // short-circuited the runtime's adapter fallback (an `adapter:"openai"`
+    // profile got `api:"anthropic-messages"`, a contradictory state). Precedence:
+    // explicit api → derived from adapter → default. Persist only an explicit or
+    // adapter-derived api; leave it unset otherwise so the runtime resolves it.
+    api: input.api ?? deriveProviderApi(input.adapter),
+    adapter: input.adapter,
     apiKey: input.apiKey ?? "",
+    apiKeyEnv: input.apiKeyEnv,
     models: input.models ?? [],
     icon: input.icon,
     iconColor: input.iconColor,
@@ -200,11 +230,43 @@ export async function updateProfile(
   if (!profile) return undefined;
   // apiKey omitted in patch → keep existing (UI sends masked key, not the real one).
   const writable = profile as unknown as Record<string, unknown>;
-  for (const k of ["name", "baseUrl", "models", "icon", "iconColor", "notes"] as const) {
+  for (const k of ["name", "baseUrl", "api", "adapter", "models", "icon", "iconColor", "notes"] as const) {
     if (patch[k] !== undefined) writable[k] = patch[k];
   }
-  if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) profile.apiKey = patch.apiKey;
+  if (typeof patch.apiKey === "string" && patch.apiKey.length > 0) {
+    profile.apiKey = patch.apiKey;
+    // #65: the user is now intentionally persisting a key in Settings — drop the
+    // env reference so the stored key (not the env var) is the source of truth.
+    delete profile.apiKeyEnv;
+  }
   profile.updatedAt = Date.now();
+  await writeProviders(dataDir, file);
+  return profile;
+}
+
+/**
+ * #69: persist the latest connectivity-probe result on a profile. Kept
+ * separate from updateProfile (which is for user-edited fields and bumps
+ * updatedAt) — a health write must not look like a profile edit. Returns the
+ * updated profile, or undefined if the id is unknown.
+ */
+export async function setProfileHealth(
+  dataDir: string,
+  id: string,
+  health: {
+    healthStatus: HealthStatus;
+    healthCheckedAt: number;
+    healthMessage?: string;
+    healthLatencyMs?: number | null;
+  },
+): Promise<StoredProviderProfile | undefined> {
+  const file = await readProviders(dataDir);
+  const profile = file.profiles.find((p) => p.id === id);
+  if (!profile) return undefined;
+  profile.healthStatus = health.healthStatus;
+  profile.healthCheckedAt = health.healthCheckedAt;
+  profile.healthMessage = health.healthMessage ?? "";
+  profile.healthLatencyMs = health.healthLatencyMs ?? null;
   await writeProviders(dataDir, file);
   return profile;
 }
@@ -292,7 +354,9 @@ export async function resolveProvider(
     pickString(templateSettings, "model") ||
     pickString(config, "model") ||
     env.BP_MODEL ||
+    env.ANTHROPIC_MODEL ||
     dotenv.BP_MODEL ||
+    dotenv.ANTHROPIC_MODEL ||
     undefined;
 
   return { apiKey, baseUrl, model, source };
@@ -353,6 +417,64 @@ export async function writeLocalSettings(
 }
 
 /**
+ * #51: project env-only provider config into a real, selected provider profile
+ * on first launch, so a user who supplies ANTHROPIC_API_KEY (etc.) via the
+ * environment — the README's documented quick-start path — sees an active
+ * provider in Settings → Providers and an enabled model selector, instead of an
+ * empty providers.json and a disabled UI.
+ *
+ * Bootstrap semantics (intentionally a one-time seed, matching `init --api-key`):
+ *   - only runs when providers.json has NO profiles yet;
+ *   - only when the env actually supplies an API key;
+ *   - writes a selected "Environment" profile from the resolved env key / base
+ *     URL / model.
+ * After this, providers.json is the SSOT — anything the user later edits in
+ * Settings wins and is never re-overwritten from the env.
+ *
+ * Returns the created profile, or null if nothing was bootstrapped.
+ */
+export async function bootstrapEnvProvider(
+  dataDir: string,
+  env: Record<string, string | undefined> = process.env,
+): Promise<StoredProviderProfile | null> {
+  const { profiles } = await readProviders(dataDir);
+  if (profiles.length > 0) return null; // already configured — never clobber
+
+  // Reuse the full resolution chain, then only act on env/dotenv-sourced keys
+  // (a template/config key would already imply a profile or be handled by init).
+  const resolved = await resolveProvider({ dataDir, env });
+  if (!resolved.apiKey || (resolved.source !== "env" && resolved.source !== "dotenv")) {
+    return null;
+  }
+
+  // #65: do NOT copy the plaintext env key into providers.json. Record only the
+  // *name* of the env var the key came from; the profile is created with an
+  // empty apiKey, so at request time both resolveProvider (backend) and
+  // resolveSessionProvider (runtime) skip the empty key and fall back to the
+  // env gateway path, which reads the same env var. The profile still exists so
+  // the user sees an active "Environment" provider + model in Settings (#51),
+  // but the secret stays in the environment, never on disk.
+  const keySources =
+    resolved.source === "dotenv"
+      ? (await parseDotenv(configPaths(dataDir).dotenv))
+      : env;
+  const apiKeyEnv =
+    (keySources.ANTHROPIC_API_KEY && "ANTHROPIC_API_KEY") ||
+    (keySources.BP_API_KEY && "BP_API_KEY") ||
+    (keySources.OPENAI_API_KEY && "OPENAI_API_KEY") ||
+    "ANTHROPIC_API_KEY";
+
+  return createProfile(dataDir, {
+    name: "Environment",
+    baseUrl: resolved.baseUrl ?? "",
+    apiKey: "", // #65: never persisted; resolved from apiKeyEnv at request time
+    apiKeyEnv,
+    models: resolved.model ? [resolved.model] : [],
+    notes: `Auto-created from environment variables on first launch. The API key is read from $${apiKeyEnv} at request time and is not stored on disk.`,
+  });
+}
+
+/**
  * Onboarding-facing view of the resolved provider config. A boolean-only key
  * presence (never the plaintext key) plus the two files a user would edit, so
  * `init`/`up` can print accurate, consistent guidance from one source.
@@ -407,7 +529,7 @@ export function formatProviderGuidance(report: ProviderConfigReport): string[] {
     "  • web Settings UI: launch, open Settings → Providers, add a provider (recommended).",
     `  • providers file:  ${report.settingsPath}`,
     `      { "profiles": [ { "id": "local", "name": "Local", "apiKey": "<key>", "baseUrl": "<gateway, optional>", "models": ["<id>"] } ], "selectedProfileId": "local" }`,
-    "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / BP_MODEL)",
+    "  • env var:        export ANTHROPIC_API_KEY=<key>   (also ANTHROPIC_BASE_URL / ANTHROPIC_MODEL / BP_MODEL)",
     "  • re-run init:    brainpilot init --api-key <key> [--base-url <url>] [--model <id>]",
     "No key needed for a test run:  BP_MOCK=1 brainpilot up",
   ];

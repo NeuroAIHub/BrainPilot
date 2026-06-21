@@ -16,6 +16,11 @@ import { join } from "node:path";
 export interface ProviderConfig {
   providerId: string;
   baseUrl?: string;
+  /** #63: wire protocol (Pi models.json api). Undefined → runtime defaults it. */
+  api?: string;
+  /** #68: coarse adapter family (auto/openai/anthropic). When `api` is unset,
+   *  the runtime derives the precise wire value from this. */
+  adapter?: string;
   apiKey: string;
   modelId?: string;
 }
@@ -23,6 +28,8 @@ export interface ProviderConfig {
 interface StoredProfile {
   id: string;
   baseUrl?: string;
+  api?: string;
+  adapter?: string;
   apiKey?: string;
   models?: string[];
 }
@@ -69,6 +76,8 @@ export async function resolveSessionProvider(
   return {
     providerId: profile.id,
     baseUrl: profile.baseUrl || undefined,
+    api: profile.api || undefined,
+    adapter: profile.adapter || undefined,
     apiKey: profile.apiKey,
     modelId,
   };

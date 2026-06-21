@@ -17,6 +17,7 @@ import {
   CreateSessionRequestSchema,
   SendMessageRequestSchema,
   InterruptRequestSchema,
+  WriteFileRequestSchema,
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
 
@@ -69,13 +70,39 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return graph ? c.json(graph) : c.json({ error: "not found" }, 404);
   });
 
+  // Persisted event history (events.jsonl) — see RUNTIME_ROUTES.getSessionHistory.
+  // Used by the web to rehydrate chat after a runtime restart; SSE only replays
+  // the in-memory ring buffer.
+  app.get("/sessions/:id/history", async (c) => {
+    const id = c.req.param("id");
+    const limitQ = c.req.query("limit");
+    const limit = limitQ !== undefined ? Number(limitQ) : undefined;
+    const result = await manager.readEventHistory(id, {
+      limit: Number.isFinite(limit) ? (limit as number) : undefined,
+    });
+    if (!result) return c.json({ error: "not found" }, 404);
+    return c.json(result);
+  });
+
   app.post("/sessions/:id/messages", async (c) => {
     const id = c.req.param("id");
     const body = await safeBody(c);
     const parsed = SendMessageRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
-    const res = await manager.sendMessage(id, parsed.data.content, parsed.data.agent ?? "principal");
+
+    // ask_user reply branch: resolve the outstanding request.
+    const data = parsed.data;
+    if ("type" in data && data.type === "user_input_response") {
+      const okResolved = manager.resolveInput(id, data.request_id, data.answer);
+      return c.json({ status: okResolved ? "ok" : "stale" });
+    }
+
+    // Normal message branch.
+    if (!("content" in data)) return c.json({ error: "invalid body" }, 400);
+    const res = await manager.sendMessage(id, data.content, data.agent ?? "principal", {
+      uuid: data.data?.uuid,
+    });
     return c.json(res);
   });
 
@@ -139,6 +166,27 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     }
   });
 
+  // #47: upload a file into the workspace (base64 body). Path-traversal guard +
+  // 20 MiB cap live in SessionManager.writeSessionFile.
+  app.post("/sessions/:id/files", async (c) => {
+    const parsed = WriteFileRequestSchema.safeParse(await safeBody(c));
+    if (!parsed.success) {
+      return c.json({ error: "path and contentBase64 are required" }, 400);
+    }
+    try {
+      const res = await manager.writeSessionFile(
+        c.req.param("id"),
+        parsed.data.path,
+        parsed.data.contentBase64,
+      );
+      return c.json(res, 201);
+    } catch (err) {
+      const msg = (err as Error).message;
+      // path traversal / oversize → 400 (client error), not 500
+      return c.json({ error: msg }, 400);
+    }
+  });
+
   const sseHandler = (id: string, c: import("hono").Context) => {
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
     c.header("Content-Type", "text/event-stream");
@@ -189,19 +237,52 @@ export interface StartServerOptions extends SessionManagerOptions {
   manager?: SessionManager;
 }
 
-export function startServer(opts: StartServerOptions = {}): {
+export async function startServer(opts: StartServerOptions = {}): Promise<{
   manager: SessionManager;
   port: number;
   close: () => Promise<void>;
-} {
+}> {
   const { app, manager } = createServer(opts);
+
+  // Restore sessions persisted under `<dataRoot>/.bp/*/meta.json` before we
+  // accept the first HTTP request, so `GET /sessions` reflects history on
+  // boot instead of an empty list. Persist defaults to true on the manager
+  // (see SessionManagerOptions); we only skip restore when the caller
+  // explicitly disabled persistence.
+  if (opts.persist !== false) {
+    try {
+      const restored = await manager.restoreFromDisk();
+      if (restored.length) {
+        // eslint-disable-next-line no-console
+        console.log(`[runtime] restored ${restored.length} session(s) from disk`);
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("[runtime] session restore failed:", err);
+    }
+  }
+
+  // Materialize the built-in skills into <dataRoot>/bp_template/skills before we
+  // accept requests, so they are loadable AND user-visible/editable from the
+  // first agent on — including a pure `docker compose up` where no CLI scaffold
+  // ever ran. Best-effort (the method swallows its own errors).
+  await manager.ensureSkillsMaterialized();
+
   const port =
     opts.port ??
     (process.env.PORT ? Number(process.env.PORT) : undefined) ??
     (process.env.BP_RUNTIME_PORT ? Number(process.env.BP_RUNTIME_PORT) : undefined) ??
     8081;
 
-  const server = serve({ fetch: app.fetch, port });
+  // Wait for the socket to be bound so callers (and tests using `port: 0`)
+  // can talk to the server / read the kernel-assigned port immediately.
+  let boundPort = port;
+  const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
+    const s = serve({ fetch: app.fetch, port }, (info) => {
+      boundPort = info.port;
+      resolve(s);
+    });
+  });
 
   // §R-4: surface the opt-in memory budget at boot (only when active).
   const memLimitMb = process.env.BP_MEM_LIMIT_MB;
@@ -225,7 +306,7 @@ export function startServer(opts: StartServerOptions = {}): {
 
   return {
     manager,
-    port,
+    port: boundPort,
     close: () =>
       new Promise<void>((resolve) => {
         manager.shutdown();
@@ -236,7 +317,8 @@ export function startServer(opts: StartServerOptions = {}): {
 
 // Allow `node dist/server.js` to boot directly.
 if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
-  const { port } = startServer();
-  // eslint-disable-next-line no-console
-  console.log(`[runtime] listening on :${port} (mock=${process.env.BP_MOCK ?? "0"})`);
+  void startServer().then(({ port }) => {
+    // eslint-disable-next-line no-console
+    console.log(`[runtime] listening on :${port} (mock=${process.env.BP_MOCK ?? "0"})`);
+  });
 }

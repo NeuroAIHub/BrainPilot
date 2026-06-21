@@ -1,0 +1,35 @@
+{
+  "name": "@brainpilot/skills",
+  "version": "0.0.6",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "Apache-2.0",
+  "type": "module",
+  "description": "BrainPilot built-in Agent Skills content (neuroscience / cognitive-science / writing), loaded via Pi's native skill pipeline",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist",
+    "skills"
+  ],
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/skills"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "tsc -b",
+    "typecheck": "tsc -b"
+  }
+}

@@ -25,11 +25,18 @@ const SSEContext = createContext<SSEContextValue | null>(null);
 
 const RECONNECT_BASE_MS = 3000;
 const RECONNECT_MAX_MS = 30000;
+// #106: if an EventSource never fires `onopen` within this window we treat the
+// connection as dead and force a rebuild. A frozen tab / bfcache restore can
+// leave a stale source stuck in CONNECTING whose onopen/onerror never fire
+// again — without this watchdog the UI sits on "正在连接实时通道" forever.
+const OPEN_WATCHDOG_MS = 8000;
 
 interface SessionConn {
   source: EventSource;
   reconnectAttempt: number;
   reconnectTimer: number | null;
+  /** #106: fires if onopen doesn't arrive in time — forces a reconnect. */
+  openWatchdog: number | null;
   /** Whether disconnectSession was called — disable auto-reconnect. */
   manuallyClosed: boolean;
 }
@@ -61,20 +68,62 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       return;
     }
 
+    // A stale entry may exist (e.g. watchdog-forced rebuild) — clear its timers
+    // and close its source before replacing it.
+    if (conn) {
+      if (conn.reconnectTimer !== null) window.clearTimeout(conn.reconnectTimer);
+      if (conn.openWatchdog !== null) window.clearTimeout(conn.openWatchdog);
+      try {
+        conn.source.close();
+      } catch {
+        /* already closed */
+      }
+    }
+
     console.log(`[SSE] openConnection: ${sessionId}`);
     setStatus(sessionId, "connecting");
     const source = new EventSource(getSSEUrl(sessionId));
 
     const entry: SessionConn = {
       source,
-      reconnectAttempt: 0,
+      reconnectAttempt: conn?.reconnectAttempt ?? 0,
       reconnectTimer: null,
+      openWatchdog: null,
       manuallyClosed: false,
     };
     connsRef.current.set(sessionId, entry);
 
+    // #106: if onopen never lands, the connection is wedged. Tear it down and
+    // reconnect through the normal backoff path so the composer doesn't stay
+    // disabled on a dead "connecting" state.
+    entry.openWatchdog = window.setTimeout(() => {
+      entry.openWatchdog = null;
+      if (entry.manuallyClosed) return;
+      if (entry.source.readyState === EventSource.OPEN) return;
+      console.warn(`[SSE] open watchdog fired for ${sessionId} — forcing reconnect`);
+      try {
+        entry.source.close();
+      } catch {
+        /* already closed */
+      }
+      setStatus(sessionId, "error");
+      entry.reconnectAttempt += 1;
+      const delay = Math.min(
+        RECONNECT_BASE_MS * Math.pow(2, entry.reconnectAttempt - 1),
+        RECONNECT_MAX_MS,
+      );
+      entry.reconnectTimer = window.setTimeout(() => {
+        entry.reconnectTimer = null;
+        openConnection(sessionId);
+      }, delay);
+    }, OPEN_WATCHDOG_MS);
+
     source.onopen = () => {
       entry.reconnectAttempt = 0;
+      if (entry.openWatchdog !== null) {
+        window.clearTimeout(entry.openWatchdog);
+        entry.openWatchdog = null;
+      }
       console.log(`[SSE] onopen: ${sessionId}`);
       setStatus(sessionId, "open");
     };
@@ -106,6 +155,10 @@ export function SSEProvider({ children }: { children: ReactNode }) {
 
     source.onerror = () => {
       console.error(`[SSE] onerror: ${sessionId}, reconnectAttempt=${entry.reconnectAttempt + 1}`);
+      if (entry.openWatchdog !== null) {
+        window.clearTimeout(entry.openWatchdog);
+        entry.openWatchdog = null;
+      }
       setStatus(sessionId, "error");
       source.close();
       if (entry.manuallyClosed) return;
@@ -139,6 +192,10 @@ export function SSEProvider({ children }: { children: ReactNode }) {
       window.clearTimeout(entry.reconnectTimer);
       entry.reconnectTimer = null;
     }
+    if (entry.openWatchdog !== null) {
+      window.clearTimeout(entry.openWatchdog);
+      entry.openWatchdog = null;
+    }
     entry.source.close();
     connsRef.current.delete(sessionId);
     setStatus(sessionId, "idle");
@@ -152,11 +209,43 @@ export function SSEProvider({ children }: { children: ReactNode }) {
         if (entry.reconnectTimer !== null) {
           window.clearTimeout(entry.reconnectTimer);
         }
+        if (entry.openWatchdog !== null) {
+          window.clearTimeout(entry.openWatchdog);
+        }
         entry.source.close();
       }
       connsRef.current.clear();
     };
   }, [isAuthReady, currentSandbox?.status]);
+
+  // #106: bfcache / frozen-tab restore can leave an EventSource that looks
+  // alive (readyState !== CLOSED) but whose onopen/onerror never fire again, so
+  // the composer stays stuck on "connecting". On page restore or tab
+  // re-focus, force any non-open connection to rebuild. The browser-native
+  // `pageshow` (persisted) covers bfcache; `visibilitychange` covers the more
+  // common "switched away and back" case.
+  useEffect(() => {
+    const revive = () => {
+      for (const [sessionId, entry] of connsRef.current) {
+        if (entry.manuallyClosed) continue;
+        if (entry.source.readyState === EventSource.OPEN) continue;
+        console.log(`[SSE] revive stale connection on restore: ${sessionId}`);
+        openConnection(sessionId);
+      }
+    };
+    const onPageShow = (event: PageTransitionEvent) => {
+      if (event.persisted) revive();
+    };
+    const onVisibility = () => {
+      if (document.visibilityState === "visible") revive();
+    };
+    window.addEventListener("pageshow", onPageShow);
+    document.addEventListener("visibilitychange", onVisibility);
+    return () => {
+      window.removeEventListener("pageshow", onPageShow);
+      document.removeEventListener("visibilitychange", onVisibility);
+    };
+  }, [openConnection]);
 
   const value = useMemo<SSEContextValue>(
     () => ({ connectSession, disconnectSession, queueRef, tick, connections }),

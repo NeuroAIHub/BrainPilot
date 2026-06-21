@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveGatewayModel, GATEWAY_PROVIDER, type PiProviderSdk } from "../pi-provider.js";
+import { resolveGatewayModel, resolveSessionModel, GATEWAY_PROVIDER, type PiProviderSdk } from "../pi-provider.js";
 
 /** Fake Pi SDK that records the models.json path it was created against. */
 function fakeSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
@@ -215,5 +215,139 @@ describe("resolveGatewayModel", () => {
       },
     };
     expect(() => resolveGatewayModel(badSdk, agentDir)).toThrow(/model not found/);
+  });
+});
+
+describe("resolveSessionModel (#63 per-session provider protocol)", () => {
+  let agentDir: string;
+  beforeEach(() => {
+    agentDir = mkdtempSync(join(tmpdir(), "bp-session-prov-"));
+  });
+  afterEach(() => {
+    rmSync(agentDir, { recursive: true, force: true });
+  });
+
+  /** Fake SDK that records the models.json path and resolves any present model. */
+  function sessionSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
+    let modelsPath: string | undefined;
+    const sdk: PiProviderSdk = {
+      AuthStorage: { create: () => ({}), inMemory: () => ({ setRuntimeApiKey: () => {} }) },
+      ModelRegistry: {
+        create: (_auth, path) => {
+          modelsPath = path;
+          return {
+            refresh: () => {},
+            getError: () => undefined,
+            find: (provider, id) => {
+              if (!path) return undefined;
+              const cfg = JSON.parse(readFileSync(path, "utf8"));
+              return cfg.providers[provider]?.models.some((m: { id: string }) => m.id === id)
+                ? { provider, id }
+                : undefined;
+            },
+          };
+        },
+      },
+    };
+    return { sdk, lastPath: () => modelsPath };
+  }
+
+  it("returns {} when key/baseUrl/modelId are incomplete", () => {
+    const { sdk } = sessionSdk();
+    expect(resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "" })).toEqual({});
+    expect(
+      resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "k", baseUrl: "https://x" }),
+    ).toEqual({}); // modelId missing
+  });
+
+  it("writes the selected api into models.json (azure-openai-responses)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    const { model } = resolveSessionModel(sdk, agentDir, {
+      providerId: "azure-openai",
+      baseUrl: "https://my-res.openai.azure.com/openai",
+      api: "azure-openai-responses",
+      apiKey: "sk-azure",
+      modelId: "gpt-5.5",
+    });
+    expect(model).toEqual({ provider: "azure-openai", id: "gpt-5.5" });
+    const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers["azure-openai"].api).toBe("azure-openai-responses");
+    expect(cfg.providers["azure-openai"].baseUrl).toBe("https://my-res.openai.azure.com/openai");
+  });
+
+  it("writes openai-responses when selected", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "oai",
+      baseUrl: "https://api.openai.com/v1",
+      api: "openai-responses",
+      apiKey: "sk-oai",
+      modelId: "gpt-x",
+    });
+    const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers["oai"].api).toBe("openai-responses");
+  });
+
+  it("defaults to anthropic-messages when api is omitted (back-compat)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "legacy",
+      baseUrl: "https://gw.example/api",
+      apiKey: "sk-legacy",
+      modelId: "claude-x",
+    });
+    const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers["legacy"].api).toBe("anthropic-messages");
+  });
+
+  // #68: when api is unset, the precise wire value is derived from the coarse
+  // adapter family. Explicit api still wins.
+  it("derives api from the adapter when api is unset (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "oai",
+      baseUrl: "https://api.openai.com/v1",
+      adapter: "openai",
+      apiKey: "sk-oai",
+      modelId: "gpt-x",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["oai"].api).toBe("openai-completions");
+  });
+
+  it("adapter=anthropic derives anthropic-messages (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "ant",
+      baseUrl: "https://gw/api",
+      adapter: "anthropic",
+      apiKey: "sk-a",
+      modelId: "claude-x",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["ant"].api).toBe("anthropic-messages");
+  });
+
+  it("adapter=auto falls back to the default api (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "autop",
+      baseUrl: "https://gw/api",
+      adapter: "auto",
+      apiKey: "sk-x",
+      modelId: "m",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["autop"].api).toBe("anthropic-messages");
+  });
+
+  it("explicit api wins over adapter (#68)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "mix",
+      baseUrl: "https://gw/api",
+      api: "openai-responses",
+      adapter: "anthropic",
+      apiKey: "sk-x",
+      modelId: "m",
+    });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["mix"].api).toBe("openai-responses");
   });
 });

@@ -5,7 +5,7 @@
  */
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
-import { readPid, isRunning, type ProcessControlDeps } from "../process-control.js";
+import { readPid, isRunning, readServerState, type ProcessControlDeps } from "../process-control.js";
 import { DEFAULT_PORT } from "../scaffold.js";
 
 export interface StatusOptions {
@@ -40,7 +40,13 @@ export async function status(
   const fetchFn = deps.fetchFn ?? fetch;
   const dataDir = resolveDataDir({ dir: options.dir, env, cwd: deps.cwd });
   const p = dataPaths(dataDir);
-  const port = options.port ?? (Number(env.BP_PORT) || DEFAULT_PORT);
+  // Port precedence (issue #41): explicit --port > persisted server.json
+  // (written by detached `up`) > BP_PORT > DEFAULT_PORT.
+  const state = await readServerState(p.serverState);
+  const port =
+    options.port ?? state?.port ?? (Number(env.BP_PORT) || DEFAULT_PORT);
+  const runtimePort =
+    options.port === undefined && state ? state.runtimePort : port + 1;
   const host = "127.0.0.1";
   const url = `http://${host}:${port}`;
 
@@ -74,7 +80,7 @@ export async function status(
     running,
     pid,
     backendPort: port,
-    runtimePort: port + 1,
+    runtimePort,
     url,
     healthy,
     ...(metrics ? { metrics } : {}),

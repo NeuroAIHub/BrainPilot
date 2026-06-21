@@ -54,6 +54,53 @@ export async function removePid(pidFile: string): Promise<void> {
   await rm(pidFile, { force: true });
 }
 
+/**
+ * Persisted runtime state for a detached server (issue #41). Written by `up`,
+ * read by `status` so it reports the actual ports without a repeated `--port`,
+ * removed by `down`.
+ */
+export interface ServerState {
+  pid: number;
+  port: number;
+  runtimePort: number;
+  host: string;
+}
+
+/** Write the detached server state file, creating parent dirs. */
+export async function writeServerState(
+  stateFile: string,
+  state: ServerState,
+): Promise<void> {
+  await mkdir(dirname(stateFile), { recursive: true });
+  await writeFile(stateFile, JSON.stringify(state), "utf8");
+}
+
+/** Read the detached server state, or null if missing/unparseable. */
+export async function readServerState(
+  stateFile: string,
+): Promise<ServerState | null> {
+  try {
+    const raw = await readFile(stateFile, "utf8");
+    const parsed = JSON.parse(raw) as Partial<ServerState>;
+    if (
+      typeof parsed.port === "number" &&
+      typeof parsed.runtimePort === "number" &&
+      typeof parsed.host === "string" &&
+      typeof parsed.pid === "number"
+    ) {
+      return parsed as ServerState;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Remove the detached server state file (no error if absent). */
+export async function removeServerState(stateFile: string): Promise<void> {
+  await rm(stateFile, { force: true });
+}
+
 /** Is the process recorded in `pidFile` currently alive? */
 export async function isRunning(
   pidFile: string,

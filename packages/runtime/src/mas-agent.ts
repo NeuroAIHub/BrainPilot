@@ -8,19 +8,50 @@
  *    converted to RUN_ERROR + system_message and the agent goes to `error`.
  *  - Map Pi `auto_retry_start/end` → agent_status_update + system_message;
  *    suppress internal events (turn_*, compaction_*).
- *  - Event-driven hooks (§8): track reply/trace/delegate per turn.
+ *
+ * Behavioural hooks (remind/trace/reply/delegate) used to live here as per-turn
+ * TurnTrackers (#79). They now live in the Pi-native `trace-reminder` extension
+ * (`extensions/trace-reminder.ts`), registered per AgentSession by the real
+ * factory. MasAgent is back to a pure Pi→AG-UI translator.
  */
-import type { AgUiEvent, AgentState } from "@brainpilot/protocol";
+import type { AgUiEvent, AgentState, TokenUsage } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
+import { normalizeAgentError, classifyAgentError, type AgentErrorKind } from "./agent-error.js";
 import type {
   AgentRole,
   IAgentSession,
   PiAgentEvent,
   PiAssistantMessageEvent,
+  PiUsage,
 } from "./types.js";
 
 export type AgentStatus = "idle" | "running" | "error" | "stopped";
+
+/** Zeroed token counters — the identity element for accumulation. */
+export function emptyTokenUsage(): TokenUsage {
+  return { input: 0, output: 0, cacheRead: 0, cacheWrite: 0, total: 0 };
+}
+
+/**
+ * Fold a provider-reported `PiUsage` into a running `TokenUsage` total
+ * (mutates and returns `acc`). Missing fields count as 0. `total` is summed
+ * from the components rather than trusting the provider's `totalTokens` so the
+ * per-agent breakdown always sums to the session total under one definition.
+ */
+export function addUsage(acc: TokenUsage, u: PiUsage | undefined): TokenUsage {
+  if (!u) return acc;
+  const input = u.input ?? 0;
+  const output = u.output ?? 0;
+  const cacheRead = u.cacheRead ?? 0;
+  const cacheWrite = u.cacheWrite ?? 0;
+  acc.input += input;
+  acc.output += output;
+  acc.cacheRead += cacheRead;
+  acc.cacheWrite += cacheWrite;
+  acc.total += input + output + cacheRead + cacheWrite;
+  return acc;
+}
 
 export interface MasAgentOpts {
   sessionId: string;
@@ -29,6 +60,13 @@ export interface MasAgentOpts {
   session: IAgentSession;
   bus: EventBus;
   onStatusChange?: (name: string, status: AgentStatus) => void;
+  /**
+   * Invoked after each assistant turn whose `message_end` carried provider
+   * token usage. `delta` is just-added usage for this turn; `cumulative` is the
+   * agent's running total. The SessionManager uses this to roll up the
+   * per-session total, push a session_state frame, and persist usage.json.
+   */
+  onUsage?: (name: string, delta: TokenUsage, cumulative: TokenUsage) => void;
 }
 
 export class MasAgent {
@@ -45,9 +83,26 @@ export class MasAgent {
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
   private lastError: AgentState["lastError"];
-
-  // §8 hook trackers (reset each turn).
-  private trackers = { replied: false, traced: false, delegated: false };
+  /**
+   * Cumulative real token usage for THIS agent across every assistant turn,
+   * summed from provider-reported `usage` on `message_end`. Read by `usage()`;
+   * fed to `onUsage` so the SessionManager can roll up the per-session total.
+   */
+  private cumulativeUsage: TokenUsage = emptyTokenUsage();
+  /**
+   * #97 error path: recoverability class of the most recent error, or undefined
+   * when the last run did not error. The delivery loop reads this after a run to
+   * decide self-retry (retryable) vs immediate escalation to the principal
+   * (fatal). Reset to undefined whenever a run completes without error.
+   */
+  private _lastErrorKind: AgentErrorKind | undefined;
+  /**
+   * The in-flight `prompt()` promise (its try/catch/finally inclusive), or
+   * undefined when idle. `abort()` awaits this so a caller can fence the old
+   * run — guaranteeing RUN_FINISHED is emitted and `status` has settled —
+   * before starting a new one (#101).
+   */
+  private currentPrompt: Promise<void> | undefined;
 
   constructor(private readonly opts: MasAgentOpts) {
     this.name = opts.name;
@@ -60,6 +115,32 @@ export class MasAgent {
 
   get status(): AgentStatus {
     return this._status;
+  }
+
+  /**
+   * #97: the recoverability class of the last error (`retryable`/`fatal`), or
+   * undefined if the last run did not error. Read by the delivery loop to choose
+   * self-retry vs escalation. The headline of that error is in `lastError`.
+   */
+  get lastErrorKind(): AgentErrorKind | undefined {
+    return this._lastErrorKind;
+  }
+
+  /**
+   * Cumulative real token usage for this agent (a copy, safe to mutate). Used
+   * by the SessionManager when rebuilding the per-session breakdown and when
+   * persisting usage.json.
+   */
+  usage(): TokenUsage {
+    return { ...this.cumulativeUsage };
+  }
+
+  /**
+   * Restore this agent's cumulative usage from persisted state (restore path,
+   * before any new turn). No-op if `u` is undefined.
+   */
+  seedUsage(u: TokenUsage | undefined): void {
+    if (u) this.cumulativeUsage = { ...u };
   }
 
   /** §10 authoritative state snapshot. */
@@ -86,10 +167,19 @@ export class MasAgent {
 
   /**
    * Send a prompt and stream events. Error-isolated (§7 L2): never throws.
+   * The settled promise is tracked in `currentPrompt` so `abort()` can await it.
    */
-  async prompt(text: string): Promise<void> {
+  prompt(text: string): Promise<void> {
+    const p = this.runPrompt(text).finally(() => {
+      // Clear the tracker only if no newer prompt has replaced it.
+      if (this.currentPrompt === p) this.currentPrompt = undefined;
+    });
+    this.currentPrompt = p;
+    return p;
+  }
+
+  private async runPrompt(text: string): Promise<void> {
     this.currentRunId = newRunId();
-    this.resetTrackers();
     this.setStatus("running");
     this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }));
     try {
@@ -97,10 +187,21 @@ export class MasAgent {
       this.bus.emit(
         ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
       );
-      if (this._status !== "error") this.setStatus("idle");
+      // A run that reached here without an in-stream error (message_end /
+      // auto_retry_end / delta error all flip status to "error") completed
+      // cleanly — clear the error class so the delivery loop's retry counter
+      // resets on the next success.
+      if (this._status !== "error") {
+        this._lastErrorKind = undefined;
+        this.setStatus("idle");
+      }
     } catch (err) {
-      const message = (err as Error)?.message ?? String(err);
-      this.recordError(message, (err as Error)?.stack);
+      const raw = (err as Error)?.message ?? String(err);
+      // issue #45: never surface raw SDK guidance (/login, node_modules paths)
+      // — normalize to a product message / redact local paths before it hits
+      // the event stream, events.jsonl, and lastError.
+      const { message, details } = normalizeAgentError(raw);
+      this.recordError(message, details, raw);
       this.bus.emit(
         ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
       );
@@ -111,14 +212,31 @@ export class MasAgent {
     }
   }
 
+  /**
+   * Abort the active run and wait for it to fully settle (#101).
+   *
+   * `session.abort()` cancels the provider stream (and for the real Pi session
+   * already awaits the agent back to idle). We then await the in-flight
+   * `prompt()` promise so that by the time abort() resolves: the original run
+   * has emitted its terminal RUN_FINISHED/RUN_ERROR, `status` has settled, and
+   * no further assistant content can be appended. This lets `interrupt()` start
+   * the principal's interrupt-notice run WITHOUT racing the old run (which would
+   * otherwise throw "Agent is already processing a prompt").
+   */
   async abort(): Promise<void> {
     try {
       await this.session.abort();
     } catch {
       /* abort best-effort */
     }
+    // Wait for the interrupted prompt to unwind its try/finally (RUN_FINISHED,
+    // status settle) before returning — do NOT optimistically force idle here.
+    try {
+      await this.currentPrompt;
+    } catch {
+      /* prompt() is error-isolated; nothing to surface */
+    }
     this.activeToolExecutions.clear();
-    this.setStatus("idle");
   }
 
   stop(): void {
@@ -127,9 +245,13 @@ export class MasAgent {
     this.setStatus("stopped");
   }
 
-  private recordError(message: string, details?: string): void {
+  private recordError(message: string, details?: string, raw?: string): void {
     const prev = this.lastError?.consecutiveCount ?? 0;
     this.lastError = { message, timestamp: new Date().toISOString(), consecutiveCount: prev + 1 };
+    // #97: classify from the rawest signal we have (raw provider blob when the
+    // caller has it, else the normalized headline) so the delivery loop can pick
+    // self-retry vs escalation.
+    this._lastErrorKind = classifyAgentError(raw ?? message);
     this.bus.emit(
       ev.systemMessage(this.sessionId, "error", `⚠️ Agent ${this.name} 遇到错误: ${message}`, {
         agent: this.name,
@@ -139,25 +261,20 @@ export class MasAgent {
     );
   }
 
-  private resetTrackers(): void {
-    this.trackers = { replied: false, traced: false, delegated: false };
-  }
-
   /** Translate one Pi event into zero or more AG-UI events (§6). */
   private onPiEvent(e: PiAgentEvent): void {
     const ctx = { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId };
     switch (e.type) {
       case "agent_start":
-      case "turn_end":
       case "agent_end":
+      case "turn_start":
+      case "turn_end":
       case "compaction_start":
       case "compaction_end":
       case "queue_update":
         // Internal / suppressed (§6 table: turn_*, compaction_* not exposed).
-        return;
-
-      case "turn_start":
-        this.resetTrackers();
+        // Behavioural reactions to turn_*/agent_end now live in the Pi-native
+        // trace-reminder extension, not here.
         return;
 
       case "message_start": {
@@ -177,6 +294,28 @@ export class MasAgent {
       }
 
       case "message_end": {
+        const end = e as Extract<PiAgentEvent, { type: "message_end" }>;
+        // #63: a provider/HTTP error does NOT throw out of session.prompt(); Pi
+        // finalizes the assistant message with stopReason "error" + errorMessage
+        // and emits it here. Surface it as a visible error instead of letting the
+        // run end with an empty assistant bubble.
+        const msg = end.message as
+          | { role?: string; stopReason?: string; errorMessage?: string; usage?: PiUsage }
+          | undefined;
+        if (msg?.stopReason === "error") {
+          const raw = msg.errorMessage || "provider request failed";
+          const { message, details } = normalizeAgentError(raw);
+          this.recordError(message, details, raw);
+          this.setStatus("error");
+        }
+        // Accumulate real provider token usage for this assistant turn. Pi
+        // attaches `usage` to the finalized assistant message; user/tool
+        // messages and mock feeds may omit it (addUsage no-ops on undefined).
+        if (msg?.role === "assistant" && msg.usage) {
+          const delta = addUsage(emptyTokenUsage(), msg.usage);
+          addUsage(this.cumulativeUsage, msg.usage);
+          this.opts.onUsage?.(this.name, delta, { ...this.cumulativeUsage });
+        }
         if (this.currentMessageId) {
           if (this.inReasoning) {
             this.bus.emit(ev.reasoningMessageEnd(ctx, this.currentMessageId));
@@ -203,8 +342,6 @@ export class MasAgent {
         this.bus.emit(ev.toolCallEnd(ctx, t.toolCallId));
         const resultStr = typeof t.result === "string" ? t.result : safeStringify(t.result);
         this.bus.emit(ev.toolCallResult(ctx, t.toolCallId, resultStr, t.isError));
-        // §8 hooks: mark replied/traced/delegated from tool results.
-        this.onToolResult(t.toolName, t.isError);
         // §7 L1: surface tool errors as system_message.
         if (t.isError) {
           this.bus.emit(
@@ -236,7 +373,9 @@ export class MasAgent {
       case "auto_retry_end": {
         const r = e as Extract<PiAgentEvent, { type: "auto_retry_end" }>;
         if (!r.success) {
-          this.recordError(r.finalError ?? "retry exhausted");
+          const raw = r.finalError ?? "retry exhausted";
+          const { message, details } = normalizeAgentError(raw);
+          this.recordError(message, details, raw);
           this.setStatus("error");
         }
         return;
@@ -275,21 +414,24 @@ export class MasAgent {
         this.bus.emit(ev.reasoningMessageEnd(ctx, id));
         this.inReasoning = false;
         return;
+      case "error": {
+        // #63: provider failure streamed mid-message. Route to a visible error
+        // (the message_end handler also catches the finalized stopReason:"error",
+        // but this covers Pi builds that only emit the streaming sub-event).
+        const err = amsg as { error?: unknown; reason?: string };
+        const raw =
+          (err.error as { errorMessage?: string } | undefined)?.errorMessage ??
+          (typeof err.error === "string" ? err.error : undefined) ??
+          err.reason ??
+          "provider request failed";
+        const { message, details } = normalizeAgentError(raw);
+        this.recordError(message, details, raw);
+        this.setStatus("error");
+        return;
+      }
       default:
         return;
     }
-  }
-
-  private onToolResult(toolName: string, isError: boolean): void {
-    if (isError) return;
-    if (toolName === "send_message") this.trackers.replied = true;
-    if (toolName === "record_trace" || toolName.startsWith("create_trace")) this.trackers.traced = true;
-    if (toolName === "create_agent") this.trackers.delegated = true;
-  }
-
-  /** Expose tracker state (for hook tests). */
-  getTrackers(): { replied: boolean; traced: boolean; delegated: boolean } {
-    return { ...this.trackers };
   }
 }
 

@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
 import { SessionManager } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
+import { PERSONAS } from "../personas.js";
 
 function mgr(): SessionManager {
   // persist:false keeps tests hermetic; mock factory => no Pi SDK / API.
@@ -55,21 +56,54 @@ describe("SessionManager (mock mode)", () => {
     expect(agents.map((a) => a.name)).toContain("principal");
   });
 
-  it("passes app-controlled skill dirs (template + session) to the factory", async () => {
-    const seen: string[][] = [];
+  it("persists the user message as a role:user CHUNK with the client uuid (#42)", async () => {
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (e) => events.push(e));
+
+    await m.sendMessage(s.id, "hello from user", "principal", { uuid: "u-123" });
+    await waitFor(() => events.some((e) => e.type === "RUN_FINISHED"));
+
+    const chunk = events.find((e) => e.type === "TEXT_MESSAGE_CHUNK") as
+      | (AgUiEvent & { message_id: string; role: string; delta: string })
+      | undefined;
+    expect(chunk).toBeDefined();
+    expect(chunk?.role).toBe("user");
+    expect(chunk?.message_id).toBe("u-123");
+    expect(chunk?.delta).toBe("hello from user");
+    expect(() => parseEvent(chunk as AgUiEvent)).not.toThrow();
+  });
+
+  it("falls back to a generated id when the client omits uuid (#42)", async () => {
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (e) => events.push(e));
+
+    await m.sendMessage(s.id, "no uuid here");
+    await waitFor(() => events.some((e) => e.type === "TEXT_MESSAGE_CHUNK"));
+
+    const chunk = events.find((e) => e.type === "TEXT_MESSAGE_CHUNK") as
+      | (AgUiEvent & { message_id: string; role: string })
+      | undefined;
+    expect(chunk?.role).toBe("user");
+    expect(chunk?.message_id).toBeTruthy();
+  });
+
+  it("merges built-in skills MCP tools for non-trace agents", async () => {
+    const seenTools: string[][] = [];
     const spyFactory: typeof mockAgentFactory = async (params) => {
-      seen.push(params.skillPaths);
+      seenTools.push(params.systemTools.map((t) => t.name));
       return mockAgentFactory(params);
     };
     const sm = new SessionManager({ persist: false, agentFactory: spyFactory });
     const s = await sm.createSession();
     await sm.sendMessage(s.id, "hi");
-    await waitFor(() => seen.length > 0);
+    await waitFor(() => seenTools.length > 0);
 
-    expect(seen[0]).toHaveLength(2);
-    // shared template dir + this session's own dir.
-    expect(seen[0][0]).toMatch(/bp_template[/\\]skills$/);
-    expect(seen[0][1]).toMatch(new RegExp(`\\.bp[/\\\\]${s.id}[/\\\\]skills$`));
+    // Principal is a non-trace agent — should have system tools.
+    const principalTools = seenTools[0]!;
+    expect(principalTools).toContain("send_message");
+    expect(principalTools).toContain("ask_user");
   });
 
   it("injects the built-in persona (not the old placeholder) for the principal", async () => {
@@ -88,6 +122,33 @@ describe("SessionManager (mock mode)", () => {
     expect(seen[0]).not.toContain("mcp__builtin__");
   });
 
+  it("keeps high-impact action authorization in PI and expert personas", () => {
+    expect(PERSONAS.principal).toContain("## User authorization gate");
+    expect(PERSONAS.principal).toContain("Use `ask_user` first");
+    expect(PERSONAS.principal).toContain("## Incremental planning for heavy work");
+    expect(PERSONAS.principal).toContain("dry run, smoke test, tiny dataset");
+    expect(PERSONAS.engineer).toContain("## High-impact action gate");
+    expect(PERSONAS.engineer).toContain('send_message(to="principal", ...)');
+    expect(PERSONAS.engineer).toContain("## Execution discipline");
+    expect(PERSONAS.engineer).toContain("Prefer writing new outputs inside the session workspace");
+    expect(PERSONAS.experimentalist).toContain("## High-impact action gate");
+    expect(PERSONAS.experimentalist).toContain("long-running training");
+  });
+
+  it("routes expert outputs through writer drafts before audit", () => {
+    expect(PERSONAS.principal).toContain("do NOT send raw expert output directly to the `auditor`");
+    expect(PERSONAS.principal).toContain("first form an auditable draft");
+    expect(PERSONAS.principal).toContain("`writer` to write or polish a report");
+    expect(PERSONAS.principal).toContain("Do not audit raw expert output.");
+    expect(PERSONAS.librarian).toContain("## Writer handoff packet");
+    expect(PERSONAS.experimentalist).toContain("## Writer handoff packet");
+    expect(PERSONAS.engineer).toContain("## Writer handoff packet");
+    expect(PERSONAS.writer).not.toContain("## Writer handoff packet");
+    expect(PERSONAS.auditor).toContain("If PI gives you only raw expert output");
+    expect(PERSONAS.auditor).not.toContain("## Writer handoff packet");
+    expect(PERSONAS.trace).not.toContain("## Writer handoff packet");
+  });
+
   it("prefers an on-disk bp_template/agents/<name>/prompt.md override", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-persona-"));
     const promptDir = join(root, "bp_template", "agents", "principal");
@@ -104,7 +165,10 @@ describe("SessionManager (mock mode)", () => {
     await sm.sendMessage(s.id, "hi");
     await waitFor(() => seen.length > 0);
 
-    expect(seen[0]).toBe("# Custom PI\nDo it my way.");
+    // The on-disk persona is used verbatim as the base, with the language
+    // directive appended at load time (#97) so it reaches pre-existing scaffolds.
+    expect(seen[0]).toContain("# Custom PI\nDo it my way.");
+    expect(seen[0]).toContain("## Response language");
     await rm(root, { recursive: true, force: true });
   });
 });
@@ -161,4 +225,3 @@ describe("SessionManager memory watchdog (§R-4 / #20)", () => {
     expect(metrics.memRatio).toBeCloseTo(0.9);
   });
 });
-

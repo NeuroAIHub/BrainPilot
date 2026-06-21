@@ -127,6 +127,49 @@ describe("MCP Servers CRUD (/api/mcp-servers)", () => {
     expect((await del(app, "nope")).status).toBe(404);
   });
 
+  // #49: invalid transport configs must 400 (JSON) and never be persisted.
+  describe("#49 transport config validation", () => {
+    it("rejects the four invalid configs from the issue with 400", async () => {
+      const { app } = await setup();
+      const bad = [
+        { name: "bad-http-no-url", config: { type: "http" } },
+        { name: "bad-sse-no-url", config: { type: "sse" } },
+        { name: "bad-stdio-no-command", config: { type: "stdio" } },
+        { name: "bad-type", config: { type: "wat", url: "http://x" } },
+      ];
+      for (const body of bad) {
+        const res = await post(app, body);
+        expect(res.status, `${body.name} should 400`).toBe(400);
+        expect(res.headers.get("content-type")).toContain("application/json");
+      }
+    });
+
+    it("leaves the on-disk file unchanged when a config is invalid", async () => {
+      const { app, dataDir } = await setup();
+      // seed one valid entry
+      await post(app, { name: "good", config: { type: "http", url: "http://host/mcp" } });
+      const before = await readFile(join(dataDir, "bp_template", "mcp_servers.json"), "utf8");
+      // an invalid create must not touch the file
+      const res = await post(app, { name: "bad", config: { type: "wat" } });
+      expect(res.status).toBe(400);
+      const after = await readFile(join(dataDir, "bp_template", "mcp_servers.json"), "utf8");
+      expect(after).toBe(before);
+    });
+
+    it("rejects empty url / command (whitespace-only) as invalid", async () => {
+      const { app } = await setup();
+      expect((await post(app, { name: "a", config: { type: "http", url: "   " } })).status).toBe(400);
+      expect((await post(app, { name: "b", config: { type: "stdio", command: "" } })).status).toBe(400);
+    });
+
+    it("PUT also rejects invalid configs with 400", async () => {
+      const { app } = await setup();
+      await post(app, { name: "s", config: { type: "stdio", command: "a" } });
+      expect((await put(app, "s", { type: "http" })).status).toBe(400);
+      expect((await put(app, "s", { type: "wat", url: "http://x" })).status).toBe(400);
+    });
+  });
+
   it("persists the runtime's {mcpServers: ...} disk format", async () => {
     const { app, dataDir } = await setup();
     await post(app, { name: "kb", config: { type: "http", url: "http://host/mcp" } });

@@ -669,6 +669,15 @@ button {
   outline: none;
 }
 
+/* #104: icon-only nav — square buttons, no horizontal text weight. The label
+   lives in a .sr-only span so the accessible name is preserved. */
+.workspace-view-tabs--icon-only button {
+  width: 28px;
+  justify-content: center;
+  gap: 0;
+  padding: 0;
+}
+
 .session-title {
   display: flex;
   min-width: 0;
@@ -691,9 +700,10 @@ button {
   white-space: nowrap;
 }
 
+/* #105: id demoted to muted secondary metadata beside the real title. */
 .session-title__id {
-  color: var(--color-text-muted);
-  font-size: 12px;
+  color: var(--color-text-subtle);
+  font-size: 11px;
   font-family: var(--font-mono);
 }
 
@@ -858,42 +868,22 @@ button {
   border-radius: 0;
 }
 
-.trace-live-toggle {
+/* #79: trace is live-by-SSE — a static "Live" indicator, not a poll toggle. */
+.trace-live-indicator {
   display: inline-flex;
   height: 28px;
   align-items: center;
   gap: 6px;
-  border: 0;
-  background: transparent;
-  color: var(--color-text-muted);
+  color: var(--color-text);
   padding: 0 9px;
   font-size: 12px;
 }
 
-.trace-live-toggle span {
+.trace-live-indicator span {
   width: 7px;
   height: 7px;
   border-radius: 999px;
-  background: var(--color-text-subtle);
-}
-
-.trace-live-toggle.is-active {
-  color: var(--color-text);
-}
-
-.trace-live-toggle.is-active span {
   background: var(--color-success);
-}
-
-.trace-live-toggle:hover:not(:disabled),
-.trace-live-toggle:focus-visible {
-  background: var(--color-hover);
-  color: var(--color-text);
-  outline: none;
-}
-
-.trace-live-toggle:disabled {
-  opacity: 0.5;
 }
 
 .agent-grid {
@@ -1168,8 +1158,8 @@ button {
 
 .trace-edge path {
   fill: none;
-  stroke: var(--color-border-strong);
-  stroke-width: 1.35;
+  stroke: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-strong));
+  stroke-width: 2;
   marker-end: url("#trace-arrow");
 }
 
@@ -1180,6 +1170,10 @@ button {
 
 .trace-edge--produced path {
   stroke: var(--color-success);
+}
+
+.trace-edge--follows path {
+  stroke: color-mix(in srgb, var(--color-accent) 50%, var(--color-border-strong));
 }
 
 .trace-edge-label rect {
@@ -1199,7 +1193,7 @@ button {
 }
 
 #trace-arrow path {
-  fill: var(--color-border-strong);
+  fill: color-mix(in srgb, var(--color-accent) 55%, var(--color-border-strong));
 }
 
 .trace-map-node {
@@ -1512,6 +1506,13 @@ button {
   font-size: 11px;
 }
 
+/* #79: auto-captured (hook-driven) trace nodes get a distinct badge. */
+.trace-detail__badges span.trace-detail__badge--auto {
+  border-color: color-mix(in srgb, var(--color-success) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-success) 14%, transparent);
+  color: var(--color-success);
+}
+
 .trace-detail__section {
   display: grid;
   gap: 8px;
@@ -1622,6 +1623,37 @@ button {
   white-space: nowrap;
 }
 
+.trace-detail__children {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  overflow: visible !important;
+  white-space: normal !important;
+}
+
+.trace-detail__children button {
+  display: inline-flex;
+  min-width: 0;
+  max-width: 100%;
+  height: 24px;
+  align-items: center;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  padding: 0 8px;
+  font: inherit;
+  font-size: 11px;
+}
+
+.trace-detail__children button:hover,
+.trace-detail__children button:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-hover);
+  color: var(--color-text);
+  outline: none;
+}
+
 .prompt-home__inner {
   display: grid;
   width: min(var(--composer-width), 100%);
@@ -1698,6 +1730,48 @@ button {
 .composer__send-tools {
   min-width: 0;
   gap: 4px;
+}
+
+/* #47: uploaded-file chips shown between the input and the toolbar. */
+.composer__attachments {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 8px 4px;
+}
+.composer__chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 220px;
+  padding: 2px 6px 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+  color: var(--text-2, inherit);
+}
+.composer__chip--pending {
+  opacity: 0.7;
+}
+.composer__chip-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.composer__chip-remove {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  opacity: 0.6;
+}
+.composer__chip-remove:hover {
+  opacity: 1;
 }
 
 .toolbar-select {
@@ -2173,34 +2247,31 @@ button {
 }
 
 .message-row--live .message-row__body::after {
-  content: "";
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  border-radius: var(--radius-md);
-  background: linear-gradient(
-    100deg,
-    transparent 30%,
-    color-mix(in srgb, var(--color-info) 22%, transparent) 50%,
-    transparent 70%
-  );
-  background-size: 220% 100%;
-  animation: textSweep 1.4s linear infinite;
+  content: none;
 }
 
-@keyframes textSweep {
-  from {
-    background-position: 160% 0;
-  }
-  to {
-    background-position: -60% 0;
-  }
+.message-row__content {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .message-row--live .message-row__body::after {
-    animation: none;
-    background: none;
+.message-row__content--pending .message-card__content {
+  color: var(--color-text-muted);
+}
+
+.message-row__streaming-cursor {
+  display: inline-block;
+  width: 7px;
+  height: 15px;
+  border-radius: 2px;
+  background: var(--color-info);
+  opacity: 0.82;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .message-row__streaming-cursor {
+    animation: pulse 1.1s infinite;
   }
 }
 
@@ -2725,7 +2796,13 @@ button {
   background: var(--color-surface-soft);
   border: 1px solid var(--color-border);
   border-radius: 4px;
-  padding: 1px 4px;
+  /* em-based padding scales with the (0.92em) code font; box-decoration-break
+     keeps the border/radius/background intact on every fragment when an inline
+     code span wraps across lines, instead of slicing into vertically-overflowing
+     boxes that overlap adjacent lines (#130). */
+  padding: 0.1em 0.35em;
+  -webkit-box-decoration-break: clone;
+  box-decoration-break: clone;
 }
 
 .message-card__content pre {
@@ -2863,6 +2940,22 @@ button {
   margin: 0;
   padding: 10px;
   font-size: 12px;
+}
+
+/* #84: label each tool payload as Args / Result so the two stacked <pre>
+   blocks are distinguishable. Label is intentionally low-weight — it's a
+   separator signal, not a heading. */
+.activity-step__io {
+  display: grid;
+  gap: 4px;
+}
+
+.activity-step__io-label {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding-left: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
 }
 
 .terminal-input {
@@ -5097,6 +5190,52 @@ button {
   font-size: 11px;
 }
 
+.agent-network__available {
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  padding: 7px 10px;
+  font-size: 11px;
+}
+
+.agent-network__available summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.agent-network__available summary::-webkit-details-marker {
+  display: none;
+}
+
+.agent-network__available summary::before {
+  content: ">";
+  display: inline-block;
+  margin-right: 6px;
+  color: var(--color-text-subtle);
+  transition: transform var(--ease-standard);
+}
+
+.agent-network__available[open] summary::before {
+  transform: rotate(90deg);
+}
+
+.agent-network__available ul {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin: 8px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-network__available li {
+  border: 1px dashed var(--color-border-strong);
+  border-radius: 999px;
+  color: var(--color-text-subtle);
+  padding: 2px 7px;
+}
+
 .agent-network__legend-dot {
   display: inline-block;
   width: 8px;
@@ -6395,6 +6534,17 @@ button {
 .agent-analytics__chart-title svg {
   color: var(--color-text-subtle);
 }
+.agent-analytics__token-total {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--color-text);
+  margin: 2px 0 8px;
+}
+.agent-analytics__token-total-label {
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--color-text-muted);
+}
 .agent-analytics__svg {
   width: 100%;
   height: auto;
@@ -7426,4 +7576,3 @@ button {
   .demo-right { border-bottom: 1px solid var(--color-border); }
   .demo-landing__cards { grid-template-columns: 1fr; }
 }
-

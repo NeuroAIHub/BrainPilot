@@ -1,14 +1,15 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, mkdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   up,
   buildStartServerOptions,
   PortInUseError,
+  portFlagHint,
   type ResolvedUpConfig,
 } from "./up.js";
-import { readPid } from "../process-control.js";
+import { readPid, readServerState } from "../process-control.js";
 import type { StartServerOptions, RunningServer } from "@brainpilot/backend-core";
 
 let dir: string;
@@ -103,6 +104,50 @@ describe("up — provider key resolution", () => {
     expect(cfg.port).toBeGreaterThan(0);
   });
 
+  it("flashes a drift banner when on-disk agent prompts diverge from built-ins (#102)", async () => {
+    const root = join(dir, "brainpilot");
+    // Pre-scaffold via a stub override that doesn't match any built-in.
+    await mkdir(join(root, "bp_template", "agents", "principal"), { recursive: true });
+    await writeFile(
+      join(root, "bp_template", "agents", "principal", "prompt.md"),
+      "USER CUSTOMISED PROMPT\n",
+      "utf8",
+    );
+    const logs: string[] = [];
+    await up(
+      { dir: root, port: 9890, foreground: true, open: false },
+      {
+        env: { BP_MOCK: "1" },
+        startServer: async () =>
+          ({ stop: async () => {} }) as unknown as RunningServer,
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    const text = logs.join("\n");
+    expect(text).toContain("on-disk agent prompt override");
+    expect(text).toContain("principal");
+    expect(text).toContain("template reset");
+  });
+
+  it("does NOT flash the drift banner when no overrides exist", async () => {
+    const root = join(dir, "brainpilot");
+    const logs: string[] = [];
+    await up(
+      { dir: root, port: 9891, foreground: true, open: false },
+      {
+        env: { BP_MOCK: "1" },
+        startServer: async () =>
+          ({ stop: async () => {} }) as unknown as RunningServer,
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    expect(logs.join("\n")).not.toContain("on-disk agent prompt override");
+  });
+
   it("skips the key warning under BP_MOCK=1 (no key needed)", async () => {
     const root = join(dir, "brainpilot");
     let started = false;
@@ -191,6 +236,49 @@ describe("up — detached start", () => {
     expect(result.pid).toBe(4242);
     const pidFromFile = await readPid(join(root, ".runtime", "backend.pid"));
     expect(pidFromFile).toBe(4242);
+    // issue #41: detached up persists resolved ports for `status`.
+    const state = await readServerState(join(root, ".runtime", "server.json"));
+    expect(state).toEqual({ pid: 4242, port: 9700, runtimePort: 9701, host: "127.0.0.1" });
+  });
+});
+
+describe("portFlagHint", () => {
+  it("returns the bare `brainpilot up --port <n>` form when not run via npm", () => {
+    expect(portFlagHint({})).toBe("brainpilot up --port <n>");
+  });
+
+  it("returns `npm run <script> -- up --port <n>` when npm_lifecycle_event is set", () => {
+    // The `up` subcommand has to come *after* `--`, since the npm script
+    // itself only runs `node bin.js` — without `up` the CLI defaults to a
+    // different command and never reaches the port path.
+    expect(portFlagHint({ npm_lifecycle_event: "bp" })).toBe(
+      "npm run bp -- up --port <n>",
+    );
+    expect(portFlagHint({ npm_lifecycle_event: "start" })).toBe(
+      "npm run start -- up --port <n>",
+    );
+  });
+
+  it("ignores the `npx` script name (npx sets npm_lifecycle_event=npx)", () => {
+    expect(portFlagHint({ npm_lifecycle_event: "npx" })).toBe(
+      "brainpilot up --port <n>",
+    );
+  });
+});
+
+describe("PortInUseError", () => {
+  it("includes the supplied hint in the message", () => {
+    const e = new PortInUseError(9001, "npm run bp -- up --port <n>");
+    expect(e.message).toContain("Port 9001 is already in use.");
+    expect(e.message).toContain("`npm run bp -- up --port <n>`");
+  });
+
+  it("falls back to the default hint when none supplied", () => {
+    const e = new PortInUseError(9001);
+    // Default form starts with either `brainpilot` or `npm run` — depends on
+    // the test runner's own env. Just assert the port and a backtick are there.
+    expect(e.message).toContain("Port 9001 is already in use.");
+    expect(e.message).toMatch(/`[^`]+--port <n>`/);
   });
 });
 

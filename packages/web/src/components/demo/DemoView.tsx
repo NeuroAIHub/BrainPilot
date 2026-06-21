@@ -4,6 +4,7 @@ import { FileUp, MessageSquare, Pause, Play, RotateCcw, SkipBack, SkipForward, U
 import type { ChatMessage, TraceNode, WebSocketEvent } from "../../contracts/backend";
 import { normalizeWebSocketEvent } from "../../contracts/backend";
 import { DemoBundle, DemoFile } from "../../contracts/demoBundle";
+import { applyMessageFilters, defaultFilterRules } from "../../contexts/messageFilters";
 import { reduceMessagesForEvent } from "../../contexts/messageReducer";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
@@ -14,8 +15,10 @@ import { FilePreviewView, PreviewSource } from "../files/FilePreviewView";
 import { getPreviewKind, isMarkdown } from "../files/filePreview";
 import { IconButton } from "../primitives/IconButton";
 import { TraceGraphView } from "../session/TraceGraphView";
+import { getNodeKindLabelKey } from "../session/traceLayout";
 import { buildDemoBundle, parseDemoBundle } from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
+import { shouldResetDemo } from "./demoReset";
 import { DemoFileTree } from "./DemoFileTree";
 import { TraceNodeModal } from "./TraceNodeModal";
 
@@ -40,32 +43,40 @@ function basename(path: string): string {
 }
 
 /**
- * Keep only the user-facing dialogue backbone for the demo's left panel.
+ * Keep the user-facing dialogue backbone for the demo's left panel.
  *
- * This is a multi-agent system: the live EventRouter
- * (agent_runtime/event_router.py) forwards only the principal (PI) agent's
- * messages to the frontend, while worker agents (engineer / trace /
- * experimentalist) run internally. The demo bundle, however, captures *all*
- * raw events, so a naive "any assistant text" filter floods the panel with
- * internal worker narration ("Recorded as T001…", engineer step notes).
+ * This is a multi-agent system. The demo bundle captures *all* raw events, and
+ * the live Chat (PromptComposer) does NOT collapse the transcript to the
+ * principal — it renders every agent's substantive replies, plus error and
+ * system_message bubbles, with per-agent attribution. The demo must mirror that
+ * so the replay faithfully represents what the user saw: a librarian's progress
+ * reply or an expert's error alert is first-class conversation, not internal
+ * noise (issue #98).
  *
- * Mirror the live behavior: keep the user's prompts and the principal's
- * substantive text replies — the seed prompt, the key exchanges, and the final
- * result — and drop everything else (worker narration, reasoning, tool
- * calls/results, hook diagnostics, NO-RENDER placeholders, empties). The
- * reasoning graph on the right tells the internal story.
+ * Keep: user prompts; assistant/system plain-text replies from ANY agent;
+ * error and system_message bubbles (the agent-attributed warnings/alerts the
+ * live Chat shows). Drop: reasoning, tool calls/results, hook diagnostics, and
+ * the interactive ask_user / auto_retry cards (the reasoning graph on the right
+ * tells the internal story, and the cards have no meaning in a read-only
+ * replay), plus NO-RENDER placeholders and empties.
  */
-function isConversationalMessage(m: ChatMessage): boolean {
+export function isDemoConversational(m: ChatMessage): boolean {
   if (m.role === "user") {
     return !!m.content?.trim();
   }
-  const isPlainText = m.kind === "text" || m.kind === undefined;
-  if (!isPlainText || !m.content?.trim()) {
-    return false;
+  // Agent-attributed warnings/errors the live Chat surfaces as standalone
+  // bubbles. system_message carries its own payload; error carries content.
+  if (m.kind === "system_message") {
+    return !!m.systemMessage;
   }
-  // Only the principal agent is user-facing. Missing agent → treat as principal
-  // for resilience against older bundles where attribution was not recorded.
-  return m.agent === undefined || m.agent === "principal";
+  if (m.kind === "error") {
+    return !!m.content?.trim();
+  }
+  // Substantive text replies from ANY agent (principal or expert). MessageStream
+  // attributes each row by `agent`, so non-principal messages render with their
+  // own avatar/name. Missing agent → treated as principal downstream.
+  const isPlainText = m.kind === "text" || m.kind === undefined;
+  return isPlainText && !!m.content?.trim();
 }
 
 const REPORT_NAME = /report|summary|总结|conclusion|readme/i;
@@ -89,7 +100,19 @@ function pickDefaultFile(files: DemoFile[]): string | null {
 }
 
 
-export function DemoView() {
+export interface DemoViewProps {
+  /**
+   * Monotonic counter bumped by the shell each time the sidebar "Live Demo"
+   * entry is clicked. A *change* (not the initial value) returns the player to
+   * the session-selection / import landing — the same effect as the header
+   * "Reselect" button — so re-clicking the nav item while a demo is already
+   * open isn't a dead no-op (issue #111). Optional so standalone/test mounts
+   * work without it.
+   */
+  resetSignal?: number;
+}
+
+export function DemoView({ resetSignal }: DemoViewProps = {}) {
   const t = useT();
   const { sessions, currentSession, messages } = useSessions();
   const { currentSandbox } = useSandbox();
@@ -107,6 +130,10 @@ export function DemoView() {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [pinnedFile, setPinnedFile] = useState<string | null>(null);
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
+  const formatNodeKind = (kind: string) => {
+    const key = getNodeKindLabelKey(kind);
+    return key ? t(key) : kind;
+  };
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const decodedRef = useRef<Map<string, DecodedFile>>(new Map());
@@ -189,6 +216,21 @@ export function DemoView() {
     return { t0: 0, t1, sorted: [], nodeMs, ordered };
   }, [bundle, nodes]);
 
+  // Return to the landing when the shell signals a sidebar "Live Demo" re-click
+  // (issue #111). Fires only on a *change* of resetSignal, never on the initial
+  // mount, so importing/packing a bundle isn't immediately undone. Clearing the
+  // bundle is enough — the "reset transport on new bundle" effect below re-inits
+  // cursor/zoom/etc. the next time a bundle is selected. The module-level
+  // demoCache keeps re-opening the same session instant.
+  const prevResetSignal = useRef(resetSignal);
+  useEffect(() => {
+    if (shouldResetDemo(prevResetSignal.current, resetSignal)) {
+      prevResetSignal.current = resetSignal;
+      setBundle(null);
+      setError(null);
+    }
+  }, [resetSignal]);
+
   // Reset transport on new bundle (start fully revealed, paused, default file).
   useEffect(() => {
     if (!bundle) {
@@ -240,15 +282,19 @@ export function DemoView() {
     return timeline.ordered.slice(0, count);
   }, [bundle, timeline, cursor]);
 
-  // The left panel shows the conversation backbone — the actual dialogue: the
-  // seed prompt and every substantive text reply. Reasoning, tool calls, tool
-  // results, hook notes and empty placeholders are dropped (the reasoning graph
-  // on the right tells that story). This is deliberately a content predicate,
-  // not a pin-to-two-messages filter: the latter relied on exact id-matching
-  // across two independent event folds and silently emptied the panel whenever a
-  // MESSAGES_SNAPSHOT reshuffled ids or no clean seed/summary message existed.
+  // The left panel shows the conversation backbone — the actual dialogue across
+  // every agent: the seed prompt, each agent's substantive text replies, and the
+  // error/system_message bubbles the live Chat surfaces. Reasoning, tool calls,
+  // tool results, hook notes and empty placeholders are dropped (the reasoning
+  // graph on the right tells that story). `applyMessageFilters` mirrors the live
+  // Chat's default rules (e.g. hiding spurious single-dot messages) so the
+  // replay matches what the user actually saw. This is deliberately a content
+  // predicate, not a pin-to-two-messages filter: the latter relied on exact
+  // id-matching across two independent event folds and silently emptied the
+  // panel whenever a MESSAGES_SNAPSHOT reshuffled ids or no clean seed/summary
+  // message existed.
   const condensedMessages = useMemo<ChatMessage[]>(
-    () => revealedMessages.filter(isConversationalMessage),
+    () => applyMessageFilters(revealedMessages.filter(isDemoConversational), defaultFilterRules),
     [revealedMessages],
   );
 
@@ -525,12 +571,19 @@ export function DemoView() {
   }
 
   // ----- Player -----
+  // Prefer the authoritative title from the live session list (it tracks
+  // backend `session_title` updates) over the snapshot captured into the bundle
+  // at pack time, which can be stale (e.g. "Session f8f35032" before a reload).
+  // Falls back to the bundle title for imported bundles whose source session is
+  // not in this client's list.
+  const liveSession = sessions.find((s) => s.id === bundle.session.id);
+  const displayTitle = liveSession?.title || bundle.session.title;
   return (
     <main className="demo-view" aria-label={t("demo.title")}>
       <header className="demo-header">
         <div className="demo-header__title">
           <span className="workspace-panel__eyebrow">{t("demo.eyebrow")}</span>
-          <h1>{bundle.session.title}</h1>
+          <h1>{displayTitle}</h1>
           <span className="demo-header__meta">
             {t("demo.meta.exported", { time: new Date(bundle.exportedAt).toLocaleString() })}
           </span>
@@ -596,6 +649,13 @@ export function DemoView() {
                 zoom={zoom}
                 onZoomChange={setZoom}
                 fitToken={revealedNodes.length}
+                formatKind={formatNodeKind}
+                zoomLabels={{
+                  controls: t("trace.aria.zoomControls"),
+                  zoomIn: t("trace.aria.zoomIn"),
+                  zoomOut: t("trace.aria.zoomOut"),
+                  reset: t("trace.aria.resetZoom"),
+                }}
               />
             </div>
             <div className="demo-transport">
@@ -658,9 +718,11 @@ export function DemoView() {
         node={modalNode}
         onClose={() => setModalNodeId(null)}
         onSelectNode={(id) => { setSelectedNodeId(id); setModalNodeId(id); }}
+        nodes={nodes}
         onSelectArtifact={selectFile}
         activeArtifactPath={currentArtifactPath}
         closeLabel={t("demo.node.modalClose")}
+        formatKind={formatNodeKind}
         t={t}
       />
     </main>

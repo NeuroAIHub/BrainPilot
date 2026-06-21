@@ -11,6 +11,7 @@ import { down } from "./commands/down.js";
 import { status } from "./commands/status.js";
 import { init } from "./commands/init.js";
 import { logs } from "./commands/logs.js";
+import { runList, runDiff, runReset } from "./commands/template.js";
 import { spawnDetachedBackend } from "./spawn-backend.js";
 
 /** Hooks injectable for tests so `run()` never touches a real server/process. */
@@ -20,6 +21,9 @@ export interface ProgramDeps {
   statusFn?: typeof status;
   initFn?: typeof init;
   logsFn?: typeof logs;
+  templateListFn?: typeof runList;
+  templateDiffFn?: typeof runDiff;
+  templateResetFn?: typeof runReset;
   log?: (msg: string) => void;
   /** Override process.exit (tests). */
   onError?: (err: Error) => void;
@@ -47,6 +51,9 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
   const statusFn = deps.statusFn ?? status;
   const initFn = deps.initFn ?? init;
   const logsFn = deps.logsFn ?? logs;
+  const templateListFn = deps.templateListFn ?? runList;
+  const templateDiffFn = deps.templateDiffFn ?? runDiff;
+  const templateResetFn = deps.templateResetFn ?? runReset;
 
   program
     .name("brainpilot")
@@ -106,6 +113,35 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         baseUrl: opts.baseUrl,
         model: opts.model,
       });
+    });
+
+  const template = program
+    .command("template")
+    .description("Inspect and manage on-disk agent prompt overrides (bp_template/agents/<name>/prompt.md)");
+
+  template
+    .command("list")
+    .description("Show drift status of every built-in agent's prompt")
+    .option("-d, --dir <path>", "data directory (default ./brainpilot)")
+    .action(async (opts) => {
+      await templateListFn({ dir: opts.dir });
+    });
+
+  template
+    .command("diff [agent]")
+    .description("Show local-vs-built-in diff for drifted agents (or one named agent)")
+    .option("-d, --dir <path>", "data directory (default ./brainpilot)")
+    .action(async (agent, opts) => {
+      await templateDiffFn({ dir: opts.dir, agent });
+    });
+
+  template
+    .command("reset [agent]")
+    .description("Overwrite local prompt(s) with the built-in version (backs up any existing file)")
+    .option("-d, --dir <path>", "data directory (default ./brainpilot)")
+    .option("-y, --yes", "skip the confirmation prompt", false)
+    .action(async (agent, opts) => {
+      await templateResetFn({ dir: opts.dir, agent, yes: opts.yes });
     });
 
   program

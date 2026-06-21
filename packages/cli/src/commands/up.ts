@@ -20,7 +20,8 @@ import { isMockMode } from "@brainpilot/runtime";
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
 import { scaffold, isScaffolded, DEFAULT_PORT } from "../scaffold.js";
-import { writePid } from "../process-control.js";
+import { detectPromptDrift } from "./template.js";
+import { writePid, writeServerState } from "../process-control.js";
 import { resolveWebDist } from "../web-dist.js";
 
 export interface UpOptions {
@@ -77,11 +78,30 @@ export function buildStartServerOptions(
   } satisfies StartServerOptions;
 }
 
+/** Pick the right CLI invocation hint based on how the process was launched.
+ *
+ *  Direct binary call → `brainpilot up --port <n>`.
+ *
+ *  npm script call → `npm run <script> -- up --port <n>`. The `--` is required
+ *  to stop npm from swallowing flags (otherwise it warns "Unknown cli config
+ *  '--port'" and never passes them through), and the `up` subcommand has to
+ *  follow it because the script itself only invokes `node bin.js`. */
+export function portFlagHint(env: NodeJS.ProcessEnv = process.env): string {
+  const script = env.npm_lifecycle_event;
+  if (script && script !== "npx") {
+    return `npm run ${script} -- up --port <n>`;
+  }
+  return "brainpilot up --port <n>";
+}
+
 export class PortInUseError extends Error {
-  constructor(public readonly port: number) {
+  constructor(
+    public readonly port: number,
+    hint: string = portFlagHint(),
+  ) {
     super(
       `Port ${port} is already in use.\n` +
-        "  Choose another with `brainpilot up --port <n>` " +
+        `  Choose another with \`${hint}\` ` +
         "(the runtime uses port+1).",
     );
     this.name = "PortInUseError";
@@ -143,6 +163,27 @@ export async function up(
     await scaffold(dataDir, { port });
   }
 
+  // 2b. Non-blocking banner if any on-disk prompt overrides have drifted from
+  //     the in-code built-in (#102). The runtime still loads the on-disk file
+  //     verbatim — we just surface the divergence so users notice when
+  //     `git pull` updated a prompt they previously customised.
+  try {
+    const drift = await detectPromptDrift(dataDir);
+    if (drift.length > 0) {
+      const names = drift.map((d) => d.name).join(", ");
+      log(
+        pc.yellow(
+          `ℹ Detected ${drift.length} on-disk agent prompt override(s) diverging from built-ins: ${names}`,
+        ),
+      );
+      log(pc.dim("    inspect:  npm run bp -- template diff"));
+      log(pc.dim("    refresh:  npm run bp -- template reset"));
+      log(pc.dim("    keep:     ignore this notice (overrides take precedence)"));
+    }
+  } catch {
+    // banner is best-effort — never fail `up` over template introspection
+  }
+
   // 3. Resolve provider key. Skipped under BP_MOCK=1 — the mock agent replaces
   //    the whole Pi layer and never makes a real LLM call, so no key is needed.
   //    A missing key no longer blocks launch: the backend/runtime boot lazily
@@ -177,7 +218,16 @@ export async function up(
     );
   }
   const pid = await deps.spawnDetached(cfg);
-  await writePid(dataPaths(dataDir).backendPid, pid);
+  const paths = dataPaths(dataDir);
+  await writePid(paths.backendPid, pid);
+  // issue #41: persist the resolved ports so `status` (which has no --port)
+  // probes the real backend rather than the default. `down` removes this.
+  await writeServerState(paths.serverState, {
+    pid,
+    port: cfg.port,
+    runtimePort: cfg.runtimePort,
+    host: cfg.host,
+  });
   log(pc.green(`BrainPilot backend started (pid ${pid}) at ${pc.bold(url)}`));
   if (open) await maybeOpen(deps, url);
   return { config: cfg, url, pid };

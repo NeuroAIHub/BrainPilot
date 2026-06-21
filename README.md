@@ -51,6 +51,34 @@ brainpilot logs      # tail backend log; add --runtime for runtime log
 brainpilot down      # stop the detached backend
 ```
 
+### Where your files live
+
+`brainpilot up` resolves a single **data directory** and keeps everything under
+it. Precedence: `--dir <path>` > `BP_DATA_DIR` env > `./brainpilot` under the
+current working directory. So a plain `brainpilot up` uses `./brainpilot/`.
+
+```
+brainpilot/                       # data root (default: ./brainpilot)
+├── workspaces/<sessionId>/       # the agent's working directory (cwd) — one per
+│                                 #   session; every file an agent reads/writes
+│                                 #   or generates lands here
+├── bp_template/                  # configuration (written by `brainpilot init`)
+│   ├── providers.json            #   API key / base URL / model (providers)
+│   ├── settings.json             #   runtime settings
+│   ├── mcp_servers.json          #   MCP server connections
+│   ├── agents/                   #   custom agent personas
+├── .bp/<sessionId>/              # per-session state (metadata, trace graph)
+├── brainpilot.config.json        # local top-level config
+├── .env                          # environment variables
+└── .runtime/                     # process state: logs/, pid files, server.json
+```
+
+> **Trust boundary.** In local (non-Docker) mode there is **no container
+> isolation** — agents read and write directly on your machine, under
+> `brainpilot/workspaces/<sessionId>/`. The UI hides the *Sandbox* control in
+> this mode because there is no Docker sandbox to attach. If you need isolation,
+> use the Docker deployment below, which runs agents inside a sandbox container.
+
 ## 💻 Run from source (contributors)
 
 From a local BrainPilot checkout:
@@ -96,6 +124,15 @@ Host networking instead of bridge:
 docker compose -f docker-compose.yml -f docker-compose.host.yml up -d --build
 ```
 
+GPU sandbox (needs an NVIDIA GPU + driver and the
+[NVIDIA Container Toolkit](https://github.com/NVIDIA/nvidia-container-toolkit)):
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d
+```
+This override points `sandbox` at the `brainpilot-sandbox-gpu` image (CUDA +
+PyTorch, see Publishing below) and reserves the host GPUs into the container.
+Without a GPU + toolkit, omit this file — the default `sandbox` is CPU-only.
+
 ### 3. Stop
 ```bash
 docker compose down
@@ -103,8 +140,10 @@ docker compose down
 
 ### 🧩 Customizing sandbox dependencies
 
-The `brainpilot-sandbox` image ships a **lightweight baseline** (Node + runtime
-only — no Python, no GPU, no terminal). To add dependencies, edit
+The `brainpilot-sandbox` (cpu) image ships a **lightweight baseline** (Node +
+Python3 + runtime only — no sci stack, no GPU). For CUDA + PyTorch use the
+`brainpilot-sandbox-gpu` image instead (see the GPU launch above and Publishing
+below). To add dependencies to the cpu image, edit
 **`docker/sandbox/extra-deps.sh`** — a build-time hook with worked examples for:
 - installing Python3 + pip packages,
 - installing system packages (apt),
@@ -197,30 +236,102 @@ bridges every configured MCP server into the agents' toolset: each remote tool
 shows up namespaced as `mcp__<server>__<tool>`. Three transports are supported —
 **stdio** (spawned local process), **streamable-http**, and **sse** (remote).
 
-### What ships by default
+The built-in skills library (see below) is separate from MCP — it is loaded
+through Pi's native skill pipeline, not as an MCP server, and needs no
+configuration.
+
+### 📚 Built-in skills library
+
+Skills sources: 
+- [https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills.git](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills.git)
+- [https://github.com/Yuan1z0825/nature-skills.git](https://github.com/Yuan1z0825/nature-skills.git)
+
+The built-in skills ship in the `@brainpilot/skills` content package
+(`packages/skills/skills/` inside the BrainPilot repo). At deploy time they are
+**materialized into your data dir** at `<data-dir>/bp_template/skills/` (a
+user-editable copy; an existing skill is never overwritten). The runtime loads
+skills from there through **Pi's native skill pipeline** — each skill's
+`name` + `description` is placed in the agent's system prompt, and the full
+`SKILL.md` body is read on demand (progressive disclosure). Agents can also
+force-load a skill with `/skill:<name>`.
+
+They are organised as a two-level directory tree:
+
+```
+skills/
+├── <category>/                  # e.g. 05_EEG_ERP, 14_Writing
+│   ├── <skill-name>/            # one sub-folder per skill
+│   │   ├── SKILL.md             # required: YAML frontmatter + Markdown body
+│   │   └── references/          # optional: supplementary files
+│   │       └── <topic>.md
+```
+
+**Adding a new skill:**
+
+1. Pick (or create) a category folder under `packages/skills/skills/`.
+   Existing categories:
+
+   | Folder | Domain |
+   |--------|--------|
+   | `01_Meta-Skills` | Skill authoring & review |
+   | `02_Cross-Domain_Foundation` | Statistics, visualisation, research literacy |
+   | `03_Cognitive_Psychology` | Paradigms, scoring, DDM, SDT |
+   | `04_Psycholinguistics` | Reading time, SPR, stimulus norming |
+   | `05_EEG_ERP` | EEG preprocessing, ERP analysis, MNE-Python |
+   | `06_fMRI_Neuroimaging` | fMRI preprocessing, GLM, pycortex, decoding |
+   | `07_Computational_Modeling` | ACT-R, Bayesian modelling, parameter recovery |
+   | `08_Computational_Neuroscience` | Neural population analysis, spiking networks |
+   | `09_Cellular_Molecular_Neuroscience` | Calcium imaging, optogenetics |
+   | `10_Clinical_Neuropsychology` | Lesion-symptom mapping, battery selection |
+   | `11_Developmental_Cognition` | Infant looking-time design |
+   | `12_Social_Cognition` | Theory-of-mind task selection |
+   | `13_Visualization` | Nature-figure creation & chart design |
+   | `14_Writing` | Markdown report writing |
+   | `15_Others` | Neuroimaging power/sample-size guides |
+
+2. Create `<category>/<skill-name>/SKILL.md` with required YAML frontmatter:
+
+   ```yaml
+   ---
+   name: "<skill-name>"
+   description: "<one-line summary used for keyword matching>"
+   domain: "<domain>"
+   version: "1.0.0"
+   ---
+   ```
+
+   The `description` field is placed in every agent's system prompt and is how
+   the model decides when a skill is relevant — make it keyword-rich and
+   specific. (`name` + `description` are required; a skill with no description
+   is not loaded.)
+
+3. (Optional) Add reference files under `references/` for deeper detail
+   (parameter tables, API docs, worked examples, formula guides). The agent
+   reads these on demand with its `read` tool — progressive disclosure keeps the
+   system prompt compact while drill-down material stays available.
+
+4. Build and restart: `npm run build -w packages/skills` then restart the
+   BrainPilot runtime. The new skill is materialized into
+   `<data-dir>/bp_template/skills/` on next launch (existing files are not
+   overwritten — copy it in manually or remove the stale copy to refresh), and
+   agents discover it on their next turn. You can also drop a skill directly
+   into `<data-dir>/bp_template/skills/` without rebuilding the package.
+
+**Quality guidelines:** skills encode validated domain methodology — every
+numerical parameter needs a citation; keep SKILL.md under 500 lines; put raw
+reference material under `references/` rather than inline. See the
+`contribute-skills-via-pr` and `verify-skill` Meta-Skills for the full
+contributor workflow.
+
+### Configuring your own servers
 
 `brainpilot init` (and `brainpilot up`, which scaffolds on first launch) writes
-`mcp_servers.json` into your **data dir** — it is generated at runtime, not stored
-in the repo. The data dir is resolved as `--dir` > `$BP_DATA_DIR` > `./brainpilot`
-under the directory you run the command from, so the file lands at
-`<data-dir>/bp_template/mcp_servers.json`. It comes pre-wired to BrainPilot's three
-built-in remote services (streamable-http, no auth):
-
-| Server | Purpose | URL |
-|--------|---------|-----|
-| `bp_KB` | Knowledge base | `http://8.145.42.208:8005/mcp` |
-| `bp_skills` | Skills | `http://8.145.42.208:8006/mcp` |
-| `bp_papersearch` | Paper search | `http://8.145.42.208:8007/mcp` |
-
-These connect automatically on launch — no extra setup. Remove or edit any entry
-to opt out or point at your own deployment. A server is connected lazily and a
-failing one is logged and skipped, so it never blocks the others or aborts launch.
+an empty `mcp_servers.json` into your **data dir** — it is generated at runtime,
+not stored in the repo. The data dir is resolved as `--dir` > `$BP_DATA_DIR` >
+`./brainpilot` under the directory you run the command from, so the file lands at
+`<data-dir>/bp_template/mcp_servers.json`.
 
 > Scaffolding is idempotent: an existing `mcp_servers.json` is never overwritten.
-> If you initialized before these defaults existed, edit the file in your data dir
-> by hand (or delete it and re-run `brainpilot init`).
-
-### Adding your own server
 
 Edit `<data-dir>/bp_template/mcp_servers.json` (global, shared by every session)
 or `<data-dir>/.bp/<session-id>/mcp_servers.json` (per session) — where
@@ -266,6 +377,9 @@ is treated as an unconfigured placeholder and skipped silently at startup, so yo
 can keep a slot in the file before wiring up its address. A ready-to-copy example
 covering all three transports is written to `bp_template/mcp_servers.example.json`.
 
+Recommended MCP server: 
+- [Tavily-web-search](https://www.tavily.com/)
+
 ## 📦 Publishing (maintainers)
 
 ```bash
@@ -278,18 +392,35 @@ npm run release           # version-sync, build, then publish protocol→runtime
 
 ### Docker 镜像发布
 
-镜像版本号与 npm 版本一致（根 `package.json` 的 `version`）。三个镜像：`brainpilot-main`、
-`brainpilot-sandbox`（cpu）、`brainpilot-sandbox-gpu`（CUDA torch）。
+**两层模型**：重依赖（CUDA + PyTorch + 科学栈，~9GB）住在 *独立发布* 的 base 镜像
+`brainpilot-gpu-base`，按依赖版本打 tag（如 `cu124-torch2.6.0`），**低频更新**；随版本
+迭代的代码镜像有三个：`brainpilot-main`、`brainpilot-sandbox`（cpu）、
+`brainpilot-sandbox-gpu`（`FROM` 上述 base + 业务层）。GPU runtime 镜像因此只重建薄薄的
+业务层，发版不再重装 torch。
 
 ```bash
 # 一次性：复制示范配置，填入国内镜像源 / 私有 registry 地址（两个 .local 文件均不提交）
 cp scripts/release-mirrors.example.sh scripts/release-mirrors.local.sh   # pip/apt 镜像源
 cp scripts/release-targets.example.sh scripts/release-targets.local.sh   # ACR/内网 registry
+```
 
-# 构建（默认全部；可传子串只建子集）
-bash scripts/release-build.sh                # 全部三个镜像
+**① GPU base 镜像**（仅在 torch/cuda 升级时重建；其余发版跳过本步）：
+```bash
+bash scripts/release-gpu-base.sh build         # 构建（下载 ~2.7GB torch，慢；打 <tag> + latest）
+bash scripts/release-gpu-base.sh push          # 推到全部 registry（ghcr + 私有）
+bash scripts/release-gpu-base.sh push --registry acr,intranet   # 体积大，可跳过公网 ghcr
+```
+升级 torch/cuda 时改三处保持一致：`docker/sandbox/Dockerfile.gpu-base` 的版本、
+`docker/sandbox/Dockerfile` 的 `gpu` stage `FROM ...:<tag>`、`scripts/release-images.sh`
+的 `GPU_BASE_TAG`。
+
+**② 随版本迭代的代码镜像**（镜像版本号 = 根 `package.json` 的 `version`）：
+```bash
+# 构建（默认全部；可传子串只建子集）。构建 sandbox-gpu 前 base 须已就位
+# （本地有或 ghcr 可拉，否则脚本会提示先跑 release-gpu-base.sh build）。
+bash scripts/release-build.sh                # 全部三个代码镜像
 bash scripts/release-build.sh main           # 只建 main
-bash scripts/release-build.sh sandbox-gpu    # 只建 GPU 变体（体积大、慢）
+bash scripts/release-build.sh sandbox-gpu    # 只建 GPU 变体（薄业务层，秒级）
 
 # 推送（需先 docker login 各 registry）
 bash scripts/release-push.sh --dry-run                       # 先看计划
@@ -298,7 +429,9 @@ bash scripts/release-push.sh --image sandbox-gpu --registry acr,intranet  # GPU 
 ```
 
 推送目标 registry 在 `scripts/release-images.sh`（ghcr，公开）+ `release-targets.local.sh`
-（ACR / 内网，私有）声明。GPU 镜像约 6GB，推公网 ghcr 可能超时，建议 `--registry acr,intranet`。
+（ACR / 内网，私有）声明。base 与 GPU runtime 镜像较大，推公网 ghcr 可能超时，建议
+`--registry acr,intranet`。runtime 的 `gpu` stage 只 `FROM` base 的版本 tag（绝不 `latest`，
+避免静默漂移）。
 
 ## 🧪 Testing
 

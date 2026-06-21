@@ -22,6 +22,7 @@
  */
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
+import { deriveProviderApi, type ProviderAdapter } from "@brainpilot/protocol";
 
 /** The synthetic provider id under which the auto-generated gateway lives. */
 export const GATEWAY_PROVIDER = "bp-gateway";
@@ -54,6 +55,11 @@ export interface PiAuthStorage {
 export interface SessionProviderConfig {
   providerId: string;
   baseUrl?: string;
+  /** #63: wire protocol (Pi models.json `api`). Defaults to anthropic-messages. */
+  api?: string;
+  /** #68: coarse adapter family (auto/openai/anthropic). When `api` is unset,
+   *  the precise wire value is derived from this. */
+  adapter?: string;
   apiKey: string;
   modelId?: string;
 }
@@ -202,7 +208,12 @@ export function resolveSessionModel(
       providers: {
         [cfg.providerId]: {
           baseUrl: cfg.baseUrl,
-          api: "anthropic-messages",
+          // #63/#68: persist the selected wire protocol instead of hardcoding
+          // anthropic-messages. Precedence: explicit `api` (precise, #63) →
+          // derived from `adapter` (coarse family, #68) → default. Pi's
+          // ModelRegistry accepts any known api; azure-openai-responses derives
+          // api-version/deployment from the Azure base URL.
+          api: cfg.api ?? deriveProviderApi(cfg.adapter as ProviderAdapter | undefined) ?? "anthropic-messages",
           // Placeholder — the real key is injected via setRuntimeApiKey below.
           apiKey: `$BP_PROVIDER_${sanitize(cfg.providerId).toUpperCase()}`,
           models: [

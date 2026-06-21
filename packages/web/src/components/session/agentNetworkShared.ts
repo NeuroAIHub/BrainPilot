@@ -13,6 +13,7 @@ import {
   GitBranch,
   Microscope,
   PenLine,
+  ShieldCheck,
   Sparkles,
   UserRoundCog,
   Wrench,
@@ -92,6 +93,13 @@ export const AGENT_PROFILES: Record<string, AgentProfile> = {
     accent: "warning",
     defaultTools: ["Read", "Write", "Grep", "Bash", "send_message"],
   },
+  auditor: {
+    displayName: "Auditor",
+    role: "profile.auditor.role",
+    description: "profile.auditor.desc",
+    accent: "danger",
+    defaultTools: ["Read", "Grep", "Bash", "Write", "send_message", "record_trace"],
+  },
   user: {
     displayName: "You",
     role: "profile.user.role",
@@ -127,6 +135,7 @@ export const BUILTIN_AGENT_NAMES = [
   "experimentalist",
   "engineer",
   "writer",
+  "auditor",
 ] as const;
 
 /* --------------------------------------------------------------------------
@@ -278,6 +287,7 @@ export function getAgentIcon(name: string) {
   if (normalized.includes("experiment")) return Microscope;
   if (normalized.includes("engineer")) return Wrench;
   if (normalized.includes("writer")) return PenLine;
+  if (normalized.includes("audit")) return ShieldCheck;
   if (normalized.includes("idea") || normalized.includes("creat")) return Sparkles;
   return Bot;
 }

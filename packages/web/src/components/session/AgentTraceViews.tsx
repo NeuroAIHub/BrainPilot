@@ -1,9 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Network, Pause, Play, RefreshCw, Search, UserRoundCog, X } from "lucide-react";
-import { TraceGraph, TraceNode } from "../../contracts/backend";
+import { TraceNode } from "../../contracts/backend";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { AgentNetwork } from "./AgentNetwork";
@@ -12,6 +11,7 @@ import { TraceNodeDetail } from "./TraceNodeDetail";
 import {
   formatTime,
   getNodeKind,
+  getNodeKindLabelKey,
   getStatusLabelKey,
   normalizeStatus,
 } from "./traceLayout";
@@ -54,23 +54,27 @@ export function AgentsPanel() {
 }
 
 export function TracePanel() {
-  const { currentSession } = useSessions();
+  // #79: trace is now live — seeded + kept current by SessionContext via SSE
+  // (CUSTOM:trace_node), so this panel reads it instead of polling.
+  const { currentSession, currentTrace, refreshTrace } = useSessions();
   const t = useT();
-  const [trace, setTrace] = useState<TraceGraph | null>(null);
+  const trace = currentTrace;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [direction, setDirection] = useState<"LR" | "TB">("LR");
   const [zoom, setZoom] = useState(1);
-  const [isAutoRefresh, setIsAutoRefresh] = useState(true);
-  const [isLoading, setIsLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [isRefreshing, setIsRefreshing] = useState(false);
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [fitToken, setFitToken] = useState(0);
   const wasUserAdjustedRef = useRef(false);
   const prevNodeCountRef = useRef(0);
+  const formatNodeKind = (kind: string) => {
+    const key = getNodeKindLabelKey(kind);
+    return key ? t(key) : kind;
+  };
 
   const allNodes = trace?.nodes ?? [];
   const playbackNodes = useMemo(() => allNodes.slice(0, playbackIndex), [allNodes, playbackIndex]);
@@ -126,54 +130,24 @@ export function TracePanel() {
     return visibleNodes.find((node) => node.id === selectedNodeId) ?? visibleNodes[0] ?? null;
   }, [selectedNodeId, trace, visibleNodes]);
 
-  const loadTrace = async (silent = false) => {
-    if (!currentSession) {
-      setTrace(null);
-      setSelectedNodeId(null);
-      return;
-    }
-    if (!silent) {
-      setIsLoading(true);
-    }
-    setError(null);
+  const handleRefresh = async () => {
+    if (!currentSession) return;
+    setIsRefreshing(true);
     try {
-      const nextTrace = await api.sessions.getTrace(currentSession.id);
-      setTrace(nextTrace);
-      if (!silent) {
-        prevNodeCountRef.current = nextTrace.nodes.length;
-        if (!wasUserAdjustedRef.current) {
-          setPlaybackIndex(nextTrace.nodes.length);
-        }
-      }
-      setSelectedNodeId((current) => {
-        if (current && nextTrace.nodes.some((node) => node.id === current)) {
-          return current;
-        }
-        return nextTrace.nodes[0]?.id ?? null;
-      });
-    } catch (err) {
-      if (!silent) {
-        setTrace(null);
-        setError(err instanceof Error ? err.message : t("trace.loadFailed"));
-      }
+      await refreshTrace(currentSession.id);
     } finally {
-      if (!silent) {
-        setIsLoading(false);
-      }
+      setIsRefreshing(false);
     }
   };
 
+  // Keep a selection valid as nodes stream in: default to the first node, and
+  // hold the current selection while it still exists.
   useEffect(() => {
-    void loadTrace();
-  }, [currentSession?.id]);
-
-  useEffect(() => {
-    if (!currentSession || !isAutoRefresh) {
-      return;
-    }
-    const interval = window.setInterval(() => void loadTrace(true), 3000);
-    return () => window.clearInterval(interval);
-  }, [currentSession?.id, isAutoRefresh]);
+    setSelectedNodeId((current) => {
+      if (current && allNodes.some((node) => node.id === current)) return current;
+      return allNodes[0]?.id ?? null;
+    });
+  }, [allNodes]);
 
   useEffect(() => {
     if (selectedNodeId && visibleNodes.length > 0 && !visibleNodeIds.has(selectedNodeId)) {
@@ -250,36 +224,26 @@ export function TracePanel() {
           </div>
           <div className="trace-toolbar">
             <div className="trace-segmented" aria-label={t("trace.aria.layoutDir")}>
-              <button className={direction === "LR" ? "is-active" : ""} onClick={() => setDirection("LR")} type="button">LR</button>
-              <button className={direction === "TB" ? "is-active" : ""} onClick={() => setDirection("TB")} type="button">TB</button>
-            </div>
-            <div className="trace-refresh-group" aria-label={t("trace.aria.refreshControls")}>
-              <IconButton className={isLoading ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void loadTrace()}>
-                <RefreshCw size={15} />
-              </IconButton>
-              <button
-                aria-pressed={isAutoRefresh}
-                className={`trace-live-toggle ${isAutoRefresh ? "is-active" : ""}`}
-                disabled={!currentSession}
-                onClick={() => setIsAutoRefresh((current) => !current)}
-                title={t("trace.autoRefreshTitle")}
-                type="button"
-              >
-                <span aria-hidden="true" />
-                {t("trace.live")}
+              <button className={direction === "LR" ? "is-active" : ""} onClick={() => setDirection("LR")} type="button">
+                {t("trace.layout.horizontal")}
+              </button>
+              <button className={direction === "TB" ? "is-active" : ""} onClick={() => setDirection("TB")} type="button">
+                {t("trace.layout.vertical")}
               </button>
             </div>
+            <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
+              <RefreshCw size={15} />
+            </IconButton>
           </div>
         </header>
 
-        {error ? <p className="workspace-panel__empty workspace-panel__empty--error">{error}</p> : null}
         {!currentSession ? <p className="workspace-panel__empty">{t("trace.emptyNoSession")}</p> : null}
 
         {trace ? (
           <>
             <div className="trace-meta">
               <span>{trace.meta.projectName || currentSession?.title || t("trace.untitled")}</span>
-              <span>{t("trace.focus", { focus: String(trace.meta.currentFocus || "-") })}</span>
+              {trace.meta.currentFocus ? <span>{t("trace.focus", { focus: String(trace.meta.currentFocus) })}</span> : null}
               <span>{t("trace.nodes", { visible: visibleNodes.length, total: trace.nodes.length })}</span>
               <span>{t("trace.created", { time: formatTime(trace.meta.createdAt) })}</span>
             </div>
@@ -318,7 +282,7 @@ export function TracePanel() {
                   onChange={setTypeFilter}
                   options={[
                     { label: t("trace.allTypes"), value: "all" },
-                    ...typeOptions.map((type) => ({ label: type, value: type })),
+                    ...typeOptions.map((type) => ({ label: formatNodeKind(type), value: type })),
                   ]}
                   value={typeFilter}
                 />
@@ -336,6 +300,7 @@ export function TracePanel() {
                   onZoomChange={setZoom}
                   fitToken={fitToken}
                   emptyLabel={t("trace.noMatch")}
+                  formatKind={formatNodeKind}
                   zoomLabels={{
                     controls: t("trace.aria.zoomControls"),
                     zoomIn: t("trace.aria.zoomIn"),
@@ -370,7 +335,7 @@ export function TracePanel() {
               </div>
 
               <article className="trace-detail">
-                <TraceNodeDetail node={selectedNode} onSelectNode={setSelectedNodeId} t={t} />
+                <TraceNodeDetail node={selectedNode} nodes={allNodes} onSelectNode={setSelectedNodeId} formatKind={formatNodeKind} t={t} />
               </article>
             </div>
           </>

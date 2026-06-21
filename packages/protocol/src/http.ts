@@ -116,12 +116,45 @@ export type GetSessionStateResponse = z.infer<typeof GetSessionStateResponseSche
  * POST /sessions/:id/messages  (inject user message)
  * ------------------------------------------------------------------ */
 
-export const SendMessageRequestSchema = z.object({
+/** A normal user message injected into the session. */
+export const SendMessageContentSchema = z.object({
   content: z.string(),
   /** Target agent; defaults to principal. */
   agent: z.string().optional(),
+  /**
+   * Optional client-supplied metadata (issue #42). The web composer sends the
+   * `uuid` it used for the optimistic user bubble so the runtime can persist a
+   * matching `TEXT_MESSAGE_CHUNK` (role:"user") under the same id — on reload
+   * the replayed event dedupes against the optimistic one by id rather than
+   * duplicating it.
+   */
+  data: z
+    .object({
+      uuid: z.string().optional(),
+      timestamp: z.string().optional(),
+    })
+    .optional(),
 });
+
+/** A reply to an outstanding ask_user (user_input_request) — see events.ts. */
+export const UserInputResponseBodySchema = z.object({
+  type: z.literal("user_input_response"),
+  session_id: z.string(),
+  request_id: z.string(),
+  answer: z.string(),
+});
+
+/**
+ * POST /sessions/:id/messages accepts EITHER a normal message OR an ask_user
+ * reply. The answer body is matched by its `type` literal; everything else is
+ * treated as a content message.
+ */
+export const SendMessageRequestSchema = z.union([
+  UserInputResponseBodySchema,
+  SendMessageContentSchema,
+]);
 export type SendMessageRequest = z.infer<typeof SendMessageRequestSchema>;
+export type UserInputResponseBody = z.infer<typeof UserInputResponseBodySchema>;
 
 export const SendMessageResponseSchema = z.object({
   accepted: z.boolean(),
@@ -153,6 +186,25 @@ export const InterruptResponseSchema = z.object({
   interrupted: z.boolean(),
 });
 export type InterruptResponse = z.infer<typeof InterruptResponseSchema>;
+
+/* ------------------------------------------------------------------ *
+ * POST /sessions/:id/files  (#47 — upload a file into the workspace)
+ * ------------------------------------------------------------------ */
+
+/** #47: upload body. Content is base64 (binary-safe over the JSON byte chain). */
+export const WriteFileRequestSchema = z.object({
+  /** Workspace-relative path (a leading `/workspace` prefix is tolerated). */
+  path: z.string().trim().min(1),
+  /** File contents, base64-encoded. */
+  contentBase64: z.string(),
+});
+export type WriteFileRequest = z.infer<typeof WriteFileRequestSchema>;
+
+export const WriteFileResponseSchema = z.object({
+  path: z.string(),
+  size: z.number(),
+});
+export type WriteFileResponse = z.infer<typeof WriteFileResponseSchema>;
 
 /* ------------------------------------------------------------------ *
  * GET /sessions/:id/agents  (§10 polling fallback)
@@ -195,6 +247,14 @@ export const RUNTIME_ROUTES = {
   sessionEvents: { method: "GET", path: "/sse/:id" },
   /** Alias path some callers use; same AgUiEvent payload as `sessionEvents`. */
   sessionEventsAlias: { method: "GET", path: "/sessions/:id/events" },
+  /**
+   * Persisted AG-UI event history from `events.jsonl`. The SPA calls this on
+   * session activation to rehydrate chat after a runtime restart (the SSE
+   * stream only replays the in-memory ring buffer). Query: `?limit=N`
+   * (default 1000, capped at 5000); returns the most recent N events when
+   * the file is longer.
+   */
+  getSessionHistory: { method: "GET", path: "/sessions/:id/history" },
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },
@@ -203,6 +263,8 @@ export const RUNTIME_ROUTES = {
   readFile: { method: "GET", path: "/sessions/:id/files/content" },
   readRawFile: { method: "GET", path: "/sessions/:id/files/raw" },
   deleteFile: { method: "DELETE", path: "/sessions/:id/files" },
+  /** #47: upload a file into the workspace. Body: { path, contentBase64 }. */
+  writeFile: { method: "POST", path: "/sessions/:id/files" },
 } as const satisfies Record<string, RouteDef>;
 
 export type RuntimeRouteName = keyof typeof RUNTIME_ROUTES;
