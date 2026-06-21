@@ -18,6 +18,7 @@ function deps(name: string): ToolDeps {
     destroyAgent: async () => {},
     wakeAgent: () => {},
     requestUserInput: async () => "stub-answer",
+    routerSkillsDir: "/tmp/bp-test-router",
   };
 }
 
@@ -44,10 +45,20 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("create_agent");
   });
 
-  it("expert gets send_message + record_trace only", () => {
+  it("expert gets send_message + record_trace + skill_search", () => {
     const names = systemToolNamesForRole("expert", "librarian");
-    expect(names.sort()).toEqual(["record_trace", "send_message"].sort());
+    expect(names.sort()).toEqual(["record_trace", "send_message", "skill_search"].sort());
     expect(names).not.toContain("create_agent");
+  });
+
+  it("skill_search reaches every non-trace role (router-skill discovery)", () => {
+    expect(systemToolNamesForRole("principal", "principal")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "librarian")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "writer")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "auditor")).toContain("skill_search");
+    expect(systemToolNamesForRole("expert", "statistician")).toContain("skill_search");
+    // Trace is graph-only — no skill discovery surface.
+    expect(systemToolNamesForRole("trace", "trace")).not.toContain("skill_search");
   });
 
   it("resolves the actual SystemTool objects for a role (filtered)", () => {
@@ -94,9 +105,9 @@ describe("tool access control (§9)", () => {
     );
   });
 
-  it("auditor gets send_message + record_trace, but NO trace-graph access", () => {
+  it("auditor gets send_message + record_trace + skill_search, but NO trace-graph access", () => {
     const names = systemToolNamesForRole("expert", "auditor");
-    expect(names.sort()).toEqual(["record_trace", "send_message"].sort());
+    expect(names.sort()).toEqual(["record_trace", "send_message", "skill_search"].sort());
     // Audit evidence is restricted to the workspace — no graph reads, no
     // create/destroy, no graph mutation.
     expect(names).not.toContain("get_trace_graph");

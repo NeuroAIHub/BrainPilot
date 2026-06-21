@@ -112,6 +112,13 @@ export interface SessionManagerOptions {
    */
   skillsDir?: string;
   /**
+   * Absolute path to the directory backing the `skill_search` tool (the second
+   * skill-loading path — long-tail domain library NOT exposed via Pi's
+   * `<available_skills>`). When omitted, defaults to
+   * `<dataRoot>/bp_template/skills-router`. Materialized alongside `skillsDir`.
+   */
+  routerSkillsDir?: string;
+  /**
    * Memory budget in bytes (issue #20 / R-4). When set, an opt-in soft watchdog
    * refuses new work past ~85% of the budget. Defaults to `BP_MEM_LIMIT_MB`
    * (parsed to bytes); `null`/absent → feature disabled, no behavior change.
@@ -196,6 +203,11 @@ export class SessionManager {
   // (`additionalSkillPaths`). The bundled @brainpilot/skills content is
   // materialized here once (lazily) on first agent creation.
   private readonly skillsDir: string;
+  // Router skills directory backing the `skill_search` Pi-native tool — the
+  // long-tail catalog NOT in `<available_skills>`. Materialized alongside
+  // `skillsDir` (each top-level category lands on the side determined by
+  // `materializeSkills`).
+  private readonly routerSkillsDir: string;
   private skillsMaterialized = false;
 
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
@@ -222,6 +234,10 @@ export class SessionManager {
 
     // Skills are loaded by Pi from this dir (default <dataRoot>/bp_template/skills).
     this.skillsDir = opts.skillsDir ?? join(this.dataRoot, "bp_template", "skills");
+    // The router skill library is a parallel directory with the same on-disk
+    // format; `skill_search` reads from here, Pi never sees it.
+    this.routerSkillsDir =
+      opts.routerSkillsDir ?? join(this.dataRoot, "bp_template", "skills-router");
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -251,8 +267,10 @@ export class SessionManager {
       const res = await materializeSkills(this.dataRoot);
       // eslint-disable-next-line no-console
       console.info(
-        `[skills] ${res.copied} skill file(s) materialized into ${res.dest}` +
-          (res.skipped ? ` (${res.skipped} preserved)` : ""),
+        `[skills] always-on: ${res.copied} copied → ${res.dest}` +
+          (res.skipped ? ` (${res.skipped} preserved)` : "") +
+          `; router: ${res.routerCopied} copied → ${res.routerDest}` +
+          (res.routerSkipped ? ` (${res.routerSkipped} preserved)` : ""),
       );
     } catch (err) {
       // eslint-disable-next-line no-console
@@ -959,6 +977,7 @@ export class SessionManager {
       },
       wakeAgent: (target) => this.wakeAgent(sessionId, target),
       requestUserInput: (req) => this.requestUserInput(entry, name, req),
+      routerSkillsDir: this.routerSkillsDir,
     };
     const systemTools = systemToolsForRole(role, name, deps);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
