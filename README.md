@@ -366,6 +366,9 @@ is treated as an unconfigured placeholder and skipped silently at startup, so yo
 can keep a slot in the file before wiring up its address. A ready-to-copy example
 covering all three transports is written to `bp_template/mcp_servers.example.json`.
 
+Recommended MCP server: 
+- [Tavily-web-search](https://www.tavily.com/)
+
 ## 📦 Publishing (maintainers)
 
 ```bash
