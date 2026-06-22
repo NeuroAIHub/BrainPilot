@@ -36,6 +36,14 @@ describe("ask_user (SessionManager)", () => {
     const okResolved = m.resolveInput(session.id, req.request_id, "A");
     expect(okResolved).toBe(true);
 
+    // issue #132: the answer is emitted as a user_input_response so export/replay
+    // preserves the Q&A. It carries the matching request_id and the answer.
+    const resp = events.find((e) => e.type === "user_input_response") as any;
+    expect(resp).toBeTruthy();
+    expect(resp.request_id).toBe(req.request_id);
+    expect(resp.answer).toBe("A");
+    expect(parseEvent(resp)).toBeTruthy();
+
     await new Promise((r) => setTimeout(r, 20));
     const toolEnd = events.find(
       (e) => e.type === "TOOL_CALL_RESULT" && (e as any).content?.includes("A"),
@@ -45,8 +53,12 @@ describe("ask_user (SessionManager)", () => {
 
   it("resolveInput returns false for unknown request_id", async () => {
     const session = await m.createSession({ title: "T" });
+    const events: AgUiEvent[] = [];
+    m.subscribe(session.id, (e) => events.push(e));
     expect(m.resolveInput(session.id, "nope", "x")).toBe(false);
     expect(m.resolveInput("no-session", "nope", "x")).toBe(false);
+    // issue #132: a stale/unknown answer is not recorded.
+    expect(events.find((e) => e.type === "user_input_response")).toBeUndefined();
   });
 
   it("interrupt rejects pending inputs", async () => {

@@ -55,14 +55,21 @@ function basename(path: string): string {
  *
  * Keep: user prompts; assistant/system plain-text replies from ANY agent;
  * error and system_message bubbles (the agent-attributed warnings/alerts the
- * live Chat shows). Drop: reasoning, tool calls/results, hook diagnostics, and
- * the interactive ask_user / auto_retry cards (the reasoning graph on the right
- * tells the internal story, and the cards have no meaning in a read-only
- * replay), plus NO-RENDER placeholders and empties.
+ * live Chat shows), plus answered ask_user cards (the question + the user's
+ * answer are a user-facing decision point, issue #132 — rendered read-only by
+ * AskUserCard since DemoView passes no onAskUserSubmit). Drop: reasoning, tool
+ * calls/results, hook diagnostics, the auto_retry card and UNANSWERED ask_user
+ * prompts (no meaning in a read-only replay), plus NO-RENDER placeholders and
+ * empties.
  */
 export function isDemoConversational(m: ChatMessage): boolean {
   if (m.role === "user") {
     return !!m.content?.trim();
+  }
+  // Answered ask_user: keep as a read-only Q&A step. Unanswered prompts have no
+  // meaning in a replay and are dropped.
+  if (m.kind === "ask_user") {
+    return m.askUser?.answer !== undefined;
   }
   // Agent-attributed warnings/errors the live Chat surfaces as standalone
   // bubbles. system_message carries its own payload; error carries content.
