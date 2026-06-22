@@ -81,9 +81,11 @@ npm install -g @brainpilot/app
 brainpilot init --api-key <你的-anthropic-key>   # 在 ./brainpilot 下生成配置
 ```
 
-缺少 Key 不再阻塞启动 —— `brainpilot up` 仍会启动，你可以在打开后的 Web **Settings UI** 里设置
-**provider url / key / model**（推荐做法，会自动帮你写入配置）。你也可以改用环境变量
-`ANTHROPIC_API_KEY` 提供 Key。
+缺少 Key 不再阻塞启动：
+
+- **`brainpilot up` 照常启动** —— 之后再补 Key，无需重新 init。
+- **在 Web Settings UI 里设置**（推荐）—— provider url / key / model，自动帮你写入配置。
+- **或改用环境变量 `ANTHROPIC_API_KEY` 提供 Key。**
 
 ### 3. 启动
 
@@ -150,9 +152,11 @@ claude "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up
 codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
 ```
 
-默认情况下，智能体在每条命令前都会停下来等你确认。想让它全程无人值守地跑完，可以加上
-`--dangerously-skip-permissions`（Claude Code）或 `--dangerously-bypass-approvals-and-sandbox`（Codex）
-—— 仅在你信任的目录里这么做。还没有 API Key？让它*“用 mock 模式启动”*，它就会以 `BP_MOCK=1` 拉起来。
+默认情况下，智能体在每条命令前都会停下来等你确认。几个小提示：
+
+- **无人值守跑完** —— 加上 `--dangerously-skip-permissions`（Claude Code）或 `--dangerously-bypass-approvals-and-sandbox`（Codex）。
+- **仅在你信任的目录里这么做** —— 这些 flag 会让智能体不再逐条确认就执行命令。
+- **还没有 API Key？** —— 让它*“用 mock 模式启动”*，它会以 `BP_MOCK=1` 拉起来。
 
 ---
 
@@ -208,10 +212,9 @@ BP_MODEL_PROVIDER=<provider 名>   # 可选；默认 = 文件里第一个 provid
 - [nature-skills](https://github.com/Yuan1z0825/nature-skills)，从 Nature 系列方法中提炼的技能
 - [MNE-Python](https://github.com/mne-tools/mne-python) 与 [pycortex](https://github.com/gallantlab/pycortex)，用 `repo-to-skill` 集成（见下文）
 
-技能位于 `packages/skills/skills/`，按两级目录树组织：`<category>/<skill-name>/SKILL.md`（可选
-`references/` 存放可下钻的细节）。部署时它们会被 **物化到你的数据目录**
-`<data-dir>/bp_template/skills/`（一份可编辑的副本；已存在的技能永不会被覆盖）。覆盖领域包括
-EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视化、科研写作等。
+- **目录结构** —— `packages/skills/skills/`，两级目录树 `<category>/<skill-name>/SKILL.md`（可选 `references/` 存放可下钻的细节）。
+- **部署时** —— **物化到你的数据目录** `<data-dir>/bp_template/skills/`，一份可编辑的副本；已存在的技能永不会被覆盖。
+- **覆盖领域** —— EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视化、科研写作等。
 
 <details>
 <summary><b>技能分类与如何新增技能</b></summary>
@@ -301,8 +304,15 @@ EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视
 - **把关键论文转成技能**，用上面的 `paper-to-skill` / 批量流水线，让方法学常驻在智能体上下文里 ——
   这是不搭建检索服务的轻量替代方案。
 
-> 🚧 一个开箱即用的托管知识库已在路线图上。在此之前，上面两条路径已经能让自部署的 BrainPilot 立刻
-> 跑在 *你自己的* 文献之上。
+#### 🚧 用我们的同款流水线构建你自己的知识库（即将开放）
+
+我们托管 demo 背后的知识库与论文库，是用一套内部的入库流水线（ingestion pipeline）构建的。我们
+计划把这套 **同款流水线** 开源出来，让你能用我们同样的方式构建属于自己的知识库与论文库，再接入
+BrainPilot —— 把它对准 **你自己的** 论文和语料，`librarian` 智能体就能像检索任何其他来源一样去
+检索它。
+
+> 🚧 这套流水线，以及一个开箱即用的托管知识库，都已在路线图上。在此之前，上面两条路径已经能让自
+> 部署的 BrainPilot 立刻跑在 *你自己的* 文献之上。
 
 ---
 
@@ -384,9 +394,10 @@ docker compose up -d --build
 <details>
 <summary><b>沙箱依赖、部署模式与内存预算</b></summary>
 
-**自定义沙箱依赖。** `brainpilot-sandbox` 镜像默认是一个轻量基线（仅 Node + 运行时）。要添加
-Python、系统包或全局 npm 工具，编辑 `docker/sandbox/extra-deps.sh`（内含范例），然后重建：
-`docker compose build sandbox`。
+**自定义沙箱依赖。** `brainpilot-sandbox` 镜像默认是一个轻量基线（仅 Node + 运行时）。
+
+- 要添加 Python、系统包或全局 npm 工具，编辑 `docker/sandbox/extra-deps.sh`（内含范例）。
+- 然后重建：`docker compose build sandbox`。
 
 **部署模式**（仅 Docker —— npm 路径始终是单用户、本地进程）：
 
@@ -395,10 +406,13 @@ Python、系统包或全局 npm 工具，编辑 `docker/sandbox/extra-deps.sh`�
 | `static` | 1 个共享 `main` + 1 个固定 `sandbox`，单用户 | 设置 `BP_RUNTIME_URL` | ✅ 已发布 |
 | `dynamic` | 共享 `main` + 经 docker.sock 按用户拉起的 sandbox | `BP_ORCHESTRATOR=docker` | 🚧 仅骨架 |
 
-**内存预算（`BP_MEM_LIMIT_MB`，可选）。** 对内存受限的容器，把它设为单容器预算（MB），运行时会
-在内核 OOM 之前自我限流（超过预算约 85% 时拒绝新工作）。严格 opt-in；单用户沙箱推荐下限约
-2 GB。在启动器侧设置 `NODE_OPTIONS=--max-old-space-size=<预算的约 75%>` 以加 V8 堆上限。完整的
-Docker 与发布细节见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+**内存预算（`BP_MEM_LIMIT_MB`，可选）。** 对内存受限的容器：
+
+- **作用** —— 运行时会在内核 OOM 之前自我限流（超过预算约 85% 时拒绝新工作）。
+- **opt-in** —— 把它设为单容器预算（MB）；单用户沙箱推荐下限约 2 GB。
+- **V8 堆上限** —— 同时在启动器侧设置 `NODE_OPTIONS=--max-old-space-size=<预算的约 75%>`。
+
+完整的 Docker 与发布细节见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
 </details>
 
 ---

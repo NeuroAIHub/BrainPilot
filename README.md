@@ -85,10 +85,11 @@ This installs the `brainpilot` CLI (`bnpt` is a built-in short alias for the sam
 brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brainpilot
 ```
 
-A missing key no longer blocks launch — `brainpilot up` starts anyway, and you can set the
-**provider url / key / model** in the web **Settings UI** after it opens (the recommended
-path; it writes the config for you). You can also supply the key via the
-`ANTHROPIC_API_KEY` environment variable instead.
+A missing key no longer blocks launch:
+
+- **`brainpilot up` starts anyway** — set the key later, no re-init needed.
+- **Set it in the web Settings UI** (recommended) — provider url / key / model; it writes the config for you.
+- **Or use the `ANTHROPIC_API_KEY` environment variable** instead.
 
 ### 3. Launch
 
@@ -159,10 +160,11 @@ claude "Globally install the @brainpilot/app npm package, then run brainpilot up
 codex exec "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
 ```
 
-By default the agent pauses for approval before each command. To let it run end-to-end
-unattended, add `--dangerously-skip-permissions` (Claude Code) or
-`--dangerously-bypass-approvals-and-sandbox` (Codex) — only do this in a directory you
-trust. No API key yet? Ask it to *"start in mock mode"* and it'll launch with `BP_MOCK=1`.
+By default the agent pauses for approval before each command. A few tips:
+
+- **Run unattended** — add `--dangerously-skip-permissions` (Claude Code) or `--dangerously-bypass-approvals-and-sandbox` (Codex).
+- **Only in a directory you trust** — those flags let the agent run commands without asking.
+- **No API key yet?** — ask it to *"start in mock mode"* and it'll launch with `BP_MOCK=1`.
 
 ---
 
@@ -223,12 +225,9 @@ Skills sources:
 - [EthoClaw](https://github.com/penciler-star/EthoClaw), ethological behavioral analysis platform
 - [NeuroClaw](https://github.com/CUHK-AIM-Group/NeuroClaw), neuroscience AI toolbox
 
-Skills live in `packages/skills/skills/` and are organised as a two-level
-`<category>/<skill-name>/SKILL.md` tree (with optional `references/` for drill-down
-detail). At deploy time they are **materialized into your data dir** at
-`<data-dir>/bp_template/skills/` (a user-editable copy; an existing skill is never
-overwritten). Covered domains span EEG/ERP, fMRI, computational modeling, psycholinguistics,
-clinical neuropsychology, visualization, scientific writing, and more.
+- **Layout** — `packages/skills/skills/`, a two-level `<category>/<skill-name>/SKILL.md` tree (optional `references/` for drill-down detail).
+- **At deploy time** — **materialized into your data dir** at `<data-dir>/bp_template/skills/`, a user-editable copy; an existing skill is never overwritten.
+- **Covered domains** — EEG/ERP, fMRI, computational modeling, psycholinguistics, clinical neuropsychology, visualization, scientific writing, and more.
 
 <details>
 <summary><b>Skill categories &amp; how to add a skill</b></summary>
@@ -332,8 +331,16 @@ papers, web sources, and knowledge bases through whatever retrieval tools you gi
   methodology is always in the agent's context — a lightweight alternative to standing up a
   retrieval service.
 
-> 🚧 A turnkey, hosted knowledge base is on the roadmap. Until then, the two paths above let a
-> self-hosted BrainPilot work against *your* literature today.
+#### 🚧 Build your own knowledge base with our pipeline (coming soon)
+
+The knowledge base and paper library behind our hosted demo are built with an in-house
+ingestion pipeline. We plan to open-source that **same pipeline** so you can build your own
+knowledge base and paper library the way we do, then connect it to BrainPilot — point it at
+your own papers and corpora, and the `librarian` agent searches it like any other retrieval
+source.
+
+> 🚧 The pipeline and a turnkey, hosted knowledge base are on the roadmap. Until then, the
+> two paths above already let a self-hosted BrainPilot work against *your* literature today.
 
 ---
 
@@ -420,9 +427,10 @@ Open <http://localhost:9001> (or your `BP_MAIN_PORT`). Stop with `docker compose
 <summary><b>Sandbox dependencies, deployment modes &amp; memory budget</b></summary>
 
 **Customizing sandbox dependencies.** The `brainpilot-sandbox` image ships a lightweight
-baseline (Node + runtime only). To add Python, system packages, or global npm tools, edit
-`docker/sandbox/extra-deps.sh` (worked examples included), then rebuild:
-`docker compose build sandbox`.
+baseline (Node + runtime only).
+
+- Add Python, system packages, or global npm tools by editing `docker/sandbox/extra-deps.sh` (worked examples included).
+- Then rebuild: `docker compose build sandbox`.
 
 **Deployment modes** (Docker-only — the npm path is always single-user, local-process):
 
@@ -431,12 +439,13 @@ baseline (Node + runtime only). To add Python, system packages, or global npm to
 | `static` | 1 shared `main` + 1 fixed `sandbox`, single user | `BP_RUNTIME_URL` set | ✅ shipped |
 | `dynamic` | shared `main` + per-user sandbox via docker.sock | `BP_ORCHESTRATOR=docker` | 🚧 skeleton only |
 
-**Memory budget (`BP_MEM_LIMIT_MB`, optional).** For capped containers, set this to the
-per-container budget in MB so the runtime self-throttles before the kernel OOM-kills it
-(refuses new work past ~85% of the budget). Strictly opt-in; recommended floor ~2 GB for a
-single-user sandbox. Set `NODE_OPTIONS=--max-old-space-size=<~75% of budget>` at the
-launcher for a V8 heap ceiling. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full Docker
-and release details.
+**Memory budget (`BP_MEM_LIMIT_MB`, optional).** For capped containers:
+
+- **What it does** — the runtime self-throttles before the kernel OOM-kills it (refuses new work past ~85% of the budget).
+- **Opt-in** — set it to the per-container budget in MB; recommended floor ~2 GB for a single-user sandbox.
+- **V8 heap ceiling** — also set `NODE_OPTIONS=--max-old-space-size=<~75% of budget>` at the launcher.
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full Docker and release details.
 </details>
 
 ---
