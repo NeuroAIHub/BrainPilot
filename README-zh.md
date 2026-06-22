@@ -70,17 +70,29 @@ npm install -g @brainpilot/app
 
 这会安装 `brainpilot` 命令（`bnpt` 是同一命令的内置短别名）。
 
-### 2. 初始化
+### 2. 配置模型服务商
+
+BrainPilot **不绑定 Anthropic** —— 支持多种服务商协议：**Anthropic Messages**、**OpenAI
+Completions**、**OpenAI Responses** 和 **Azure OpenAI Responses**。按你的模型/网关所用协议任选。
+
+推荐做法是启动后用 **Web Settings UI**：打开 **Settings → Providers（服务商）**，添加一个服务商
+（base URL / key / 协议 / 模型列表），它会自动帮你写入配置。缺少 Key 不再阻塞启动：
+**`brainpilot up` 照常启动**，所以你完全可以先跳过、在浏览器里配置服务商。
+
+<details>
+<summary><b>更想用命令行？在 init 时生成配置</b></summary>
 
 ```bash
+# Anthropic（默认协议）
 brainpilot init --api-key <你的-anthropic-key>   # 在 ./brainpilot 下生成配置
+
+# 一条命令接入网关 / 第三方端点
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
 ```
 
-缺少 Key 不再阻塞启动：
-
-- **`brainpilot up` 照常启动** —— 之后再补 Key，无需重新 init。
-- **在 Web Settings UI 里设置**（推荐）—— provider url / key / model，自动帮你写入配置。
-- **或改用环境变量 `ANTHROPIC_API_KEY` 提供 Key。**
+也可以改用环境变量 `ANTHROPIC_API_KEY` 代替 `--api-key`。多服务商 / OpenAI 兼容端点的配置，见下方
+[使用自己的模型](#-使用自己的模型)。
+</details>
 
 ### 3. 启动
 
@@ -185,10 +197,13 @@ codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilo
 
 ## 🤖 使用自己的模型
 
-BrainPilot 默认对接 Pi 内置的 Anthropic 端点。改用其他端点最简单的方式是启动后用 **Settings
-UI**：打开 **Settings → Providers（服务商）**（Settings 按钮在侧边栏），点 **添加服务商**，填入
-base URL、API key、协议和模型列表。你还能在这里 **测试** 连接、切换当前使用的服务商 —— 它会自动
-帮你写入配置，无需手动改文件。
+BrainPilot 支持多种服务商协议 —— **Anthropic Messages**、**OpenAI Completions**、**OpenAI
+Responses** 和 **Azure OpenAI Responses** —— 可对接 Anthropic、OpenAI 兼容端点、Azure，或两者
+之间的任意网关。
+
+最简单的方式是启动后用 **Settings UI**：打开 **Settings → Providers（服务商）**（Settings 按钮在
+侧边栏），点 **添加服务商**，填入 base URL、API key、协议和模型列表。你还能在这里 **测试** 连接、
+切换当前使用的服务商 —— 它会自动帮你写入配置，无需手动改文件。
 
 也可以在 init 时用一条命令接入网关 / 第三方端点：
 

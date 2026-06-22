@@ -70,17 +70,32 @@ npm install -g @brainpilot/app
 
 This installs the `brainpilot` CLI (`bnpt` is a built-in short alias for the same command).
 
-### 2. Initialize
+### 2. Configure a model provider
+
+BrainPilot is **not tied to Anthropic** — it supports multiple provider protocols:
+**Anthropic Messages**, **OpenAI Completions**, **OpenAI Responses**, and **Azure OpenAI
+Responses**. Pick whichever your model/gateway speaks.
+
+The recommended way is the **web Settings UI** after launch — open **Settings → Providers**,
+add a provider (base URL / key / protocol / model list), and it writes the config for you.
+A missing key no longer blocks launch: **`brainpilot up` starts anyway**, so you can skip
+ahead and configure the provider in the browser.
+
+<details>
+<summary><b>Prefer the command line? Scaffold config at init time</b></summary>
 
 ```bash
+# Anthropic (default protocol)
 brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brainpilot
+
+# A gateway / third-party endpoint in one command
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
 ```
 
-A missing key no longer blocks launch:
-
-- **`brainpilot up` starts anyway** — set the key later, no re-init needed.
-- **Set it in the web Settings UI** (recommended) — provider url / key / model; it writes the config for you.
-- **Or use the `ANTHROPIC_API_KEY` environment variable** instead.
+You can also supply the key via the `ANTHROPIC_API_KEY` environment variable instead of
+`--api-key`. For multi-provider / OpenAI-compatible setups, see
+[Using your own model](#-using-your-own-model) below.
+</details>
 
 ### 3. Launch
 
@@ -192,8 +207,11 @@ By default the agent pauses for approval before each command. A few tips:
 
 ## 🤖 Using your own model
 
-By default BrainPilot talks to Pi's built-in Anthropic endpoint. The easiest way to point
-it elsewhere is the **Settings UI** after launch: open **Settings → Providers** (the
+BrainPilot works with multiple provider protocols — **Anthropic Messages**, **OpenAI
+Completions**, **OpenAI Responses**, and **Azure OpenAI Responses** — so you can point it at
+Anthropic, an OpenAI-compatible endpoint, Azure, or any gateway in between.
+
+The easiest way is the **Settings UI** after launch: open **Settings → Providers** (the
 Settings button lives in the sidebar), then **Add Provider** to set the base URL, API key,
 protocol, and model list. You can **test** the connection and switch the active provider
 right there — it writes the config for you, no file editing required.
