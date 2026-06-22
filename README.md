@@ -72,7 +72,7 @@ This installs the `brainpilot` CLI (`bnpt` is a built-in short alias for the sam
 
 ### 2. Configure a model provider
 
-BrainPilot is **not tied to Anthropic** — it supports multiple provider protocols:
+BrainPilot supports multiple provider protocols:
 **Anthropic Messages**, **OpenAI Completions**, **OpenAI Responses**, and **Azure OpenAI
 Responses**. Pick whichever your model/gateway speaks.
 
@@ -89,7 +89,7 @@ ahead and configure the provider in the browser.
 brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brainpilot
 
 # A gateway / third-party endpoint in one command
-brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model deepseek-v4-pro
 ```
 
 You can also supply the key via the `ANTHROPIC_API_KEY` environment variable instead of
