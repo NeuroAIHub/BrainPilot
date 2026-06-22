@@ -17,6 +17,12 @@ const PKG_PATH: Record<(typeof PUBLIC)[number], string> = {
   cli: "../package.json",
 };
 
+// License + version are standardized across the monorepo. The root package.json
+// is the single source of truth (versions kept in lockstep by
+// scripts/sync-versions.js; license must match the repo-root LICENSE file).
+const ROOT = readPkg("../../../package.json");
+const EXPECTED_LICENSE = "AGPL-3.0-only";
+
 describe.each(PUBLIC)("public package %s is publish-ready", (shortName) => {
   const pkg = readPkg(PKG_PATH[shortName]);
 
@@ -29,8 +35,16 @@ describe.each(PUBLIC)("public package %s is publish-ready", (shortName) => {
     expect(pkg.files).toContain("dist");
   });
 
-  it("is licensed Apache-2.0", () => {
-    expect(pkg.license).toBe("Apache-2.0");
+  // License is standardized to AGPL-3.0-only (matches the repo-root LICENSE
+  // and the root package.json). Every published package must agree — a drift
+  // back to Apache-2.0 (or anything else) fails CI here.
+  it(`is licensed ${EXPECTED_LICENSE}`, () => {
+    expect(pkg.license).toBe(EXPECTED_LICENSE);
+  });
+
+  // Versions are kept in lockstep with the root by scripts/sync-versions.js.
+  it("version matches the root package.json (single source of truth)", () => {
+    expect(pkg.version).toBe(ROOT.version);
   });
 
   it("has public publishConfig access", () => {
@@ -100,6 +114,20 @@ describe("targeted publish guards", () => {
     const tsconfig = readPkg("../../runtime/tsconfig.json");
     const refs: Array<{ path: string }> = tsconfig.references ?? [];
     expect(refs.some((r) => r.path === "../skills")).toBe(true);
+  });
+});
+
+describe("license is consistent across the repo", () => {
+  it(`root package.json is ${EXPECTED_LICENSE}`, () => {
+    expect(ROOT.license).toBe(EXPECTED_LICENSE);
+  });
+
+  // The declared SPDX license must match the actual LICENSE file text, so the
+  // metadata can never silently diverge from the legal terms we ship.
+  it("the LICENSE file is the AGPL-3.0 text", () => {
+    const license = readFileSync(new URL("../../../LICENSE", import.meta.url), "utf8");
+    expect(license).toMatch(/GNU AFFERO GENERAL PUBLIC LICENSE/);
+    expect(license).toMatch(/Version 3/);
   });
 });
 
