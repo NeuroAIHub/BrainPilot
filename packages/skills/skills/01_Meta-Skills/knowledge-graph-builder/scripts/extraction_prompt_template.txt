@@ -1,0 +1,19 @@
+Extract ALL scientific claims from this neuroscience paper abstract as JSON array.
+
+Each claim object fields:
+- subject, subject_type, predicate, object, object_type, negated
+- effect_metric, effect_size, p_value, sample_size
+- study_type, methodology, replicability, direction, raw_sentence
+- conditions: list of conditions under which this claim holds (e.g. ["female only", "age > 65", "resting-state fMRI"]). Empty list [] if unconditional.
+- population: object with study population info, null if not reported:
+  {{"mean_age": number or null, "age_range": "e.g. 18-65" or null, "n_female": int or null, "n_male": int or null, "ethnicity": str or null, "cohort_name": str or null}}
+
+Types: brain_region, disease, gene, neurotransmitter, protein, drug, network, biomarker, cognitive_function
+Predicates: reduces, increases, correlates_with, causes, is_biomarker_of, is_risk_factor_for, treats, modulates, activates, inhibits, predicts, mediates, is_associated_with, distinguishes
+Study types: fMRI, PET, DTI, sMRI, EEG, MEG, lesion, meta_analysis, GWAS, animal_model, clinical_trial, case_control, longitudinal, cross_sectional, review
+
+Title: {title}
+PMID: {pmid}
+Abstract: {abstract}
+
+Return JSON array. Empty array [] if no claims.

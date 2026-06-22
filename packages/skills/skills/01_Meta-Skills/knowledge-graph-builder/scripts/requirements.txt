@@ -1,0 +1,15 @@
+# Knowledge Graph Builder - Python Dependencies
+
+# Core
+networkx>=3.0
+requests>=2.31.0
+
+# LLM extraction
+openai>=1.0.0
+
+# PubMed (optional, requests fallback available)
+biopython>=1.81
+
+# Atlas generation (optional)
+nilearn>=0.10.0
+nibabel>=5.0.0

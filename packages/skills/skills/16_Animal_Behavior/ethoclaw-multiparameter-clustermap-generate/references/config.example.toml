@@ -1,0 +1,56 @@
+# h5-multiparameter-clustermap config
+
+[io]
+# Folder containing .h5 files
+root = "C:/Users/ASUS/Desktop/2Dxy_test_project/random_project"
+
+# Output directory (relative to root unless absolute)
+outdir = "results/cluster_all_kinematic_params"
+
+[h5]
+# Datasets inside the .h5
+param_name_dataset = "KinematicParameter/ParameterName"
+param_data_dataset = "KinematicParameter/ParameterData"
+
+[features]
+# How to summarize each parameter's time-series per sample
+# Options: mean | median | max
+summary = "mean"
+
+# Normalize feature matrix columns (parameter-wise) across samples
+# Options: col_zscore | none
+normalize = "col_zscore"
+
+[clustering]
+# Options: average | complete | ward | single
+linkage = "average"
+
+# Options: euclidean | correlation  (correlation corresponds to 1-Pearson distance)
+metric = "euclidean"
+
+[plot]
+# Journal-style presets (recommended): nature | cell | minimal
+# If set, will provide defaults for cmap/fonts/grid.
+style = "nature"
+
+# Colormap for heatmap. Works with matplotlib colormaps (e.g., RdBu_r, coolwarm)
+# and seaborn palettes (vlag, icefire). Ignored if style enforces a cmap.
+cmap = "RdBu_r"
+
+# Add grid lines (makes parameter boundaries clearer)
+linewidths = 0.4
+linecolor = "white"
+
+# Figure size (inches)
+figwidth = 18
+figheight = 10
+
+# Tick label styling (useful when many parameters)
+xtick_rotation = 90
+xtick_fontsize = 7
+ytick_fontsize = 8
+
+# Save both formats
+save_png = true
+save_pdf = true
+png_dpi = 300

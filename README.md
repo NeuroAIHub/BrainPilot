@@ -219,6 +219,9 @@ Skills sources:
 - [Awesome Cognitive & Neuroscience Skills](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills), a curated cognitive-science & neuroscience skill collection
 - [nature-skills](https://github.com/Yuan1z0825/nature-skills), skills distilled from Nature-family methods
 - [MNE-Python](https://github.com/mne-tools/mne-python) and [pycortex](https://github.com/gallantlab/pycortex), integrated with `repo-to-skill` (see below)
+- [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut), markerless animal pose estimation toolbox
+- [EthoClaw](https://github.com/penciler-star/EthoClaw), ethological behavioral analysis platform
+- [NeuroClaw](https://github.com/CUHK-AIM-Group/NeuroClaw), neuroscience AI toolbox
 
 Skills live in `packages/skills/skills/` and are organised as a two-level
 `<category>/<skill-name>/SKILL.md` tree (with optional `references/` for drill-down
@@ -295,9 +298,10 @@ at the papers, codebases, and methods *you* care about:
   first-draft `SKILL.md`.
 - **`repo-to-skill`** (built-in Meta-Skill) — give it a GitHub URL or local repo path and it
   converts the codebase into a structured skill with progressive disclosure. We've used it to
-  integrate well-known tools like [MNE-Python](https://github.com/mne-tools/mne-python) and
-  [pycortex](https://github.com/gallantlab/pycortex); [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut)
-  is planned next.
+  integrate well-known tools like [MNE-Python](https://github.com/mne-tools/mne-python),
+  [pycortex](https://github.com/gallantlab/pycortex), [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut),
+  [EthoClaw](https://github.com/penciler-star/EthoClaw), and
+  [NeuroClaw](https://github.com/CUHK-AIM-Group/NeuroClaw).
 - **Batch extraction pipeline** — to convert a *folder* of papers/transcripts at once, use the
   `pipeline/` tool in
   [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills):
