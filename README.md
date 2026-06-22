@@ -197,6 +197,7 @@ Skills sources:
 
 - <https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills>
 - <https://github.com/Yuan1z0825/nature-skills>
+- [MNE-Python](https://github.com/mne-tools/mne-python) and [pycortex](https://github.com/gallantlab/pycortex), integrated with `repo-to-skill` (see below)
 
 Skills live in `packages/skills/skills/` and are organised as a two-level
 `<category>/<skill-name>/SKILL.md` tree (with optional `references/` for drill-down
@@ -272,7 +273,10 @@ at the papers, codebases, and methods *you* care about:
   to *"turn this paper into a skill"*; it extracts the reproducible methodology into a
   first-draft `SKILL.md`.
 - **`repo-to-skill`** (built-in Meta-Skill) — give it a GitHub URL or local repo path and it
-  converts the codebase into a structured skill with progressive disclosure.
+  converts the codebase into a structured skill with progressive disclosure. We've used it to
+  integrate well-known tools like [MNE-Python](https://github.com/mne-tools/mne-python) and
+  [pycortex](https://github.com/gallantlab/pycortex); [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut)
+  is planned next.
 - **Batch extraction pipeline** — to convert a *folder* of papers/transcripts at once, use the
   `pipeline/` tool in
   [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills):
@@ -285,8 +289,9 @@ at the papers, codebases, and methods *you* care about:
   and [`nature-skills`](https://github.com/Yuan1z0825/nature-skills). Copy any
   `<category>/<skill-name>/` folder into `<data-dir>/bp_template/skills/` (no rebuild needed).
 
-> ⚠️ Generated skills are AI-extracted from literature — **verify parameters and citations
-> before relying on them in real research.**
+> ⚠️ Some of the skills are AI-generated (extracted from literature or codebases), so they
+> may contain errors — **verify parameters and citations before relying on them in real
+> research.**
 
 ### Knowledge & paper base
 
@@ -430,6 +435,7 @@ BrainPilot is a 7-package TypeScript monorepo:
 Questions, ideas, or just want to say hi? Join our open-source community on Feishu:
 
 - 🪶 **[Join the BrainPilot Feishu group →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
+- 📧 **Contact:** [hx-li25@mails.tsinghua.edu.cn](mailto:hx-li25@mails.tsinghua.edu.cn)
 
 You can also [open an issue](https://github.com/NeuroAIHub/BrainPilot/issues/new/choose)
 or start a discussion.

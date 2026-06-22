@@ -187,6 +187,7 @@ BP_MODEL_PROVIDER=<provider 名>   # 可选；默认 = 文件里第一个 provid
 
 - <https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills>
 - <https://github.com/Yuan1z0825/nature-skills>
+- [MNE-Python](https://github.com/mne-tools/mne-python) 与 [pycortex](https://github.com/gallantlab/pycortex)，用 `repo-to-skill` 集成（见下文）
 
 技能位于 `packages/skills/skills/`，按两级目录树组织：`<category>/<skill-name>/SKILL.md`（可选
 `references/` 存放可下钻的细节）。部署时它们会被 **物化到你的数据目录**
@@ -253,7 +254,9 @@ EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视
 - **`paper-to-skill`**（内置 Meta-Skill）—— 给智能体一篇论文（PDF 或文本），让它"把这篇论文变成
   一个 skill"，它会把可复现的方法学提取成一份初稿 `SKILL.md`。
 - **`repo-to-skill`**（内置 Meta-Skill）—— 给它一个 GitHub 链接或本地仓库路径，它会把代码库转换
-  成带渐进式披露的结构化技能。
+  成带渐进式披露的结构化技能。我们已用它集成了 [MNE-Python](https://github.com/mne-tools/mne-python)、
+  [pycortex](https://github.com/gallantlab/pycortex) 等知名工具；
+  [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) 已在计划中。
 - **批量提取流水线** —— 想一次性转换 *一整个文件夹* 的论文/转录稿，可用公开仓库
   [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
   里的 `pipeline/` 工具：`pip install -r pipeline/requirements.txt`，
@@ -265,7 +268,8 @@ EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视
   和 [`nature-skills`](https://github.com/Yuan1z0825/nature-skills)。把任意
   `<category>/<skill-name>/` 文件夹拷进 `<data-dir>/bp_template/skills/` 即可（无需重新构建）。
 
-> ⚠️ 自动生成的技能是 AI 从文献中提取的 —— **在真实研究中依赖之前，请先核验参数与引用。**
+> ⚠️ 其中有些技能是 AI 生成的（从文献或代码库中提取），可能存在错误 —— **在真实研究中依赖之前，请
+> 先核验参数与引用。**
 
 ### 知识库与论文库
 
@@ -400,6 +404,7 @@ BrainPilot 是一个 7 包的 TypeScript monorepo：
 有问题、有想法，或者只想打个招呼？欢迎加入我们的飞书开源社区群：
 
 - 🪶 **[加入 BrainPilot 飞书群 →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
+- 📧 **联系邮箱：** [hx-li25@mails.tsinghua.edu.cn](mailto:hx-li25@mails.tsinghua.edu.cn)
 
 你也可以[提一个 issue](https://github.com/NeuroAIHub/BrainPilot/issues/new/choose)或发起讨论。
 
