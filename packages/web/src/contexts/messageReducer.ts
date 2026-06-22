@@ -258,6 +258,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           agent,
           kind: "tool",
           toolResult: content,
+          // #134 — keep the link back to the originating TOOL_CALL_START so the
+          // UI can suppress results of internal tools (record_trace) whose name
+          // only rode on the call event, not on this result.
+          toolCallId: event.toolCallId,
         },
       ];
     }

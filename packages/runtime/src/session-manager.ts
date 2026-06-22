@@ -774,6 +774,16 @@ export class SessionManager {
     if (!entry || !deferred) return false;
     entry.pendingInputs.delete(requestId);
     deferred.resolve(answer);
+    // issue #132: persist + broadcast the answer so export/replay preserves the
+    // ask_user Q&A. user_input_request is already emitted in requestUserInput;
+    // without this the response was only used to resolve the promise and never
+    // reached events.jsonl, leaving a gap in the demo replay.
+    entry.bus.emit(
+      ev.userInputResponse(
+        { sessionId: entry.id, runId: entry.activeRunId ?? undefined },
+        { request_id: requestId, answer },
+      ),
+    );
     this.touch(entry);
     return true;
   }

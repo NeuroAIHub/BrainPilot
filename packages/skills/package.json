@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "BrainPilot built-in Agent Skills content (neuroscience / cognitive-science / writing), loaded via Pi's native skill pipeline",
   "main": "./dist/index.js",

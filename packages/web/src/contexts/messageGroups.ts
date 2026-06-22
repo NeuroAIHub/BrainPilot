@@ -10,6 +10,60 @@ export type RenderItem =
   | { type: "activity"; id: string; steps: ChatMessage[]; streaming: boolean };
 
 /**
+ * #134 — tool visibility model. Internal tools are part of the agent's plumbing
+ * (trace bookkeeping) rather than the user-facing conversation: the model still
+ * sees their calls and results, but the chat UI hides both so an implementation
+ * detail (`trace event dispatched`) never surfaces above the Principal's reply.
+ * Trace changes are surfaced quietly via the Trace tab badge instead.
+ *
+ * Hard-coded for the current internal toolset; promote to a richer
+ * `ToolVisibility = "user" | "debug" | "internal"` map if/when more land.
+ */
+const INTERNAL_TOOL_NAMES: ReadonlySet<string> = new Set([
+  "record_trace",
+  "create_trace_node",
+  "update_trace_node",
+  "add_trace_relation",
+  "get_trace_graph",
+]);
+
+/** A tool name is internal if it matches bare or mcp-namespaced (server__tool). */
+export function isInternalToolName(name: string | undefined): boolean {
+  if (!name) return false;
+  if (INTERNAL_TOOL_NAMES.has(name)) return true;
+  const bare = name.includes("__") ? name.slice(name.lastIndexOf("__") + 2) : name;
+  return INTERNAL_TOOL_NAMES.has(bare);
+}
+
+/**
+ * Drop internal-tool calls AND their matching results from the chat stream.
+ *
+ * A TOOL_CALL_START carries the tool name; the later TOOL_CALL_RESULT carries
+ * only a `toolCallId` linking back to it. So we first collect the call ids of
+ * every internal tool, then filter out both the call message and any tool
+ * message whose `toolCallId` (the result) points at one. Presentation-only:
+ * the underlying message list and the model's view are untouched.
+ */
+export function stripInternalToolMessages(messages: ChatMessage[]): ChatMessage[] {
+  const internalCallIds = new Set<string>();
+  for (const m of messages) {
+    if (m.kind === "tool" && isInternalToolName(m.toolName)) {
+      internalCallIds.add(m.id);
+      if (m.toolCallId) internalCallIds.add(m.toolCallId);
+    }
+  }
+  if (internalCallIds.size === 0) return messages;
+  return messages.filter((m) => {
+    if (m.kind !== "tool") return true;
+    // The call itself (internal tool name) → drop.
+    if (isInternalToolName(m.toolName)) return false;
+    // The result, linked by toolCallId to an internal call → drop.
+    if (m.toolCallId && internalCallIds.has(m.toolCallId)) return false;
+    return true;
+  });
+}
+
+/**
  * Standalone kinds render as their own visible card. All assistant text
  * messages — whether they come from the Principal or an Expert agent, and
  * whether they are an intermediate utterance or the turn's final answer —
@@ -49,6 +103,8 @@ export function buildRenderItems(
   runningAgents?: ReadonlySet<string>,
 ): RenderItem[] {
   const items: RenderItem[] = [];
+  // #134 — internal tools (trace bookkeeping) are hidden from the chat UI.
+  messages = stripInternalToolMessages(messages);
   let buffer: ChatMessage[] = [];
   // A step keeps its block "in progress" while its owning agent's run is active.
   // Steps default to the principal agent when unattributed, matching how the

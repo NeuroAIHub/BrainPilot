@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "BrainPilot AG-UI events + REST/SSE schemas + Runtime HTTP contract (SSOT, zod-validated)",
   "main": "./dist/index.js",

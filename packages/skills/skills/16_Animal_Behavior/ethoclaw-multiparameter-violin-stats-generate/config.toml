@@ -1,0 +1,81 @@
+# h5-multiparameter-violin-stats default configuration
+# Edit this file to change default plotting style / statistics behavior.
+
+[stats]
+# Default tests used when CLI sets --method auto
+# - For 2 groups: "ttest" or "mannwhitney"
+# - For 3+ groups: "anova" or "kruskal"
+default_2_groups = "ttest"
+default_3plus_groups = "kruskal"
+
+alpha = 0.05
+
+# For 3+ groups, whether to run pairwise tests only when the overall test is significant.
+pairwise_only_if_overall_sig = true
+
+# Multiple-comparison correction for pairwise p-values.
+# Supported: "holm" (default), "bonferroni"
+pairwise_correction = "holm"
+
+[plot]
+# Seaborn theme
+style = "whitegrid"     # e.g. whitegrid, white, ticks
+context = "notebook"    # e.g. paper, notebook, talk, poster
+
+# Color palette: seaborn palette name (Set2, tab10, etc.)
+palette = "Set2"
+
+# Violin appearance
+fig_width = 10
+fig_height = 5
+cut = 0
+
+# Raw points overlay
+show_points = true
+point_color = "black"
+point_size = 3
+point_alpha = 0.4
+point_jitter = 0.2
+
+# Summary overlay (what you called "box"):
+# - "box"         : seaborn inner="box"
+# - "quartile"    : seaborn inner="quartile" (median + quartiles)
+# - "mean_sem"    : overlay mean ± SEM (custom errorbar)
+# - "median_iqr"  : overlay median + IQR (custom errorbar)
+# - "none"        : no inner/summary
+summary = "mean_sem"
+summary_color = "black"
+summary_capsize = 4
+summary_linewidth = 1.5
+
+# Output
+[dump]
+# Matplotlib savefig dpi
+png_dpi = 200
+
+# Also save a PDF copy alongside each PNG.
+save_pdf = true
+
+[annotate]
+# Add significance brackets on each violin plot.
+show = true
+
+# Prefer adjusted p-values for multi-group pairwise (Holm/Bonferroni) when available.
+use_p_adj = true
+
+# Only show significant comparisons by default.
+only_sig = true
+
+# Whether to show non-significant (ns) comparisons.
+show_ns = false
+
+# Max number of pairwise brackets to draw per plot (avoid clutter).
+max_pairs = 10
+
+# Label format: "stars" | "p" | "stars+p"
+label_format = "stars+p"
+
+# Visual spacing relative to data range
+step = 0.08
+bracket_height = 0.02
+fontsize = 9

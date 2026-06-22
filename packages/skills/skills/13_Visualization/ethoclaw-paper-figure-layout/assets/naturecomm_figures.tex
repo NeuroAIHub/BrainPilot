@@ -1,0 +1,74 @@
+% naturecomm_figures.tex
+% A Nature Communications–style 2-column LaTeX template tuned for figure-heavy docs.
+% Reference PDF: /home/max/Downloads/demo.pdf (Nature Communications | (2021)12:2784 | doi:10.1038/s41467-021-22970-y)
+%
+% NOTE: The TypeTex LaTeX compiler in this environment does NOT have xelatex.
+% Keep this template pdfLaTeX-compatible (no fontspec).
+%
+% Traits emulated:
+% - 2-column layout, ~6mm column gap
+% - Grey running header line with journal/doi/url and page number
+% - Figures centered, captions below, small caption text, ragged-right
+% - Supports single-column figures and wide figures (figure*)
+
+\documentclass[9pt,twocolumn]{article}
+
+% demo.pdf page size is 210 x 276 mm (A4 width, shorter height)
+\usepackage[
+  paperwidth=210mm,
+  paperheight=276mm,
+  top=16mm,bottom=16mm,left=16.5mm,right=16.5mm
+]{geometry}
+
+\setlength{\columnsep}{6mm}
+
+\usepackage{graphicx}
+\usepackage{xcolor}
+\usepackage{caption}
+\usepackage{subcaption}
+\usepackage{fancyhdr}
+\usepackage{hyperref}
+
+% --- Running header ---
+\pagestyle{fancy}
+\fancyhf{}
+\renewcommand{\headrulewidth}{0.3pt}
+\renewcommand{\headrule}{\hbox to\headwidth{\color{black!25}\leaders\hrule height \headrulewidth\hfill}}
+
+% Customize these per document
+\newcommand{\NCJournal}{NATURE COMMUNICATIONS}
+\newcommand{\NCYear}{2021}
+\newcommand{\NCVol}{12}
+\newcommand{\NCArticle}{2784}
+\newcommand{\NCDOI}{https://doi.org/10.1038/s41467-021-22970-y}
+\newcommand{\NCURL}{www.nature.com/naturecommunications}
+
+\lhead{\color{black!55}\fontsize{8}{9}\selectfont
+\NCJournal\ | (\NCYear)\NCVol:\NCArticle\ | \href{\NCDOI}{\NCDOI}\ | \NCURL}
+\rhead{\color{black!55}\fontsize{8}{9}\selectfont \thepage}
+
+% --- Figure caption style ("Fig. 1" bold) ---
+\renewcommand{\figurename}{Fig.}
+\captionsetup[figure]{
+  font=small,
+  labelfont=bf,
+  labelsep=space,
+  justification=raggedright,
+  singlelinecheck=false,
+  skip=2mm
+}
+
+% Float spacing (tune to taste)
+\setlength{\textfloatsep}{6mm}
+\setlength{\intextsep}{6mm}
+\setlength{\floatsep}{5mm}
+\setlength{\dbltextfloatsep}{6mm}
+\setlength{\dblfloatsep}{5mm}
+\usepackage{titlesec}
+\titlespacing*{\section}{0pt}{1.0ex}{0.8ex}
+\titlespacing*{\subsection}{0pt}{0.8ex}{0.6ex}
+
+% ---- Document starts here ----
+% \begin{document}
+% ...
+% \end{document}
