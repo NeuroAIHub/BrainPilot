@@ -145,13 +145,34 @@ brainpilot/                       # data root (default: ./brainpilot)
 > [Docker deployment](#-docker-deployment), which runs agents inside a sandbox container.
 </details>
 
+### Let your coding agent deploy it
+
+Already working inside **Claude Code** or **OpenAI Codex**? You don't have to run the steps
+above by hand — hand the whole setup to the agent in one sentence and it installs the CLI,
+launches BrainPilot, and hands you back the local URL:
+
+```bash
+# Claude Code
+claude "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
+
+# OpenAI Codex
+codex exec "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
+```
+
+By default the agent pauses for approval before each command. To let it run end-to-end
+unattended, add `--dangerously-skip-permissions` (Claude Code) or
+`--dangerously-bypass-approvals-and-sandbox` (Codex) — only do this in a directory you
+trust. No API key yet? Ask it to *"start in mock mode"* and it'll launch with `BP_MOCK=1`.
+
 ---
 
 ## 🤖 Using your own model
 
 By default BrainPilot talks to Pi's built-in Anthropic endpoint. The easiest way to point
-it elsewhere is the **Settings UI** after launch — set the base URL, key, and model there
-and it writes the config for you.
+it elsewhere is the **Settings UI** after launch: open **Settings → Providers** (the
+Settings button lives in the sidebar), then **Add Provider** to set the base URL, API key,
+protocol, and model list. You can **test** the connection and switch the active provider
+right there — it writes the config for you, no file editing required.
 
 To wire a gateway / third-party endpoint in one command at init time:
 
@@ -321,9 +342,16 @@ process), **streamable-http**, and **sse** (remote).
 
 > 💡 **Recommended:** [Tavily](https://www.tavily.com/) for agent web search.
 
-`brainpilot init` (and `brainpilot up`, which scaffolds on first launch) writes a
-`mcp_servers.json` into your **data dir** (`<data-dir>/bp_template/mcp_servers.json`).
-Scaffolding is idempotent — an existing file is never overwritten.
+The easiest way to add one is the **Settings UI** after launch: open **Settings → MCP**
+(the Settings button lives in the sidebar), then **Add Server** — pick a transport
+(stdio / http / sse) and fill in the command + args (stdio) or url + headers (http/sse).
+You can edit or remove servers from the same tab, and it writes the config for you, no
+file editing required.
+
+Prefer config files? `brainpilot init` (and `brainpilot up`, which scaffolds on first
+launch) writes a `mcp_servers.json` into your **data dir**
+(`<data-dir>/bp_template/mcp_servers.json`). Scaffolding is idempotent — an existing file
+is never overwritten.
 
 <details>
 <summary><b>Config format &amp; all three transports</b></summary>

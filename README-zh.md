@@ -137,12 +137,31 @@ brainpilot/                       # 数据根目录（默认 ./brainpilot）
 > Docker 沙箱。如需隔离，请使用 [Docker 部署](#-docker-部署)，它会把智能体跑在沙箱容器内。
 </details>
 
+### 让你的编码智能体替你部署
+
+已经在用 **Claude Code** 或 **OpenAI Codex**？那就不用手动跑上面的步骤了 —— 一句话把整套安装交给智能体，
+它会帮你装好 CLI、启动 BrainPilot，并把本地访问地址回给你：
+
+```bash
+# Claude Code
+claude "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
+
+# OpenAI Codex
+codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
+```
+
+默认情况下，智能体在每条命令前都会停下来等你确认。想让它全程无人值守地跑完，可以加上
+`--dangerously-skip-permissions`（Claude Code）或 `--dangerously-bypass-approvals-and-sandbox`（Codex）
+—— 仅在你信任的目录里这么做。还没有 API Key？让它*“用 mock 模式启动”*，它就会以 `BP_MOCK=1` 拉起来。
+
 ---
 
 ## 🤖 使用自己的模型
 
-BrainPilot 默认对接 Pi 内置的 Anthropic 端点。改用其他端点最简单的方式是在启动后的 **Settings
-UI** 里设置 base URL、key 和 model，它会自动帮你写入配置。
+BrainPilot 默认对接 Pi 内置的 Anthropic 端点。改用其他端点最简单的方式是启动后用 **Settings
+UI**：打开 **Settings → Providers（服务商）**（Settings 按钮在侧边栏），点 **添加服务商**，填入
+base URL、API key、协议和模型列表。你还能在这里 **测试** 连接、切换当前使用的服务商 —— 它会自动
+帮你写入配置，无需手动改文件。
 
 也可以在 init 时用一条命令接入网关 / 第三方端点：
 
@@ -295,9 +314,14 @@ EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视
 
 > 💡 **推荐：** 用 [Tavily](https://www.tavily.com/) 给智能体做联网搜索。
 
-`brainpilot init`（以及首次启动会做 scaffold 的 `brainpilot up`）会在你的 **数据目录** 写入
-`mcp_servers.json`（`<data-dir>/bp_template/mcp_servers.json`）。scaffold 是幂等的 —— 已存在的
-文件永不会被覆盖。
+最简单的添加方式是启动后用 **Settings UI**：打开 **Settings → MCP**（Settings 按钮在侧边栏），
+点 **添加服务器**，选一种传输方式（stdio / http / sse），再填入 command + args（stdio）或
+url + headers（http/sse）。同一标签页里也能编辑或移除服务器，它会自动帮你写入配置，无需手动改
+文件。
+
+更想用配置文件？`brainpilot init`（以及首次启动会做 scaffold 的 `brainpilot up`）会在你的
+**数据目录** 写入 `mcp_servers.json`（`<data-dir>/bp_template/mcp_servers.json`）。scaffold 是
+幂等的 —— 已存在的文件永不会被覆盖。
 
 <details>
 <summary><b>配置格式与三种传输方式</b></summary>
