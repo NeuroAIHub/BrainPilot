@@ -4,7 +4,7 @@
   "engines": {
     "node": ">=22"
   },
-  "license": "Apache-2.0",
+  "license": "AGPL-3.0-only",
   "type": "module",
   "description": "BrainPilot CLI — Docker-free local one-click launch (bin: brainpilot / bnpt)",
   "homepage": "https://github.com/NeuroAIHub/BrainPilot#readme",
