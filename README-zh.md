@@ -44,7 +44,7 @@
 师、写作者……），它们通过基于文件的信箱（mailbox）协作。每个智能体读取、写入或生成的文件都
 会落到磁盘上真实的工作区里，整个运行过程会被记录为一张可供检视的 **轨迹图（trace graph）**。
 
-它使用 **TypeScript + [Pi SDK](https://pi.dev)** 做智能体编排，以 **Hono** 后端配 **React**
+它使用 **TypeScript + [Pi Agent](https://pi.dev)** 做智能体编排，以 **Hono** 后端配 **React**
 单页前端对外提供服务。最快的上手方式是一条 npm 安装命令 —— **无需 Docker**。
 
 ### 核心亮点
@@ -64,8 +64,8 @@ BrainPilot 通过 **`@brainpilot/app`** 以本地进程方式运行 —— 无�
 
 ### 环境要求
 
-- **Node.js** ≥ 22
-- 一个 **Anthropic API Key** —— *或* 用 `BP_MOCK=1` 做无 Key 冒烟运行
+- **[Node.js](https://nodejs.org/en/download/)** ≥ 22
+- 用于智能体的 **API Key** —— *或* 用 `BP_MOCK=1` 做无 Key 冒烟运行
 
 ### 1. 安装
 
