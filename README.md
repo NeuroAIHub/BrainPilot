@@ -69,7 +69,7 @@ This is the recommended way to get started.
 ### Prerequisites
 
 - **[Node.js](https://nodejs.org/en/download/)** ≥ 22
-- An **API key** for agents— *or* `BP_MOCK=1` for a no-key smoke run
+- An **Anthropic API key** — *or* `BP_MOCK=1` for a no-key smoke run
 
 ### 1. Install
 

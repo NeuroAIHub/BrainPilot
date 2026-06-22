@@ -65,7 +65,7 @@ BrainPilot 通过 **`@brainpilot/app`** 以本地进程方式运行 —— 无�
 ### 环境要求
 
 - **[Node.js](https://nodejs.org/en/download/)** ≥ 22
-- 用于智能体的 **API Key** —— *或* 用 `BP_MOCK=1` 做无 Key 冒烟运行
+- 一个 **Anthropic API Key** —— *或* 用 `BP_MOCK=1` 做无 Key 冒烟运行
 
 ### 1. 安装
 
