@@ -1,0 +1,54 @@
+# Neuroethology Top 5 digest config
+
+query: all:((neuroethology OR neuroscience OR "behavioral neuroscience" OR "behavioural neuroscience" OR "neural circuit" OR electrophysiology OR "calcium imaging" OR "neural recording" OR "neural decoding") AND (behavior OR behaviour OR "animal behavior" OR "animal behaviour" OR locomotion OR vocalization OR courtship OR foraging OR decision-making OR zebrafish OR drosophila OR rodent OR mouse OR songbird OR bat OR primate))
+pubmed_query: (((neuroethology[tiab] OR neuroscience[tiab] OR "behavioral neuroscience"[tiab] OR "behavioural neuroscience"[tiab] OR "Neural Circuits"[mh] OR electrophysiology[tiab] OR "calcium imaging"[tiab] OR "neural recording"[tiab] OR "neural decoding"[tiab])) AND (("Behavior, Animal"[mh] OR behavior[tiab] OR behaviour[tiab] OR "animal behavior"[tiab] OR "animal behaviour"[tiab] OR locomotion[tiab] OR vocalization[tiab] OR courtship[tiab] OR foraging[tiab] OR decision-making[tiab]) AND (zebrafish[tiab] OR drosophila[tiab] OR rodent[tiab] OR mouse[tiab] OR songbird[tiab] OR bat[tiab] OR primate[tiab] OR animal[tiab])))
+max_results: 80
+pubmed_max_results: 80
+source_weight_pubmed: 1.25
+source_weight_arxiv: 1.0
+
+include_keywords:
+  - neuroethology
+  - behavioral neuroscience
+  - behavioural neuroscience
+  - animal behavior
+  - animal behaviour
+  - neural circuit
+  - neural activity
+  - electrophysiology
+  - calcium imaging
+  - neural recording
+  - neural decoding
+  - behavior analysis
+  - locomotion
+  - vocalization
+  - courtship
+  - foraging
+  - decision-making
+  - social behavior
+  - zebrafish
+  - drosophila
+  - rodent
+  - mouse
+  - songbird
+  - bat
+  - primate
+
+exclude_keywords:
+  - large language model
+  - llm
+  - robot
+  - robotic
+  - robotics
+  - quadruped
+  - quadrupedal
+  - text-to-image
+  - image generation
+  - diffusion model for images
+  - recommender system
+  - blood glucose
+  - scleral
+  - stock prediction
+  - benchmark only
+  - jailbreak
+  - code generation

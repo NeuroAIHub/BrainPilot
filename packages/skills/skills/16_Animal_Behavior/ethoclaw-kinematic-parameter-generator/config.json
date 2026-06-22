@@ -1,0 +1,19 @@
+{
+  "name": "ethoclaw-kinematic-parameter-generator",
+  "description": "Checks if .h5 files contain KinematicParameter data, and if not, generates it from the 2Dskeleton data. Can process single files or batch process entire directories. Supports custom calibration parameters.",
+  "activation_keywords": ["kinematic", "h5", "parameter", "generate", "skeleton", "batch", "calibration", "ethoclaw"],
+  "files": [
+    "kinematic_generator.py",
+    "batch_kinematic_generator.py",
+    "generate_kinematic_parameter.py",
+    "SKILL.md",
+    "README.md"
+  ],
+  "requirements": [
+    "h5py",
+    "numpy",
+    "ffmpeg",
+    "opencv-python"
+  ],
+  "entry_point": "batch_kinematic_generator.py"
+}
