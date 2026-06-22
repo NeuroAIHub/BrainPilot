@@ -46,7 +46,7 @@ collaborate over a file-based mailbox. Every file an agent reads, writes, or gen
 lands in a real workspace on disk, and the whole run is captured as a **trace graph** you
 can inspect.
 
-It is built with **TypeScript + the [Pi SDK](https://pi.dev)** for agent orchestration,
+It is built with **TypeScript + the [Pi Agent](https://pi.dev)** for agent orchestration,
 served as a **Hono** backend with a **React** single-page UI. The fastest way to run it is
 a single npm install — **no Docker required**.
 
@@ -68,8 +68,8 @@ This is the recommended way to get started.
 
 ### Prerequisites
 
-- **Node.js** ≥ 22
-- An **Anthropic API key** — *or* `BP_MOCK=1` for a no-key smoke run
+- **[Node.js](https://nodejs.org/en/download/)** ≥ 22
+- An **API key** for agents— *or* `BP_MOCK=1` for a no-key smoke run
 
 ### 1. Install
 
