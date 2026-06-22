@@ -150,6 +150,14 @@ export const ev = {
       allow_free_text: req.allow_free_text,
     } as AgUiEvent;
   },
+  userInputResponse(ctx: Ctx, res: { request_id: string; answer: string }): AgUiEvent {
+    return {
+      type: "user_input_response",
+      ...envelope(ctx),
+      request_id: res.request_id,
+      answer: res.answer,
+    } as AgUiEvent;
+  },
   systemMessage(
     sessionId: string,
     level: "info" | "warning" | "error" | "fatal",

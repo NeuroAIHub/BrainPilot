@@ -59,12 +59,35 @@ describe("isDemoConversational (#98 multi-agent transcript)", () => {
     expect(isDemoConversational(msg({ role: "system", kind: "system_message", content: "" }))).toBe(false);
   });
 
-  it("drops reasoning, tool calls/results, hooks and interactive cards", () => {
+  it("drops reasoning, tool calls/results, hooks and auto_retry cards", () => {
     expect(isDemoConversational(msg({ kind: "thinking", content: "let me think" }))).toBe(false);
     expect(isDemoConversational(msg({ kind: "tool", content: "Tool: read" }))).toBe(false);
     expect(isDemoConversational(msg({ role: "system", kind: "hook", content: "reset" }))).toBe(false);
-    expect(isDemoConversational(msg({ kind: "ask_user", content: "pick one" }))).toBe(false);
     expect(isDemoConversational(msg({ kind: "auto_retry", content: "retrying" }))).toBe(false);
+  });
+
+  it("keeps an answered ask_user card but drops an unanswered prompt (#132)", () => {
+    // Answered: question + user answer are a user-facing decision point, kept as
+    // a read-only Q&A step in the replay.
+    expect(
+      isDemoConversational(
+        msg({
+          kind: "ask_user",
+          content: "pick one",
+          askUser: { requestId: "req_1", agent: "principal", question: "pick one", answer: "A" },
+        }),
+      ),
+    ).toBe(true);
+    // Unanswered prompt has no meaning in a read-only replay.
+    expect(
+      isDemoConversational(
+        msg({
+          kind: "ask_user",
+          content: "pick one",
+          askUser: { requestId: "req_1", agent: "principal", question: "pick one" },
+        }),
+      ),
+    ).toBe(false);
   });
 
   it("drops empty text placeholders", () => {
