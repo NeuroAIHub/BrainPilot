@@ -72,7 +72,7 @@ npm install -g @brainpilot/app
 
 ### 2. 配置模型服务商
 
-BrainPilot **不绑定 Anthropic** —— 支持多种服务商协议：**Anthropic Messages**、**OpenAI
+BrainPilot 支持多种服务商协议：**Anthropic Messages**、**OpenAI
 Completions**、**OpenAI Responses** 和 **Azure OpenAI Responses**。按你的模型/网关所用协议任选。
 
 推荐做法是启动后用 **Web Settings UI**：打开 **Settings → Providers（服务商）**，添加一个服务商
@@ -87,7 +87,7 @@ Completions**、**OpenAI Responses** 和 **Azure OpenAI Responses**。按你的�
 brainpilot init --api-key <你的-anthropic-key>   # 在 ./brainpilot 下生成配置
 
 # 一条命令接入网关 / 第三方端点
-brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model deepseek-v4-pro
 ```
 
 也可以改用环境变量 `ANTHROPIC_API_KEY` 代替 `--api-key`。多服务商 / OpenAI 兼容端点的配置，见下方
