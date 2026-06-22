@@ -262,10 +262,48 @@ under `references/` rather than inline. See the `contribute-skills-via-pr` and
 `verify-skill` Meta-Skills for the full contributor workflow.
 </details>
 
-### Knowledge base
+### Grow your own skill library
 
-> 🚧 **Coming soon.** A curated, retrievable knowledge base for neuroscience research is in
-> the works and will be documented here.
+The skills you see in our demo are extracted from our own paper and methodology libraries.
+You can grow your own library the same way, using the open-source tools we ship — point them
+at the papers, codebases, and methods *you* care about:
+
+- **`paper-to-skill`** (built-in Meta-Skill) — give an agent a paper (PDF or text) and ask it
+  to *"turn this paper into a skill"*; it extracts the reproducible methodology into a
+  first-draft `SKILL.md`.
+- **`repo-to-skill`** (built-in Meta-Skill) — give it a GitHub URL or local repo path and it
+  converts the codebase into a structured skill with progressive disclosure.
+- **Batch extraction pipeline** — to convert a *folder* of papers/transcripts at once, use the
+  `pipeline/` tool in
+  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills):
+  `pip install -r pipeline/requirements.txt`, `cp pipeline/config.example.yaml pipeline/config.yaml`,
+  drop `.txt`/`.md` sources into `input/`, set your API key, then run
+  `python pipeline/extract.py --config pipeline/config.yaml`. It writes standard `SKILL.md`
+  files you can drop into `<data-dir>/bp_template/skills/`.
+- **Pre-built collections** — or just install ready-made skills from our public repos:
+  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
+  and [`nature-skills`](https://github.com/Yuan1z0825/nature-skills). Copy any
+  `<category>/<skill-name>/` folder into `<data-dir>/bp_template/skills/` (no rebuild needed).
+
+> ⚠️ Generated skills are AI-extracted from literature — **verify parameters and citations
+> before relying on them in real research.**
+
+### Knowledge & paper base
+
+Our hosted demo answers from **our own curated knowledge base and paper library**. We can't
+offer those as a public service yet, so BrainPilot does not ship a built-in knowledge base —
+instead it lets you **connect your own**. The built-in `librarian` agent already searches
+papers, web sources, and knowledge bases through whatever retrieval tools you give it:
+
+- **Connect a retrieval MCP server** over your own corpus (a vector store, a paper archive, a
+  filesystem of PDFs, an internal search API) — see [Connecting MCP servers](#-connecting-mcp-servers).
+  Any MCP server you add shows up as agent tools automatically.
+- **Turn key papers into skills** with `paper-to-skill` / the batch pipeline above, so the
+  methodology is always in the agent's context — a lightweight alternative to standing up a
+  retrieval service.
+
+> 🚧 A turnkey, hosted knowledge base is on the roadmap. Until then, the two paths above let a
+> self-hosted BrainPilot work against *your* literature today.
 
 ---
 

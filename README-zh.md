@@ -245,9 +245,41 @@ EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视
 与 `verify-skill` 两个 Meta-Skills。
 </details>
 
-### 知识库
+### 构建你自己的技能库
 
-> 🚧 **即将推出。** 一个面向脑科学研究的、可检索的精选知识库正在建设中，届时会在此处说明。
+我们 demo 里展示的技能，都是从我们自己的论文库与方法学库中提取出来的。你也可以用同样的方式、借助
+我们开源的工具，构建属于你自己的技能库 —— 把它们对准 **你** 关心的论文、代码库和方法：
+
+- **`paper-to-skill`**（内置 Meta-Skill）—— 给智能体一篇论文（PDF 或文本），让它"把这篇论文变成
+  一个 skill"，它会把可复现的方法学提取成一份初稿 `SKILL.md`。
+- **`repo-to-skill`**（内置 Meta-Skill）—— 给它一个 GitHub 链接或本地仓库路径，它会把代码库转换
+  成带渐进式披露的结构化技能。
+- **批量提取流水线** —— 想一次性转换 *一整个文件夹* 的论文/转录稿，可用公开仓库
+  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
+  里的 `pipeline/` 工具：`pip install -r pipeline/requirements.txt`，
+  `cp pipeline/config.example.yaml pipeline/config.yaml`，把 `.txt`/`.md` 源文件放进 `input/`，
+  配好 API key，运行 `python pipeline/extract.py --config pipeline/config.yaml`。它会产出标准的
+  `SKILL.md`，直接丢进 `<data-dir>/bp_template/skills/` 即可。
+- **现成合集** —— 也可以直接安装我们公开仓库里现成的技能：
+  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
+  和 [`nature-skills`](https://github.com/Yuan1z0825/nature-skills)。把任意
+  `<category>/<skill-name>/` 文件夹拷进 `<data-dir>/bp_template/skills/` 即可（无需重新构建）。
+
+> ⚠️ 自动生成的技能是 AI 从文献中提取的 —— **在真实研究中依赖之前，请先核验参数与引用。**
+
+### 知识库与论文库
+
+我们的托管 demo 是基于 **我们自己精选的知识库与论文库** 来回答的。这些我们暂时还无法以公开服务的
+形式提供，因此 BrainPilot 不内置知识库 —— 而是让你 **接入你自己的**。内置的 `librarian` 智能体已
+经能通过你提供的检索工具去搜索论文、网络来源和知识库：
+
+- **接入一个检索型 MCP 服务**，对准你自己的语料（向量库、论文归档、一堆 PDF 的文件系统、内网搜索
+  API）—— 见 [接入 MCP 服务](#-接入-mcp-服务)。你添加的任何 MCP 服务都会自动作为智能体工具出现。
+- **把关键论文转成技能**，用上面的 `paper-to-skill` / 批量流水线，让方法学常驻在智能体上下文里 ——
+  这是不搭建检索服务的轻量替代方案。
+
+> 🚧 一个开箱即用的托管知识库已在路线图上。在此之前，上面两条路径已经能让自部署的 BrainPilot 立刻
+> 跑在 *你自己的* 文献之上。
 
 ---
 
