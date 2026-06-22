@@ -42,13 +42,13 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 
 ### Highlights
 
-- **🧠 Built for brain science research — supports workflows across literature review, hypothesis refinement, experiment design, data analysis, writing, and audit.
-- **🤝 Principal Agent + specialist agents — a coordinating Principal Agent works with domain specialists including librarian, analyst, experimentalist, writer, and auditor agents.
-- **📚 Integrated domain knowledge and skills — brings together brain-science knowledge, methodological skills, analysis procedures, writing conventions, and tool interfaces.
-- **🛡️ Auditor Agent for scientific reliability — reviews claims, evidence chains, citations, hallucination risks, omitted information, and unsupported reasoning.
-- **🔭 Traceable research process — represents each session as an inspectable trace graph, making task structure, agent actions, evidence flow, and decision points visible.
-- **🔌 Extensible research tool ecosystem — connects models, MCP tools, paper databases, code execution environments, and custom research utilities.
-- **🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
+- 🧠 Built for brain science research — supports workflows across literature review, hypothesis refinement, experiment design, data analysis, writing, and audit.
+- 🤝 Principal Agent + specialist agents — a coordinating Principal Agent works with domain specialists including librarian, analyst, experimentalist, writer, and auditor agents.
+- 📚 Integrated domain knowledge and skills — brings together brain-science knowledge, methodological skills, analysis procedures, writing conventions, and tool interfaces.
+- 🛡️ Auditor Agent for scientific reliability — reviews claims, evidence chains, citations, hallucination risks, omitted information, and unsupported reasoning.
+- 🔭 Traceable research process — represents each session as an inspectable trace graph, making task structure, agent actions, evidence flow, and decision points visible.
+- 🔌 Extensible research tool ecosystem — connects models, MCP tools, paper databases, code execution environments, and custom research utilities.
+- 🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
 
 ---
 
