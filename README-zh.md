@@ -185,8 +185,8 @@ BP_MODEL_PROVIDER=<provider 名>   # 可选；默认 = 文件里第一个 provid
 
 技能来源：
 
-- <https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills>
-- <https://github.com/Yuan1z0825/nature-skills>
+- [Awesome Cognitive & Neuroscience Skills](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)，精选的认知科学与神经科学技能合集
+- [nature-skills](https://github.com/Yuan1z0825/nature-skills)，从 Nature 系列方法中提炼的技能
 - [MNE-Python](https://github.com/mne-tools/mne-python) 与 [pycortex](https://github.com/gallantlab/pycortex)，用 `repo-to-skill` 集成（见下文）
 
 技能位于 `packages/skills/skills/`，按两级目录树组织：`<category>/<skill-name>/SKILL.md`（可选

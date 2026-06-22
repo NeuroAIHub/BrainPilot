@@ -195,8 +195,8 @@ placed in the agent's system prompt, and the full `SKILL.md` body is read on dem
 
 Skills sources:
 
-- <https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills>
-- <https://github.com/Yuan1z0825/nature-skills>
+- [Awesome Cognitive & Neuroscience Skills](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills), a curated cognitive-science & neuroscience skill collection
+- [nature-skills](https://github.com/Yuan1z0825/nature-skills), skills distilled from Nature-family methods
 - [MNE-Python](https://github.com/mne-tools/mne-python) and [pycortex](https://github.com/gallantlab/pycortex), integrated with `repo-to-skill` (see below)
 
 Skills live in `packages/skills/skills/` and are organised as a two-level
