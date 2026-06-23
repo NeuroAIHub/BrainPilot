@@ -5,8 +5,7 @@
 <h1 align="center">🧠 BrainPilot</h1>
 
 <p align="center">
-  面向可信脑科学研究的开源多智能体平台 ——
-  由一个 Principal 智能体统筹多个专家智能体，替你读文献、做推理、跑真实分析。
+BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它整合专业智能体、领域知识、科研技能和工具接口，帮助研究者覆盖完整科研流程：文献综述、假设细化、实验设计、数据分析、报告撰写和科学结论审查。
 </p>
 
 <p align="center">
@@ -37,24 +36,20 @@
 
 ---
 
-## 📖 项目简介
 
-**BrainPilot** 是一个面向脑科学与认知科学研究的开源、单用户多智能体协作平台。一个
-**Principal（主控）** 智能体与你对话、规划任务，并把工作委派给 **专家智能体**（文献官、分析
-师、写作者……），它们通过基于文件的信箱（mailbox）协作。每个智能体读取、写入或生成的文件都
-会落到磁盘上真实的工作区里，整个运行过程会被记录为一张可供检视的 **轨迹图（trace graph）**。
+## 📖 概览
 
-它使用 **TypeScript + [Pi SDK](https://pi.dev)** 做智能体编排，以 **Hono** 后端配 **React**
-单页前端对外提供服务。最快的上手方式是一条 npm 安装命令 —— **无需 Docker**。
+BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助研究者将宽泛的科学问题转化为结构化、可执行、可检查的研究流程。系统以总控智能体为核心，由它与研究者对话、理解研究目标、规划任务，并协调文献智能体、分析智能体、实验智能体、写作智能体和审查智能体等专业智能体协同工作。BrainPilot 强调人在回路的科研协作范式：研究者始终保留判断权和控制权，而智能体负责处理证据密集、跨领域和重复性的研究任务。系统集成了脑科学领域知识、方法技能、分析流程和科研工具，并通过流程追踪图记录研究过程，使中间操作、证据来源、生成结论和潜在风险都可以被检查和回溯。
 
-### 核心亮点
+## ✨ 亮点
 
-- **🚀 一条命令启动** —— `npm i -g @brainpilot/app` 后 `brainpilot up`，打开浏览器即可开工。
-- **🤝 主控 + 专家** —— 主控智能体通过文件信箱把任务委派给领域专家。
-- **📚 内置技能库** —— 经过验证的脑科学/认知科学方法学，按需经 MCP 检索调用。
-- **🔌 原生 MCP 工具** —— 接入任意 Model Context Protocol 服务（stdio / streamable-http / sse）。
-- **🔭 可检视的运行** —— 每个会话有独立工作区，外加一张记录全过程的轨迹图。
-- **🧩 自带模型** —— 默认走 Anthropic，也可在 Settings UI 配置任意 Anthropic / OpenAI 兼容网关。
+- **🧠 面向脑科学研究** — 支持从文献综述、假设细化、实验设计到数据分析、论文写作和科学审查的完整科研流程。
+- **🤝 总控智能体协调专业智能体团队** — 由总控智能体统一理解用户需求、规划任务，并协调文献智能体、分析智能体、实验智能体、写作智能体和审查智能体等专业智能体协同工作。
+- **📚 整合领域知识与科研技能** — 集成脑科学相关知识、研究方法、分析流程、写作规范和工具接口，使智能体能够调用专业知识完成具体科研任务。
+- **🛡️ 审查智能体提升科研可靠性** — 审查科学结论、证据链、引用来源、幻觉风险、遗漏信息和缺乏支撑的推理，帮助研究者发现潜在问题。
+- **🔭 流程追踪图展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
+- **🔌 可扩展的科研工具生态** — 支持连接模型、MCP 工具、文献数据库、代码执行环境和自定义科研工具，适配不同研究场景。
+- **🚀 快速本地启动** — 简单安装后即可在浏览器中开始使用，降低脑科学智能体系统的部署和使用门槛。
 
 ---
 
@@ -64,8 +59,8 @@ BrainPilot 通过 **`@brainpilot/app`** 以本地进程方式运行 —— 无�
 
 ### 环境要求
 
-- **Node.js** ≥ 22
-- 一个 **Anthropic API Key** —— *或* 用 `BP_MOCK=1` 做无 Key 冒烟运行
+- **[Node.js](https://nodejs.org/en/download/)** ≥ 22
+- 用于智能体的**API Key**
 
 ### 1. 安装
 
@@ -77,27 +72,27 @@ npm install -g @brainpilot/app
 
 ### 2. 配置模型服务商
 
-BrainPilot **不绑定 Anthropic** —— 支持多种服务商协议：**Anthropic Messages**、**OpenAI
+BrainPilot 支持多种服务商协议：**Anthropic Messages**、**OpenAI
 Completions**、**OpenAI Responses** 和 **Azure OpenAI Responses**。按你的模型/网关所用协议任选。
 
 推荐做法是启动后用 **Web Settings UI**：打开 **Settings → Providers（服务商）**，添加一个服务商
 （base URL / key / 协议 / 模型列表），它会自动帮你写入配置。缺少 Key 不再阻塞启动：
 **`brainpilot up` 照常启动**，所以你完全可以先跳过、在浏览器里配置服务商。
 
-<details>
-<summary><b>更想用命令行？在 init 时生成配置</b></summary>
+
+<b>或者在 init 时生成配置</b>
 
 ```bash
 # Anthropic（默认协议）
 brainpilot init --api-key <你的-anthropic-key>   # 在 ./brainpilot 下生成配置
 
 # 一条命令接入网关 / 第三方端点
-brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model deepseek-v4-pro
 ```
 
 也可以改用环境变量 `ANTHROPIC_API_KEY` 代替 `--api-key`。多服务商 / OpenAI 兼容端点的配置，见下方
 [使用自己的模型](#-使用自己的模型)。
-</details>
+
 
 ### 3. 启动
 

@@ -2,11 +2,10 @@
   <img src="assets/banner.png" alt="BrainPilot" width="680"/>
 </p> -->
 
-<h1 align="center">🧠 BrainPilot</h1>
+<h1 align="center">🧠 BrainPilot: Enabling Agentic Research for Brain Science</h1>
 
 <p align="center">
-  An open-source multi-agent platform for trustworthy neuroscience research —
-  a Principal agent that coordinates specialist agents to read, reason, and run real analyses for you.
+BrainPilot is an open-source, human-in-the-loop agentic system for brain science that brings together specialist agents, domain knowledge, skills, and tools to help researchers in all scientific stages — review literature, design studies, run analyses, draft reports, and audit scientific claims.
 </p>
 
 <p align="center">
@@ -39,25 +38,17 @@
 
 ## 📖 Overview
 
-**BrainPilot** is an open-source, single-user multi-agent collaboration platform for
-neuroscience and cognitive-science research. A **Principal** agent talks to you, plans
-the work, and delegates to **specialist agents** (librarian, analyst, writer, …) that
-collaborate over a file-based mailbox. Every file an agent reads, writes, or generates
-lands in a real workspace on disk, and the whole run is captured as a **trace graph** you
-can inspect.
-
-It is built with **TypeScript + the [Pi SDK](https://pi.dev)** for agent orchestration,
-served as a **Hono** backend with a **React** single-page UI. The fastest way to run it is
-a single npm install — **no Docker required**.
+BrainPilot is an open-source AI research workspace for brain science. It helps researchers turn broad scientific questions into structured, inspectable workflows, from literature review and hypothesis refinement to experiment design, data analysis, writing, and audit. At its center, a Principal Agent communicates with the user, plans the work, and coordinates specialist agents such as librarian, analyst, experimentalist, writer, and auditor agents. BrainPilot is designed for human-in-the-loop scientific work: researchers remain in control, while agents handle evidence-heavy and cross-disciplinary tasks. The system integrates domain knowledge, methodological skills, and research tools, and records the process as a trace graph so that intermediate actions, evidence, claims, and potential risks can be inspected.
 
 ### Highlights
 
-- **🚀 One-command launch** — `npm i -g @brainpilot/app` then `brainpilot up`; open the browser and start working.
-- **🤝 Principal + specialists** — a coordinating agent delegates to domain specialists over a file-based mailbox.
-- **📚 Built-in skills library** — validated neuroscience & cognitive-science methodology, retrieved on demand via MCP.
-- **🔌 MCP-native tools** — connect any Model Context Protocol server (stdio / streamable-http / sse).
-- **🔭 Inspectable runs** — every session has its own workspace and a trace graph of what happened.
-- **🧩 Bring your own model** — Anthropic by default, or any Anthropic-/OpenAI-compatible gateway, configured from the Settings UI.
+- 🧠 Built for brain science research — supports workflows across literature review, hypothesis refinement, experiment design, data analysis, writing, and audit.
+- 🤝 Principal Agent + specialist agents — a coordinating Principal Agent works with domain specialists including librarian, analyst, experimentalist, writer, and auditor agents.
+- 📚 Integrated domain knowledge and skills — brings together brain-science knowledge, methodological skills, analysis procedures, writing conventions, and tool interfaces.
+- 🛡️ Auditor Agent for scientific reliability — reviews claims, evidence chains, citations, hallucination risks, omitted information, and unsupported reasoning.
+- 🔭 Traceable research process — represents each session as an inspectable trace graph, making task structure, agent actions, evidence flow, and decision points visible.
+- 🔌 Extensible research tool ecosystem — connects models, MCP tools, paper databases, code execution environments, and custom research utilities.
+- 🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
 
 ---
 
@@ -68,8 +59,8 @@ This is the recommended way to get started.
 
 ### Prerequisites
 
-- **Node.js** ≥ 22
-- An **Anthropic API key** — *or* `BP_MOCK=1` for a no-key smoke run
+- **[Node.js](https://nodejs.org/en/download/)** ≥ 22
+- An **API key** for Agent
 
 ### 1. Install
 
@@ -81,7 +72,7 @@ This installs the `brainpilot` CLI (`bnpt` is a built-in short alias for the sam
 
 ### 2. Configure a model provider
 
-BrainPilot is **not tied to Anthropic** — it supports multiple provider protocols:
+BrainPilot supports multiple provider protocols:
 **Anthropic Messages**, **OpenAI Completions**, **OpenAI Responses**, and **Azure OpenAI
 Responses**. Pick whichever your model/gateway speaks.
 
@@ -90,21 +81,19 @@ add a provider (base URL / key / protocol / model list), and it writes the confi
 A missing key no longer blocks launch: **`brainpilot up` starts anyway**, so you can skip
 ahead and configure the provider in the browser.
 
-<details>
-<summary><b>Prefer the command line? Scaffold config at init time</b></summary>
+<b>Or Scaffold config at init time</b>
 
 ```bash
 # Anthropic (default protocol)
 brainpilot init --api-key <your-anthropic-key>   # scaffold config under ./brainpilot
 
 # A gateway / third-party endpoint in one command
-brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model deepseek-v4-pro
 ```
 
 You can also supply the key via the `ANTHROPIC_API_KEY` environment variable instead of
 `--api-key`. For multi-provider / OpenAI-compatible setups, see
 [Using your own model](#-using-your-own-model) below.
-</details>
 
 ### 3. Launch
 
