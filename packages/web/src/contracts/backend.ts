@@ -481,7 +481,14 @@ function normalizeStringArray(value: unknown): string[] {
 }
 
 function camelizeKey(key: string): string {
-  return key.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
+  // Preserve a leading-underscore prefix: `_ts` / `_seq` are AG-UI transport
+  // metadata whose underscore is significant. Without this guard the regex
+  // turns `_ts` into `Ts`, so `normalizeAgUiEvent` strips the timestamp and the
+  // demo replay's timeline collapses (every event lands at ms=0). Only internal
+  // snake_case boundaries (e.g. `agent_name` → `agentName`) are camelized.
+  const lead = key.match(/^_+/)?.[0] ?? "";
+  const rest = key.slice(lead.length);
+  return lead + rest.replace(/_([a-z])/g, (_, char: string) => char.toUpperCase());
 }
 
 function camelizeObject(value: unknown): unknown {
