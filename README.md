@@ -60,7 +60,7 @@ This is the recommended way to get started.
 ### Prerequisites
 
 - **[Node.js](https://nodejs.org/en/download/)** ≥ 22
-- An ** API key** for Agent
+- An **API key** for Agent
 
 ### 1. Install
 
