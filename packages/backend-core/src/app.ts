@@ -14,6 +14,7 @@
  * `API_BASE = "/api"`), with static assets served at the root.
  */
 import { createRequire } from "node:module";
+import { join } from "node:path";
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
@@ -294,7 +295,7 @@ export function createApp(options: CreateAppOptions): Hono {
   if (options.serveWeb !== false) {
     app.use("/*", serveStatic({ root: webRoot }));
     // SPA fallback: any unmatched GET that isn't /api returns index.html.
-    app.get("/*", serveStatic({ path: `${webRoot}/index.html` }));
+    app.get("/*", serveStatic({ path: join(webRoot, "index.html") }));
   }
 
   return app;

@@ -3,6 +3,7 @@
  * Exported via the package's `./server` entry. The orchestrator's runtime is
  * started lazily on the first request that needs it; graceful shutdown stops it.
  */
+import { pathToFileURL } from "node:url";
 import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
@@ -85,9 +86,11 @@ export async function startServer(
 }
 
 // Allow `node dist/server.js` to boot directly.
+// pathToFileURL keeps the main-module check correct on Windows (a naive
+// `file://${argv[1]}` never matches import.meta.url there).
 const isMain =
   typeof process.argv[1] === "string" &&
-  import.meta.url === `file://${process.argv[1]}`;
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   startServer().then(
     (s) => {
