@@ -60,7 +60,7 @@ This is the recommended way to get started.
 ### Prerequisites
 
 - **[Node.js](https://nodejs.org/en/download/)** ≥ 22
-- An **Anthropic API key** — *or* `BP_MOCK=1` for a no-key smoke run
+- An ** API key** for Agent
 
 ### 1. Install
 
@@ -81,8 +81,7 @@ add a provider (base URL / key / protocol / model list), and it writes the confi
 A missing key no longer blocks launch: **`brainpilot up` starts anyway**, so you can skip
 ahead and configure the provider in the browser.
 
-<details>
-<summary><b>Prefer the command line? Scaffold config at init time</b></summary>
+<b>Or Scaffold config at init time</b>
 
 ```bash
 # Anthropic (default protocol)
@@ -95,7 +94,6 @@ brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api 
 You can also supply the key via the `ANTHROPIC_API_KEY` environment variable instead of
 `--api-key`. For multi-provider / OpenAI-compatible setups, see
 [Using your own model](#-using-your-own-model) below.
-</details>
 
 ### 3. Launch
 
