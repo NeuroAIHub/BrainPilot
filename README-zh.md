@@ -60,7 +60,7 @@ BrainPilot 通过 **`@brainpilot/app`** 以本地进程方式运行 —— 无�
 ### 环境要求
 
 - **[Node.js](https://nodejs.org/en/download/)** ≥ 22
-- 一个 **Anthropic API Key** —— *或* 用 `BP_MOCK=1` 做无 Key 冒烟运行
+- 用于智能体的**API Key**
 
 ### 1. 安装
 
@@ -79,8 +79,8 @@ Completions**、**OpenAI Responses** 和 **Azure OpenAI Responses**。按你的�
 （base URL / key / 协议 / 模型列表），它会自动帮你写入配置。缺少 Key 不再阻塞启动：
 **`brainpilot up` 照常启动**，所以你完全可以先跳过、在浏览器里配置服务商。
 
-<details>
-<summary><b>更想用命令行？在 init 时生成配置</b></summary>
+
+<b>或者在 init 时生成配置</b>
 
 ```bash
 # Anthropic（默认协议）
@@ -92,7 +92,7 @@ brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api 
 
 也可以改用环境变量 `ANTHROPIC_API_KEY` 代替 `--api-key`。多服务商 / OpenAI 兼容端点的配置，见下方
 [使用自己的模型](#-使用自己的模型)。
-</details>
+
 
 ### 3. 启动
 
