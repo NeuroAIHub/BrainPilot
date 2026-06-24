@@ -1,4 +1,4 @@
-import { Bot, Paperclip, Square, X } from "lucide-react";
+import { Bot, Square } from "lucide-react";
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProviderProfile } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
@@ -13,6 +13,7 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { ComposerInput } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
+import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
 
 export function PromptComposer() {
@@ -33,11 +34,6 @@ export function PromptComposer() {
   const commandsRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
-  // #47: file upload — names of files uploaded into the workspace this turn,
-  // shown as removable chips and announced to the agent on send.
-  const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [attachments, setAttachments] = useState<string[]>([]);
-  const [uploading, setUploading] = useState(false);
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
@@ -224,50 +220,17 @@ export function PromptComposer() {
       return;
     }
     draftStore.set(sessionId, "");
-    // #47: if files were uploaded this turn, prepend a notice so the agent knows
-    // they exist in its workspace and can `read` them. Cleared after send.
-    const notice =
-      attachments.length > 0 ? `${t("chat.upload.notice", { names: attachments.join(", ") })}\n\n` : "";
-    const sentAttachments = attachments;
-    if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
-    const ok = await sendPrompt(`${notice}${content}`, {
+    const ok = await sendPrompt(content, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
     });
     // #106: a failed/timed-out send must not silently eat the user's input.
-    // Restore the draft (and attachment chips) so they can retry without
-    // retyping. Only restore if they haven't already started typing again.
-    if (!ok) {
-      if (draftStore.get(sessionId).trim().length === 0) {
-        draftStore.set(sessionId, content);
-      }
-      if (sentAttachments.length > 0) {
-        setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
-      }
-    }
-  };
-
-  // #47: upload the chosen files into the session workspace, then track their
-  // names as chips. Uses the current sandbox/session id (single-user: same id).
-  const handleFilesChosen = async (files: FileList | null) => {
-    if (!files || files.length === 0) return;
-    const sandboxId = currentSandbox?.id;
-    if (!sandboxId) return;
-    setUploading(true);
-    setComposerError(null);
-    try {
-      for (const file of Array.from(files)) {
-        await api.sandbox.uploadFile(sandboxId, file.name, file);
-        setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
-      }
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setComposerError(t("chat.upload.failed", { msg }));
-    } finally {
-      setUploading(false);
-      if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-selecting the same file
+    // Restore the draft so they can retry without retyping. Only restore if they
+    // haven't already started typing again.
+    if (!ok && draftStore.get(sessionId).trim().length === 0) {
+      draftStore.set(sessionId, content);
     }
   };
 
@@ -325,26 +288,6 @@ export function PromptComposer() {
             ariaLabel={t("chat.srAsk")}
           />
 
-          {attachments.length > 0 || uploading ? (
-            <div className="composer__attachments" aria-label={t("chat.aria.attachFile")}>
-              {attachments.map((name) => (
-                <span className="composer__chip" key={name}>
-                  <Paperclip size={12} />
-                  <span className="composer__chip-name">{name}</span>
-                  <button
-                    type="button"
-                    className="composer__chip-remove"
-                    aria-label={t("chat.aria.removeAttachment")}
-                    onClick={() => setAttachments((prev) => prev.filter((n) => n !== name))}
-                  >
-                    <X size={12} />
-                  </button>
-                </span>
-              ))}
-              {uploading ? <span className="composer__chip composer__chip--pending">{t("chat.upload.uploading")}</span> : null}
-            </div>
-          ) : null}
-
           <div className="composer__toolbar">
             <div className="composer__tools">
               {/*
@@ -389,76 +332,64 @@ export function PromptComposer() {
               )}
             </div>
 
-            <div className="composer__send-tools">
-              <CustomSelect
-                ariaLabel={t("chat.modelPlaceholder")}
-                className="model-select"
-                disabled={!currentSandbox || !activeProvider || activeProvider.models.length === 0}
-                onChange={async (model) => {
-                  setSelectedModel(model);
-                  setComposerError(null);
-                  try {
-                    await api.settings.update({ model });
-                  } catch (e) {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    console.error("Failed to save model selection", e);
-                    setComposerError(t("chat.error.saveModel", { msg }));
-                    return;
-                  }
-                  try {
-                    await reloadConfig();
-                  } catch (e) {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    console.error("Failed to reload config after model change", e);
-                    setComposerError(t("chat.error.reloadConfig", { msg }));
-                  }
-                }}
-                options={activeProvider?.models.map((model) => {
-                  const mh = activeProvider.modelHealth?.find((m) => m.model === model);
-                  const status = mh?.status ?? "unknown";
-                  return {
-                    value: model,
-                    label: model,
-                    indicator: (
-                      <span
-                        className={`model-status-dot model-status-dot--${status}`}
-                        title={mh?.error ?? status}
-                      />
-                    ),
-                  };
-                }) ?? []}
-                placeholder={t("chat.modelPlaceholder")}
-                title={activeProvider ? t("chat.providerTitle", { name: activeProvider.name }) : t("chat.noActiveProvider")}
-                value={selectedModel}
-              />
-              {/*
-                issue #47: 语音输入 (Mic) has no capture/permission flow yet —
-                hidden until implemented. The chat.aria.voice i18n key is kept.
-                Re-add the Mic lucide import when restoring this.
-              <IconButton label={t("chat.aria.voice")}>
-                <Mic size={17} />
-              </IconButton>
-              */}
-              <input
-                ref={fileInputRef}
-                type="file"
-                multiple
-                style={{ display: "none" }}
-                onChange={(e) => void handleFilesChosen(e.target.files)}
-              />
-              <IconButton
-                label={t("chat.aria.attachFile")}
-                onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || !currentSandbox}
-              >
-                <Paperclip size={17} />
-              </IconButton>
-              <ComposerSendButton
-                sessionId={sessionId}
-                canSend={canSend}
-                label={t("chat.aria.send")}
-              />
-            </div>
+            {/*
+              issue #47: 语音输入 (Mic) had no capture/permission flow and was
+              never shipped; #160 removed the file-upload (Paperclip) button that
+              also lived in this cluster (upload was never a supported feature).
+              The send cluster is now just the model picker + send button.
+            */}
+            <ComposerSendTools
+              modelSelect={
+                <CustomSelect
+                  ariaLabel={t("chat.modelPlaceholder")}
+                  className="model-select"
+                  disabled={!currentSandbox || !activeProvider || activeProvider.models.length === 0}
+                  onChange={async (model) => {
+                    setSelectedModel(model);
+                    setComposerError(null);
+                    try {
+                      await api.settings.update({ model });
+                    } catch (e) {
+                      const msg = e instanceof Error ? e.message : String(e);
+                      console.error("Failed to save model selection", e);
+                      setComposerError(t("chat.error.saveModel", { msg }));
+                      return;
+                    }
+                    try {
+                      await reloadConfig();
+                    } catch (e) {
+                      const msg = e instanceof Error ? e.message : String(e);
+                      console.error("Failed to reload config after model change", e);
+                      setComposerError(t("chat.error.reloadConfig", { msg }));
+                    }
+                  }}
+                  options={activeProvider?.models.map((model) => {
+                    const mh = activeProvider.modelHealth?.find((m) => m.model === model);
+                    const status = mh?.status ?? "unknown";
+                    return {
+                      value: model,
+                      label: model,
+                      indicator: (
+                        <span
+                          className={`model-status-dot model-status-dot--${status}`}
+                          title={mh?.error ?? status}
+                        />
+                      ),
+                    };
+                  }) ?? []}
+                  placeholder={t("chat.modelPlaceholder")}
+                  title={activeProvider ? t("chat.providerTitle", { name: activeProvider.name }) : t("chat.noActiveProvider")}
+                  value={selectedModel}
+                />
+              }
+              sendButton={
+                <ComposerSendButton
+                  sessionId={sessionId}
+                  canSend={canSend}
+                  label={t("chat.aria.send")}
+                />
+              }
+            />
           </div>
 
         </form>
