@@ -17,9 +17,7 @@ import { SandboxStatus } from "./SandboxStatus";
 import { Sidebar } from "../sidebar/Sidebar";
 import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
-
-const MIN_SIDEBAR_WIDTH = 220;
-const MAX_SIDEBAR_WIDTH = 420;
+import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
 
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
@@ -87,12 +85,21 @@ export function DesktopShell() {
         return;
       }
 
+      // #159 — drag the edge left past the collapse threshold and the rail snaps
+      // to the icon rail; otherwise apply the clamped expanded width. resolveResize
+      // owns the geometry (pure + unit-tested in sidebarResize.test.ts).
       const delta = event.clientX - sidebarResizeRef.current.pointerX;
-      const nextWidth = Math.max(
-        MIN_SIDEBAR_WIDTH,
-        Math.min(MAX_SIDEBAR_WIDTH, sidebarResizeRef.current.width + delta),
-      );
-      setSidebarWidth(nextWidth);
+      const outcome = resolveResize(sidebarResizeRef.current.width + delta);
+      if (outcome.collapse) {
+        setUserCollapsed(true);
+        sidebarResizeRef.current = null;
+        setIsSidebarResizing(false);
+        // Restore a sensible width so expanding again (toggle / drag) isn't stuck
+        // at the collapsed remnant.
+        setSidebarWidth(DEFAULT_SIDEBAR_WIDTH);
+        return;
+      }
+      setSidebarWidth(outcome.width);
     };
 
     const handlePointerUp = () => {
