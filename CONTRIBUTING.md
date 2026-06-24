@@ -51,14 +51,13 @@ For a no-key smoke run: `BP_MOCK=1 npm run bp -- up`.
 
 ## Development Workflow
 
-BrainPilot uses a two-branch model:
+BrainPilot follows a simple GitHub Flow: **`main` is the single source of truth.**
+You branch off `main`, open a PR, and merge back into `main` once CI is green and a
+maintainer approves.
 
-- **`development`** — the working branch; open your PRs against this.
-- **`main`** — the stable branch; changes land here only after they've been tested.
-
-1. **Fork** the repository and create a branch from `development`:
+1. **Fork** the repository and create a branch from `main`:
    ```bash
-   git checkout -b feat/your-feature development
+   git checkout -b feat/your-feature main
    ```
 2. **Branch naming:**
    - `feat/` — new features or enhancements
@@ -67,7 +66,23 @@ BrainPilot uses a two-branch model:
    - `ci/` / `chore/` — tooling and maintenance
 3. Make your changes and **test locally**.
 4. Run **all checks** before committing (see below).
-5. Open a **Pull Request** against `development`.
+5. Open a **Pull Request** against `main`.
+
+### How your PR is verified
+
+Two layers, with different jobs:
+
+- **Public CI (the merge gate)** — every PR runs the GitHub Actions workflow
+  (typecheck + unit tests + web build + the fast black-box suites). This is the
+  authoritative gate: it is fully public and reproducible, so you can see exactly
+  what is checked and reproduce any failure locally. **A PR merges once this is
+  green** (and a maintainer approves).
+- **Maintainer regression (pre-release)** — maintainers additionally run a fuller
+  regression (real provider / real sessions) on internal infrastructure before
+  cutting a release. This is a release-time smoke check, **not** a per-PR gate, so
+  it never blocks external contributors. Test cases from it are continuously
+  de-identified and folded back into the public CI above, so the public gate keeps
+  getting stronger over time.
 
 ## Before You Submit a PR
 
