@@ -31,10 +31,17 @@ export interface ProbeInput {
   apiKey: string;
 }
 
-/** Strip absolute node_modules paths from any error text before surfacing it. */
+/**
+ * Strip absolute node_modules paths from any error text before surfacing it.
+ *
+ * Cross-platform (#157): accept BOTH `/` and `\` separators, plus an optional
+ * Windows drive prefix. A native Windows path like
+ * `C:\Users\<user>\…\node_modules\@pkg\file.md` previously slipped through
+ * unredacted, leaking the username into the Test-button error toast.
+ */
 function redact(text: string): string {
   return text
-    .replace(/(?:\/[^\s:]*)?node_modules\/[^\s)]*/g, "<path>")
+    .replace(/(?:[A-Za-z]:)?(?:[\\/][^\s:]*)?node_modules[\\/][^\s)]*/g, "<path>")
     .replace(/\s+/g, " ")
     .trim();
 }
