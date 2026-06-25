@@ -53,6 +53,35 @@ describe("templateList", () => {
   });
 });
 
+// #3 — cross-platform: Windows editors and `git autocrlf=true` save the
+// on-disk `prompt.md` with CRLF, but `PERSONAS[name]` is shipped as an LF
+// TypeScript string literal. Without the CRLF collapse, every line from the
+// second onward differs by one `\r`, every agent reports `drift` on every
+// Windows install, and `bp template diff` paints the whole file red/green.
+describe("CRLF tolerance (#3)", () => {
+  it("a CRLF-line-ended on-disk file matching the built-in is `in-sync`, not `drift`", async () => {
+    const crlf = PERSONAS.principal!.replace(/\n/g, "\r\n");
+    await writePrompt("principal", crlf);
+    const rows = await templateList({ dir, env: {}, cwd: "/" });
+    expect(rows.find((r) => r.name === "principal")?.state).toBe("in-sync");
+  });
+
+  it("`detectPromptDrift` reports a CRLF-converted file as no-drift", async () => {
+    await writePrompt("principal", PERSONAS.principal!.replace(/\n/g, "\r\n"));
+    await writePrompt("librarian", PERSONAS.librarian!.replace(/\n/g, "\r\n"));
+    expect(await detectPromptDrift(dir)).toEqual([]);
+  });
+
+  it("`runDiff` produces no `+`/`-` rows for a CRLF copy of the built-in", async () => {
+    await writePrompt("trace", PERSONAS.trace!.replace(/\n/g, "\r\n"));
+    const out: string[] = [];
+    await runDiff({ dir, env: {}, cwd: "/", agent: "trace", log: (m) => out.push(m) });
+    // After the CRLF fold, the on-disk file should match the built-in, so the
+    // command's "no drift" path is hit and no diff body is emitted.
+    expect(out.join("\n")).toMatch(/no drift/);
+  });
+});
+
 describe("detectPromptDrift", () => {
   it("returns only drifted agents", async () => {
     await writePrompt("principal", PERSONAS.principal!);
