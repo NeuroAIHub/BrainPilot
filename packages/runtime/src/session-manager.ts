@@ -345,6 +345,13 @@ export class SessionManager {
     let rel = rawPath ?? "";
     if (rel === "/workspace") rel = "";
     else if (rel.startsWith("/workspace/")) rel = rel.slice("/workspace/".length);
+    // Cross-platform (#5): the runtime now emits POSIX `/` in all
+    // workspace-relative paths it hands out (writeSessionFile, skill_search).
+    // Accept either separator on the way back in so an LLM that round-trips
+    // a path we gave it (or pre-#5 clients with cached `\` paths) still
+    // resolves correctly. `\` is not a legal Windows filename character, so
+    // this collapse is unambiguous.
+    rel = rel.replace(/\\/g, "/");
     rel = rel.replace(/^\/+/, ""); // never let a leading slash make it absolute
     const abs = resolve(root, rel);
     if (abs !== root && !abs.startsWith(root + sep)) {
@@ -432,8 +439,12 @@ export class SessionManager {
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, buf);
     // Return the workspace-relative path (strip the absolute root prefix).
+    // Cross-platform (#5): always emit POSIX `/` so the API contract is
+    // identical across hosts; the frontend embeds this in URL query strings
+    // (`?path=foo/bar.txt`) and the model echoes it back via `read_file`.
     const root = this.workspaceDir(sid);
-    const relOut = abs === root ? "" : abs.slice(root.length + 1);
+    const relOut =
+      abs === root ? "" : abs.slice(root.length + 1).split(sep).join("/");
     return { path: relOut, size: buf.byteLength };
   }
 

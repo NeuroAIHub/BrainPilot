@@ -31,7 +31,7 @@
  */
 import { readFile, readdir, stat, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep, posix } from "node:path";
 import type { SystemTool } from "../types.js";
 import type { ToolDeps } from "./system-tools.js";
 
@@ -116,7 +116,12 @@ export async function collectAllSkills(base: string): Promise<SkillRecord[]> {
     for (const skillName of skills) {
       const skillMd = join(catPath, skillName, "SKILL.md");
       if (!(await exists(skillMd))) continue;
-      const relPath = join(category, skillName);
+      // Cross-platform (#5): the relative path leaves the runtime and is
+      // shown both to the model (in `relative_paths`) and round-tripped back
+      // through the `browse` mode. Standardize on POSIX `/` so the API
+      // surface is identical on Windows and POSIX, the model never sees a
+      // backslash it has to JSON-escape, and URL/query forms stay valid.
+      const relPath = posix.join(category, skillName);
       const existing = byName.get(skillName);
       if (existing) {
         existing.relative_paths.push(relPath);
@@ -238,8 +243,25 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
   if (rel === "" || rel === ".") {
     target = baseAbs;
   } else {
-    // Reject any absolute path or one starting with '..' before resolve.
-    if (rel.startsWith("/")) {
+    // Reject any absolute path or one containing a `..` segment before resolve.
+    // Cross-platform (#2): the previous guard hardcoded POSIX `/`, so a
+    // Windows absolute path slipped past to the second-line containment
+    // guard with a less specific error. The check below recognizes:
+    //   - POSIX absolute paths (`/foo`)             — `isAbsolute` + `startsWith("/")`
+    //   - Windows absolute paths native to the host — `isAbsolute` (only true on Win)
+    //   - Windows-shaped paths inspected on POSIX   — `^[A-Za-z]:[\\/]` regex
+    //     (POSIX `isAbsolute("C:\\foo")` is false, so we have to match the
+    //     drive prefix explicitly to keep the guard host-platform-agnostic)
+    //   - Leading-backslash form                    — `startsWith("\\")`
+    // and the `..`-segment check the comment already promised but the code
+    // never actually did (across both separators).
+    if (
+      isAbsolute(rel) ||
+      rel.startsWith("/") ||
+      rel.startsWith("\\") ||
+      /^[A-Za-z]:[\\/]/.test(rel) ||
+      rel.split(/[\\/]/).some((seg) => seg === "..")
+    ) {
       throw new Error("path traversal outside skills directory is not allowed");
     }
     target = resolve(join(baseAbs, rel));
@@ -259,7 +281,12 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
         type: d.isDirectory() ? "directory" : "file",
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-    const displayPath = target === baseAbs ? "." : target.slice(baseAbs.length + 1);
+    // Cross-platform (#5): emit POSIX-style separators in the response so
+    // the model and frontend never see OS-native backslashes.
+    const displayPath =
+      target === baseAbs
+        ? "."
+        : target.slice(baseAbs.length + 1).split(sep).join("/");
     return jsonText({ path: displayPath, type: "directory", children });
   }
   if (st.isFile()) {
