@@ -151,4 +151,52 @@ describe("assertRepoCwd", () => {
       "__exit__",
     );
   });
+
+  // Issue #169: an npm-installed CLI ships at
+  // `<prefix>/node_modules/@brainpilot/app/dist/bin.js` — no `packages/cli/`
+  // layer ever matches the cwd compare, so the guard must recognise the
+  // node_modules layout and let it through from ANY directory. These bin paths
+  // are strings only (the install case returns before any realpath compare), so
+  // they need not exist on disk.
+  it("passes for a global install (node_modules) regardless of cwd", () => {
+    const cwd = makeForeign();
+    const binPath = join(
+      "/usr",
+      "local",
+      "lib",
+      "node_modules",
+      "@brainpilot",
+      "app",
+      "dist",
+      "bin.js",
+    );
+    expect(() =>
+      assertRepoCwd({ argv: ["up"], env: {}, cwd, binPath }),
+    ).not.toThrow();
+  });
+
+  it("passes for a local install (project node_modules) regardless of cwd", () => {
+    const cwd = makeForeign();
+    const binPath = join(
+      makeForeign(),
+      "node_modules",
+      "@brainpilot",
+      "app",
+      "dist",
+      "bin.js",
+    );
+    expect(() =>
+      assertRepoCwd({ argv: ["up"], env: {}, cwd, binPath }),
+    ).not.toThrow();
+  });
+
+  it("still rejects a from-source run launched from the wrong cwd", () => {
+    // Regression guard: the node_modules bypass must NOT weaken the repo-root
+    // contract for a genuine source checkout (bin path has no node_modules).
+    const { binPath } = makeFakeRepo();
+    const cwd = makeForeign();
+    expect(() => callAssert({ argv: [], env: {}, cwd, binPath })).toThrow(
+      "__exit__",
+    );
+  });
 });

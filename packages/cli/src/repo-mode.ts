@@ -18,6 +18,16 @@
  * or set the env escape hatch `BP_ALLOW_FOREIGN_CWD=1`; those paths are
  * dev/CI/test scenarios where the cwd-is-repo assumption legitimately doesn't
  * hold.
+ *
+ * The guard is ALSO skipped when the running bin.js lives inside a
+ * `node_modules/` tree (issue #169). A global or local npm install
+ * (`npm i -g @brainpilot/app`) ships the CLI as a single extracted workspace
+ * at `<prefix>/node_modules/@brainpilot/app/dist/bin.js` — there is no
+ * `packages/cli/` layer for the cwd compare to ever match, so without this the
+ * installed CLI is unlaunchable from any directory. The #102 "configs update
+ * with `git pull`" rationale does not apply to installed users (they have no
+ * repo to pull), so the default `<cwd>/brainpilot` data dir is correct for
+ * them. The repo-root contract remains enforced for the from-source case.
  */
 import { realpathSync } from "node:fs";
 import { resolve } from "node:path";
@@ -25,6 +35,17 @@ import { fileURLToPath } from "node:url";
 
 /** Lookup of argv flags that pin the data dir explicitly (skip the cwd guard). */
 const EXPLICIT_DIR_FLAGS = new Set(["-d", "--dir"]);
+
+/**
+ * True when the running bin.js lives inside a `node_modules/` tree, i.e. the
+ * CLI was reached via an npm install (global or local) rather than run from a
+ * cloned repo's `packages/cli/dist`. Split on both separators so it holds on
+ * Windows paths too. See the header comment (#169) for why this bypasses the
+ * repo-root guard.
+ */
+function isInstalledLayout(binPath: string): boolean {
+  return binPath.split(/[\\/]/).includes("node_modules");
+}
 
 function hasExplicitDirFlag(argv: readonly string[]): boolean {
   for (let i = 0; i < argv.length; i++) {
@@ -88,6 +109,11 @@ export function assertRepoCwd(options: AssertRepoCwdOptions = {}): void {
   if (env.BP_DATA_DIR?.trim()) return;
   if (env.BP_DATA_ROOT?.trim()) return;
   if (hasExplicitDirFlag(argv)) return;
+
+  // An npm-installed CLI (node_modules) is a legitimate non-repo launch (#169):
+  // the `packages/cli/dist/bin.js` shape the cwd compare below looks for never
+  // exists for installed users, so without this they could never start it.
+  if (isInstalledLayout(binPath)) return;
 
   const expected = resolve(cwd, "packages/cli/dist/bin.js");
   if (samePath(expected, binPath)) return;
