@@ -36,6 +36,7 @@ import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
+import { isWindows } from "./platform.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
 
 interface Deferred<T> {
@@ -376,7 +377,11 @@ export class SessionManager {
           const st = await stat(join(dir, d.name));
           size = st.size;
           modified = Math.floor(st.mtimeMs / 1000);
-          permissions = (st.mode & 0o777).toString(8);
+          // POSIX permission bits are meaningless on Windows (`st.mode` reflects
+          // FAT-era read-only attr only and would always render `666`/`777`/`444`),
+          // so emit an empty string and let the frontend show `-` instead of a
+          // misleading octal value. (#10 — cross-platform pass.)
+          permissions = isWindows ? "" : (st.mode & 0o777).toString(8);
         } catch {
           /* broken symlink / race — report zeros */
         }
