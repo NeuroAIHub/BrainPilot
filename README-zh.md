@@ -208,7 +208,7 @@ Responses** 和 **Azure OpenAI Responses** —— 可对接 Anthropic、OpenAI �
 也可以在 init 时用一条命令接入网关 / 第三方端点：
 
 ```bash
-brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model your_model_name
 ```
 
 <details>
