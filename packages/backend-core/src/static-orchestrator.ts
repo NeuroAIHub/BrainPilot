@@ -69,8 +69,14 @@ export class StaticRuntimeOrchestrator implements Orchestrator {
       if (Date.now() >= deadline) {
         throw new Error(
           `static runtime did not become healthy at ${this.url} within ` +
-            `${this.healthTimeoutMs}ms — is the sandbox container up? ` +
-            `(check \`docker compose logs sandbox\` and BP_RUNTIME_URL)`,
+            `${this.healthTimeoutMs}ms.\n` +
+            `  This is STATIC (sandbox) mode: the backend is trying to reach a ` +
+            `pre-started runtime container at BP_RUNTIME_URL.\n` +
+            `  • If you meant to run a Docker deployment: check it is up ` +
+            `(\`docker compose logs sandbox\`) and that BP_RUNTIME_URL is correct.\n` +
+            `  • If you meant to run from source: you likely have a stray ` +
+            `BP_RUNTIME_URL/BP_ORCHESTRATOR in your environment. Run ` +
+            `\`brainpilot up --mode local\` (or \`unset BP_RUNTIME_URL BP_ORCHESTRATOR\`).`,
         );
       }
       await this.sleep(this.pollMs);

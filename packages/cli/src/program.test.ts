@@ -22,6 +22,24 @@ describe("program — commander wiring", () => {
     expect(upFn.mock.calls[0]![0]).toMatchObject({ open: false });
   });
 
+  it("`up --mode static` forwards the orchestrator mode", async () => {
+    const upFn = vi.fn().mockResolvedValue({ url: "x", config: {} });
+    await run(["up", "--mode", "static"], { upFn });
+    expect(upFn.mock.calls[0]![0]).toMatchObject({ mode: "static" });
+  });
+
+  it("`up` with no --mode leaves mode undefined (resolver defaults to local)", async () => {
+    const upFn = vi.fn().mockResolvedValue({ url: "x", config: {} });
+    await run(["up"], { upFn });
+    expect(upFn.mock.calls[0]![0].mode).toBeUndefined();
+  });
+
+  it("rejects an invalid --mode", async () => {
+    const upFn = vi.fn();
+    await expect(run(["up", "--mode", "bogus"], { upFn })).rejects.toThrow();
+    expect(upFn).not.toHaveBeenCalled();
+  });
+
   it("dispatches `down` with --dir", async () => {
     const downFn = vi.fn().mockResolvedValue({ stopped: true, pid: 1, forced: false });
     await run(["down", "--dir", "/d"], { downFn });
