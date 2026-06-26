@@ -15,7 +15,6 @@ import {
 import { FileContent, FileEntry } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
-import { runtimeConfig } from "../../config";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { downloadBlob } from "../../utils/download";
@@ -128,10 +127,14 @@ function findNode(root: FileNode, path: string | null): FileNode | null {
 export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeStart, width }: FileSidebarProps) {
   const { currentSandbox } = useSandbox();
   const { currentSession } = useSessions();
-  // In single-user local mode the workspace is addressed by the active session
-  // id (workspaces/<sid>/), not a container id. Elsewhere the sandbox id is the
-  // addressing key. `currentSandbox.status` still gates whether files are live.
-  const sandboxId = runtimeConfig.localMode ? currentSession?.id ?? null : currentSandbox?.id ?? null;
+  // The runtime always addresses a workspace by session id (workspaces/<sid>/),
+  // never by container id — in both local and remote mode. A container can host
+  // several sessions, and the file tree shows the *current session's* workspace.
+  // (#168) `currentSandbox.status` still gates whether files are live; the
+  // variable name stays `sandboxId` only because the call sites/sub-component
+  // prop are named that way — it has always carried the session id in local
+  // mode. A full rename rides with the planned session-management cleanup.
+  const sandboxId = currentSession?.id ?? null;
   const t = useT();
   const [tree, setTree] = useState<FileNode>(rootNode);
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(["/workspace"]));
