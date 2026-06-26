@@ -19,6 +19,13 @@ export interface StartServerOptions extends Partial<CreateAppOptions> {
   eager?: boolean;
   /** When true, the runtime child inherits stdio (foreground CLI mode). */
   stdioInherit?: boolean;
+  /**
+   * Port the local runtime should bind. Forwarded to the local orchestrator so
+   * the foreground (in-process) path honours `--port` (runtime = backend + 1)
+   * instead of falling back to AGENT_RUNTIME_PORT/8081 (#171). The detached path
+   * injects the same value via the AGENT_RUNTIME_PORT env var (spawn-backend).
+   */
+  runtimePort?: number;
 }
 
 export interface RunningServer {
@@ -46,6 +53,7 @@ export function buildServerOrchestrator(
     createOrchestrator({
       local: {
         dataDir: options.dataDir,
+        ...(options.runtimePort !== undefined ? { port: options.runtimePort } : {}),
         ...(options.stdioInherit ? { stdioInherit: true } : {}),
       },
     })

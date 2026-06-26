@@ -33,6 +33,32 @@ describe("buildServerOrchestrator", () => {
     expect(env.BP_DATA_DIR).toBe("/data/detached");
   });
 
+  it("threads runtimePort through to the local runtime env (#171)", () => {
+    // Foreground path: `up` prechecks port+1 and must pass it to the backend so
+    // the runtime binds there instead of the AGENT_RUNTIME_PORT/8081 fallback.
+    const orch = buildServerOrchestrator({
+      dataDir: "/data/xyz",
+      stdioInherit: true,
+      runtimePort: 9501,
+    });
+    expect(orch).toBeInstanceOf(LocalProcessOrchestrator);
+    const env = (orch as LocalProcessOrchestrator).buildEnv();
+    expect(env.AGENT_RUNTIME_PORT).toBe("9501");
+  });
+
+  it("falls back to the default runtime port when runtimePort is omitted (#171)", () => {
+    const prev = process.env.AGENT_RUNTIME_PORT;
+    delete process.env.AGENT_RUNTIME_PORT;
+    try {
+      const orch = buildServerOrchestrator({ dataDir: "/data/xyz", stdioInherit: true });
+      const env = (orch as LocalProcessOrchestrator).buildEnv();
+      expect(env.AGENT_RUNTIME_PORT).toBe("8081");
+    } finally {
+      if (prev === undefined) delete process.env.AGENT_RUNTIME_PORT;
+      else process.env.AGENT_RUNTIME_PORT = prev;
+    }
+  });
+
   it("returns an injected orchestrator verbatim (short-circuit)", () => {
     const injected = { id: "injected" } as unknown as Orchestrator;
     expect(buildServerOrchestrator({ orchestrator: injected })).toBe(injected);
