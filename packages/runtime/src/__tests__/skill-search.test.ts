@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   collectAllSkills,
   countKeywordHits,
+  normalizeKeywords,
   parseFrontmatterDescription,
   searchSkills,
   createSkillSearchTool,
@@ -91,6 +92,37 @@ describe("countKeywordHits", () => {
   });
 });
 
+describe("normalizeKeywords", () => {
+  it("returns empty array for undefined / null-ish input", () => {
+    expect(normalizeKeywords(undefined)).toEqual([]);
+    expect(normalizeKeywords("")).toEqual([]);
+  });
+
+  it("splits a comma-separated string and trims each entry", () => {
+    expect(normalizeKeywords("EEG, preprocessing, ICA")).toEqual([
+      "EEG",
+      "preprocessing",
+      "ICA",
+    ]);
+  });
+
+  it("drops empty entries from comma-separated string", () => {
+    expect(normalizeKeywords("EEG,,, ICA, ")).toEqual(["EEG", "ICA"]);
+  });
+
+  it("handles a single keyword string with no commas", () => {
+    expect(normalizeKeywords("fMRI")).toEqual(["fMRI"]);
+  });
+
+  it("passes through a string array unchanged (trimming + dedup empties)", () => {
+    expect(normalizeKeywords(["EEG", " ICA ", ""])).toEqual(["EEG", "ICA"]);
+  });
+
+  it("handles an already-clean string array", () => {
+    expect(normalizeKeywords(["a", "b", "c"])).toEqual(["a", "b", "c"]);
+  });
+});
+
 describe("collectAllSkills", () => {
   let base: string;
   beforeAll(async () => {
@@ -153,6 +185,37 @@ describe("searchSkills — query mode", () => {
 
   it("query mode requires keywords or skill_name", async () => {
     await expect(searchSkills(base, { mode: "query" })).rejects.toThrow(/keywords/);
+  });
+
+  it("accepts keywords as a comma-separated string", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, { mode: "query", keywords: "EEG, paradigm" }),
+    );
+    expect(out.keywords).toEqual(["EEG", "paradigm"]);
+    expect(out.results[0].name).toBe("eeg-paradigm-designer");
+    expect(out.results[0].keyword_hits).toBeGreaterThan(0);
+  });
+
+  it("comma string with empties and whitespace normalises correctly", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, { mode: "query", keywords: " EEG ,, , paradigm " }),
+    );
+    expect(out.keywords).toEqual(["EEG", "paradigm"]);
+    expect(out.total_matched).toBe(1);
+  });
+
+  it("single keyword string (no commas) works", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, { mode: "query", keywords: "figure" }),
+    );
+    expect(out.keywords).toEqual(["figure"]);
+    expect(out.results[0].name).toBe("figure-builder");
+  });
+
+  it("empty comma string throws (no valid keywords)", async () => {
+    await expect(
+      searchSkills(base, { mode: "query", keywords: " , , " }),
+    ).rejects.toThrow(/keywords/);
   });
 });
 
@@ -260,5 +323,25 @@ describe("createSkillSearchTool", () => {
     };
     const tool = createSkillSearchTool(deps);
     await expect(tool.execute({ mode: "query" })).rejects.toThrow(/keywords/);
+  });
+
+  it("accepts comma-separated keyword string via execute()", async () => {
+    const base = await makeFixtureBase();
+    const deps: ToolDeps = {
+      sessionId: "s",
+      fromAgent: "principal",
+      mailbox: new Mailbox("s"),
+      trace: new GraphOfTrace("s"),
+      ensureAgent: async () => {},
+      destroyAgent: async () => {},
+      wakeAgent: () => {},
+      requestUserInput: async () => "",
+      routerSkillsDir: base,
+    };
+    const tool = createSkillSearchTool(deps);
+    const out = await tool.execute({ mode: "query", keywords: "EEG, paradigm" });
+    const payload = JSON.parse(out.content[0]!.text);
+    expect(payload.keywords).toEqual(["EEG", "paradigm"]);
+    expect(payload.results[0].name).toBe("eeg-paradigm-designer");
   });
 });

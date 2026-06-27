@@ -168,7 +168,7 @@ export interface SkillSearchArgs {
  * comma-separated string (e.g. `"EEG, preprocessing, ICA"`), trim each entry,
  * and drop empties — matching `skills_tool.py` behaviour.
  */
-function normalizeKeywords(raw: string[] | string | undefined): string[] {
+export function normalizeKeywords(raw: string[] | string | undefined): string[] {
   if (!raw) return [];
   if (typeof raw === "string") {
     return raw.split(",").map((s) => s.trim()).filter(Boolean);
