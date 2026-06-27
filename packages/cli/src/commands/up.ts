@@ -15,8 +15,8 @@
  * is injectable so tests drive it without a real server.
  */
 import { resolveProvider, describeProviderConfig, formatProviderGuidance } from "@brainpilot/backend-core";
-import type { StartServerOptions, RunningServer } from "@brainpilot/backend-core";
-import { isMockMode } from "@brainpilot/runtime";
+import type { StartServerOptions, RunningServer, OrchestratorMode } from "@brainpilot/backend-core";
+import { isMockMode, isMacOS, isWindows } from "@brainpilot/runtime";
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
 import { scaffold, isScaffolded, DEFAULT_PORT } from "../scaffold.js";
@@ -33,6 +33,8 @@ export interface UpOptions {
   foreground?: boolean;
   /** `--no-open` to suppress the browser. */
   open?: boolean;
+  /** `--mode <local|static|docker>` force the orchestrator mode (default local). */
+  mode?: OrchestratorMode;
 }
 
 /** Injectable collaborators (defaults wire to real implementations). */
@@ -61,6 +63,30 @@ export interface ResolvedUpConfig {
   webDist: string | null;
   foreground: boolean;
   open: boolean;
+  /** Orchestrator mode passed explicitly to the backend (default local). */
+  mode: OrchestratorMode;
+}
+
+/**
+ * Resolve the orchestrator mode for `brainpilot up`. Unlike the backend's
+ * env-based `resolveOrchestratorMode` (which reads BP_RUNTIME_URL / BP_MODE),
+ * the CLI defaults to `local` and only departs from it when the user is
+ * explicit — via `--mode` or an explicit `BP_ORCHESTRATOR`. This is the fix for
+ * "users accidentally enter sandbox mode": a stray BP_RUNTIME_URL left over
+ * from a `docker compose` session no longer hijacks a source launch into
+ * static (sandbox) mode. To run `up` against a pre-started container, the user
+ * must say so (`--mode static` or BP_ORCHESTRATOR=static).
+ */
+export function resolveUpMode(
+  optionMode: OrchestratorMode | undefined,
+  env: Record<string, string | undefined>,
+): OrchestratorMode {
+  if (optionMode) return optionMode;
+  const explicit = (env.BP_ORCHESTRATOR ?? "").toLowerCase();
+  if (explicit === "docker" || explicit === "local" || explicit === "static") {
+    return explicit as OrchestratorMode;
+  }
+  return "local";
 }
 
 /** Build the StartServerOptions from resolved config — exposed for tests. */
@@ -73,8 +99,15 @@ export function buildStartServerOptions(
     dataDir: cfg.dataDir,
     serveWeb: cfg.webDist !== null,
     stdioInherit: cfg.foreground,
+    // Pass the mode explicitly so a stray BP_RUNTIME_URL/BP_MODE in the
+    // environment can't silently flip a local source-launch into static/docker.
+    mode: cfg.mode,
+    // #171: carry the prechecked runtime port into the in-process backend so the
+    // foreground path binds the runtime on `port + 1` (honouring `--port`)
+    // instead of the orchestrator's AGENT_RUNTIME_PORT/8081 fallback. The
+    // detached path passes the same value via env (spawn-backend.ts).
+    runtimePort: cfg.runtimePort,
     ...(cfg.webDist ? { webRoot: cfg.webDist } : {}),
-    // The backend creates a LocalProcessOrchestrator from env (BP_MODE=single).
   } satisfies StartServerOptions;
 }
 
@@ -146,6 +179,7 @@ export async function up(
   const host = "127.0.0.1";
   const foreground = options.foreground ?? true;
   const open = options.open ?? true;
+  const mode = resolveUpMode(options.mode, env);
 
   const cfg: ResolvedUpConfig = {
     dataDir,
@@ -155,7 +189,29 @@ export async function up(
     webDist: webDistFn(),
     foreground,
     open,
+    mode,
   };
+
+  // Make the resolved mode visible (the #1 cause of "I accidentally entered
+  // sandbox mode" was that the mode switch was completely silent). For the
+  // non-default static/docker modes, name the trigger so the user understands
+  // why they left local.
+  if (mode === "local") {
+    log(pc.dim(`mode=local · dataDir=${dataDir} · runtime port ${cfg.runtimePort}`));
+  } else {
+    const via = options.mode
+      ? "--mode"
+      : "BP_ORCHESTRATOR";
+    log(
+      pc.yellow(
+        `mode=${mode} (via ${via}) — connecting to an external runtime, not a local one.`,
+      ),
+    );
+    if (mode === "static") {
+      log(pc.dim(`    BP_RUNTIME_URL=${env.BP_RUNTIME_URL ?? "(unset — required for static)"}`));
+    }
+    log(pc.dim("    To run from source instead, drop --mode / BP_ORCHESTRATOR (defaults to local)."));
+  }
 
   // 2. Scaffold if absent (idempotent).
   if (!(await isScaffolded(dataDir))) {
@@ -245,13 +301,11 @@ async function maybeOpen(deps: UpDeps, url: string): Promise<void> {
 /** Open a URL in the OS default browser using the platform launcher (no deps). */
 const defaultOpenBrowser = async (url: string): Promise<void> => {
   const { spawn } = await import("node:child_process");
-  const platform = process.platform;
-  const [cmd, args] =
-    platform === "darwin"
-      ? ["open", [url]]
-      : platform === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
-        : ["xdg-open", [url]];
+  const [cmd, args] = isMacOS
+    ? ["open", [url]]
+    : isWindows
+      ? ["cmd", ["/c", "start", "", url]]
+      : ["xdg-open", [url]];
   const child = spawn(cmd as string, args as string[], { stdio: "ignore", detached: true });
   child.on("error", () => {}); // launcher missing (e.g. headless Linux) — ignore
   child.unref();

@@ -1,4 +1,6 @@
 import { describe, it, expect } from "vitest";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import {
   systemToolNamesForRole,
   systemToolsForRole,
@@ -18,7 +20,11 @@ function deps(name: string): ToolDeps {
     destroyAgent: async () => {},
     wakeAgent: () => {},
     requestUserInput: async () => "stub-answer",
-    routerSkillsDir: "/tmp/bp-test-router",
+    // Field is required by ToolDeps but the access-control tests never read
+    // it. Use the OS tmpdir so the path is at least well-formed on Windows
+    // (where `/tmp/...` is not a real directory) if a future change starts
+    // exercising it. (#8 — cross-platform pass.)
+    routerSkillsDir: join(tmpdir(), "bp-test-router"),
   };
 }
 

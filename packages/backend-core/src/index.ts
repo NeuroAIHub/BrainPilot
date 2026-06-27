@@ -8,7 +8,7 @@ export const BACKEND_NAME = "@brainpilot/backend-core";
 export { createApp } from "./app.js";
 export type { CreateAppOptions } from "./app.js";
 
-export { startServer } from "./server.js";
+export { startServer, buildServerOrchestrator } from "./server.js";
 export type { StartServerOptions, RunningServer } from "./server.js";
 
 export { createOrchestrator } from "./create-orchestrator.js";

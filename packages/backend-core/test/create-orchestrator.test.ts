@@ -107,6 +107,66 @@ describe("DockerOrchestrator (stubbed dockerode)", () => {
     expect(container.stop).toHaveBeenCalledTimes(1);
   });
 
+  // #1 — cross-platform: the legacy `Binds: ["src:dst:rw"]` colon-string is
+  // unparseable when `src` is a Windows path that already contains a colon
+  // after the drive letter, so we use the structured `Mounts` API instead.
+  // The two assertions below pin that contract: a structured `Mounts` array
+  // exists with the bind shape, and the deprecated `Binds` field is gone.
+  it("uses HostConfig.Mounts (structured) instead of Binds for bind mounts (#1)", async () => {
+    const container = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const docker = {
+      createContainer: vi.fn(async () => container),
+    } as never;
+    const orch = new DockerOrchestrator({
+      docker,
+      image: "brainpilot-sandbox:test",
+      containerPort: 8081,
+      hostPort: 18081,
+      dataDir: "/host/bp",
+      containerDataDir: "/root/.bp-root",
+      healthProbe: async () => true,
+      sleep: async () => {},
+    });
+    await orch.ensureRuntime();
+    const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
+      .createContainer.mock.calls[0]![0] as { HostConfig?: Record<string, unknown> };
+    const hostConfig = createArg.HostConfig!;
+    expect(hostConfig.Binds).toBeUndefined();
+    expect(hostConfig.Mounts).toEqual([
+      { Type: "bind", Source: "/host/bp", Target: "/root/.bp-root", ReadOnly: false },
+    ]);
+  });
+
+  // The bind-mount block is conditional on `dataDir` — when no dataDir is
+  // configured the container runs without a host bind, and neither field
+  // should be present (matches the original code path's intent).
+  it("emits neither Binds nor Mounts when no dataDir is configured (#1)", async () => {
+    const container = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const docker = {
+      createContainer: vi.fn(async () => container),
+    } as never;
+    const orch = new DockerOrchestrator({
+      docker,
+      image: "brainpilot-sandbox:test",
+      healthProbe: async () => true,
+      sleep: async () => {},
+    });
+    await orch.ensureRuntime();
+    const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
+      .createContainer.mock.calls[0]![0] as { HostConfig?: Record<string, unknown> };
+    const hostConfig = createArg.HostConfig!;
+    expect(hostConfig.Binds).toBeUndefined();
+    expect(hostConfig.Mounts).toBeUndefined();
+  });
+
   it("auto-pulls the image when createContainer reports it is missing", async () => {
     const container = {
       start: vi.fn(async () => {}),

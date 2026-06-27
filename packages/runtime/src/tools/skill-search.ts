@@ -31,7 +31,7 @@
  */
 import { readFile, readdir, stat, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
-import { join, resolve, sep } from "node:path";
+import { isAbsolute, join, resolve, sep, posix } from "node:path";
 import type { SystemTool } from "../types.js";
 import type { ToolDeps } from "./system-tools.js";
 
@@ -116,7 +116,12 @@ export async function collectAllSkills(base: string): Promise<SkillRecord[]> {
     for (const skillName of skills) {
       const skillMd = join(catPath, skillName, "SKILL.md");
       if (!(await exists(skillMd))) continue;
-      const relPath = join(category, skillName);
+      // Cross-platform (#5): the relative path leaves the runtime and is
+      // shown both to the model (in `relative_paths`) and round-tripped back
+      // through the `browse` mode. Standardize on POSIX `/` so the API
+      // surface is identical on Windows and POSIX, the model never sees a
+      // backslash it has to JSON-escape, and URL/query forms stay valid.
+      const relPath = posix.join(category, skillName);
       const existing = byName.get(skillName);
       if (existing) {
         existing.relative_paths.push(relPath);
@@ -156,10 +161,25 @@ export function countKeywordHits(text: string, keywords: string[]): number {
 
 export interface SkillSearchArgs {
   mode: "query" | "browse";
-  keywords?: string[];
+  /** Accepts a string[] or a single comma-separated string (e.g. "EEG, ICA"). */
+  keywords?: string[] | string;
   topk?: number;
   skill_name?: string;
   relative_path?: string;
+}
+
+/**
+ * Normalise the `keywords` parameter: accept either `string[]` or a single
+ * comma-separated string (e.g. `"EEG, preprocessing, ICA"`), trim each entry,
+ * and drop empties — matching `skills_tool.py` behaviour.
+ */
+export function normalizeKeywords(raw: string[] | string | undefined): string[] {
+  if (!raw) return [];
+  if (typeof raw === "string") {
+    return raw.split(",").map((s) => s.trim()).filter(Boolean);
+  }
+  // Already an array — still trim and drop empties for robustness.
+  return raw.map((s) => String(s).trim()).filter(Boolean);
 }
 
 /** JSON-stringify with 2-space indent; the model parses these as text. */
@@ -199,22 +219,23 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
     }
 
     // Sub-mode A: keyword search.
-    if (!args.keywords || args.keywords.length === 0) {
+    const kws = normalizeKeywords(args.keywords);
+    if (kws.length === 0) {
       throw new Error(
-        "in query mode you must pass either 'keywords' (string list) or 'skill_name' (exact name)",
+        "in query mode you must pass either 'keywords' (string list or comma-separated string) or 'skill_name' (exact name)",
       );
     }
     const skills = await collectAllSkills(baseAbs);
     const topk = typeof args.topk === "number" && args.topk > 0 ? Math.floor(args.topk) : 5;
     const scored = skills.map((skill) => ({
       skill,
-      hits: countKeywordHits(skill.description, args.keywords!),
+      hits: countKeywordHits(skill.description, kws),
     }));
     // Sort: hit count desc, then alphabetical name asc.
     scored.sort((a, b) => b.hits - a.hits || a.skill.name.localeCompare(b.skill.name));
     const top = scored.slice(0, topk);
     const result: QueryResult = {
-      keywords: args.keywords,
+      keywords: kws,
       total_matched: scored.filter((s) => s.hits > 0).length,
       returned: top.length,
       results: top.map(({ skill, hits }) => ({
@@ -238,8 +259,25 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
   if (rel === "" || rel === ".") {
     target = baseAbs;
   } else {
-    // Reject any absolute path or one starting with '..' before resolve.
-    if (rel.startsWith("/")) {
+    // Reject any absolute path or one containing a `..` segment before resolve.
+    // Cross-platform (#2): the previous guard hardcoded POSIX `/`, so a
+    // Windows absolute path slipped past to the second-line containment
+    // guard with a less specific error. The check below recognizes:
+    //   - POSIX absolute paths (`/foo`)             — `isAbsolute` + `startsWith("/")`
+    //   - Windows absolute paths native to the host — `isAbsolute` (only true on Win)
+    //   - Windows-shaped paths inspected on POSIX   — `^[A-Za-z]:[\\/]` regex
+    //     (POSIX `isAbsolute("C:\\foo")` is false, so we have to match the
+    //     drive prefix explicitly to keep the guard host-platform-agnostic)
+    //   - Leading-backslash form                    — `startsWith("\\")`
+    // and the `..`-segment check the comment already promised but the code
+    // never actually did (across both separators).
+    if (
+      isAbsolute(rel) ||
+      rel.startsWith("/") ||
+      rel.startsWith("\\") ||
+      /^[A-Za-z]:[\\/]/.test(rel) ||
+      rel.split(/[\\/]/).some((seg) => seg === "..")
+    ) {
       throw new Error("path traversal outside skills directory is not allowed");
     }
     target = resolve(join(baseAbs, rel));
@@ -259,7 +297,12 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
         type: d.isDirectory() ? "directory" : "file",
       }))
       .sort((a, b) => a.name.localeCompare(b.name));
-    const displayPath = target === baseAbs ? "." : target.slice(baseAbs.length + 1);
+    // Cross-platform (#5): emit POSIX-style separators in the response so
+    // the model and frontend never see OS-native backslashes.
+    const displayPath =
+      target === baseAbs
+        ? "."
+        : target.slice(baseAbs.length + 1).split(sep).join("/");
     return jsonText({ path: displayPath, type: "directory", children });
   }
   if (st.isFile()) {
@@ -293,10 +336,13 @@ export function createSkillSearchTool(deps: ToolDeps): SystemTool {
           description: "'query' to search/load skills; 'browse' to list/read paths",
         },
         keywords: {
-          type: "array",
-          items: { type: "string" },
+          oneOf: [
+            { type: "array", items: { type: "string" } },
+            { type: "string" },
+          ],
           description:
-            "(query mode) keywords matched against each skill's frontmatter description",
+            "(query mode) keywords matched against each skill's frontmatter description; " +
+            "pass an array of strings or a single comma-separated string",
         },
         topk: {
           type: "integer",

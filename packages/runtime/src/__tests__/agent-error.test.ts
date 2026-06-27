@@ -44,6 +44,43 @@ describe("normalizeAgentError (#45)", () => {
   it("handles empty input", () => {
     expect(normalizeAgentError("").message).toBe("");
   });
+
+  // #157 — the original two regexes hardcoded forward slashes, so a Windows
+  // absolute path (which carries the user's username under `C:\Users\<u>\…`)
+  // slipped through redact() verbatim and leaked into the chat error bubble
+  // and events.jsonl.
+  describe("Windows path leakage (#157)", () => {
+    const winNoKeyRaw = [
+      "No model selected.",
+      "  C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\@earendil-works\\pi-coding-agent\\docs\\providers.md",
+    ].join("\n");
+
+    it("does not leak a Windows absolute node_modules path in the message", () => {
+      const out = normalizeAgentError(winNoKeyRaw);
+      expect(out.message).not.toMatch(/node_modules/);
+      expect(out.message).not.toMatch(/\.md/);
+    });
+
+    it("does not leak the Windows username (privacy)", () => {
+      const out = normalizeAgentError(winNoKeyRaw);
+      expect(out.message).not.toMatch(/alice/);
+      expect(out.message).not.toMatch(/C:\\Users/i);
+    });
+
+    it("keeps the semantic head of the error", () => {
+      const out = normalizeAgentError(winNoKeyRaw);
+      expect(out.message).toContain("No model selected.");
+    });
+
+    it("drops a Windows-only path line just like the POSIX case", () => {
+      const raw =
+        "Tool failed: cannot read config.\nC:\\Users\\bob\\proj\\node_modules\\pkg\\docs\\x.md";
+      const out = normalizeAgentError(raw);
+      expect(out.message).toContain("Tool failed: cannot read config.");
+      expect(out.message).not.toMatch(/node_modules/);
+      expect(out.message).not.toMatch(/bob/);
+    });
+  });
 });
 
 describe("normalizeAgentError — provider HTTP errors (#97)", () => {

@@ -39,6 +39,12 @@ export async function spawnDetachedBackend(
       ...process.env,
       BP_DATA_DIR: cfg.dataDir,
       BP_MODE: "single",
+      // Pin the orchestrator mode resolved by `up`. The detached server boots
+      // via `node server.js` and resolves its mode from env, so without this a
+      // stray BP_RUNTIME_URL would flip the background backend into static
+      // (sandbox) mode. BP_ORCHESTRATOR has the highest precedence and thus
+      // also neutralizes any leftover BP_RUNTIME_URL/BP_MODE in the parent env.
+      BP_ORCHESTRATOR: cfg.mode,
       BP_PORT: String(cfg.port),
       PORT: String(cfg.port),
       AGENT_RUNTIME_PORT: String(cfg.runtimePort),

@@ -94,4 +94,19 @@ describe("probeProvider (#55)", () => {
     );
     expect(r.message).not.toMatch(/node_modules/);
   });
+
+  it("redacts native Windows node_modules paths (incl. username) from error messages (#157)", async () => {
+    const fetchFn = vi.fn(async () => {
+      throw new Error(
+        "boom at C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\undici\\lib\\x.js:1",
+      );
+    });
+    const r = await probeProvider(
+      { baseUrl: "https://gw/api", apiKey: "sk" },
+      { fetchFn: fetchFn as never },
+    );
+    expect(r.message).not.toMatch(/node_modules/);
+    expect(r.message).not.toMatch(/alice/);
+    expect(r.message).not.toMatch(/C:\\Users/i);
+  });
 });

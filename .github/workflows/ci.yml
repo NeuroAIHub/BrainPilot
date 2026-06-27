@@ -6,9 +6,9 @@ name: CI
 
 on:
   push:
-    branches: [development, main, testbed]
+    branches: [main, testbed]
   pull_request:
-    branches: [development, main, testbed]
+    branches: [main, testbed]
 
 jobs:
   build-and-test:
@@ -44,7 +44,7 @@ jobs:
         run: npm run build
 
   # 黑盒测试可在 GitHub runner 跑的部分（零 token、不需真实 provider/宿主权限）。
-  # 仅 testbed 分支有 testbed/ 目录；development/main 无此目录，job 自动跳过（if 守卫）。
+  # 仅 testbed 分支有 testbed/ 目录；main 无此目录，job 自动跳过（if 守卫）。
   # 完整黑盒回归（recovery 需 kill 进程、cases/mcp 需真实 provider）由服务器 run-all.sh 跑。
   blackbox-fast:
     runs-on: ubuntu-latest
@@ -75,6 +75,10 @@ jobs:
       - name: probes 单测（质量探针，纯函数，零依赖）
         if: steps.detect.outputs.present == 'true'
         run: node testbed/suites/probes.test.mjs
+
+      - name: crossplatform 单测（Windows 路径/EOL 回归，纯函数）
+        if: steps.detect.outputs.present == 'true'
+        run: node testbed/suites/crossplatform.test.mjs
 
       - name: 起 mock 实例 + 跑 contract/scenarios（零 token）
         if: steps.detect.outputs.present == 'true'

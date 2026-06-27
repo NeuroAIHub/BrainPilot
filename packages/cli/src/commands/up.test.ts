@@ -5,6 +5,7 @@ import { join } from "node:path";
 import {
   up,
   buildStartServerOptions,
+  resolveUpMode,
   PortInUseError,
   portFlagHint,
   type ResolvedUpConfig,
@@ -32,6 +33,7 @@ describe("buildStartServerOptions", () => {
       webDist: "/web/dist",
       foreground: true,
       open: false,
+      mode: "local",
     };
     const opts = buildStartServerOptions(cfg);
     expect(opts).toMatchObject({
@@ -40,6 +42,7 @@ describe("buildStartServerOptions", () => {
       dataDir: "/data",
       serveWeb: true,
       webRoot: "/web/dist",
+      mode: "local",
     });
   });
 
@@ -52,10 +55,42 @@ describe("buildStartServerOptions", () => {
       webDist: null,
       foreground: true,
       open: false,
+      mode: "local",
     };
     const opts = buildStartServerOptions(cfg);
     expect(opts.serveWeb).toBe(false);
     expect("webRoot" in opts).toBe(false);
+  });
+});
+
+describe("resolveUpMode", () => {
+  it("defaults to local with an empty env (the source-launch default)", () => {
+    expect(resolveUpMode(undefined, {})).toBe("local");
+  });
+
+  it("IGNORES a stray BP_RUNTIME_URL — the core fix (no accidental sandbox)", () => {
+    // A leftover BP_RUNTIME_URL from a `docker compose` session must NOT flip a
+    // source launch into static mode. The backend's env resolver would; the CLI
+    // resolver deliberately does not.
+    expect(resolveUpMode(undefined, { BP_RUNTIME_URL: "http://sandbox:8081" })).toBe("local");
+  });
+
+  it("IGNORES a stray BP_MODE=docker", () => {
+    expect(resolveUpMode(undefined, { BP_MODE: "docker" })).toBe("local");
+  });
+
+  it("honors an explicit --mode option", () => {
+    expect(resolveUpMode("static", { BP_RUNTIME_URL: "http://x" })).toBe("static");
+    expect(resolveUpMode("docker", {})).toBe("docker");
+  });
+
+  it("honors an explicit BP_ORCHESTRATOR when no --mode given", () => {
+    expect(resolveUpMode(undefined, { BP_ORCHESTRATOR: "static" })).toBe("static");
+    expect(resolveUpMode(undefined, { BP_ORCHESTRATOR: "docker" })).toBe("docker");
+  });
+
+  it("--mode wins over BP_ORCHESTRATOR", () => {
+    expect(resolveUpMode("local", { BP_ORCHESTRATOR: "static" })).toBe("local");
   });
 });
 
@@ -194,10 +229,58 @@ describe("up — foreground start", () => {
       dataDir: root,
       serveWeb: true,
       webRoot: "/web/dist",
+      // #171: the prechecked runtime port (port + 1) must reach the backend,
+      // not just be computed into result.config.
+      runtimePort: 9501,
     });
     expect(result.server).toBe(fakeServer);
     expect(result.url).toBe("http://127.0.0.1:9500");
     expect(result.config.runtimePort).toBe(9501);
+  });
+
+  it("forces mode=local and prints a local banner even with a stray BP_RUNTIME_URL", async () => {
+    const root = join(dir, "bp");
+    let captured: StartServerOptions | undefined;
+    const logs: string[] = [];
+    await up(
+      { dir: root, port: 9550, foreground: true, open: false },
+      {
+        env: { ANTHROPIC_API_KEY: "sk", BP_RUNTIME_URL: "http://sandbox:8081" },
+        startServer: async (opts) => {
+          captured = opts;
+          return { stop: async () => {} } as unknown as RunningServer;
+        },
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    // The stray BP_RUNTIME_URL must NOT have flipped us into static mode.
+    expect(captured?.mode).toBe("local");
+    expect(logs.join("\n")).toContain("mode=local");
+  });
+
+  it("passes mode=static and warns when --mode static is explicit", async () => {
+    const root = join(dir, "bp");
+    let captured: StartServerOptions | undefined;
+    const logs: string[] = [];
+    await up(
+      { dir: root, port: 9560, foreground: true, open: false, mode: "static" },
+      {
+        env: { ANTHROPIC_API_KEY: "sk", BP_RUNTIME_URL: "http://sandbox:8081" },
+        startServer: async (opts) => {
+          captured = opts;
+          return { stop: async () => {} } as unknown as RunningServer;
+        },
+        isPortFree: freePorts(),
+        webDist: () => null,
+        log: (m) => logs.push(m),
+      },
+    );
+    expect(captured?.mode).toBe("static");
+    const text = logs.join("\n");
+    expect(text).toContain("mode=static");
+    expect(text).toContain("--mode");
   });
 
   it("calls the browser-open hook when open=true", async () => {

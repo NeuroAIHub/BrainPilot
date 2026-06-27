@@ -181,6 +181,64 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
+// #5 — cross-platform: every workspace-relative path the runtime hands out
+// (writeSessionFile result, skill_search responses) must use POSIX `/` so the
+// API contract is identical on Windows and POSIX, the model never sees a
+// backslash it has to JSON-escape, and URL query strings stay valid. And the
+// inverse: paths echoed back by the model — including round-tripped ones with
+// the backslash form — must still resolve. `\` is not a legal Windows
+// filename character, so collapsing `\` → `/` on input is unambiguous.
+describe("SessionManager workspace path normalization (#5)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-fs-"));
+  });
+
+  it("writeSessionFile returns nested paths in POSIX form", async () => {
+    const m = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: mockAgentFactory,
+    });
+    const s = await m.createSession({ title: "fs" });
+    const b64 = Buffer.from("hello", "utf8").toString("base64");
+    const out = await m.writeSessionFile(s.id, "docs/sub/note.txt", b64);
+    expect(out.path).toBe("docs/sub/note.txt");
+    expect(out.path).not.toMatch(/\\/);
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("accepts a backslash-shaped relative path on input and resolves identically", async () => {
+    const m = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: mockAgentFactory,
+    });
+    const s = await m.createSession({ title: "fs" });
+    const b64 = Buffer.from("x", "utf8").toString("base64");
+    const a = await m.writeSessionFile(s.id, "a/b/c.txt", b64);
+    const b = await m.writeSessionFile(s.id, "a\\b\\c.txt", b64);
+    // Same logical path → both resolve to the same workspace location, both
+    // returned in POSIX form.
+    expect(a.path).toBe("a/b/c.txt");
+    expect(b.path).toBe("a/b/c.txt");
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("returns the empty string for a write at the workspace root", async () => {
+    const m = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: mockAgentFactory,
+    });
+    const s = await m.createSession({ title: "fs" });
+    const b64 = Buffer.from("y", "utf8").toString("base64");
+    const out = await m.writeSessionFile(s.id, "top.txt", b64);
+    expect(out.path).toBe("top.txt");
+    await rm(root, { recursive: true, force: true });
+  });
+});
+
 describe("SessionManager memory watchdog (§R-4 / #20)", () => {
   it("is fully opt-out when no budget is set (identical to today)", async () => {
     const m = new SessionManager({ persist: false, agentFactory: mockAgentFactory });

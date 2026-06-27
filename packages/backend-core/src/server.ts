@@ -8,7 +8,7 @@ import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
 import { bootstrapEnvProvider } from "./config.js";
-import type { Orchestrator } from "./orchestrator.js";
+import type { Orchestrator, OrchestratorMode } from "./orchestrator.js";
 
 export interface StartServerOptions extends Partial<CreateAppOptions> {
   /** Backend port. Default 9001 (§11A.5 决策 D). */
@@ -16,10 +16,24 @@ export interface StartServerOptions extends Partial<CreateAppOptions> {
   hostname?: string;
   /** Provide a pre-built orchestrator; otherwise one is created from env. */
   orchestrator?: Orchestrator;
+  /**
+   * Force the orchestrator mode. When omitted the mode is resolved from env
+   * (BP_ORCHESTRATOR / BP_RUNTIME_URL / BP_MODE). The `brainpilot up` CLI passes
+   * this explicitly so a stray BP_RUNTIME_URL can't silently flip a local
+   * source-launch into static (sandbox) mode.
+   */
+  mode?: OrchestratorMode;
   /** Eagerly ensure the runtime at boot (default false — lazy on first use). */
   eager?: boolean;
   /** When true, the runtime child inherits stdio (foreground CLI mode). */
   stdioInherit?: boolean;
+  /**
+   * Port the local runtime should bind. Forwarded to the local orchestrator so
+   * the foreground (in-process) path honours `--port` (runtime = backend + 1)
+   * instead of falling back to AGENT_RUNTIME_PORT/8081 (#171). The detached path
+   * injects the same value via the AGENT_RUNTIME_PORT env var (spawn-backend).
+   */
+  runtimePort?: number;
 }
 
 export interface RunningServer {
@@ -29,6 +43,36 @@ export interface RunningServer {
   stop: () => Promise<void>;
 }
 
+/**
+ * Build the orchestrator for a server from its options. Exposed (and pure) so
+ * the dataDir wiring is unit-testable without binding a socket.
+ *
+ * Issue #169: the local orchestrator MUST receive `options.dataDir` — it spawns
+ * the runtime child with `BP_DATA_DIR=<dataDir>`, and the runtime materializes
+ * skills / persists sessions under that root. Dropping it here made the runtime
+ * fall back to `./brainpilot` (relative to cwd) while the backend scaffold wrote
+ * to the requested `--dir`, splitting one launch across two data dirs.
+ */
+export function buildServerOrchestrator(
+  options: StartServerOptions = {},
+): Orchestrator {
+  return (
+    options.orchestrator ??
+    createOrchestrator({
+      // Pass the mode explicitly when set (the `brainpilot up` CLI does) so a
+      // stray BP_RUNTIME_URL/BP_MODE in the environment can't silently flip a
+      // local source-launch into static/docker. When omitted, createOrchestrator
+      // falls back to env resolution (Docker compose relies on that path).
+      ...(options.mode ? { mode: options.mode } : {}),
+      local: {
+        dataDir: options.dataDir,
+        ...(options.runtimePort !== undefined ? { port: options.runtimePort } : {}),
+        ...(options.stdioInherit ? { stdioInherit: true } : {}),
+      },
+    })
+  );
+}
+
 export async function startServer(
   options: StartServerOptions = {},
 ): Promise<RunningServer> {
@@ -36,11 +80,7 @@ export async function startServer(
   // 127.0.0.1 is the safe default for local/CLI use; containers set BP_HOST=0.0.0.0
   // so the published port (DNAT'd to the container IP) can reach the server.
   const hostname = options.hostname ?? process.env.BP_HOST ?? "127.0.0.1";
-  const orchestrator =
-    options.orchestrator ??
-    createOrchestrator({
-      local: options.stdioInherit ? { stdioInherit: true } : undefined,
-    });
+  const orchestrator = buildServerOrchestrator(options);
 
   const app = createApp({
     orchestrator,
