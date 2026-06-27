@@ -8,7 +8,7 @@ import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
 import { bootstrapEnvProvider } from "./config.js";
-import type { Orchestrator } from "./orchestrator.js";
+import type { Orchestrator, OrchestratorMode } from "./orchestrator.js";
 
 export interface StartServerOptions extends Partial<CreateAppOptions> {
   /** Backend port. Default 9001 (§11A.5 决策 D). */
@@ -16,6 +16,13 @@ export interface StartServerOptions extends Partial<CreateAppOptions> {
   hostname?: string;
   /** Provide a pre-built orchestrator; otherwise one is created from env. */
   orchestrator?: Orchestrator;
+  /**
+   * Force the orchestrator mode. When omitted the mode is resolved from env
+   * (BP_ORCHESTRATOR / BP_RUNTIME_URL / BP_MODE). The `brainpilot up` CLI passes
+   * this explicitly so a stray BP_RUNTIME_URL can't silently flip a local
+   * source-launch into static (sandbox) mode.
+   */
+  mode?: OrchestratorMode;
   /** Eagerly ensure the runtime at boot (default false — lazy on first use). */
   eager?: boolean;
   /** When true, the runtime child inherits stdio (foreground CLI mode). */
@@ -45,6 +52,11 @@ export function buildServerOrchestrator(
   return (
     options.orchestrator ??
     createOrchestrator({
+      // Pass the mode explicitly when set (the `brainpilot up` CLI does) so a
+      // stray BP_RUNTIME_URL/BP_MODE in the environment can't silently flip a
+      // local source-launch into static/docker. When omitted, createOrchestrator
+      // falls back to env resolution (Docker compose relies on that path).
+      ...(options.mode ? { mode: options.mode } : {}),
       local: {
         dataDir: options.dataDir,
         ...(options.stdioInherit ? { stdioInherit: true } : {}),
