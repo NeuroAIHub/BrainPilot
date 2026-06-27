@@ -822,6 +822,7 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
             <TimelineTab
               messages={messages}
               now={now}
+              isRunning={runningCount > 0}
               onSelectMessage={(agentName) => selectNode(agentName)}
             />
           )}
