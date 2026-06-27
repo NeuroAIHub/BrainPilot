@@ -18,6 +18,14 @@ function makeForeign(): string {
   return realpathSync(mkdtempSync(join(tmpdir(), "bp-foreign-")));
 }
 
+// Argv-literal placeholders for `--dir`/`BP_DATA_DIR`. The tests never touch
+// these as real paths — `assertRepoCwd` only inspects their *presence* in
+// argv/env — but using the OS tmpdir keeps the values well-shaped on
+// Windows where `/tmp/...` is not a real path. (#9 — cross-platform pass.)
+const TMP_DIR = join(tmpdir(), "somewhere");
+const TMP_DIR_EQUALS = `--dir=${join(tmpdir(), "foo")}`;
+const TMP_DATA_DIR = join(tmpdir(), "dd");
+
 function callAssert(opts: Parameters<typeof assertRepoCwd>[0]): {
   exited: number | null;
   err: string;
@@ -83,7 +91,7 @@ describe("assertRepoCwd", () => {
     const cwd = makeForeign();
     expect(() =>
       assertRepoCwd({
-        argv: ["up", "--dir", "/tmp/somewhere"],
+        argv: ["up", "--dir", TMP_DIR],
         env: {},
         cwd,
         binPath,
@@ -96,7 +104,7 @@ describe("assertRepoCwd", () => {
     const cwd = makeForeign();
     expect(() =>
       assertRepoCwd({
-        argv: ["up", "-d", "/tmp/somewhere"],
+        argv: ["up", "-d", TMP_DIR],
         env: {},
         cwd,
         binPath,
@@ -109,7 +117,7 @@ describe("assertRepoCwd", () => {
     const cwd = makeForeign();
     expect(() =>
       assertRepoCwd({
-        argv: ["up", "--dir=/tmp/foo"],
+        argv: ["up", TMP_DIR_EQUALS],
         env: {},
         cwd,
         binPath,
@@ -123,7 +131,7 @@ describe("assertRepoCwd", () => {
     expect(() =>
       assertRepoCwd({
         argv: ["up"],
-        env: { BP_DATA_DIR: "/tmp/dd" },
+        env: { BP_DATA_DIR: TMP_DATA_DIR },
         cwd,
         binPath,
       }),
