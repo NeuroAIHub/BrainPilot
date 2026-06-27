@@ -18,6 +18,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { isWindows } from "./platform.js";
 import type { SystemTool, SystemToolResult } from "./types.js";
 
 /** Wire transport for an MCP server. Absent ⇒ "stdio" (back-compat). */
@@ -118,10 +119,37 @@ export async function openTransport(name: string, spec: McpServerSpec) {
   }
   const { StdioClientTransport } = await import("@modelcontextprotocol/sdk/client/stdio.js");
   return new StdioClientTransport({
-    command: spec.command,
+    command: resolveStdioCommand(spec.command, isWindows),
     args: spec.args ?? [],
     ...(spec.env ? { env: spec.env } : {}),
   });
+}
+
+/**
+ * Windows shim resolution for stdio MCP servers (#7 — cross-platform pass).
+ *
+ * On Windows the npm-ecosystem launchers (`npx`, `npm`, `yarn`, `pnpm`) only
+ * exist as `.cmd` batch shims, never as a bare-name executable. Node ≥20.12's
+ * CVE-2024-27980 fix made `child_process.spawn("npx", …, { shell: false })`
+ * fail with EINVAL/ENOENT instead of silently routing through cmd.exe — so the
+ * de-facto MCP install form (`npx -y @modelcontextprotocol/server-*`) which
+ * appears in every published config and in our own scaffold blows up on Windows
+ * unless callers know to write `npx.cmd` themselves.
+ *
+ * We auto-append `.cmd` for that exact short list on Windows when the caller
+ * didn't already provide an extension. `node` is intentionally excluded — it's
+ * `node.exe` on Windows and Node's own launcher handles the `.exe` fallback.
+ * Anything outside the allow-list is passed through verbatim (we don't want to
+ * second-guess a user-supplied binary path).
+ *
+ * Exported so unit tests can exercise both branches without OS mocking — the
+ * `windows` flag is injected, not read from `process.platform`, here.
+ */
+export function resolveStdioCommand(cmd: string, windows: boolean): string {
+  if (!windows) return cmd;
+  if (/\.(cmd|bat|exe|ps1|com)$/i.test(cmd)) return cmd;
+  if (/^(npx|npm|yarn|pnpm)$/i.test(cmd)) return `${cmd}.cmd`;
+  return cmd;
 }
 
 export class McpBridge {

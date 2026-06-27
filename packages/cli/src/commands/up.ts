@@ -16,7 +16,7 @@
  */
 import { resolveProvider, describeProviderConfig, formatProviderGuidance } from "@brainpilot/backend-core";
 import type { StartServerOptions, RunningServer, OrchestratorMode } from "@brainpilot/backend-core";
-import { isMockMode } from "@brainpilot/runtime";
+import { isMockMode, isMacOS, isWindows } from "@brainpilot/runtime";
 import pc from "picocolors";
 import { resolveDataDir, dataPaths } from "../paths.js";
 import { scaffold, isScaffolded, DEFAULT_PORT } from "../scaffold.js";
@@ -296,13 +296,11 @@ async function maybeOpen(deps: UpDeps, url: string): Promise<void> {
 /** Open a URL in the OS default browser using the platform launcher (no deps). */
 const defaultOpenBrowser = async (url: string): Promise<void> => {
   const { spawn } = await import("node:child_process");
-  const platform = process.platform;
-  const [cmd, args] =
-    platform === "darwin"
-      ? ["open", [url]]
-      : platform === "win32"
-        ? ["cmd", ["/c", "start", "", url]]
-        : ["xdg-open", [url]];
+  const [cmd, args] = isMacOS
+    ? ["open", [url]]
+    : isWindows
+      ? ["cmd", ["/c", "start", "", url]]
+      : ["xdg-open", [url]];
   const child = spawn(cmd as string, args as string[], { stdio: "ignore", detached: true });
   child.on("error", () => {}); // launcher missing (e.g. headless Linux) — ignore
   child.unref();

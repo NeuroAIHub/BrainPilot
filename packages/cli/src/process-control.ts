@@ -5,6 +5,7 @@
  */
 import { writeFile, readFile, rm, mkdir } from "node:fs/promises";
 import { dirname } from "node:path";
+import { gracefulSignalsSupported } from "@brainpilot/runtime";
 
 export interface ProcessControlDeps {
   /** Probe liveness. Defaults to `process.kill(pid, 0)`. */
@@ -13,6 +14,12 @@ export interface ProcessControlDeps {
   signal?: (pid: number, sig: NodeJS.Signals) => void;
   /** Sleep impl (injectable for tests). */
   sleep?: (ms: number) => Promise<void>;
+  /**
+   * Whether the OS supports graceful POSIX signal delivery. Defaults to the
+   * runtime helper (`gracefulSignalsSupported`, false on Windows). Tests inject
+   * this to exercise both branches deterministically. (#6 — cross-platform.)
+   */
+  gracefulSignals?: boolean;
 }
 
 const realIsAlive = (pid: number): boolean => {
@@ -123,6 +130,15 @@ export interface StopResult {
 /**
  * Gracefully stop the process recorded in `pidFile`: SIGTERM, wait up to
  * `timeoutMs`, then SIGKILL. Removes the pid file afterward.
+ *
+ * Cross-platform (#6): Windows can't deliver POSIX signals to another process
+ * — any signal sent via `process.kill` is translated to `TerminateProcess`,
+ * which is a forceful kill the target can't intercept. Sending SIGTERM and
+ * then polling for up to `timeoutMs` wastes time (the process is already dead
+ * the moment the call returns) and the registered SIGTERM handler in the
+ * server never runs. On platforms where graceful signals don't work we skip
+ * straight to a single SIGKILL and report `forced: true` to be honest about
+ * the shutdown mode.
  */
 export async function stop(
   pidFile: string,
@@ -131,6 +147,7 @@ export async function stop(
   const isAlive = options.isAlive ?? realIsAlive;
   const signal = options.signal ?? realSignal;
   const sleep = options.sleep ?? realSleep;
+  const graceful = options.gracefulSignals ?? gracefulSignalsSupported;
   const timeoutMs = options.timeoutMs ?? 10_000;
   const pollMs = options.pollMs ?? 100;
 
@@ -141,6 +158,19 @@ export async function stop(
   if (!isAlive(pid)) {
     await removePid(pidFile);
     return { stopped: true, pid, forced: false };
+  }
+
+  // Windows / no-graceful-signals path: skip SIGTERM-then-wait, force-kill once.
+  if (!graceful) {
+    let forced = false;
+    try {
+      signal(pid, "SIGKILL");
+      forced = true;
+    } catch {
+      // already gone between probe and signal — fall through to cleanup.
+    }
+    await removePid(pidFile);
+    return { stopped: true, pid, forced };
   }
 
   try {
