@@ -151,8 +151,26 @@ export class DockerOrchestrator implements Orchestrator {
       ExposedPorts: { [portKey]: {} },
       HostConfig: {
         PortBindings: { [portKey]: [{ HostPort: String(this.hostPort) }] },
+        // Cross-platform (#1): the legacy `Binds: ["src:dst:mode"]` colon-
+        // delimited form is unparseable when `src` is a Windows path that
+        // already contains a colon after the drive letter
+        // (`C:\Users\foo\bp` → `C:\Users\foo\bp:/root/...:rw`), causing
+        // dockerode/Docker Engine to mis-split the spec and either 422 the
+        // container create or mount a host directory named just `C`. Use the
+        // structured `Mounts` API (Docker Engine ≥1.25) instead — Source /
+        // Target / ReadOnly are separate fields, so Engine's own
+        // Windows-aware path translation does the right thing.
         ...(this.dataDir
-          ? { Binds: [`${this.dataDir}:${this.containerDataDir}:rw`] }
+          ? {
+              Mounts: [
+                {
+                  Type: "bind",
+                  Source: this.dataDir,
+                  Target: this.containerDataDir,
+                  ReadOnly: false,
+                },
+              ],
+            }
           : {}),
       },
     };
