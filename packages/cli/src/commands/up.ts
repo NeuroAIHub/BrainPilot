@@ -102,6 +102,11 @@ export function buildStartServerOptions(
     // Pass the mode explicitly so a stray BP_RUNTIME_URL/BP_MODE in the
     // environment can't silently flip a local source-launch into static/docker.
     mode: cfg.mode,
+    // #171: carry the prechecked runtime port into the in-process backend so the
+    // foreground path binds the runtime on `port + 1` (honouring `--port`)
+    // instead of the orchestrator's AGENT_RUNTIME_PORT/8081 fallback. The
+    // detached path passes the same value via env (spawn-backend.ts).
+    runtimePort: cfg.runtimePort,
     ...(cfg.webDist ? { webRoot: cfg.webDist } : {}),
   } satisfies StartServerOptions;
 }

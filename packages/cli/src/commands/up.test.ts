@@ -229,6 +229,9 @@ describe("up — foreground start", () => {
       dataDir: root,
       serveWeb: true,
       webRoot: "/web/dist",
+      // #171: the prechecked runtime port (port + 1) must reach the backend,
+      // not just be computed into result.config.
+      runtimePort: 9501,
     });
     expect(result.server).toBe(fakeServer);
     expect(result.url).toBe("http://127.0.0.1:9500");
