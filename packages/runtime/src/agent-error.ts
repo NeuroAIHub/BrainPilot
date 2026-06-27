@@ -146,6 +146,12 @@ function pickMessage(obj: unknown): string | undefined {
  * keeping its semantic content. Best-effort — drops lines that are purely an
  * absolute node_modules doc path or a `/login` hint, and scrubs any inline
  * absolute path that reaches into node_modules.
+ *
+ * Cross-platform (#157): the path separator class allows BOTH `/` and `\`, and
+ * the leading anchor optionally accepts a Windows drive prefix (`C:\…`). The
+ * original POSIX-only regex hardcoded forward slashes, so a native Windows path
+ * like `C:\Users\alice\…\node_modules\@pkg\docs\providers.md` slipped through
+ * verbatim and leaked the username into the chat bubble + events.jsonl.
  */
 function redact(raw: string): string {
   return raw
@@ -154,12 +160,13 @@ function redact(raw: string): string {
       const t = line.trim();
       if (/use \/login/i.test(t)) return false;
       // A line that is just an absolute path into node_modules (doc pointer).
-      if (/^\/?\S*node_modules\/\S+$/.test(t)) return false;
+      // Allows a Windows drive prefix and either separator style.
+      if (/^(?:[A-Za-z]:)?[\\/]?\S*node_modules[\\/]\S+$/.test(t)) return false;
       return true;
     })
     .map((line) =>
-      // Scrub any remaining inline absolute node_modules path.
-      line.replace(/\/\S*node_modules\/\S+/g, "").trimEnd(),
+      // Scrub any remaining inline absolute node_modules path (POSIX or Windows).
+      line.replace(/(?:[A-Za-z]:)?[\\/]\S*node_modules[\\/]\S+/g, "").trimEnd(),
     )
     .join("\n")
     .replace(/\n{2,}/g, "\n")
