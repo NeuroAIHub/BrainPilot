@@ -217,7 +217,7 @@ right there — it writes the config for you, no file editing required.
 To wire a gateway / third-party endpoint in one command at init time:
 
 ```bash
-brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model kimi-k2.6
+brainpilot init --api-key <key> --base-url https://your-gateway.example.com/api --model your_model_name
 ```
 
 <details>

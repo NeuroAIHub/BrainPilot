@@ -29,6 +29,30 @@ export interface RunningServer {
   stop: () => Promise<void>;
 }
 
+/**
+ * Build the orchestrator for a server from its options. Exposed (and pure) so
+ * the dataDir wiring is unit-testable without binding a socket.
+ *
+ * Issue #169: the local orchestrator MUST receive `options.dataDir` — it spawns
+ * the runtime child with `BP_DATA_DIR=<dataDir>`, and the runtime materializes
+ * skills / persists sessions under that root. Dropping it here made the runtime
+ * fall back to `./brainpilot` (relative to cwd) while the backend scaffold wrote
+ * to the requested `--dir`, splitting one launch across two data dirs.
+ */
+export function buildServerOrchestrator(
+  options: StartServerOptions = {},
+): Orchestrator {
+  return (
+    options.orchestrator ??
+    createOrchestrator({
+      local: {
+        dataDir: options.dataDir,
+        ...(options.stdioInherit ? { stdioInherit: true } : {}),
+      },
+    })
+  );
+}
+
 export async function startServer(
   options: StartServerOptions = {},
 ): Promise<RunningServer> {
@@ -36,11 +60,7 @@ export async function startServer(
   // 127.0.0.1 is the safe default for local/CLI use; containers set BP_HOST=0.0.0.0
   // so the published port (DNAT'd to the container IP) can reach the server.
   const hostname = options.hostname ?? process.env.BP_HOST ?? "127.0.0.1";
-  const orchestrator =
-    options.orchestrator ??
-    createOrchestrator({
-      local: options.stdioInherit ? { stdioInherit: true } : undefined,
-    });
+  const orchestrator = buildServerOrchestrator(options);
 
   const app = createApp({
     orchestrator,
