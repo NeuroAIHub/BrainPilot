@@ -206,10 +206,62 @@ describe("searchSkills — browse mode", () => {
     ).rejects.toThrow(/traversal/);
   });
 
+  // #2 — cross-platform: the previous guard hardcoded POSIX `/` so a Windows
+  // absolute path like `C:\Windows\System32` or `\Windows` was let through to
+  // the second-line containment guard, which still saved it but with a less
+  // specific error. Reject them up-front instead.
+  it("rejects Windows-style absolute paths (drive prefix and leading backslash) (#2)", async () => {
+    await expect(
+      searchSkills(base, { mode: "browse", relative_path: "C:\\Windows\\System32" }),
+    ).rejects.toThrow(/traversal/);
+    await expect(
+      searchSkills(base, { mode: "browse", relative_path: "C:/Windows" }),
+    ).rejects.toThrow(/traversal/);
+    await expect(
+      searchSkills(base, { mode: "browse", relative_path: "\\windows" }),
+    ).rejects.toThrow(/traversal/);
+  });
+
+  // #2 — the original comment promised to reject `..` segments before the
+  // resolve step, but the code never actually did; only the second-line
+  // containment check caught them after the fact. Make the up-front guard
+  // honest. Also covers backslash-separated `..` for Windows-shaped inputs.
+  it("rejects any `..` segment up front, not just at the containment guard (#2)", async () => {
+    await expect(
+      searchSkills(base, { mode: "browse", relative_path: "foo/../bar" }),
+    ).rejects.toThrow(/traversal/);
+    await expect(
+      searchSkills(base, { mode: "browse", relative_path: "foo\\..\\bar" }),
+    ).rejects.toThrow(/traversal/);
+  });
+
   it("throws on a missing path", async () => {
     await expect(
       searchSkills(base, { mode: "browse", relative_path: "nope/nada" }),
     ).rejects.toThrow(/does not exist/);
+  });
+
+  // #5 — paths handed back to the model must use POSIX separators so they
+  // round-trip safely through JSON and URL query strings, and so the API
+  // contract is identical on Windows and POSIX hosts.
+  it("emits POSIX-style separators in browse `path` and search `relative_paths` (#5)", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, {
+        mode: "browse",
+        relative_path: "02_Cross-Domain/eeg-paradigm-designer",
+      }),
+    );
+    expect(out.path).toBe("02_Cross-Domain/eeg-paradigm-designer");
+    expect(out.path).not.toMatch(/\\/);
+
+    const query = JSON.parse(
+      await searchSkills(base, { mode: "query", keywords: ["EEG"] }),
+    );
+    for (const r of query.results) {
+      for (const p of r.relative_paths) {
+        expect(p).not.toMatch(/\\/);
+      }
+    }
   });
 });
 
