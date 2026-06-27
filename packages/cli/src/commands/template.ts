@@ -63,10 +63,17 @@ async function readOrNull(p: string): Promise<string | null> {
   }
 }
 
-/** Normalize for byte-level comparison: strip a single trailing newline so
- *  hand-edited files don't show as `drift` over a meaningless EOL. */
+/** Normalize for byte-level comparison so an EOL-only or line-ending-only
+ *  divergence doesn't show as `drift`. Cross-platform (#3): Windows editors
+ *  and git's `autocrlf=true` save `prompt.md` with CRLF, but the built-in
+ *  persona strings ship as LF — without the CRLF collapse, every line from
+ *  the second onward differs by one `\r`, so every agent reports `drift` on
+ *  every Windows install and `bp template diff` paints the whole file
+ *  red/green. We fold CRLF → LF first, then strip a single trailing
+ *  newline. */
 function normalize(s: string): string {
-  return s.endsWith("\n") ? s.slice(0, -1) : s;
+  const lf = s.replace(/\r\n/g, "\n");
+  return lf.endsWith("\n") ? lf.slice(0, -1) : lf;
 }
 
 /** Compute drift status for every built-in agent (or just one). */
@@ -151,8 +158,11 @@ export async function runList(options: CommonOptions = {}): Promise<void> {
  * in a `diff` dependency for what is effectively a debug helper.
  */
 function unifiedDiff(a: string, b: string, label: string): string {
-  const aLines = a.split("\n");
-  const bLines = b.split("\n");
+  // Cross-platform (#3): the diff is computed line-by-line on `\n` splits,
+  // so a CRLF disk file vs an LF built-in would otherwise compare every line
+  // as "different by one `\r`" and paint the entire output. Fold first.
+  const aLines = a.replace(/\r\n/g, "\n").split("\n");
+  const bLines = b.replace(/\r\n/g, "\n").split("\n");
   const lines: string[] = [];
   lines.push(pc.bold(`--- ${label} (built-in)`));
   lines.push(pc.bold(`+++ ${label} (on-disk)`));
