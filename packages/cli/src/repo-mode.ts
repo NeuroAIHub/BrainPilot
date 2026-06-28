@@ -77,7 +77,14 @@ export interface AssertRepoCwdOptions {
  */
 function samePath(a: string, b: string): boolean {
   try {
-    return realpathSync(a) === realpathSync(b);
+    const ra = realpathSync(a);
+    const rb = realpathSync(b);
+    // Windows/macOS filesystems are case-insensitive and realpathSync does not
+    // canonicalize drive-letter casing, so compare case-insensitively there.
+    if (process.platform === "win32" || process.platform === "darwin") {
+      return ra.toLowerCase() === rb.toLowerCase();
+    }
+    return ra === rb;
   } catch {
     return false;
   }

@@ -3,11 +3,12 @@
  * Exported via the package's `./server` entry. The orchestrator's runtime is
  * started lazily on the first request that needs it; graceful shutdown stops it.
  */
+import { pathToFileURL } from "node:url";
 import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
 import { bootstrapEnvProvider } from "./config.js";
-import type { Orchestrator } from "./orchestrator.js";
+import type { Orchestrator, OrchestratorMode } from "./orchestrator.js";
 
 export interface StartServerOptions extends Partial<CreateAppOptions> {
   /** Backend port. Default 9001 (§11A.5 决策 D). */
@@ -15,10 +16,24 @@ export interface StartServerOptions extends Partial<CreateAppOptions> {
   hostname?: string;
   /** Provide a pre-built orchestrator; otherwise one is created from env. */
   orchestrator?: Orchestrator;
+  /**
+   * Force the orchestrator mode. When omitted the mode is resolved from env
+   * (BP_ORCHESTRATOR / BP_RUNTIME_URL / BP_MODE). The `brainpilot up` CLI passes
+   * this explicitly so a stray BP_RUNTIME_URL can't silently flip a local
+   * source-launch into static (sandbox) mode.
+   */
+  mode?: OrchestratorMode;
   /** Eagerly ensure the runtime at boot (default false — lazy on first use). */
   eager?: boolean;
   /** When true, the runtime child inherits stdio (foreground CLI mode). */
   stdioInherit?: boolean;
+  /**
+   * Port the local runtime should bind. Forwarded to the local orchestrator so
+   * the foreground (in-process) path honours `--port` (runtime = backend + 1)
+   * instead of falling back to AGENT_RUNTIME_PORT/8081 (#171). The detached path
+   * injects the same value via the AGENT_RUNTIME_PORT env var (spawn-backend).
+   */
+  runtimePort?: number;
 }
 
 export interface RunningServer {
@@ -44,8 +59,14 @@ export function buildServerOrchestrator(
   return (
     options.orchestrator ??
     createOrchestrator({
+      // Pass the mode explicitly when set (the `brainpilot up` CLI does) so a
+      // stray BP_RUNTIME_URL/BP_MODE in the environment can't silently flip a
+      // local source-launch into static/docker. When omitted, createOrchestrator
+      // falls back to env resolution (Docker compose relies on that path).
+      ...(options.mode ? { mode: options.mode } : {}),
       local: {
         dataDir: options.dataDir,
+        ...(options.runtimePort !== undefined ? { port: options.runtimePort } : {}),
         ...(options.stdioInherit ? { stdioInherit: true } : {}),
       },
     })
@@ -105,9 +126,11 @@ export async function startServer(
 }
 
 // Allow `node dist/server.js` to boot directly.
+// pathToFileURL keeps the main-module check correct on Windows (a naive
+// `file://${argv[1]}` never matches import.meta.url there).
 const isMain =
   typeof process.argv[1] === "string" &&
-  import.meta.url === `file://${process.argv[1]}`;
+  import.meta.url === pathToFileURL(process.argv[1]).href;
 if (isMain) {
   startServer().then(
     (s) => {

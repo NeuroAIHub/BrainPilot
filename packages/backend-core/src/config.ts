@@ -106,10 +106,22 @@ export interface ResolveProviderOptions {
 /* ----------------------------- providers.json ----------------------------- *
  * The provider registry is the SSOT for LLM credentials in single-user mode.
  * It stores FULL profiles (incl. plaintext apiKey) on disk under bp_template/;
- * the data dir is gitignored and written 0600. The HTTP layer never returns the
- * plaintext key — it masks it (see app.ts `toHttpProfile`). A session selects a
- * profile + model by id; resolveProvider() resolves the *selected* profile
- * first, falling back to the legacy env/dotenv chain for backward compat.
+ * the data dir is gitignored. The HTTP layer never returns the plaintext key
+ * — it masks it (see app.ts `toHttpProfile`). A session selects a profile +
+ * model by id; resolveProvider() resolves the *selected* profile first,
+ * falling back to the legacy env/dotenv chain for backward compat.
+ *
+ * #4 — cross-platform file-mode caveat:
+ *   - POSIX hosts: we write providers.json with `mode: 0o600` (owner R/W only),
+ *     which is the standard "this file contains a secret" guard.
+ *   - Windows hosts: Node's `mode` parameter only maps to the FAT-era read-
+ *     only attribute; it does NOT translate to a Windows ACL. The file ends
+ *     up with whatever ACL it inherits from the parent directory (typically
+ *     `Users: Read`), so other local user accounts on the same machine can
+ *     read it. Treat the at-rest key on Windows as protected at the
+ *     filesystem-permission level only by your account login / disk encryption
+ *     (BitLocker, EFS). Future work: OS keychain (Win Credential Manager /
+ *     macOS Keychain / libsecret) for true plaintext-free at-rest storage.
  * -------------------------------------------------------------------------- */
 
 /** A stored provider profile (internal — holds the plaintext key). */

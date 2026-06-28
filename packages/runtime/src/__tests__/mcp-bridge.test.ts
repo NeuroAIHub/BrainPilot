@@ -6,6 +6,7 @@ import {
   McpBridge,
   loadMcpServersConfig,
   openTransport,
+  resolveStdioCommand,
   type McpClientLike,
 } from "../mcp-bridge.js";
 
@@ -127,5 +128,50 @@ describe("openTransport", () => {
 
   it("rejects a stdio spec with no command", async () => {
     await expect(openTransport("fs", { type: "stdio" })).rejects.toThrow(/requires a 'command'/);
+  });
+});
+
+// #7 — cross-platform: Windows can't spawn npm-ecosystem shims by bare name
+// (they only exist as `.cmd`), so the bridge auto-suffixes a known short list.
+// POSIX must remain a pass-through to preserve historical behaviour.
+describe("resolveStdioCommand (cross-platform, #7)", () => {
+  describe("on POSIX (windows=false)", () => {
+    it("returns the command unchanged for all inputs", () => {
+      expect(resolveStdioCommand("npx", false)).toBe("npx");
+      expect(resolveStdioCommand("npm", false)).toBe("npm");
+      expect(resolveStdioCommand("/usr/local/bin/node", false)).toBe("/usr/local/bin/node");
+      expect(resolveStdioCommand("some-binary", false)).toBe("some-binary");
+    });
+  });
+
+  describe("on Windows (windows=true)", () => {
+    it("appends `.cmd` to the npm-ecosystem allow-list", () => {
+      expect(resolveStdioCommand("npx", true)).toBe("npx.cmd");
+      expect(resolveStdioCommand("npm", true)).toBe("npm.cmd");
+      expect(resolveStdioCommand("yarn", true)).toBe("yarn.cmd");
+      expect(resolveStdioCommand("pnpm", true)).toBe("pnpm.cmd");
+    });
+
+    it("matches the allow-list case-insensitively", () => {
+      expect(resolveStdioCommand("NPX", true)).toBe("NPX.cmd");
+      expect(resolveStdioCommand("Pnpm", true)).toBe("Pnpm.cmd");
+    });
+
+    it("leaves a command alone when the user already gave an extension", () => {
+      expect(resolveStdioCommand("npx.cmd", true)).toBe("npx.cmd");
+      expect(resolveStdioCommand("npm.bat", true)).toBe("npm.bat");
+      expect(resolveStdioCommand("node.exe", true)).toBe("node.exe");
+      expect(resolveStdioCommand("foo.ps1", true)).toBe("foo.ps1");
+    });
+
+    it("does NOT touch commands outside the allow-list (incl. node)", () => {
+      // Node itself is .exe and Windows handles that fallback natively.
+      expect(resolveStdioCommand("node", true)).toBe("node");
+      expect(resolveStdioCommand("python", true)).toBe("python");
+      expect(resolveStdioCommand("uvx", true)).toBe("uvx");
+      expect(resolveStdioCommand("C:\\Users\\u\\bin\\custom", true)).toBe(
+        "C:\\Users\\u\\bin\\custom",
+      );
+    });
   });
 });

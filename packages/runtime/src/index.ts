@@ -53,6 +53,8 @@ export type { McpServersConfig, McpServerSpec, McpClientLike, McpConnectFn } fro
 export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
 export type { MaterializeSkillsResult } from "./materialize-skills.js";
 
+export { isWindows, isMacOS, isLinux, gracefulSignalsSupported } from "./platform.js";
+
 export type {
   AgentRole,
   IAgentSession,

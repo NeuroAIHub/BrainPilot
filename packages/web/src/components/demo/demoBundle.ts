@@ -159,9 +159,14 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
   let timeline: DemoBundle["timeline"] = "timestamped";
   // Pull the persisted event timeline from the new history endpoint (the
   // legacy `/sessions/:id/events` path is an SSE alias and returns no JSON).
-  // Cap at 5000 — the endpoint enforces the same cap, but stating it here
-  // documents the bundle's max footprint.
-  const historyEnvelope = await api.sessions.getHistory(session.id, { limit: 5000 });
+  // Request the FULL log (`limit: 0`) — same as the live chat rehydrate path
+  // (HISTORY_REHYDRATE_LIMIT). A positive cap returns the *tail* of the log,
+  // which slices off the oldest events: the leading TEXT_MESSAGE_START of the
+  // earliest messages is dropped, leaving orphaned CONTENT/END that the
+  // reducer can't attach to anything, so the conversation's opening replies
+  // silently vanish from the replay. The 25 MB embed budget (MAX_TOTAL_BYTES)
+  // still bounds the bundle's real footprint via the files section.
+  const historyEnvelope = await api.sessions.getHistory(session.id, { limit: 0 });
   let events: typeof historyEnvelope.events | undefined = historyEnvelope.events;
   let messages: ChatMessage[] | undefined;
   if (!events || events.length === 0) {

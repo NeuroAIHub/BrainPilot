@@ -10,6 +10,7 @@
  *   GET  /sse/:id  (+ alias GET /sessions/:id/events)
  *   POST /sessions/:id/interrupt, GET /sessions/:id/agents, POST /sessions/:id/evict
  */
+import { pathToFileURL } from "node:url";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
 import { stream } from "hono/streaming";
@@ -315,8 +316,10 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
   };
 }
 
-// Allow `node dist/server.js` to boot directly.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+// Allow `node dist/server.js` to boot directly. Use pathToFileURL for the
+// main-module check so it works on Windows too — a naive `file://${argv[1]}`
+// never matches import.meta.url there (backslashes, drive letter, file:///).
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   void startServer().then(({ port }) => {
     // eslint-disable-next-line no-console
     console.log(`[runtime] listening on :${port} (mock=${process.env.BP_MOCK ?? "0"})`);

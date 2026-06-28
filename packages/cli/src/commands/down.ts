@@ -40,6 +40,7 @@ export async function down(
     isAlive: deps.isAlive,
     signal: deps.signal,
     sleep: deps.sleep,
+    gracefulSignals: deps.gracefulSignals,
   });
 
   // Backstop the runtime (issue #58): the backend normally kills its runtime
@@ -52,6 +53,7 @@ export async function down(
     isAlive: deps.isAlive,
     signal: deps.signal,
     sleep: deps.sleep,
+    gracefulSignals: deps.gracefulSignals,
   });
   // Drop the persisted server state so a later `status` doesn't report a dead
   // server's ports (issue #41).

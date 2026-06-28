@@ -1,9 +1,14 @@
 import { describe, it, expect } from "vitest";
 import { resolveDataDir, dataPaths } from "./paths.js";
+import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
 describe("resolveDataDir precedence", () => {
-  const cwd = "/tmp/launch";
+  // Use the OS tmpdir so the cwd literal is a valid absolute path on every
+  // host (Windows in particular — `/tmp/launch` resolves to `C:\tmp\launch`
+  // there, which is technically fine for resolve()-based equality but
+  // depends on a fragile detail). (#9 — cross-platform pass.)
+  const cwd = join(tmpdir(), "launch");
 
   it("uses --dir when provided (highest priority)", () => {
     const d = resolveDataDir({

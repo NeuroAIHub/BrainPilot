@@ -171,6 +171,25 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // Strip NO-RENDER wrapper used by record_trace "Message Complete" hint
       delta = delta.replace(/<!--NO-RENDER-->[\s\S]*?<!--\/NO-RENDER-->/g, "");
       if (!delta) return existing;
+      // Orphaned CONTENT (no matching START) — recover gracefully instead of
+      // dropping it. This happens when a demo bundle was exported from a
+      // tail-sliced history: the leading START of the earliest messages is gone,
+      // and a plain `.map` here would no-op, silently swallowing the opening
+      // replies. Synthesize the message so the content still renders.
+      if (!existing.some((m) => m.id === id)) {
+        return [
+          ...existing,
+          {
+            id,
+            role: "assistant",
+            content: delta,
+            createdAt: new Date().toISOString(),
+            agent,
+            streaming: true,
+            kind: "text",
+          },
+        ];
+      }
       return existing.map((m) =>
         m.id === id ? { ...m, content: (m.content ?? "") + delta } : m,
       );

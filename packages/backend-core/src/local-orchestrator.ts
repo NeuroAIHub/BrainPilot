@@ -16,6 +16,7 @@ import { spawn, type ChildProcess } from "node:child_process";
 import { createRequire } from "node:module";
 import { openSync, closeSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
+import { gracefulSignalsSupported } from "@brainpilot/runtime";
 import type {
   EnsureRuntimeOptions,
   Orchestrator,
@@ -231,7 +232,13 @@ export class LocalProcessOrchestrator implements Orchestrator {
     this.removePidFile();
     if (child) {
       try {
-        child.kill("SIGTERM");
+        // Cross-platform (#6): on Windows `child.kill("SIGTERM")` is translated
+        // to `TerminateProcess` (a forceful kill the child cannot intercept),
+        // so the SIGTERM/SIGKILL distinction is meaningless. We call the
+        // platform-appropriate signal explicitly so the intent reads correctly
+        // at the call-site and Windows logs don't show a phantom "graceful"
+        // shutdown that never actually ran the child's signal handlers.
+        child.kill(gracefulSignalsSupported ? "SIGTERM" : "SIGKILL");
       } catch {
         /* already gone */
       }

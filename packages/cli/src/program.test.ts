@@ -1,13 +1,20 @@
 import { describe, it, expect, vi } from "vitest";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { run } from "./program.js";
+
+// Use the OS tmpdir so the `--dir` argv literal is shaped the same way on
+// Windows and POSIX. The CLI just echoes the option value back through
+// commander; we never touch the filesystem. (#9 — cross-platform pass.)
+const TMP_DIR = join(tmpdir(), "x");
 
 describe("program — commander wiring", () => {
   it("dispatches `up` with parsed --dir/--port and foreground default", async () => {
     const upFn = vi.fn().mockResolvedValue({ url: "x", config: {} });
-    await run(["up", "--dir", "/tmp/x", "--port", "9100"], { upFn });
+    await run(["up", "--dir", TMP_DIR, "--port", "9100"], { upFn });
     expect(upFn).toHaveBeenCalledOnce();
     const [opts] = upFn.mock.calls[0]!;
-    expect(opts).toMatchObject({ dir: "/tmp/x", port: 9100, foreground: true });
+    expect(opts).toMatchObject({ dir: TMP_DIR, port: 9100, foreground: true });
   });
 
   it("`up --detach` sets foreground false", async () => {
@@ -20,6 +27,24 @@ describe("program — commander wiring", () => {
     const upFn = vi.fn().mockResolvedValue({ url: "x", config: {} });
     await run(["up", "--no-open"], { upFn });
     expect(upFn.mock.calls[0]![0]).toMatchObject({ open: false });
+  });
+
+  it("`up --mode static` forwards the orchestrator mode", async () => {
+    const upFn = vi.fn().mockResolvedValue({ url: "x", config: {} });
+    await run(["up", "--mode", "static"], { upFn });
+    expect(upFn.mock.calls[0]![0]).toMatchObject({ mode: "static" });
+  });
+
+  it("`up` with no --mode leaves mode undefined (resolver defaults to local)", async () => {
+    const upFn = vi.fn().mockResolvedValue({ url: "x", config: {} });
+    await run(["up"], { upFn });
+    expect(upFn.mock.calls[0]![0].mode).toBeUndefined();
+  });
+
+  it("rejects an invalid --mode", async () => {
+    const upFn = vi.fn();
+    await expect(run(["up", "--mode", "bogus"], { upFn })).rejects.toThrow();
+    expect(upFn).not.toHaveBeenCalled();
   });
 
   it("dispatches `down` with --dir", async () => {

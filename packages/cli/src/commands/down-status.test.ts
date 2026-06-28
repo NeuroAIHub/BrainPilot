@@ -112,6 +112,36 @@ describe("down", () => {
     // Only the backend was signalled; no runtime pid to chase.
     expect(procs.signals).toEqual([{ pid: 1234, sig: "SIGTERM" }]);
   });
+
+  // #6 — cross-platform: on Windows POSIX signals are translated to
+  // TerminateProcess (a force kill the target can't intercept), so the
+  // SIGTERM-then-wait dance is pure waste. With gracefulSignals=false the
+  // stop path must skip straight to a single SIGKILL and report `forced`.
+  it("skips SIGTERM and goes straight to SIGKILL when graceful signals unsupported (#6)", async () => {
+    const root = join(dir, "bp");
+    const p = dataPaths(root);
+    await writePid(p.backendPid, 1234);
+    // The process stays "alive" until signalled — fakeProcs deletes on
+    // SIGTERM|SIGKILL, so a single SIGKILL is enough.
+    const procs = fakeProcs(new Set([1234]));
+    // Track how long we'd have slept if the wait loop ran. Should be zero.
+    let sleeps = 0;
+    const trackedSleep = async (_ms: number): Promise<void> => {
+      sleeps += 1;
+    };
+
+    const res = await down(
+      { dir: root, timeoutMs: 10_000 },
+      { ...procs, sleep: trackedSleep, gracefulSignals: false, log: () => {} },
+    );
+
+    expect(res.stopped).toBe(true);
+    expect(res.pid).toBe(1234);
+    expect(res.forced).toBe(true);
+    // Exactly one signal: SIGKILL. No SIGTERM, no poll-loop sleeping.
+    expect(procs.signals).toEqual([{ pid: 1234, sig: "SIGKILL" }]);
+    expect(sleeps).toBe(0);
+  });
 });
 
 describe("status", () => {

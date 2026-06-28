@@ -37,6 +37,12 @@ function parsePort(value: string): number {
   return n;
 }
 
+function parseMode(value: string): "local" | "static" | "docker" {
+  const v = value.toLowerCase();
+  if (v === "local" || v === "static" || v === "docker") return v;
+  throw new Error(`Invalid mode: ${value} (expected local | static | docker)`);
+}
+
 /** Read the CLI package version from its own package.json (single source of truth). */
 function requireVersion(): string {
   const require = createRequire(import.meta.url);
@@ -67,6 +73,11 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     .option("-p, --port <n>", "backend port (runtime uses port+1)", parsePort)
     .option("--detach", "run the backend as a background process")
     .option("--no-open", "do not open the browser")
+    .option(
+      "--mode <mode>",
+      "orchestrator mode: local (default) | static (connect BP_RUNTIME_URL) | docker",
+      parseMode,
+    )
     .action(async (opts) => {
       const foreground = !opts.detach;
       await upFn(
@@ -75,6 +86,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
           port: opts.port,
           foreground,
           open: opts.open,
+          mode: opts.mode,
         },
         { spawnDetached: spawnDetachedBackend },
       );
