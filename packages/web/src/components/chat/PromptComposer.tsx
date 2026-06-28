@@ -1,4 +1,4 @@
-import { Bot, Square } from "lucide-react";
+import { Bot, Paperclip, Square, X } from "lucide-react";
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProviderProfile } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
@@ -34,6 +34,14 @@ export function PromptComposer() {
   const commandsRef = useRef<HTMLDivElement | null>(null);
   const menuRef = useRef<HTMLDivElement | null>(null);
   const [menuPos, setMenuPos] = useState<{ top: number; left: number } | null>(null);
+  // #47: file upload — names of files uploaded into the workspace this turn,
+  // shown as removable chips and announced to the agent on send. (Restored: the
+  // backend upload chain — writeFile route + #60 staging/drain — was always
+  // present; only this composer UI was removed in #160. It now lives in the
+  // left tool cluster, not the send cluster guarded by composerSendTools.test.)
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachments, setAttachments] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
@@ -220,17 +228,53 @@ export function PromptComposer() {
       return;
     }
     draftStore.set(sessionId, "");
+    // #47: if files were uploaded this turn, prepend a notice so the agent knows
+    // they exist in its workspace and can `read` them. Cleared after send.
+    const notice =
+      attachments.length > 0 ? `${t("chat.upload.notice", { names: attachments.join(", ") })}\n\n` : "";
+    const sentAttachments = attachments;
+    if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
-    const ok = await sendPrompt(content, {
+    const ok = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
     });
     // #106: a failed/timed-out send must not silently eat the user's input.
-    // Restore the draft so they can retry without retyping. Only restore if they
-    // haven't already started typing again.
-    if (!ok && draftStore.get(sessionId).trim().length === 0) {
-      draftStore.set(sessionId, content);
+    // Restore the draft (and attachment chips) so they can retry without
+    // retyping. Only restore if they haven't already started typing again.
+    if (!ok) {
+      if (draftStore.get(sessionId).trim().length === 0) {
+        draftStore.set(sessionId, content);
+      }
+      if (sentAttachments.length > 0) {
+        setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
+      }
+    }
+  };
+
+  // #47: upload the chosen files into the session workspace, then track their
+  // names as chips. In single-user mode the sandbox id and session id are the
+  // same; a draft has no real session yet, so uploads land in the `"local"`
+  // staging area and the runtime drains them into the real workspace on send
+  // (#60 drainLocalUploads). Files are uploaded to the workspace root by name.
+  const handleFilesChosen = async (files: FileList | null) => {
+    if (!files || files.length === 0) return;
+    const uploadId = currentSession?.id ?? currentSandbox?.id;
+    if (!uploadId) return;
+    setUploading(true);
+    setComposerError(null);
+    try {
+      for (const file of Array.from(files)) {
+        await api.sandbox.uploadFile(uploadId, file.name, file);
+        setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
+      }
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      setComposerError(t("chat.upload.failed", { msg }));
+    } finally {
+      setUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-selecting the same file
     }
   };
 
@@ -288,6 +332,26 @@ export function PromptComposer() {
             ariaLabel={t("chat.srAsk")}
           />
 
+          {attachments.length > 0 || uploading ? (
+            <div className="composer__attachments" aria-label={t("chat.aria.attachFile")}>
+              {attachments.map((name) => (
+                <span className="composer__chip" key={name}>
+                  <Paperclip size={12} />
+                  <span className="composer__chip-name">{name}</span>
+                  <button
+                    type="button"
+                    className="composer__chip-remove"
+                    aria-label={t("chat.aria.removeAttachment")}
+                    onClick={() => setAttachments((prev) => prev.filter((n) => n !== name))}
+                  >
+                    <X size={12} />
+                  </button>
+                </span>
+              ))}
+              {uploading ? <span className="composer__chip composer__chip--pending">{t("chat.upload.uploading")}</span> : null}
+            </div>
+          ) : null}
+
           <div className="composer__toolbar">
             <div className="composer__tools">
               {/*
@@ -298,6 +362,27 @@ export function PromptComposer() {
                 <Plus size={18} />
               </IconButton>
               */}
+              {/*
+                #47: file upload. The button lives here in the left tool cluster
+                (not the send cluster, which composerSendTools.test.tsx guards
+                against an upload control under #160). The hidden <input> is
+                clicked programmatically; chosen files upload to the workspace
+                root and are announced to the agent on send.
+              */}
+              <input
+                ref={fileInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => void handleFilesChosen(e.target.files)}
+              />
+              <IconButton
+                label={t("chat.aria.attachFile")}
+                onClick={() => fileInputRef.current?.click()}
+                disabled={uploading || !currentSandbox}
+              >
+                <Paperclip size={17} />
+              </IconButton>
               {SHOW_SLASH_COMMANDS && slashCommands.length > 0 && (
                 <div className="command-picker" ref={commandsRef}>
                   <IconButton
