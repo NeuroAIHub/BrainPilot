@@ -14,7 +14,7 @@
  * `API_BASE = "/api"`), with static assets served at the root.
  */
 import { createRequire } from "node:module";
-import { join } from "node:path";
+import { resolve, join } from "node:path";
 import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
@@ -101,6 +101,25 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/health", (c) => c.json({ status: "ok" }));
 
   api.get("/version", (c) => c.json({ name: pkg.name, version: pkg.version }));
+
+  // ---- Runtime info (backend-local; #156) ------------------------------
+  // Exposes the real on-disk data root so the Files panel can show users
+  // where a session's workspace actually lives (e.g. to open it in a file
+  // manager). Host paths are sensitive in multi-user hosting, so this is
+  // gated to local mode: hosted deployments set BP_LOCAL_MODE=0 (mirroring
+  // the web build's VITE_LOCAL_MODE) and then only `{ localMode: false }`
+  // is returned — never a host path. A per-session workspace dir is
+  // `<workspacesRoot>/<sessionId>` (the SPA joins the active id itself).
+  const localMode = (env?.BP_LOCAL_MODE ?? process.env.BP_LOCAL_MODE) !== "0";
+  api.get("/info", (c) => {
+    if (!localMode) return c.json({ localMode: false });
+    const absDataDir = resolve(dataDir);
+    return c.json({
+      localMode: true,
+      dataDir: absDataDir,
+      workspacesRoot: join(absDataDir, "workspaces"),
+    });
+  });
 
   // ---- Identity (backend-local) ----------------------------------------
   // Trust-front (#21): hosted deployments resolve identity at the upstream

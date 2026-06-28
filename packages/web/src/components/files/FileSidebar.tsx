@@ -13,6 +13,7 @@ import {
   X,
 } from "lucide-react";
 import { FileContent, FileEntry } from "../../contracts/backend";
+import { runtimeConfig } from "../../config";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
@@ -146,6 +147,49 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
+
+  // #156: in local mode, surface the real on-disk workspace dir so users know
+  // which directory the agent writes into. `workspacesRoot` comes from the
+  // backend (gated to local mode there too); the per-session dir is
+  // `<workspacesRoot>/<sessionId>`. Null in hosted mode → keep showing the
+  // virtual `/workspace` and never disclose a host path.
+  const [workspacesRoot, setWorkspacesRoot] = useState<string | null>(null);
+  useEffect(() => {
+    if (!runtimeConfig.localMode) return;
+    let cancelled = false;
+    void api.getInfo().then((info) => {
+      if (!cancelled && info.localMode && info.workspacesRoot) {
+        setWorkspacesRoot(info.workspacesRoot);
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Join with the platform's separator: a Windows root contains "\", a POSIX
+  // root "/". Detect from the root itself rather than assuming the host.
+  const realWorkspacePath = useMemo(() => {
+    if (!workspacesRoot || !currentSession?.id) return null;
+    const sepChar = workspacesRoot.includes("\\") && !workspacesRoot.includes("/") ? "\\" : "/";
+    return `${workspacesRoot.replace(/[\\/]$/, "")}${sepChar}${currentSession.id}`;
+  }, [workspacesRoot, currentSession?.id]);
+
+  // Map a virtual `/workspace[/...]` path to its real on-disk equivalent for
+  // display. Returns the original virtual path when no real root is known.
+  const toDisplayPath = useCallback(
+    (virtualPath: string): string => {
+      if (!realWorkspacePath) return virtualPath;
+      const sepChar = realWorkspacePath.includes("\\") && !realWorkspacePath.includes("/") ? "\\" : "/";
+      if (virtualPath === "/workspace") return realWorkspacePath;
+      if (virtualPath.startsWith("/workspace/")) {
+        const rel = virtualPath.slice("/workspace/".length).split("/").join(sepChar);
+        return `${realWorkspacePath}${sepChar}${rel}`;
+      }
+      return virtualPath;
+    },
+    [realWorkspacePath],
+  );
 
   const loadDirectory = useCallback(
     async (path: string) => {
@@ -446,7 +490,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         </header>
 
         <div className="file-sidebar__path">
-          <span>/workspace</span>
+          <span title={realWorkspacePath ?? "/workspace"}>{realWorkspacePath ?? "/workspace"}</span>
           <small>{currentSandbox?.status === "running" ? t("files.live") : t("files.offline")}</small>
         </div>
 
@@ -466,6 +510,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
           setIsPreviewMaximized(false);
         }}
         sandboxId={sandboxId}
+        toDisplayPath={toDisplayPath}
         onToggleMaximize={() => setIsPreviewMaximized((current) => !current)}
       />
     </>
@@ -478,6 +523,7 @@ function FilePreviewPanel({
   isMaximized,
   onClose,
   sandboxId,
+  toDisplayPath,
   onToggleMaximize,
 }: {
   file: FileNode | null;
@@ -485,6 +531,7 @@ function FilePreviewPanel({
   isMaximized: boolean;
   onClose: () => void;
   sandboxId: string | null;
+  toDisplayPath: (virtualPath: string) => string;
   onToggleMaximize: () => void;
 }) {
   const t = useT();
@@ -637,7 +684,7 @@ function FilePreviewPanel({
       <dl className="file-preview__meta">
         <div>
           <dt>{t("files.preview.path")}</dt>
-          <dd>{file.path}</dd>
+          <dd>{toDisplayPath(file.path)}</dd>
         </div>
         <div>
           <dt>{t("files.preview.size")}</dt>

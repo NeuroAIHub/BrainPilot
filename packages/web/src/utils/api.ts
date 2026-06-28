@@ -123,6 +123,20 @@ export const api = {
     return handleJson(await apiFetch(`${API_BASE}/version`));
   },
 
+  // #156: real on-disk paths for the Files panel (local mode only). Hosted
+  // backends return `{ localMode: false }` with no host path. Best-effort:
+  // any failure resolves to a non-local shape so callers fall back cleanly.
+  async getInfo(): Promise<{ localMode: boolean; dataDir?: string; workspacesRoot?: string }> {
+    if (runtimeConfig.useMockBackend) {
+      return { localMode: false };
+    }
+    try {
+      return await handleJson(await apiFetch(`${API_BASE}/info`));
+    } catch {
+      return { localMode: false };
+    }
+  },
+
   auth: {
     async me(): Promise<User> {
       if (runtimeConfig.useMockBackend) {
