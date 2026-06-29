@@ -194,15 +194,36 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const loadDirectory = useCallback(
     async (path: string) => {
       if (!currentSandbox || currentSandbox.status !== "running" || !sandboxId) {
+        // #193 diagnostics: distinguish "panel gated off" from "listed but empty".
+        // Logs the exact reason the gate blocked the load so a user (esp. on
+        // Windows, where the empty-panel report originates) can paste it back.
+        console.warn("[FileSidebar] load skipped — sandbox not ready", {
+          path,
+          sandboxId,
+          hasSandbox: !!currentSandbox,
+          sandboxStatus: currentSandbox?.status ?? null,
+        });
         setError(t("files.error.notRunning"));
         return;
       }
       setError(null);
-      const entries = await api.sandbox.listFiles(sandboxId, path);
-      const children = entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) }));
-      setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+      try {
+        // #193 diagnostics: log the exact request being addressed so an empty or
+        // failing listing can be traced to the real sandboxId + path on the wire.
+        console.debug("[FileSidebar] listFiles", { sandboxId, path });
+        const entries = await api.sandbox.listFiles(sandboxId, path);
+        console.debug("[FileSidebar] listFiles ok", { sandboxId, path, count: entries.length });
+        const children = entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) }));
+        setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+      } catch (err) {
+        // The runtime now returns a distinct error (instead of an empty array)
+        // when readdir fails for a reason other than ENOENT (#193). Surface it
+        // rather than leaving the panel stuck loading with no feedback.
+        console.error("[FileSidebar] listFiles failed", { sandboxId, path, error: err });
+        setError(err instanceof Error ? err.message : t("files.error.loadFailed"));
+      }
     },
-    [currentSandbox, sandboxId],
+    [currentSandbox, sandboxId, t],
   );
 
   useEffect(() => {

@@ -367,8 +367,20 @@ export class SessionManager {
     let dirents;
     try {
       dirents = await readdir(dir, { withFileTypes: true });
-    } catch {
-      return []; // missing workspace → empty (new session, nothing written yet)
+    } catch (err) {
+      // ENOENT is the only benign case: the workspace dir does not exist yet
+      // because nothing has been written for this (new) session → empty list.
+      // Any OTHER failure (EACCES, EPERM, ENOTDIR, a Windows-specific readdir
+      // error, …) is a real problem; swallowing it as `[]` made a broken
+      // listing indistinguishable from an empty workspace (#193). Surface it so
+      // the panel can show a distinct error instead of a misleading empty state.
+      const code = (err as NodeJS.ErrnoException)?.code;
+      if (code === "ENOENT") {
+        return []; // missing workspace → empty (new session, nothing written yet)
+      }
+      throw new Error(
+        `failed to list workspace for session ${sid} at ${dir}: ${code ?? (err as Error)?.message ?? String(err)}`,
+      );
     }
     const entries = await Promise.all(
       dirents.map(async (d) => {
