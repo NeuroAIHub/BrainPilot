@@ -429,6 +429,10 @@ docker compose up -d --build
 
 打开 <http://localhost:9001>（或你的 `BP_MAIN_PORT`）。停止用 `docker compose down`。
 
+默认构建使用 **CPU** 沙箱 stage —— 无需 GPU,也无需私有镜像访问权限。
+GPU 模式（`docker-compose.gpu.yml`）基于私有的 `brainpilot-gpu-base` 镜像,仅供内部用户使用;
+没有 ghcr 访问权限无法拉取,CPU 默认路径也不需要它。
+
 <details>
 <summary><b>沙箱依赖、部署模式与内存预算</b></summary>
 

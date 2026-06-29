@@ -5,6 +5,11 @@ services:
     build:
       context: .
       dockerfile: docker/sandbox/Dockerfile
+      # Default to the CPU stage. The sandbox Dockerfile is multi-stage and its
+      # last stage is `gpu` (FROM a private ghcr base); a targetless build would
+      # resolve to that last stage and fail with 403 for users without private
+      # ghcr access. GPU users opt in via docker-compose.gpu.yml (prebuilt image).
+      target: cpu
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
