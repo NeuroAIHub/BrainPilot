@@ -102,6 +102,25 @@ const SessionContext = createContext<SessionContextValue | null>(null);
 // CONTENT / END leaves old long sessions looking empty.
 const HISTORY_REHYDRATE_LIMIT = 0;
 
+/**
+ * #194-B1: merge the full rehydrated history under whatever the live message
+ * list already holds. On refresh the SSE ring-buffer tail seeds a few recent
+ * messages before history arrives; we must NOT discard the (complete) history
+ * just because the list is non-empty. The persisted history is the base; we
+ * append only the messages already shown that history doesn't contain (by id) —
+ * in-flight optimistic sends, or events newer than the persisted file. Ordering
+ * matters: history first (chronological), then the live-only tail.
+ */
+export function mergeRehydratedMessages(
+  existing: ChatMessage[],
+  history: ChatMessage[],
+): ChatMessage[] {
+  if (existing.length === 0) return history;
+  const historyIds = new Set(history.map((m) => m.id));
+  const extra = existing.filter((m) => !historyIds.has(m.id));
+  return [...history, ...extra];
+}
+
 function foldSessionHistory(events: unknown[], sessionId: string): {
   messages: ChatMessage[];
   trace: TraceGraph | null;
@@ -293,13 +312,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         hydratedSessionsRef.current.add(sessionId);
         if (lastUsage) setTokenUsage(lastUsage);
 
-        // Only seed the message list if the user hasn't already started typing
-        // / receiving live SSE for this session in the brief window before
-        // history arrived (otherwise we'd clobber their in-flight messages).
-        setMessagesBySession((current) => {
-          if ((current[sessionId]?.length ?? 0) > 0) return current;
-          return { ...current, [sessionId]: nextMessages };
-        });
+        // Merge the full history under whatever SSE / optimistic messages have
+        // already landed — do NOT bail just because the list is non-empty
+        // (#194-B1). On refresh the SSE ring-buffer tail arrives first and seeds
+        // a few recent messages; the old `length > 0 → skip` guard then dropped
+        // the entire rehydrated history, leaving only those few. The persisted
+        // history is the complete log, so use it as the base and append only the
+        // messages SSE already showed that the history doesn't contain (by id) —
+        // in-flight optimistic sends, or events newer than the persisted file.
+        setMessagesBySession((current) => ({
+          ...current,
+          [sessionId]: mergeRehydratedMessages(current[sessionId] ?? [], nextMessages),
+        }));
         if (nextTrace) {
           setTraceBySession((current) =>
             current[sessionId] ? current : { ...current, [sessionId]: nextTrace! },
