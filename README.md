@@ -461,6 +461,10 @@ docker compose up -d --build
 
 Open <http://localhost:9001> (or your `BP_MAIN_PORT`). Stop with `docker compose down`.
 
+The default build targets the **CPU** sandbox stage — no GPU or private image access required.
+GPU mode (`docker-compose.gpu.yml`) builds on a private `brainpilot-gpu-base` image reserved for
+internal users; it is not pullable without ghcr access and is not needed for the CPU default path.
+
 <details>
 <summary><b>Sandbox dependencies, deployment modes &amp; memory budget</b></summary>
 
