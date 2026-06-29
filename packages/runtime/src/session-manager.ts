@@ -1443,14 +1443,23 @@ export class SessionManager {
    * the web rehydrate path so long sessions are not sliced through the middle
    * of a streamed message.
    *
-   * Returns `undefined` if the session id isn't in memory — this method is
-   * only useful for known sessions (call `restoreFromDisk` first if needed).
+   * History is a **disk read** (`<dataRoot>/.bp/<sid>/events.jsonl`), so it does
+   * NOT require the session to be live in memory: a session evicted by the idle
+   * reaper (or lost to a runtime restart) keeps its transcript on disk
+   * (`evictSession` flushes + drops the in-memory entry but never deletes the
+   * file). Returning `undefined` only when neither memory nor disk knows the
+   * session is what lets a post-refresh rehydrate replay an evicted session
+   * instead of getting a 404 and rendering an empty transcript (#165 / #194-B2).
+   *
+   * In non-persisting mode (`persist:false`, e.g. unit tests) there is no disk
+   * backing, so an unknown session is genuinely `undefined`.
    */
   async readEventHistory(
     sessionId: string,
     opts: { limit?: number } = {},
   ): Promise<{ events: AgUiEvent[]; total: number; truncated: boolean } | undefined> {
-    if (!this.sessions.has(sessionId)) return undefined;
+    // Without persistence the only source of truth is memory.
+    if (!this.persist && !this.sessions.has(sessionId)) return undefined;
     const requestedLimit = opts.limit;
     const limit =
       requestedLimit === undefined || !Number.isFinite(requestedLimit)
@@ -1463,7 +1472,10 @@ export class SessionManager {
     try {
       raw = await readFile(path, "utf8");
     } catch {
-      // No events file yet — empty history is valid (newly created session).
+      // No events file. For a live (or persisting-but-new) session this is a
+      // valid empty history. For an unknown session with no transcript on disk
+      // there is nothing to serve → undefined so the route can 404.
+      if (!this.sessions.has(sessionId)) return undefined;
       return { events: [], total: 0, truncated: false };
     }
     const lines = raw.split("\n");
