@@ -219,3 +219,44 @@ describe("api.sessions.interrupt — hits the interrupt route, not /messages (#9
     expect(url.endsWith("/messages")).toBe(false);
   });
 });
+
+describe("api.sandbox.uploadFile — #47 base64 upload to the workspace", () => {
+  // blobToBase64 uses the browser FileReader, absent in the node test env; stub
+  // it with a minimal readAsDataURL that emits a data: URL so the base64 path
+  // (prefix stripping) is exercised end-to-end.
+  beforeEach(() => {
+    class FakeFileReader {
+      result: string | null = null;
+      error: unknown = null;
+      onload: (() => void) | null = null;
+      onerror: (() => void) | null = null;
+      readAsDataURL(_blob: Blob) {
+        // "hi" → aGk= ; the helper must strip the "data:...;base64," prefix.
+        this.result = "data:text/plain;base64,aGk=";
+        this.onload?.();
+      }
+    }
+    vi.stubGlobal("FileReader", FakeFileReader);
+  });
+
+  it("POSTs { path, contentBase64 } and returns the runtime's { path, size }", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 201, contentType: "application/json", json: { path: "notes.txt", size: 2 } }),
+    );
+    const out = await api.sandbox.uploadFile("s1", "notes.txt", new Blob(["hi"]));
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/sandbox\/s1\/files$/);
+    expect((init as RequestInit).method).toBe("POST");
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body).toEqual({ path: "notes.txt", contentBase64: "aGk=" });
+    expect(out).toEqual({ path: "notes.txt", size: 2 });
+  });
+
+  it("throws the backend error message on a non-ok response", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { detail: "file too large" } }),
+    );
+    await expect(api.sandbox.uploadFile("s1", "big.bin", new Blob(["hi"]))).rejects.toThrow("file too large");
+  });
+});

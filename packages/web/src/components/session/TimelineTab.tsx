@@ -15,6 +15,13 @@ import { getMessageEdge, msgTypeKind } from "./agentNetworkShared";
 interface TimelineTabProps {
   messages: ChatMessage[];
   now: number;
+  /**
+   * Whether the session is actively running (≥1 agent in a running state).
+   * Only while running does the axis track wall-clock `now` and show the
+   * live "now" marker; a finished session freezes the axis at the last
+   * message so the plot doesn't grow a blank right gutter over time (#166).
+   */
+  isRunning?: boolean;
   /** Click a dot → caller selects that agent (and flips to Detail tab). */
   onSelectMessage: (agentName: string) => void;
 }
@@ -33,7 +40,30 @@ const LABEL_W = 88;
 const PAD_TOP = 28;
 const TICK_COUNT = 6;
 
-export function TimelineTab({ messages, now, onSelectMessage }: TimelineTabProps) {
+/**
+ * Compute the timeline's [start, end] axis bounds (#166).
+ *
+ * The axis always starts at the first message. It ends at the LAST message,
+ * and only extends to wall-clock `now` while the session is actively running.
+ * A finished session therefore freezes its right edge at the last event
+ * instead of accreting blank space as real time marches on.
+ *
+ * `tsList` must be ascending (as produced by the sorted `dots`).
+ */
+export function computeTimeBounds(
+  tsList: number[],
+  now: number,
+  isRunning: boolean,
+): { start: number; end: number } {
+  if (tsList.length === 0) return { start: now - 60_000, end: now };
+  const start = tsList[0];
+  const lastTs = tsList[tsList.length - 1];
+  const end = isRunning ? Math.max(now, lastTs) : lastTs;
+  // Degenerate span (single dot / identical timestamps): give it a minute.
+  return { start, end: end === start ? start + 60_000 : end };
+}
+
+export function TimelineTab({ messages, now, isRunning = false, onSelectMessage }: TimelineTabProps) {
   const t = useT();
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [zoom, setZoom] = useState(1);
@@ -78,12 +108,10 @@ export function TimelineTab({ messages, now, onSelectMessage }: TimelineTabProps
     return names;
   }, [dots]);
 
-  const timeBounds = useMemo(() => {
-    if (dots.length === 0) return { start: now - 60_000, end: now };
-    const start = dots[0].ts;
-    const end = Math.max(now, dots[dots.length - 1].ts);
-    return { start, end: end === start ? start + 60_000 : end };
-  }, [dots, now]);
+  const timeBounds = useMemo(
+    () => computeTimeBounds(dots.map((d) => d.ts), now, isRunning),
+    [dots, now, isRunning],
+  );
 
   if (dots.length === 0) {
     return (
@@ -243,8 +271,10 @@ export function TimelineTab({ messages, now, onSelectMessage }: TimelineTabProps
             </g>
           ))}
 
-          {/* "now" marker */}
-          <line x1={xOf(now)} x2={xOf(now)} y1={PAD_TOP - 6} y2={svgH - 4} className="agent-timeline__now" />
+          {/* "now" marker — only meaningful while the session is live (#166) */}
+          {isRunning && (
+            <line x1={xOf(now)} x2={xOf(now)} y1={PAD_TOP - 6} y2={svgH - 4} className="agent-timeline__now" />
+          )}
 
           {/* delegate→result arcs */}
           {arcs.map((a) => {

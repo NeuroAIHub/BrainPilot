@@ -231,6 +231,46 @@ describe("Hono app — REST forwarding", () => {
     expect(pkg.version).not.toBe("0.1.0"); // the old hardcoded drift value
     expect(fetchFn).not.toHaveBeenCalled();
   });
+
+  // #156: /api/info exposes the real on-disk data root for the Files panel,
+  // gated to local mode. It must never touch the runtime.
+  it("GET /api/info returns absolute dataDir + workspacesRoot in local mode", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-info-"));
+    const fetchFn = vi.fn();
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {}, // BP_LOCAL_MODE unset → defaults to local mode
+    });
+    const res = await app.request("/api/info");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { localMode: boolean; dataDir: string; workspacesRoot: string };
+    expect(body.localMode).toBe(true);
+    expect(body.dataDir).toBe(path.resolve(dir));
+    expect(body.workspacesRoot).toBe(path.join(path.resolve(dir), "workspaces"));
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
+
+  it("GET /api/info hides host paths when BP_LOCAL_MODE=0 (hosted)", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-info-hosted-"));
+    const fetchFn = vi.fn();
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: { BP_LOCAL_MODE: "0" },
+    });
+    const res = await app.request("/api/info");
+    expect(res.status).toBe(200);
+    const body = (await res.json()) as { localMode: boolean; dataDir?: string; workspacesRoot?: string };
+    expect(body).toEqual({ localMode: false });
+    expect(body.dataDir).toBeUndefined();
+    expect(body.workspacesRoot).toBeUndefined();
+    expect(fetchFn).not.toHaveBeenCalled();
+  });
 });
 
 describe("Hono app — SSE byte passthrough (修正4)", () => {
