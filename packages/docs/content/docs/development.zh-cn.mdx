@@ -1,0 +1,73 @@
+---
+title: 开发
+description: 从源码运行 BrainPilot，验证改动，并构建文档站点。
+---
+
+## 克隆并构建
+
+```bash
+git clone https://github.com/NeuroAIHub/BrainPilot.git
+cd BrainPilot
+npm install
+npm run build
+```
+
+## 从源码启动
+
+```bash
+npm run bp -- up
+```
+
+无 Key 本地运行：
+
+```bash
+BP_MOCK=1 npm run bp -- up
+```
+
+通过 `npm run` 使用 CLI 时，请保留 `--` 分隔符，确保参数能正确透传。
+
+## 常用检查
+
+开 PR 前建议运行：
+
+```bash
+npm run typecheck
+BP_MOCK=1 npm test
+cd packages/web && npm test && npm run build
+```
+
+构建文档：
+
+```bash
+npm run docs:build
+npm run docs:check
+```
+
+## 包结构
+
+| Package | 作用 |
+| --- | --- |
+| `@brainpilot/protocol` | 共享的 wire 和 domain schema |
+| `@brainpilot/runtime` | 智能体编排、会话状态、MCP bridge、运行时服务 |
+| `@brainpilot/backend-core` | REST 与 SSE 后端核心 |
+| `@brainpilot/web` | 浏览器 UI |
+| `@brainpilot/app` | npm CLI 包：`brainpilot` / `bnpt` |
+| `@brainpilot/skills` | 内置技能内容包 |
+| `@brainpilot/client-cli` | 无头验证客户端 |
+| `@brainpilot/docs` | 静态公开文档站点 |
+
+## 文档工作流
+
+文档内容位于：
+
+```text
+packages/docs/content/docs/
+```
+
+英文页面使用 `page-name.mdx`，简体中文页面使用 `page-name.zh-cn.mdx`。
+
+不要把真实 provider key、MCP token 或内部专用端点写进公开文档。文档 CI 会做基础密钥扫描，但 reviewer 仍然需要人工检查示例。
+
+## Pull Request
+
+纯文档改动可以直接开 PR。新功能或架构改动建议先开 issue 或 discussion，再进入实现。

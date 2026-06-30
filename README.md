@@ -26,6 +26,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
+  <a href="https://brainpilot.chat/docs">Docs</a> ·
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-resources--knowledge-base">Resources</a> ·
   <a href="#-connecting-mcp-servers">MCP</a> ·
@@ -56,6 +57,9 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 
 BrainPilot runs as a local process via **`@brainpilot/app`** — no Docker required.
 This is the recommended way to get started.
+
+For the full beginner guide, provider setup, MCP setup, and troubleshooting notes, see the
+public docs at **[brainpilot.chat/docs](https://brainpilot.chat/docs)**.
 
 ### Prerequisites
 
@@ -499,7 +503,7 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide (dev setup, branch
 running from source, tests, and the release process), and
 **[SECURITY.md](SECURITY.md)** to report a vulnerability privately.
 
-BrainPilot is a 7-package TypeScript monorepo:
+BrainPilot is an 8-package TypeScript monorepo:
 
 | Package | Role |
 |---------|------|
@@ -510,6 +514,7 @@ BrainPilot is a 7-package TypeScript monorepo:
 | `@brainpilot/app` | `brainpilot` / `bnpt` — Docker-free local launch |
 | `@brainpilot/skills` | built-in skills content library (materialized into the data dir, loaded via Pi's native skill pipeline) |
 | `@brainpilot/client-cli` | `bp-client` — headless end-to-end verification client |
+| `@brainpilot/docs` | static public documentation site for `brainpilot.chat/docs` |
 
 ---
 

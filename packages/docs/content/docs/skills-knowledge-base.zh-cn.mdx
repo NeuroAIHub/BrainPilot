@@ -1,0 +1,65 @@
+---
+title: 技能与知识库
+description: 理解 BrainPilot 的内置技能库，以及如何接入自己的研究语料。
+---
+
+BrainPilot 自带脑科学技能库。技能不是 MCP 服务器，而是结构化的方法学文档，智能体会在相关任务中发现并按需读取。
+
+## 内置技能
+
+技能在仓库中的位置：
+
+```text
+packages/skills/skills/
+```
+
+运行时会被物化到数据目录：
+
+```text
+brainpilot/bp_template/skills/
+```
+
+脚手架不会覆盖用户已经编辑过的技能文件。
+
+## 一个技能包含什么
+
+每个技能都有一个 `SKILL.md`，并带有必需的 frontmatter：
+
+```yaml
+---
+name: "skill-name"
+description: "用于匹配的一句话摘要，应该包含清晰关键词。"
+domain: "brain-science"
+version: "1.0.0"
+---
+```
+
+`description` 会帮助智能体判断何时应该使用该技能。请写得清楚、具体、可检索。
+
+## 新增技能
+
+贡献内置技能时：
+
+1. 在 `packages/skills/skills/` 下选择已有分类，或新增分类。
+2. 创建 `<category>/<skill-name>/SKILL.md`。
+3. 较长的参考表、示例或原始资料放到 `references/`。
+4. 提交 PR 前运行技能包构建：
+
+```bash
+npm run build -w @brainpilot/skills
+```
+
+## 知识库策略
+
+开源包里不会内置一个公开托管知识库。你可以通过 MCP 接入自己的检索服务：
+
+- 面向实验室论文库的向量检索服务
+- 论文搜索服务
+- 基于文件系统或数据库的检索工具
+- 内部文献综述 API
+
+也可以把重要论文或方法转换成技能，让智能体在不依赖远程检索服务的情况下获得稳定的方法学上下文。
+
+## 使用前验证
+
+部分技能可能来自论文或代码库的自动提取。把结果用于真实科研前，请核对数值参数、引用和方法假设。

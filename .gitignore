@@ -5,6 +5,8 @@ claude/settings.json
 claude/settings.local.json
 # Documentation (auto-generated, user-specific)
 docs/
+!packages/docs/
+!packages/docs/**
 plans/
 MULTI_USER.md
 

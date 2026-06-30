@@ -1,0 +1,84 @@
+---
+title: MCP 工具
+description: 把 stdio、HTTP 和 SSE Model Context Protocol 服务接入 BrainPilot。
+---
+
+BrainPilot 可以把 Model Context Protocol 服务暴露的工具接入智能体。配置后的工具会以命名空间形式出现，例如 `mcp__server_name__tool_name`。
+
+## 在界面中添加服务器
+
+1. 启动 BrainPilot。
+2. 打开 **Settings -> MCP**。
+3. 点击 **Add Server（添加服务器）**。
+4. 选择传输方式：`stdio`、`http` 或 `sse`。
+5. 填写该传输方式需要的字段。
+6. 保存服务器。
+7. 新建一个会话，让工具列表刷新。
+
+## HTTP 服务器示例
+
+| 字段 | 值 |
+| --- | --- |
+| Name | `paper_search` |
+| Transport | `http` |
+| URL | `https://your-mcp.example.com/mcp` |
+
+如果 MCP 端点需要鉴权，请在可用时使用 headers 字段，或按服务提供方的说明配置。
+
+## stdio 服务器示例
+
+本地 MCP 服务器可以作为子进程启动：
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/path/to/allowed/folder"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+给 filesystem 类工具设置尽量窄的目录范围。不要轻易把整个 home 目录交给工具。
+
+## 配置文件格式
+
+BrainPilot 会把 MCP 配置写入数据目录：
+
+```text
+brainpilot/bp_template/mcp_servers.json
+```
+
+文件遵循常见的 `mcpServers` 映射格式：
+
+```json
+{
+  "mcpServers": {
+    "web_search": {
+      "type": "http",
+      "url": "https://your-mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    },
+    "events": {
+      "type": "sse",
+      "url": "https://your-mcp.example.com/sse"
+    }
+  }
+}
+```
+
+## 安全提醒
+
+- 把 MCP 服务器视为你信任的代码或服务；智能体可以调用其中的工具。
+- 不要把 API key 写进公开仓库里的 MCP URL 或 headers。
+- 服务器名称尽量清晰，因为它会成为智能体可见工具命名空间的一部分。
+- 修改 MCP 设置后，重启或新建会话。
