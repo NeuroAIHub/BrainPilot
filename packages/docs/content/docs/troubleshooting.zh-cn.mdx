@@ -1,0 +1,93 @@
+---
+title: 故障排查
+description: 处理常见的安装、启动、模型服务商和 MCP 问题。
+---
+
+## `brainpilot: command not found`
+
+先确认全局包是否安装：
+
+```bash
+npm list -g @brainpilot/app --depth=0
+```
+
+如果包已安装但命令找不到，查看 npm 全局 bin 目录：
+
+```bash
+npm bin -g
+```
+
+确认这个目录在你的 `PATH` 中。
+
+## Node 版本太低
+
+BrainPilot 要求 Node.js 22 或更高版本：
+
+```bash
+node -v
+```
+
+如果版本低于 `v22`，请先升级 Node.js。
+
+## npm 全局安装权限错误
+
+如果全局安装遇到权限错误，建议使用 Node 版本管理器，或配置 npm 用户级 prefix。除非你清楚安全影响，否则不要直接用 `sudo` 跑 npm。
+
+## 端口被占用
+
+尝试换一个端口：
+
+```bash
+brainpilot up --port 9010
+```
+
+如果之前用后台模式启动过：
+
+```bash
+brainpilot status
+brainpilot down
+```
+
+## 启动成功但浏览器打不开
+
+先确认打开的是终端打印的 URL，然后查看日志：
+
+```bash
+brainpilot logs
+```
+
+如果 BrainPilot 跑在远程机器或容器里，确认端口已经暴露，并且你的浏览器能访问到。
+
+## Provider 测试失败
+
+逐项检查：
+
+- API key 是否有效，复制时是否带了多余空格
+- Base URL 是否符合服务商要求
+- 协议是否与服务商匹配
+- 模型 ID 是否存在，例如 `glm-5.2`
+- 当前机器是否能访问服务商网络
+
+修改当前服务商后，如果已有会话仍在使用旧设置，请新建会话。
+
+## MCP 服务器没有显示工具
+
+逐项检查：
+
+- 服务器名称是否唯一且清晰
+- 传输方式是否匹配：`stdio`、`http` 或 `sse`
+- HTTP/SSE URL 是否可访问
+- 鉴权 headers 或 query token 是否正确
+- stdio 命令路径和参数是否有效
+
+修改 MCP 设置后，新建一个会话。
+
+## 干净的无 Key 冒烟测试
+
+用 mock 模式把安装问题和 provider 问题分开：
+
+```bash
+BP_MOCK=1 brainpilot up --dir ./bp-smoke-test --port 9011
+```
+
+如果 mock 模式可以正常启动，重点排查 provider 或 MCP 配置。

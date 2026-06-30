@@ -12,10 +12,14 @@
     "packages/cli",
     "packages/client-cli",
     "packages/web",
-    "packages/skills"
+    "packages/skills",
+    "packages/docs"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
+    "docs:build": "npm run build -w @brainpilot/docs",
+    "docs:check": "npm run check:secrets -w @brainpilot/docs && npm run typecheck -w @brainpilot/docs",
+    "docs:dev": "npm run dev -w @brainpilot/docs --",
     "typecheck": "tsc -b packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
     "test": "vitest run",
     "test:watch": "vitest",

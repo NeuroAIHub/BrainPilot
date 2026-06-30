@@ -1,0 +1,93 @@
+---
+title: Troubleshooting
+description: Fix common installation, startup, provider, and MCP issues.
+---
+
+## `brainpilot: command not found`
+
+Confirm the package is installed globally:
+
+```bash
+npm list -g @brainpilot/app --depth=0
+```
+
+If it is installed but the command is missing, check your npm global bin directory:
+
+```bash
+npm bin -g
+```
+
+Make sure that directory is on your `PATH`.
+
+## Node Version Is Too Old
+
+BrainPilot requires Node.js 22 or later:
+
+```bash
+node -v
+```
+
+Install a newer Node.js release if the version is below `v22`.
+
+## npm Global Permission Errors
+
+If global install fails with permission errors, use a Node version manager or configure an npm user prefix. Avoid running npm with `sudo` unless you understand the security tradeoff.
+
+## Port Already in Use
+
+Try another port:
+
+```bash
+brainpilot up --port 9010
+```
+
+If you previously started BrainPilot in detached mode:
+
+```bash
+brainpilot status
+brainpilot down
+```
+
+## Startup Works but the Browser Cannot Connect
+
+Check the printed URL, then inspect logs:
+
+```bash
+brainpilot logs
+```
+
+If you are running in a remote machine or container, make sure the port is exposed and reachable from your browser.
+
+## Provider Test Fails
+
+Check:
+
+- the API key is valid and not copied with extra spaces
+- the base URL matches your provider's expected endpoint
+- the selected protocol matches the provider
+- the model ID exists, for example `glm-5.2`
+- the machine can reach the provider network
+
+After changing the active provider, start a new session if the existing one still uses old settings.
+
+## MCP Server Does Not Show Tools
+
+Check:
+
+- the server name is unique and descriptive
+- the transport matches the server: `stdio`, `http`, or `sse`
+- the HTTP/SSE URL is reachable
+- auth headers or query tokens are correct
+- stdio command paths and arguments are valid
+
+Create a new session after changing MCP settings.
+
+## Clean No-key Smoke Run
+
+Use mock mode to separate install problems from provider problems:
+
+```bash
+BP_MOCK=1 brainpilot up --dir ./bp-smoke-test --port 9011
+```
+
+If mock mode works, focus on provider or MCP configuration.

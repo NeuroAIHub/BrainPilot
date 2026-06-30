@@ -92,6 +92,7 @@ Run these locally — CI runs them too, but catching issues early saves everyone
 npm run typecheck                    # tsc -b across non-web packages
 BP_MOCK=1 npx vitest run             # all non-web tests, deterministic mock (no API quota)
 ( cd packages/web && npm test && npm run build )   # web: vitest + vite build
+npm run docs:check && npm run docs:build           # docs: MDX/types/static export + secret scan
 ```
 
 `BP_MOCK=1` selects a deterministic mock agent so tests never consume API quota.

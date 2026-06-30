@@ -1,0 +1,84 @@
+---
+title: Providers
+description: Configure model providers from the Settings UI or CLI initialization.
+---
+
+BrainPilot can talk to multiple model provider protocols:
+
+- **Anthropic Messages**
+- **OpenAI Completions**
+- **OpenAI Responses**
+- **Azure OpenAI Responses**
+
+The safest beginner path is the web UI because it writes the configuration file for you.
+
+## Add a Provider in the UI
+
+1. Start BrainPilot with `brainpilot up`.
+2. Open the printed local URL.
+3. Go to **Settings -> Providers**.
+4. Click **Add Provider**.
+5. Fill in name, base URL, protocol, API key, and model IDs.
+6. Save the provider.
+7. Click **Use** on the provider you want as the active default.
+
+Example gateway setup:
+
+| Field | Value |
+| --- | --- |
+| Provider name | `sqz` |
+| Base URL | `https://your-gateway.example.com` |
+| Protocol | `Anthropic Messages` |
+| API key | `<your-api-key>` |
+| Models | `glm-5.2` |
+
+Keep real keys in your local config only. Do not commit provider keys to GitHub issues, docs, screenshots, or repository files.
+
+## CLI Initialization
+
+For quick local scaffolding:
+
+```bash
+brainpilot init --api-key <your-api-key>
+```
+
+For a custom endpoint:
+
+```bash
+brainpilot init \
+  --api-key <your-api-key> \
+  --base-url https://your-gateway.example.com \
+  --model glm-5.2
+```
+
+The UI remains the recommended path for multiple providers and model lists.
+
+## Where Provider Config Lives
+
+Provider settings are stored in the BrainPilot data directory, usually:
+
+```text
+brainpilot/bp_template/providers.json
+```
+
+If you launch with `--dir` or `BP_DATA_DIR`, look under that data directory instead.
+
+## Choosing a Protocol
+
+Use the protocol that matches your model gateway:
+
+| Gateway behavior | Protocol to try first |
+| --- | --- |
+| Anthropic-compatible `/messages` API | `Anthropic Messages` |
+| OpenAI-compatible chat/completions API | `OpenAI Completions` |
+| OpenAI Responses API | `OpenAI Responses` |
+| Azure-hosted Responses API | `Azure OpenAI Responses` |
+
+If provider testing fails, confirm the base URL, protocol, model ID, and key with your provider.
+
+## Beginner Checklist
+
+- The base URL should not include random trailing path segments unless your gateway requires them.
+- The model ID must match exactly what the gateway expects.
+- Save first, then click **Use**.
+- Start a new session after changing the active provider if an existing session still uses the old setting.

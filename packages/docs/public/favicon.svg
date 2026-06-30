@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="BrainPilot">
+  <rect width="64" height="64" rx="14" fill="#0f766e"/>
+  <path d="M20 36c0-10 6-18 15-18 7 0 12 5 12 12 0 8-6 14-14 14h-3v-8h3c4 0 6-2 6-6 0-3-2-5-5-5-4 0-7 4-7 11v10h-7V36z" fill="#ffffff"/>
+  <circle cx="43" cy="44" r="4" fill="#99f6e4"/>
+</svg>

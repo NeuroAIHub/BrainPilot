@@ -26,6 +26,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 <p align="center">
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
+  <a href="https://brainpilot.chat/docs">文档</a> ·
   <a href="#-快速开始">快速开始</a> ·
   <a href="#-资源与知识库">资源</a> ·
   <a href="#-接入-mcp-服务">MCP</a> ·
@@ -56,6 +57,9 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 ## 🚀 快速开始
 
 BrainPilot 通过 **`@brainpilot/app`** 以本地进程方式运行 —— 无需 Docker，这是推荐的上手方式。
+
+完整的新手指南、模型服务商配置、MCP 配置和故障排查，请查看公开文档：
+**[brainpilot.chat/docs](https://brainpilot.chat/docs)**。
 
 ### 环境要求
 
@@ -465,7 +469,7 @@ GPU 模式（`docker-compose.gpu.yml`）基于私有的 `brainpilot-gpu-base` �
 完整指南（开发环境、分支模型、从源码运行、测试、发布流程）见
 **[CONTRIBUTING.md](CONTRIBUTING.md)**；私下报告安全漏洞见 **[SECURITY.md](SECURITY.md)**。
 
-BrainPilot 是一个 7 包的 TypeScript monorepo：
+BrainPilot 是一个 8 包的 TypeScript monorepo：
 
 | 包 | 角色 |
 |---------|------|
@@ -476,6 +480,7 @@ BrainPilot 是一个 7 包的 TypeScript monorepo：
 | `@brainpilot/app` | `brainpilot` / `bnpt` —— 免 Docker 本地启动 |
 | `@brainpilot/skills` | 内置技能内容库（物化到数据目录，经 Pi 原生 skill 流水线加载） |
 | `@brainpilot/client-cli` | `bp-client` —— 无头端到端验证客户端 |
+| `@brainpilot/docs` | 面向 `brainpilot.chat/docs` 的静态公开文档站点 |
 
 ---
 

@@ -1,0 +1,108 @@
+---
+title: Installation
+description: Install, update, run, and uninstall BrainPilot without surprising your local environment.
+---
+
+## Recommended npm Setup
+
+Use the published npm package for the simplest single-user setup:
+
+```bash
+npm install -g @brainpilot/app
+brainpilot up
+```
+
+The package includes the CLI, backend, runtime, web UI, and built-in skills needed for a local browser session.
+
+## Update
+
+To update to the latest published version:
+
+```bash
+npm install -g @brainpilot/app@latest
+brainpilot --version
+```
+
+Then restart BrainPilot:
+
+```bash
+brainpilot down
+brainpilot up
+```
+
+If you normally run in foreground mode, stop the old process with `Ctrl-C` before starting the new one.
+
+## Uninstall
+
+```bash
+npm uninstall -g @brainpilot/app
+```
+
+This removes the CLI package. It does not delete your BrainPilot data directory.
+
+## Data Directory
+
+BrainPilot keeps its runtime files under one data directory. The resolution order is:
+
+1. `--dir <path>`
+2. `BP_DATA_DIR`
+3. `./brainpilot` under the current working directory
+
+Example:
+
+```bash
+brainpilot up --dir ./my-brainpilot-data
+```
+
+Typical contents:
+
+```text
+brainpilot/
+  bp_template/
+    providers.json
+    mcp_servers.json
+    settings.json
+    skills/
+  workspaces/
+  .bp/
+  .runtime/
+```
+
+## Local Isolation
+
+The npm path is a local process. It does **not** create a Docker sandbox. Agents read and write under the session workspace inside the data directory, so choose that directory carefully and avoid pointing BrainPilot at private folders you do not want agents to inspect.
+
+For stronger process isolation, use Docker deployment instead of the npm local process.
+
+## Run From Source
+
+Use source mode when you want the latest GitHub code or plan to contribute changes:
+
+```bash
+git clone https://github.com/NeuroAIHub/BrainPilot.git
+cd BrainPilot
+npm install
+npm run build
+npm run bp -- up
+```
+
+For a no-key smoke run:
+
+```bash
+BP_MOCK=1 npm run bp -- up
+```
+
+With `npm run`, keep the `--` separator so flags are forwarded to the BrainPilot CLI.
+
+## Detached Mode
+
+Run BrainPilot in the background:
+
+```bash
+brainpilot up --detach
+brainpilot status
+brainpilot logs
+brainpilot down
+```
+
+Use foreground mode while learning; use detached mode when you want it to keep running after the terminal command returns.

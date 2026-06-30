@@ -1,0 +1,73 @@
+---
+title: Development
+description: Run BrainPilot from source, verify changes, and build the documentation site.
+---
+
+## Clone and Build
+
+```bash
+git clone https://github.com/NeuroAIHub/BrainPilot.git
+cd BrainPilot
+npm install
+npm run build
+```
+
+## Run From Source
+
+```bash
+npm run bp -- up
+```
+
+For a no-key local run:
+
+```bash
+BP_MOCK=1 npm run bp -- up
+```
+
+With `npm run`, keep the `--` separator so CLI flags are forwarded correctly.
+
+## Common Checks
+
+Run these before opening a PR:
+
+```bash
+npm run typecheck
+BP_MOCK=1 npm test
+cd packages/web && npm test && npm run build
+```
+
+Build the docs:
+
+```bash
+npm run docs:build
+npm run docs:check
+```
+
+## Package Layout
+
+| Package | Role |
+| --- | --- |
+| `@brainpilot/protocol` | Shared wire and domain schemas |
+| `@brainpilot/runtime` | Agent orchestration, session state, MCP bridge, runtime server |
+| `@brainpilot/backend-core` | REST and SSE backend core |
+| `@brainpilot/web` | Browser UI |
+| `@brainpilot/app` | npm CLI package: `brainpilot` / `bnpt` |
+| `@brainpilot/skills` | Built-in skills content library |
+| `@brainpilot/client-cli` | Headless verification client |
+| `@brainpilot/docs` | Static public docs site |
+
+## Documentation Workflow
+
+Docs live in:
+
+```text
+packages/docs/content/docs/
+```
+
+English pages use `page-name.mdx`. Simplified Chinese pages use `page-name.zh-cn.mdx`.
+
+Do not put real provider keys, MCP tokens, or internal-only endpoints in public docs. The docs CI includes a basic secret scan, but reviewers should still check examples manually.
+
+## Pull Requests
+
+Documentation-only changes can be opened directly as PRs. New features or architecture changes should start with an issue or discussion before implementation.
