@@ -232,25 +232,12 @@ codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilo
 
 ### 构建你自己的技能库
 
-我们 demo 里展示的技能，都是从我们自己的论文库与方法学库中提取出来的。你也可以用同样的方式、借助
-我们开源的工具，构建属于你自己的技能库 —— 把它们对准 **你** 关心的论文、代码库和方法：
+你可以把论文、代码库、实验室 protocol 和可复用分析流程转换成标准 `SKILL.md`，放到
+`<data-dir>/bp_template/skills/`，逐步构建自己的方法学技能库。BrainPilot 支持 paper-to-skill、
+repo-to-skill、批量提取流水线和公开技能合集。
 
-- **`paper-to-skill`**（内置 Meta-Skill）—— 给智能体一篇论文（PDF 或文本），让它"把这篇论文变成
-  一个 skill"，它会把可复现的方法学提取成一份初稿 `SKILL.md`。
-- **`repo-to-skill`**（内置 Meta-Skill）—— 给它一个 GitHub 链接或本地仓库路径，它会把代码库转换
-  成带渐进式披露的结构化技能。我们已用它集成了 [MNE-Python](https://github.com/mne-tools/mne-python)、
-  [pycortex](https://github.com/gallantlab/pycortex) 等知名工具；
-  [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut) 已在计划中。
-- **批量提取流水线** —— 想一次性转换 *一整个文件夹* 的论文/转录稿，可用公开仓库
-  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
-  里的 `pipeline/` 工具：`pip install -r pipeline/requirements.txt`，
-  `cp pipeline/config.example.yaml pipeline/config.yaml`，把 `.txt`/`.md` 源文件放进 `input/`，
-  配好 API key，运行 `python pipeline/extract.py --config pipeline/config.yaml`。它会产出标准的
-  `SKILL.md`，直接丢进 `<data-dir>/bp_template/skills/` 即可。
-- **现成合集** —— 也可以直接安装我们公开仓库里现成的技能：
-  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
-  和 [`nature-skills`](https://github.com/Yuan1z0825/nature-skills)。把任意
-  `<category>/<skill-name>/` 文件夹拷进 `<data-dir>/bp_template/skills/` 即可（无需重新构建）。
+完整流程和示例见
+**[技能与知识库文档](https://brainpilot.chat/docs/zh-cn/skills-knowledge-base)**。
 
 > ⚠️ 其中有些技能是 AI 生成的（从文献或代码库中提取），可能存在错误 —— **在真实研究中依赖之前，请
 > 先核验参数与引用。**
@@ -262,9 +249,10 @@ codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilo
 经能通过你提供的检索工具去搜索论文、网络来源和知识库：
 
 - **接入一个检索型 MCP 服务**，对准你自己的语料（向量库、论文归档、一堆 PDF 的文件系统、内网搜索
-  API）—— 见 [接入 MCP 服务](#-接入-mcp-服务)。你添加的任何 MCP 服务都会自动作为智能体工具出现。
-- **把关键论文转成技能**，用上面的 `paper-to-skill` / 批量流水线，让方法学常驻在智能体上下文里 ——
-  这是不搭建检索服务的轻量替代方案。
+  API）—— 见 **[MCP 工具文档](https://brainpilot.chat/docs/zh-cn/mcp)**。你添加的任何 MCP 服务都会
+  自动作为智能体工具出现。
+- **把关键论文转成技能**，让方法学常驻在智能体上下文里 —— 这是不搭建检索服务的轻量替代方案。见
+  **[技能与知识库文档](https://brainpilot.chat/docs/zh-cn/skills-knowledge-base)**。
 
 #### 🚧 用我们的同款流水线构建你自己的知识库（即将开放）
 

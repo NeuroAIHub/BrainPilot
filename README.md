@@ -249,30 +249,13 @@ under `references/` rather than inline. See the `contribute-skills-via-pr` and
 
 ### Grow your own skill library
 
-The skills you see in our demo are extracted from our own paper and methodology libraries.
-You can grow your own library the same way, using the open-source tools we ship — point them
-at the papers, codebases, and methods *you* care about:
+You can extend BrainPilot with your own methodology library: turn papers, codebases, lab
+protocols, and reusable analysis procedures into standard `SKILL.md` folders under
+`<data-dir>/bp_template/skills/`. BrainPilot supports paper-to-skill, repo-to-skill, batch
+extraction, and pre-built public skill collections.
 
-- **`paper-to-skill`** (built-in Meta-Skill) — give an agent a paper (PDF or text) and ask it
-  to *"turn this paper into a skill"*; it extracts the reproducible methodology into a
-  first-draft `SKILL.md`.
-- **`repo-to-skill`** (built-in Meta-Skill) — give it a GitHub URL or local repo path and it
-  converts the codebase into a structured skill with progressive disclosure. We've used it to
-  integrate well-known tools like [MNE-Python](https://github.com/mne-tools/mne-python),
-  [pycortex](https://github.com/gallantlab/pycortex), [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut),
-  [EthoClaw](https://github.com/penciler-star/EthoClaw), and
-  [NeuroClaw](https://github.com/CUHK-AIM-Group/NeuroClaw).
-- **Batch extraction pipeline** — to convert a *folder* of papers/transcripts at once, use the
-  `pipeline/` tool in
-  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills):
-  `pip install -r pipeline/requirements.txt`, `cp pipeline/config.example.yaml pipeline/config.yaml`,
-  drop `.txt`/`.md` sources into `input/`, set your API key, then run
-  `python pipeline/extract.py --config pipeline/config.yaml`. It writes standard `SKILL.md`
-  files you can drop into `<data-dir>/bp_template/skills/`.
-- **Pre-built collections** — or just install ready-made skills from our public repos:
-  [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)
-  and [`nature-skills`](https://github.com/Yuan1z0825/nature-skills). Copy any
-  `<category>/<skill-name>/` folder into `<data-dir>/bp_template/skills/` (no rebuild needed).
+For the full workflow and examples, see
+**[Skills and Knowledge Base](https://brainpilot.chat/docs/skills-knowledge-base)**.
 
 > ⚠️ Some of the skills are AI-generated (extracted from literature or codebases), so they
 > may contain errors — **verify parameters and citations before relying on them in real
@@ -286,11 +269,12 @@ instead it lets you **connect your own**. The built-in `librarian` agent already
 papers, web sources, and knowledge bases through whatever retrieval tools you give it:
 
 - **Connect a retrieval MCP server** over your own corpus (a vector store, a paper archive, a
-  filesystem of PDFs, an internal search API) — see [Connecting MCP servers](#-connecting-mcp-servers).
+  filesystem of PDFs, an internal search API) — see
+  **[MCP Tools](https://brainpilot.chat/docs/mcp)**.
   Any MCP server you add shows up as agent tools automatically.
-- **Turn key papers into skills** with `paper-to-skill` / the batch pipeline above, so the
-  methodology is always in the agent's context — a lightweight alternative to standing up a
-  retrieval service.
+- **Turn key papers into skills** so the methodology is always in the agent's context — a
+  lightweight alternative to standing up a retrieval service. See
+  **[Skills and Knowledge Base](https://brainpilot.chat/docs/skills-knowledge-base)**.
 
 #### 🚧 Build your own knowledge base with our pipeline (coming soon)
 
