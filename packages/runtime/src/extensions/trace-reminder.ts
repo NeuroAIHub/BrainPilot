@@ -87,13 +87,16 @@ export interface TraceReminderDeps {
  * substantive work and arms the delegate reminder.
  */
 const PI_ALLOWED_TOOLS = new Set([
-  // information-gathering / read-only
-  "Read",
-  "Grep",
-  "Glob",
-  "LS",
-  "WebFetch",
-  "WebSearch",
+  // information-gathering / read-only. These MUST be Pi's real emitted tool
+  // names, which are lowercase (see BUILTIN_TOOL_CONFIG in tools/system-tools.ts:
+  // principal = ["read","write","edit","bash","grep","find","glob","ls"]). Names
+  // are matched case-insensitively below, but keep them lowercase to match the
+  // source of truth. (The principal has no WebFetch/WebSearch tool — omitted.)
+  "read",
+  "grep",
+  "glob",
+  "ls",
+  "find",
   // management / coordination
   "create_agent",
   "destroy_agent",
@@ -182,8 +185,10 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       if (t === "send_message") replied = true;
       if (t === "create_agent") delegated = true;
       // 意图三: any successful call NOT in the allow-set (a write/run, or an
-      // external MCP/domain tool) is the principal doing the work itself.
-      if (deps.role === "principal" && !PI_ALLOWED_TOOLS.has(t)) didSubstantiveWork = true;
+      // external MCP/domain tool) is the principal doing the work itself. Match
+      // case-insensitively — Pi emits builtins lowercase, but normalizing here
+      // keeps the exemption working if a tool ever surfaces in another case.
+      if (deps.role === "principal" && !PI_ALLOWED_TOOLS.has(t.toLowerCase())) didSubstantiveWork = true;
     });
 
     pi.on("agent_end", (e) => {
