@@ -422,7 +422,7 @@ BrainPilot is an 8-package TypeScript monorepo:
 Questions, ideas, or just want to say hi? Join our open-source community on Feishu:
 
 - 🪶 **[Join the BrainPilot Feishu group →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
-- 📧 **Contact:** [hx-li25@mails.tsinghua.edu.cn](mailto:hx-li25@mails.tsinghua.edu.cn)
+- 📧 **Contact:** [thu_neuroai@mail.tsinghua.edu.cn](mailto:thu_neuroai@mail.tsinghua.edu.cn)
 
 You can also [open an issue](https://github.com/NeuroAIHub/BrainPilot/issues/new/choose)
 or start a discussion.

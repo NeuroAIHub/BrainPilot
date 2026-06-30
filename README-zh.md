@@ -395,7 +395,7 @@ BrainPilot 是一个 8 包的 TypeScript monorepo：
 有问题、有想法，或者只想打个招呼？欢迎加入我们的飞书开源社区群：
 
 - 🪶 **[加入 BrainPilot 飞书群 →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
-- 📧 **联系邮箱：** [hx-li25@mails.tsinghua.edu.cn](mailto:hx-li25@mails.tsinghua.edu.cn)
+- 📧 **联系邮箱：** [thu_neuroai@mail.tsinghua.edu.cn](mailto:thu_neuroai@mail.tsinghua.edu.cn)
 
 你也可以[提一个 issue](https://github.com/NeuroAIHub/BrainPilot/issues/new/choose)或发起讨论。
 
