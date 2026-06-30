@@ -49,6 +49,17 @@ version: "1.0.0"
 npm run build -w @brainpilot/skills
 ```
 
+## 构建你自己的技能库
+
+demo 中的技能来自论文库和方法学库。你也可以把 BrainPilot 的工具对准自己关心的论文、代码库和方法，逐步构建自己的技能库：
+
+- **`paper-to-skill`**：给智能体一篇论文、PDF 或文本来源，让它把其中的方法学转换成技能。它会生成一份面向可复现方法的初稿 `SKILL.md`。
+- **`repo-to-skill`**：给智能体一个 GitHub URL 或本地仓库路径。它会把代码库转换成结构化技能，并通过 `references/` 做渐进式披露。
+- **批量提取流水线**：如果要处理一整个文件夹的论文或转录稿，可以使用 [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills) 中的 `pipeline/` 工具。配置 pipeline、放入 `.txt` 或 `.md` 来源、设置 API key 后，运行 `python pipeline/extract.py --config pipeline/config.yaml`。
+- **现成技能合集**：也可以直接把 [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills) 或 [`nature-skills`](https://github.com/Yuan1z0825/nature-skills) 中的技能复制到 `<data-dir>/bp_template/skills/`。
+
+生成后的目录应遵循 `<category>/<skill-name>/SKILL.md` 结构。添加技能后，重启 BrainPilot 或新建会话。
+
 ## 知识库策略
 
 开源包里不会内置一个公开托管知识库。你可以通过 MCP 接入自己的检索服务：
