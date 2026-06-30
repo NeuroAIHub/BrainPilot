@@ -621,6 +621,35 @@ describe("Hono app — local config routes", () => {
       });
       expect(res.status).toBe(400);
     });
+
+    it("#203 rejects a non-URL base_url with 400", async () => {
+      const { app } = await provApp();
+      const res = await postProfile(app, { name: "Bad URL", base_url: "not a url", api_key: "sk-x", models: ["m"] });
+      expect(res.status).toBe(400);
+    });
+
+    it("#203 accepts an empty base_url and localhost base_url", async () => {
+      const { app } = await provApp();
+      expect((await postProfile(app, { name: "Empty Base", base_url: "", api_key: "sk-x", models: ["m"] })).status).toBe(
+        201,
+      );
+      expect(
+        (await postProfile(app, { name: "Local Base", base_url: "http://127.0.0.1:1234", api_key: "sk-x", models: ["m"] }))
+          .status,
+      ).toBe(201);
+    });
+
+    it("#205 rejects a duplicate provider name with 409 (case-insensitive)", async () => {
+      const { app } = await provApp();
+      expect((await postProfile(app, { name: "sqz", base_url: "https://a", api_key: "k", models: ["m"] })).status).toBe(
+        201,
+      );
+      const dup = await postProfile(app, { name: "  SQZ  ", base_url: "https://b", api_key: "k", models: ["m"] });
+      expect(dup.status).toBe(409);
+      // only the first profile persisted
+      const list = (await (await app.request("/api/provider/profiles")).json()) as unknown[];
+      expect(list).toHaveLength(1);
+    });
   });
 
   // #55: the Test button must do a real connectivity probe, not echo unknown.

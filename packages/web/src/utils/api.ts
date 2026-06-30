@@ -66,13 +66,44 @@ function authHeaders(json = true): Record<string, string> {
   return json ? { "Content-Type": "application/json" } : {};
 }
 
+/**
+ * #206: build a readable message from a Zod issue list. The backend returns
+ * `details: parsed.error.issues` — each issue has a `path` (field) and a
+ * `message`. We render `field: message` per issue so a validation 400 tells the
+ * user *which* field is wrong (empty name, invalid url, …) instead of degrading
+ * to a generic "Request failed (400)".
+ */
+function formatIssues(details: unknown): string | null {
+  if (!Array.isArray(details) || details.length === 0) return null;
+  const parts: string[] = [];
+  for (const issue of details) {
+    if (!issue || typeof issue !== "object") continue;
+    const { path, message } = issue as { path?: unknown; message?: unknown };
+    if (typeof message !== "string" || message.length === 0) continue;
+    const field = Array.isArray(path) ? path.filter((p) => p !== "" && p != null).join(".") : "";
+    parts.push(field ? `${field}: ${message}` : message);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 async function parseError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
-    const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
-    if (typeof body?.detail === "string") {
+    // #206: the backend uses two shapes — `{ detail }` (single string) and the
+    // Zod validation shape `{ error, details }`. parseError previously read only
+    // `detail`, so every `{ error, details }` 400/409 fell through to the generic
+    // text fallback. Read all three: detail → error(+formatted details) → error.
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: unknown; error?: unknown; details?: unknown }
+      | null;
+    if (typeof body?.detail === "string" && body.detail.length > 0) {
       return body.detail;
     }
+    const issues = formatIssues(body?.details);
+    if (typeof body?.error === "string" && body.error.length > 0) {
+      return issues ? `${body.error} (${issues})` : body.error;
+    }
+    if (issues) return issues;
   }
   const text = await res.text().catch(() => "");
   return text || `Request failed (${res.status})`;
