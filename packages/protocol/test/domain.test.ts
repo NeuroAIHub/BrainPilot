@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   AgentStateSchema,
+  EXAMPLE_MODEL,
   FileContentSchema,
   FileEntrySchema,
   McpServerConfigSchema,
@@ -180,6 +181,14 @@ describe("domain schemas", () => {
       expect(ProviderProfileCreateSchema.safeParse({ ...base, base_url: "https://api.x.com" }).success).toBe(true);
       // omitted entirely is fine (optional)
       expect(ProviderProfileCreateSchema.safeParse(base).success).toBe(true);
+    });
+  });
+
+  describe("#207 EXAMPLE_MODEL", () => {
+    it("is a non-empty Claude example string shared across packages", () => {
+      expect(typeof EXAMPLE_MODEL).toBe("string");
+      expect(EXAMPLE_MODEL.length).toBeGreaterThan(0);
+      expect(EXAMPLE_MODEL).toBe("claude-sonnet-4-6");
     });
   });
 });

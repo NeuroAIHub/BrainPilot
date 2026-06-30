@@ -12,7 +12,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ProviderApi, ProviderAdapter, HealthStatus } from "@brainpilot/protocol";
-import { deriveProviderApi } from "@brainpilot/protocol";
+import { deriveProviderApi, EXAMPLE_MODEL } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -529,7 +529,7 @@ export async function describeProviderConfig(
  */
 export function formatProviderGuidance(report: ProviderConfigReport): string[] {
   if (report.hasKey) {
-    const model = report.model || "(default) claude-sonnet-4-6";
+    const model = report.model || `(default) ${EXAMPLE_MODEL}`;
     const baseUrl = report.baseUrl || "(built-in Anthropic endpoint)";
     return [
       `✓ Provider key configured (from ${report.source ?? "unknown"}).`,
