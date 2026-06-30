@@ -1,0 +1,26 @@
+# Python dependencies for the BrainPilot KnowledgeBase pipeline.
+# Install with:  pip install -r KnowledgeBase/requirements.txt
+#
+# Tested with Python 3.10–3.12. A virtualenv (or conda env) is strongly
+# recommended — bge-m3 brings in a PyTorch with CUDA wheels that you do
+# NOT want clashing with whatever Python tools you use elsewhere.
+
+# ── OCR + metadata extraction (stages 1–2) ─────────────────────────────
+PyMuPDF>=1.24         # render PDF pages → PNG for the SiliconFlow OCR API
+openai>=1.40          # OpenAI-compatible client (used by SiliconFlow and the
+                      # metadata-extraction LLM)
+
+# ── chunking (stage 3) ────────────────────────────────────────────────
+# (stdlib only — argparse + multiprocessing)
+
+# ── vectorize + retrieve (stage 4 + agent runtime) ────────────────────
+# bge-m3 + bge-reranker-v2-m3 via FlagEmbedding. Installs torch as a
+# transitive dep; if you want a specific CUDA variant install torch first
+# from https://pytorch.org/get-started/locally/ then re-run this file.
+FlagEmbedding>=1.2.10
+huggingface_hub>=0.24  # used by setup_models.py to fetch model weights
+fastapi>=0.110         # local model_server.py sidecar
+uvicorn>=0.27
+pydantic>=2.6
+requests>=2.31         # vectorize.py HTTP encoder path
+numpy>=1.24

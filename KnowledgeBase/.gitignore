@@ -1,0 +1,26 @@
+# User-generated data: don't commit any of it.
+source/pdf/*
+!source/pdf/.gitkeep
+source/mmd/*
+!source/mmd/.gitkeep
+source/OCRed_pdf.json
+source/KB_source.json
+source/API_config.json
+
+# Chunks + vector store are rebuilt from the pdfs
+chunks/*
+!chunks/.gitkeep
+vectorstore/*
+!vectorstore/.gitkeep
+
+# Model weights (~2.5 GB). Ship via setup_models.py, never via git.
+models/*
+!models/.gitkeep
+
+# Python virtualenv created by scripts/setup_env.sh
+.venv/
+
+# Python cruft
+__pycache__/
+*.pyc
+*.tmp

@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Check, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
@@ -8,8 +8,9 @@ import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 
-type SettingsTab = "account" | "providers" | "mcp" | "preferences";
+type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
 
 type SettingsDialogProps = {
   isOpen: boolean;
@@ -20,6 +21,7 @@ const tabs: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
   { id: "account", labelKey: "settings.tab.account", icon: UserRound },
   { id: "providers", labelKey: "settings.tab.providers", icon: SlidersHorizontal },
   { id: "mcp", labelKey: "settings.tab.mcp", icon: Plug },
+  { id: "knowledgeBase", labelKey: "settings.tab.knowledgeBase", icon: Database },
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
 
@@ -492,6 +494,8 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 </div>
               </section>
             ) : null}
+
+            {activeTab === "knowledgeBase" ? <KnowledgeBasePanel /> : null}
 
             {activeTab === "preferences" ? (
               <section className="settings-section">

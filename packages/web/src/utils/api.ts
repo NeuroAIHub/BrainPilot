@@ -735,4 +735,88 @@ export const api = {
       return normalizeProviderProfile(raw as Parameters<typeof normalizeProviderProfile>[0]);
     },
   },
+
+  // Knowledge Base — local pipeline build orchestration.
+  // Mirrors the backend /api/kb/* routes. The SSE event stream is consumed
+  // directly via `new EventSource()` in the panel component (so it can stay
+  // attached for the lifetime of the dialog), so we don't expose a helper
+  // here for it.
+  kb: {
+    async build(opts: {
+      ocrApiKey?: string;
+      metaApiKey?: string;
+      metaBaseUrl?: string;
+      metaModel?: string;
+      kbRoot?: string;
+      ocrConcurrency?: number;
+      ocrLimit?: number;
+      skip?: Array<"ocr" | "extract" | "chunk" | "vectorize">;
+      only?: Array<"ocr" | "extract" | "chunk" | "vectorize">;
+    }): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/build`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `kb build failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    async status(): Promise<{
+      active: boolean;
+      startedAt: number | null;
+      finishedAt: number | null;
+      exitCode: number | null | undefined;
+      error?: string;
+      recentEvents: Array<{
+        ts: string;
+        stage: string;
+        event: string;
+        msg: string;
+        [k: string]: unknown;
+      }>;
+      environment: {
+        python: string;
+        pythonIsVenv: boolean;
+        venvExists: boolean;
+        expectedVenvPath: string;
+        scriptsPresent: boolean;
+        kbRoot: string;
+      };
+    }> {
+      return handleJson(await apiFetch(`${API_BASE}/kb/status`));
+    },
+
+    async cancel(): Promise<{ ok: boolean; message?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/cancel`, { method: "POST" });
+      return res.json().catch(() => ({ ok: false }));
+    },
+
+    // Bootstrap the Python venv (KnowledgeBase/.venv) before the first
+    // build can run. Streams progress on the same SSE channel as `build`,
+    // so the panel only needs one EventSource subscription.
+    async setupEnv(opts: {
+      python?: string;
+      reinstall?: boolean;
+      kbRoot?: string;
+    } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/setup-env`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `setup-env failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    eventsUrl(): string {
+      return `${API_BASE}/kb/events`;
+    },
+  },
 };
