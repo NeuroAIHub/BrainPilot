@@ -264,16 +264,27 @@ papers, web sources, and knowledge bases through whatever retrieval tools you gi
   lightweight alternative to standing up a retrieval service. See
   **[Skills and Knowledge Base](https://brainpilot.chat/docs/skills-knowledge-base)**.
 
-#### 🚧 Build your own knowledge base with our pipeline (coming soon)
+#### 🧪 Build your own knowledge base with the bundled pipeline
 
-The knowledge base and paper library behind our hosted demo are built with an in-house
-ingestion pipeline. We plan to open-source that **same pipeline** so you can build your own
-knowledge base and paper library the way we do, then connect it to BrainPilot — point it at
-your own papers and corpora, and the `librarian` agent searches it like any other retrieval
-source.
+BrainPilot now ships an end-to-end ingestion pipeline under
+[`KnowledgeBase/`](./KnowledgeBase/README.md). Drop your PDFs into
+`KnowledgeBase/source/pdf/`, click **Settings → Knowledge Base → Build Knowledge Base**
+(or run `python KnowledgeBase/scripts/build_kb.py` from a shell), and the agent gets two
+new built-in tools:
 
-> 🚧 The pipeline and a turnkey, hosted knowledge base are on the roadmap. Until then, the
-> two paths above already let a self-hosted BrainPilot work against *your* literature today.
+- **`get_domain_knowledge_local`** — bge-m3 embedding retrieval + bge-reranker-v2-m3 rerank
+  over your local vector store.
+- **`search_papers_local`** — multi-criteria metadata search + keyword ranking over your
+  `KB_source.json` paper library.
+
+The embedding and reranker models run **on your own machine** — a single-user loopback
+sidecar is auto-spawned by the runtime, so there is no systemd daemon, no public port, and
+no third-party retrieval service. You supply just two API keys (SiliconFlow for OCR, any
+OpenAI-compatible endpoint for metadata extraction — the latter can reuse your agent's
+existing LLM key).
+
+See [`KnowledgeBase/README.md`](./KnowledgeBase/README.md) for the full pipeline walkthrough,
+incremental-build semantics, FAQ and offline mode.
 
 ---
 

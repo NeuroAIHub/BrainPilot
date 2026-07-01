@@ -51,9 +51,17 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("create_agent");
   });
 
-  it("expert gets send_message + record_trace + skill_search", () => {
+  it("expert gets send_message + record_trace + skill_search + local KB tools", () => {
     const names = systemToolNamesForRole("expert", "librarian");
-    expect(names.sort()).toEqual(["record_trace", "send_message", "skill_search"].sort());
+    expect(names.sort()).toEqual(
+      [
+        "record_trace",
+        "send_message",
+        "skill_search",
+        "get_domain_knowledge_local",
+        "search_papers_local",
+      ].sort(),
+    );
     expect(names).not.toContain("create_agent");
   });
 
@@ -111,9 +119,17 @@ describe("tool access control (§9)", () => {
     );
   });
 
-  it("auditor gets send_message + record_trace + skill_search, but NO trace-graph access", () => {
+  it("auditor gets send_message + record_trace + skill_search + local KB tools, but NO trace-graph access", () => {
     const names = systemToolNamesForRole("expert", "auditor");
-    expect(names.sort()).toEqual(["record_trace", "send_message", "skill_search"].sort());
+    expect(names.sort()).toEqual(
+      [
+        "record_trace",
+        "send_message",
+        "skill_search",
+        "get_domain_knowledge_local",
+        "search_papers_local",
+      ].sort(),
+    );
     // Audit evidence is restricted to the workspace — no graph reads, no
     // create/destroy, no graph mutation.
     expect(names).not.toContain("get_trace_graph");

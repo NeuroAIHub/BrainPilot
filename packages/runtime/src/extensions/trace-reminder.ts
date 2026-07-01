@@ -8,10 +8,10 @@
  *  - 意图二 (expert results flow back): if an expert run produced work but never
  *    send_message'd the principal, nudge; if it still won't, the host writes a
  *    fallback note into the principal's mailbox so the PI never dead-waits.
- *  - 意图三 (PI keeps to delegation): if the principal does substantive work
- *    directly without delegating, append a soft reminder to the tool result.
- *  - 意图四 (resource awareness): on a tool error, append a soft hint that the
- *    knowledge tools / record_trace exist. (Static identity lives in personas.)
+ *  - 意图三 (PI keeps to delegation): if the principal did substantive work
+ *    directly (a write/run/external tool, not a read or coordination call)
+ *    without delegating, nudge it at run end via a followUp (same channel as
+ *    意图一/二) — the tool result itself is left untouched.
  *
  * 意图一 and 意图二 are ORTHOGONAL checks (B): an expert can owe both a trace
  * and a reply. They limit independently (A — separate counters), but when BOTH
@@ -29,8 +29,9 @@
  *    {deliverAs:"followUp"})` inside `agent_end`: it releases the current stop
  *    and starts a NEW agent loop (a fresh agent_start) — which is why the
  *    anti-loop counters must NOT reset on agent_start.
- *  - `tool_result` MAY return `{content}` to rewrite the result text — used for
- *    the soft reminders (意图三/四).
+ *  - Host-injected text (every followUp this file sends) is wrapped in a paired
+ *    `[SYSTEM-MESSAGE:kind] … [/SYSTEM-MESSAGE]` marker via the `SYS()` helper, so
+ *    a consumer can strip it with one regex and the wrapping has a single source.
  */
 import type { AgentRole } from "../types.js";
 
@@ -39,14 +40,6 @@ interface PiExtensionApi {
   on(event: "agent_start", handler: () => void): void;
   on(event: "tool_execution_start", handler: (e: { toolName: string; args?: unknown }) => void): void;
   on(event: "tool_execution_end", handler: (e: { toolName: string; isError: boolean }) => void): void;
-  on(
-    event: "tool_result",
-    handler: (e: {
-      toolName: string;
-      isError: boolean;
-      content: Array<{ type: string; text?: string }>;
-    }) => { content: Array<{ type: "text"; text: string }> } | void,
-  ): void;
   on(event: "agent_end", handler: (e: AgentEndLike) => void): void;
   sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
 }
@@ -87,10 +80,21 @@ export interface TraceReminderDeps {
 }
 
 /**
- * Management/coordination tools that are legitimate for a principal to call
- * directly — they don't count as "doing the work itself" (意图三 exemption).
+ * Tools a principal may call directly WITHOUT it counting as "doing the work
+ * itself" (意图三 exemption): information-gathering / read-only tools plus the
+ * management/coordination tools. Anything NOT in this set — a write/edit/run, or
+ * any external MCP tool (domain work a principal should delegate) — counts as
+ * substantive work and arms the delegate reminder.
  */
-const MGMT_TOOLS = new Set([
+const PI_ALLOWED_TOOLS = new Set([
+  // information-gathering / read-only
+  "Read",
+  "Grep",
+  "Glob",
+  "LS",
+  "WebFetch",
+  "WebSearch",
+  // management / coordination
   "create_agent",
   "destroy_agent",
   "record_trace",
@@ -99,17 +103,35 @@ const MGMT_TOOLS = new Set([
   "get_trace_graph",
 ]);
 
-const TRACE_REMINDER =
-  "你本轮做了实质工作但尚未调用 record_trace。如果这步值得留痕，请调用 record_trace 记录后再结束。";
-const EXPERT_REPLY_REMINDER =
-  "你尚未通过 send_message(to=\"principal\", ...) 把结果回交给 Principal。请回交结果，否则 Principal 收不到你的产出。";
-const MERGED_REMINDER =
-  "你本轮尚未回交结果，也未记录关键决策。结束前请：" +
-  "① 用 send_message(to=\"principal\", ...) 回交结果；" +
-  "② 用 record_trace 记录关键决策。";
-const DELEGATE_REMINDER = "[提醒：作为 Principal，实质工作应委派给专家，而不是自己埋头执行。]";
-const TOOL_FAILURE_REMINDER =
-  "[提醒：该工具调用失败。可用 record_trace 记录这次失败，或借助知识库/检索工具寻找替代方案。]";
+/**
+ * Paired marker wrapping EVERY host-injected message, so a consumer can strip it
+ * with a single regex (`\[SYSTEM-MESSAGE.*?\][\s\S]*?\[/SYSTEM-MESSAGE\]`) and the
+ * wrapping style has one source of truth. `kind` sub-tags the message for
+ * filtering/metrics; the namespace is intentionally generic (not "REMINDER") so
+ * future host injections of any sort reuse the same envelope.
+ */
+const SYS = (kind: string, body: string): string => `[SYSTEM-MESSAGE:${kind}] ${body} [/SYSTEM-MESSAGE]`;
+
+const TRACE_REMINDER = SYS(
+  "trace",
+  "You did substantive work this run but have not called record_trace. " +
+    "If this step is worth recording, call record_trace before finishing.",
+);
+const EXPERT_REPLY_REMINDER = SYS(
+  "reply",
+  'You have not returned your result to the Principal via send_message(to="principal", ...). ' +
+    "Please report back, otherwise the Principal will not receive your output.",
+);
+const MERGED_REMINDER = SYS(
+  "merged",
+  "Before finishing this run: " +
+    '(1) return your result via send_message(to="principal", ...); ' +
+    "(2) record the key decision via record_trace.",
+);
+const DELEGATE_REMINDER = SYS(
+  "delegate",
+  "As the Principal, substantive work should be delegated to an expert rather than done directly.",
+);
 
 /**
  * Build the extension factory for one agent. The returned function is what Pi
@@ -126,23 +148,27 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
     let traced = false;
     let replied = false;
     let delegated = false;
-    let delegateRemindCount = 0;
+    // 意图三: did the principal do substantive (non-read, non-coordination) work
+    // directly this run? Set in tool_execution_end, read in agent_end.
+    let didSubstantiveWork = false;
 
     // ⚠️ Cross-run-CHAIN counters — MUST NOT reset on agent_start/turn_start nor
     // at the top of agent_end. sendUserMessage(followUp) starts a NEW agent loop
     // (verified: a followUp fires a fresh agent_start) whose end re-enters
     // agent_end; if these were cleared we would re-remind forever. They are reset
     // ONLY at the terminal exits below (dimension satisfied, or already reminded
-    // once → fallback/let-go). Decoupled per dimension (A) so a trace reminder
-    // and a reply reminder limit independently.
+    // once → fallback/let-go). Decoupled per dimension (A) so a trace reminder,
+    // a reply reminder, and a delegate reminder limit independently. delegate
+    // moved here (from a run-scoped flag) because it now fires via followUp too.
     let traceRemindCount = 0;
     let replyRemindCount = 0;
+    let delegateRemindCount = 0;
 
     pi.on("agent_start", () => {
       traced = false;
       replied = false;
       delegated = false;
-      delegateRemindCount = 0;
+      didSubstantiveWork = false;
     });
 
     // tool_execution_start: nothing required for accounting (we key off
@@ -155,28 +181,9 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       if (t === "record_trace" || t.startsWith("create_trace")) traced = true;
       if (t === "send_message") replied = true;
       if (t === "create_agent") delegated = true;
-    });
-
-    pi.on("tool_result", (e) => {
-      // 意图四 (failure hint) takes precedence; 意图三 (over-step) can stack.
-      let suffix = "";
-      if (e.isError) {
-        suffix += `\n${TOOL_FAILURE_REMINDER}`;
-      }
-      if (
-        deps.role === "principal" &&
-        !delegated &&
-        !MGMT_TOOLS.has(e.toolName) &&
-        delegateRemindCount < 1
-      ) {
-        delegateRemindCount++;
-        suffix += `\n${DELEGATE_REMINDER}`;
-      }
-      if (!suffix) return; // no rewrite — leave the result untouched
-
-      // Rewrite by appending to the existing text content; the tool still ran.
-      const text = e.content.map((c) => (c.type === "text" ? c.text ?? "" : "")).join("");
-      return { content: [{ type: "text", text: `${text}${suffix}` }] };
+      // 意图三: any successful call NOT in the allow-set (a write/run, or an
+      // external MCP/domain tool) is the principal doing the work itself.
+      if (deps.role === "principal" && !PI_ALLOWED_TOOLS.has(t)) didSubstantiveWork = true;
     });
 
     pi.on("agent_end", (e) => {
@@ -219,6 +226,17 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       if (canTrace) {
         traceRemindCount++;
         pi.sendUserMessage(TRACE_REMINDER, { deliverAs: "followUp" });
+        return;
+      }
+
+      // 意图三 (PI delegation): the principal did substantive work itself this run
+      // without delegating. Nudge once via followUp (NOT merged with trace —
+      // separate limiter, worst case one extra round-trip). Cross-run-chain
+      // limited like the others. Only reachable for a principal once its trace
+      // dimension is settled (a principal has no reply dimension).
+      if (deps.role === "principal" && didSubstantiveWork && !delegated && delegateRemindCount < 1) {
+        delegateRemindCount++;
+        pi.sendUserMessage(DELEGATE_REMINDER, { deliverAs: "followUp" });
         return;
       }
 

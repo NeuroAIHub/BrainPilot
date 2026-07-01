@@ -43,6 +43,13 @@ import {
   deleteMcpServer,
   type StoredProviderProfile,
 } from "./config.js";
+import {
+  cancelKbBuild,
+  getKbBuildStatus,
+  startKbBuild,
+  startKbEnvSetup,
+  subscribeKbBuild,
+} from "./kb-builder.js";
 
 export interface CreateAppOptions {
   orchestrator: Orchestrator;
@@ -315,6 +322,120 @@ export function createApp(options: CreateAppOptions): Hono {
     const ok = await deleteMcpServer(dataDir, c.req.param("name"));
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.body(null, 204);
+  });
+
+  // ---- Knowledge Base build orchestration ------------------------------
+  //
+  // Spawn ``KnowledgeBase/scripts/build_kb.py --json`` and surface its
+  // NDJSON progress over SSE so the "Build Knowledge Base" button in the
+  // settings panel can show a live log.  One run at a time; cancellable.
+  //
+  // POST /api/kb/build  { kbRoot?, ocrApiKey, ocrConcurrency?, ocrLimit?,
+  //                       metaApiKey?, metaBaseUrl?, metaModel?, skip?, only? }
+  // GET  /api/kb/status
+  // GET  /api/kb/events    Server-Sent Events
+  // POST /api/kb/cancel
+  api.post("/kb/build", async (c) => {
+    const body = await safeJson(c);
+    const result = startKbBuild({
+      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+      ocrApiKey: typeof body.ocrApiKey === "string" ? body.ocrApiKey : undefined,
+      ocrConcurrency:
+        typeof body.ocrConcurrency === "number" ? body.ocrConcurrency : undefined,
+      ocrLimit: typeof body.ocrLimit === "number" ? body.ocrLimit : undefined,
+      metaApiKey: typeof body.metaApiKey === "string" ? body.metaApiKey : undefined,
+      metaBaseUrl: typeof body.metaBaseUrl === "string" ? body.metaBaseUrl : undefined,
+      metaModel: typeof body.metaModel === "string" ? body.metaModel : undefined,
+      skip: Array.isArray(body.skip)
+        ? (body.skip.filter((s) =>
+            typeof s === "string" && ["ocr", "extract", "chunk", "vectorize"].includes(s),
+          ) as Array<"ocr" | "extract" | "chunk" | "vectorize">)
+        : undefined,
+      only: Array.isArray(body.only)
+        ? (body.only.filter((s) =>
+            typeof s === "string" && ["ocr", "extract", "chunk", "vectorize"].includes(s),
+          ) as Array<"ocr" | "extract" | "chunk" | "vectorize">)
+        : undefined,
+    });
+    if (!result.ok) return c.json({ error: result.message }, 409);
+    return c.json({ ok: true, startedAt: result.startedAt });
+  });
+
+  api.get("/kb/status", (c) => c.json(getKbBuildStatus()));
+
+  // Bootstrap the KnowledgeBase Python venv. Shares the same run slot /
+  // SSE stream as /kb/build (both surfaces are in the same panel and
+  // pipeline-mutate the same on-disk state, so only one Python job runs
+  // at a time).
+  api.post("/kb/setup-env", async (c) => {
+    const body = await safeJson(c);
+    const result = startKbEnvSetup({
+      python: typeof body.python === "string" ? body.python : undefined,
+      reinstall: typeof body.reinstall === "boolean" ? body.reinstall : undefined,
+      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+    });
+    if (!result.ok) return c.json({ error: result.message }, 409);
+    return c.json({ ok: true, startedAt: result.startedAt });
+  });
+
+  api.post("/kb/cancel", (c) => {
+    const r = cancelKbBuild();
+    return c.json(r, r.ok ? 200 : 404);
+  });
+
+  api.get("/kb/events", (c) => {
+    // SSE: stream every NDJSON event from the active build, plus a snapshot
+    // of buffered events so a late subscriber doesn't see a blank panel.
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        const enc = new TextEncoder();
+        const send = (ev: unknown) => {
+          controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+        };
+        const handle = subscribeKbBuild(send);
+        // Replay buffered history immediately
+        for (const ev of handle.history) send(ev);
+        if (!getKbBuildStatus().active) {
+          // No active run; flush a sentinel and close.
+          send({ stage: "build", event: "idle", msg: "no active build" });
+          controller.close();
+          handle.unsubscribe();
+          return;
+        }
+        // Heartbeat every 15 s so intermediaries don't kill the connection.
+        const hb = setInterval(() => {
+          try {
+            controller.enqueue(enc.encode(": ping\n\n"));
+          } catch {
+            /* connection torn down */
+          }
+        }, 15_000);
+        void handle.done.then(() => {
+          clearInterval(hb);
+          try {
+            send({ stage: "build", event: "stream-end", msg: "build completed" });
+          } catch {
+            /* ignore */
+          }
+          try {
+            controller.close();
+          } catch {
+            /* already closed */
+          }
+          handle.unsubscribe();
+        });
+        // If the client disconnects, hono will GC the controller; the
+        // listener stays attached but cheap (single Set entry).
+      },
+    });
+    return new Response(stream, {
+      status: 200,
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache",
+        connection: "keep-alive",
+      },
+    });
   });
 
   // Mount the API under /api (the SPA's API_BASE).

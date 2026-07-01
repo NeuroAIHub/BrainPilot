@@ -11,6 +11,10 @@ import type { AgentRole, SystemTool } from "../types.js";
 import { MailboxFullError, type Mailbox, type MsgType } from "../mailbox.js";
 import type { GraphOfTrace } from "../trace.js";
 import { createSkillSearchTool } from "./skill-search.js";
+import {
+  createGetDomainKnowledgeLocalTool,
+  createSearchPapersLocalTool,
+} from "./kb/tools.js";
 
 export interface ToolDeps {
   sessionId: string;
@@ -339,6 +343,12 @@ export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
     createAddTraceRelationTool(deps),
     createGetTraceGraphTool(deps),
     createSkillSearchTool(deps),
+    // Local KB tools: powered by the KnowledgeBase/ directory (its scripts
+    // build the store; here we just consume the on-disk artefacts plus an
+    // auto-spawned bge sidecar). Both are no-op-safe when the KB hasn't
+    // been built yet — they return a clear "build the KB first" error.
+    createGetDomainKnowledgeLocalTool(),
+    createSearchPapersLocalTool(),
   ];
   return new Map(tools.map((t) => [t.name, t]));
 }
@@ -359,18 +369,46 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "record_trace",
     "ask_user",
     "skill_search",
+    "get_domain_knowledge_local",
+    "search_papers_local",
   ],
   trace: ["create_trace_node", "update_trace_node", "add_trace_relation", "get_trace_graph"],
-  expert: ["send_message", "record_trace", "skill_search"],
+  expert: [
+    "send_message",
+    "record_trace",
+    "skill_search",
+    "get_domain_knowledge_local",
+    "search_papers_local",
+  ],
   // Auditor: comms + self-trace only. Deliberately NO `get_trace_graph` —
   // evidence is restricted to the session workspace; the audit must not
-  // dredge the trace graph or other agents' internal state. skill_search is
-  // included so an audit can resolve a methodology skill referenced in a draft.
-  auditor: ["send_message", "record_trace", "skill_search"],
+  // dredge the trace graph or other agents' internal state. skill_search and
+  // the local KB tools are included so an audit can resolve a methodology
+  // skill referenced in a draft and verify a cited claim against the KB.
+  auditor: [
+    "send_message",
+    "record_trace",
+    "skill_search",
+    "get_domain_knowledge_local",
+    "search_papers_local",
+  ],
   // Writer: needs ask_user to present format/style options before drafting.
-  writer: ["send_message", "record_trace", "ask_user", "skill_search"],
+  writer: [
+    "send_message",
+    "record_trace",
+    "ask_user",
+    "skill_search",
+    "get_domain_knowledge_local",
+    "search_papers_local",
+  ],
   // Default for any other expert-like agent.
-  _default: ["send_message", "record_trace", "skill_search"],
+  _default: [
+    "send_message",
+    "record_trace",
+    "skill_search",
+    "get_domain_knowledge_local",
+    "search_papers_local",
+  ],
 };
 
 /**
