@@ -109,6 +109,15 @@ describe("personas", () => {
     expect(writer).toContain("Translate them into a clean narrative");
   });
 
+  it("writer persona encourages evidence-grounded visual presentation", () => {
+    const writer = PERSONAS.writer!;
+    expect(writer).toContain("Visualization-first presentation");
+    expect(writer).toContain("For every report-like deliverable");
+    expect(writer).toContain("statistical charts");
+    expect(writer).toContain("Do not invent numbers");
+    expect(writer).toContain("ask the engineer");
+  });
+
   it("auditor persona constrains scope, bash, and followup count", () => {
     const a = PERSONAS.auditor!;
     // Three claim categories explicitly named
