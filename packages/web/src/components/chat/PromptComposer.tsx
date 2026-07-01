@@ -15,6 +15,8 @@ import { ComposerInput } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
+import { RunningScriptsPanel } from "./RunningScriptsPanel";
+import { selectActiveScripts } from "./runningScripts";
 
 export function PromptComposer() {
   const t = useT();
@@ -69,6 +71,14 @@ export function PromptComposer() {
   const hasMessages = visibleMessages.length > 0;
   const isAgentRunning = agents.some((a) => a.status === "running");
   const lastAssistantStreaming = visibleMessages[visibleMessages.length - 1]?.role === "assistant" && visibleMessages[visibleMessages.length - 1]?.streaming;
+  // A bash tool is in flight iff selectActiveScripts finds anything; when it
+  // does, the RunningScriptsPanel below the toast owns the Stop button so
+  // we don't render a duplicate. When no scripts are running (e.g. the agent
+  // is thinking or streaming text), the toast keeps its own Stop.
+  const hasActiveScripts = useMemo(
+    () => selectActiveScripts(visibleMessages).length > 0,
+    [visibleMessages],
+  );
 
   // Agents whose run is still active. Threaded to MessageStream so a folded
   // activity block stays "in progress" across ReAct rounds — without this, the
@@ -312,18 +322,25 @@ export function PromptComposer() {
                 return t(label.key, label.vars);
               })()}
             </span>
-            <button
-              className="agent-running-toast__stop"
-              type="button"
-              onClick={() => void interruptCurrent()}
-              aria-label={t("chat.aria.stop")}
-              title={t("chat.aria.stop")}
-            >
-              <Square size={10} fill="currentColor" />
-              <span>{t("chat.stop")}</span>
-            </button>
+            {hasActiveScripts ? null : (
+              <button
+                className="agent-running-toast__stop"
+                type="button"
+                onClick={() => void interruptCurrent()}
+                aria-label={t("chat.aria.stop")}
+                title={t("chat.aria.stop")}
+              >
+                <Square size={10} fill="currentColor" />
+                <span>{t("chat.stop")}</span>
+              </button>
+            )}
           </div>
         ) : null}
+
+        <RunningScriptsPanel
+          messages={visibleMessages}
+          onStop={() => void interruptCurrent()}
+        />
 
         <form className="composer" aria-label={t("chat.aria.newPrompt")} onSubmit={handleSubmit}>
           <ComposerInput
