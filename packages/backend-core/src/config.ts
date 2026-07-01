@@ -487,6 +487,63 @@ export async function bootstrapEnvProvider(
 }
 
 /**
+ * Strip the plaintext key from a legacy settings.json (top-level AND nested
+ * `provider` object), rewrite it at mode 0o600 so it stops sitting on disk at
+ * the old 0644. Best-effort: if the rewrite fails, at least tighten the mode.
+ */
+async function stripLegacyKey(
+  file: string,
+  parsed: Record<string, unknown> | null,
+): Promise<void> {
+  try {
+    if (parsed) {
+      for (const k of ["apiKey", "api_key"]) delete parsed[k];
+      const nested = parsed.provider;
+      if (nested && typeof nested === "object") {
+        for (const k of ["apiKey", "api_key"]) delete (nested as Record<string, unknown>)[k];
+      }
+      await fs.writeFile(file, JSON.stringify(parsed, null, 2), { encoding: "utf8", mode: 0o600 });
+    }
+    await fs.chmod(file, 0o600);
+  } catch {
+    // best-effort: a failure to sanitize the legacy file must not break startup
+  }
+}
+
+/**
+ * #202: one-time upgrade migration. Pre-rewrite versions wrote the provider —
+ * including a plaintext apiKey at mode 0644 — into bp_template/settings.json;
+ * the current SSOT is bp_template/providers.json. If providers.json is empty and
+ * the legacy settings.json carries an apiKey, fold it into a provider profile
+ * (written 0600 by createProfile, set as selected) and strip the plaintext key
+ * from the old file so it no longer lingers on disk. Idempotent: a no-op once
+ * providers.json has any profile or there's nothing to migrate.
+ */
+export async function migrateLegacySettings(
+  dataDir: string,
+): Promise<StoredProviderProfile | null> {
+  const { profiles } = await readProviders(dataDir);
+  if (profiles.length > 0) return null; // already configured — never clobber
+
+  const paths = configPaths(dataDir);
+  const legacy = await readJsonSafe(paths.bpTemplateSettings);
+  const apiKey = pickString(legacy, "apiKey", "api_key");
+  if (!apiKey) return null; // nothing to migrate
+
+  const model = pickString(legacy, "model");
+  const profile = await createProfile(dataDir, {
+    name: "Migrated",
+    apiKey, // persisted into providers.json at 0600 by createProfile
+    baseUrl: pickString(legacy, "baseUrl", "base_url") ?? "",
+    models: model ? [model] : [],
+    notes: "Migrated from legacy settings.json on upgrade (#202).",
+  });
+
+  await stripLegacyKey(paths.bpTemplateSettings, legacy);
+  return profile;
+}
+
+/**
  * Onboarding-facing view of the resolved provider config. A boolean-only key
  * presence (never the plaintext key) plus the two files a user would edit, so
  * `init`/`up` can print accurate, consistent guidance from one source.

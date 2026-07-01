@@ -51,6 +51,7 @@ export {
   readLocalSettings,
   writeLocalSettings,
   bootstrapEnvProvider,
+  migrateLegacySettings,
   parseDotenv,
   configPaths,
   describeProviderConfig,
