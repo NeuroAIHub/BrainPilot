@@ -129,28 +129,14 @@ npm run build        # build all packages
 npm run bp -- up     # launch from source (the -- forwards flags to the CLI)
 ```
 
-Then open the printed URL. For a no-key smoke run: `BP_MOCK=1 npm run bp -- up`. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev workflow (ports, branch model, tests).
+Then open the printed URL. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev
+workflow (ports, branch model, tests).
 
 ### Let your agent deploy it
 
-Already working inside **Claude Code** or **OpenAI Codex**? You don't have to run the steps
-above by hand — hand the whole setup to the agent in one sentence and it installs the CLI,
-launches BrainPilot, and hands you back the local URL:
+Already working inside **Claude Code** or **OpenAI Codex**? Tell your agent:
 
-```bash
-# Claude Code
-claude "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
-
-# OpenAI Codex
-codex exec "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
-```
-
-By default the agent pauses for approval before each command. A few tips:
-
-- **Run unattended** — add `--dangerously-skip-permissions` (Claude Code) or `--dangerously-bypass-approvals-and-sandbox` (Codex).
-- **Only in a directory you trust** — those flags let the agent run commands without asking.
-- **No API key yet?** — ask it to *"start in mock mode"* and it'll launch with `BP_MOCK=1`.
+> Globally install the `@brainpilot/app` npm package, then run `brainpilot up` and give me the URL to open.
 
 > [!TIP]
 > ### <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/openclaw.png" height="28" align="top"/> OpenClaw — drive BrainPilot from your chat app
