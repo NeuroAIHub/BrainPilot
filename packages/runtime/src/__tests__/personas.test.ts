@@ -98,6 +98,17 @@ describe("personas", () => {
     expect(p.toLowerCase()).toContain("exemption");
   });
 
+  it("principal and writer personas keep internal status out of user-facing prose", () => {
+    const pi = PERSONAS.principal!;
+    const writer = PERSONAS.writer!;
+    expect(pi).toContain("User-facing communication style");
+    expect(pi).toContain("unread-message counts");
+    expect(pi).toContain("agent-status blocks");
+    expect(writer).toContain("Academic report narrative");
+    expect(writer).toContain("Purpose");
+    expect(writer).toContain("Translate them into a clean narrative");
+  });
+
   it("auditor persona constrains scope, bash, and followup count", () => {
     const a = PERSONAS.auditor!;
     // Three claim categories explicitly named
