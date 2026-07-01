@@ -14,33 +14,38 @@ describe("renderAgentStatusBlock", () => {
     expect(renderAgentStatusBlock([])).toBe("");
   });
 
-  it("renders a natural-language line per agent with status + unread count", () => {
+  it("returns empty string when only idle agents have no pending messages", () => {
+    expect(renderAgentStatusBlock([{ name: "principal", status: "idle", unread: 0 }])).toBe("");
+  });
+
+  it("renders an internal-only line per active or pending agent", () => {
     const lines: AgentStatusLine[] = [
       { name: "principal", status: "running", unread: 1 },
-      { name: "librarian", status: "idle", unread: 0 },
+      { name: "experimentalist", status: "idle", unread: 0 },
+      { name: "librarian", status: "idle", unread: 1 },
       { name: "engineer", status: "error", unread: 2 },
     ];
     const out = renderAgentStatusBlock(lines);
-    expect(out).toContain("<agent_status>");
-    expect(out).toContain("</agent_status>");
-    expect(out).toContain("- principal: running, 1 unread message");
-    expect(out).toContain("- librarian: idle, 0 unread messages");
-    expect(out).toContain("- engineer: error, 2 unread messages");
+    expect(out).toContain("<internal_agent_status>");
+    expect(out).toContain("</internal_agent_status>");
+    expect(out).toContain("Never mention");
+    expect(out).toContain("- principal: status=running, 1 pending message");
+    expect(out).not.toContain("experimentalist");
+    expect(out).toContain("- librarian: 1 pending message");
+    expect(out).toContain("- engineer: status=error, 2 pending messages");
   });
 
-  it("uses the singular form for exactly one unread message", () => {
+  it("uses the singular form for exactly one pending message", () => {
     const out = renderAgentStatusBlock([{ name: "x", status: "idle", unread: 1 }]);
-    expect(out).toContain("1 unread message");
-    expect(out).not.toContain("1 unread messages");
+    expect(out).toContain("1 pending message");
+    expect(out).not.toContain("1 pending messages");
   });
 
-  it("uses the plural form for zero and many", () => {
+  it("uses the plural form for many pending messages", () => {
     const out = renderAgentStatusBlock([
-      { name: "a", status: "idle", unread: 0 },
       { name: "b", status: "idle", unread: 3 },
     ]);
-    expect(out).toContain("0 unread messages");
-    expect(out).toContain("3 unread messages");
+    expect(out).toContain("3 pending messages");
   });
 });
 
@@ -49,19 +54,19 @@ describe("renderAgentStatusBlock", () => {
 describe("collectAgentStatusLines", () => {
   const unread = (counts: Record<string, number>) => (name: string) => counts[name] ?? 0;
 
-  it("includes the principal itself", () => {
+  it("includes the principal itself when active or pending", () => {
     const agents: StatusAgentLike[] = [
       { name: "principal", role: "principal", status: "running" },
       { name: "engineer", role: "expert", status: "idle" },
     ];
     const lines = collectAgentStatusLines(agents, unread({ principal: 1, engineer: 0 }));
-    expect(lines.map((l) => l.name)).toEqual(["principal", "engineer"]);
+    expect(lines.map((l) => l.name)).toEqual(["principal"]);
     expect(lines.find((l) => l.name === "principal")?.unread).toBe(1);
   });
 
   it("excludes the trace agent", () => {
     const agents: StatusAgentLike[] = [
-      { name: "principal", role: "principal", status: "idle" },
+      { name: "principal", role: "principal", status: "running" },
       { name: "trace", role: "trace", status: "running" },
     ];
     const lines = collectAgentStatusLines(agents, unread({}));
@@ -70,11 +75,20 @@ describe("collectAgentStatusLines", () => {
 
   it("excludes stopped agents", () => {
     const agents: StatusAgentLike[] = [
-      { name: "principal", role: "principal", status: "idle" },
+      { name: "principal", role: "principal", status: "running" },
       { name: "engineer", role: "expert", status: "stopped" },
     ];
     const lines = collectAgentStatusLines(agents, unread({}));
     expect(lines.map((l) => l.name)).toEqual(["principal"]);
+  });
+
+  it("excludes idle agents with no pending messages", () => {
+    const agents: StatusAgentLike[] = [
+      { name: "principal", role: "principal", status: "idle" },
+      { name: "writer", role: "expert", status: "idle" },
+    ];
+    const lines = collectAgentStatusLines(agents, unread({}));
+    expect(lines).toEqual([]);
   });
 
   it("carries the unread count from the inbox", () => {
@@ -116,7 +130,7 @@ const userMsg = (text: string): FakeMsg => ({ role: "user", content: [{ type: "t
 
 describe("makeAgentStatusExt — context hook", () => {
   it("appends a fresh status block before the LLM call", () => {
-    const block = "<agent_status>\nfresh\n</agent_status>";
+    const block = "<internal_agent_status>\nfresh\n</internal_agent_status>";
     const { pi, fire } = fakePi();
     makeAgentStatusExt({ renderStatus: () => block })(pi as never);
 
@@ -130,14 +144,16 @@ describe("makeAgentStatusExt — context hook", () => {
 
   it("strips a stale block from a previous turn and injects only the latest", () => {
     const stale = "<agent_status>\nold\n</agent_status>";
-    const fresh = "<agent_status>\nnew\n</agent_status>";
+    const fresh = "<internal_agent_status>\nnew\n</internal_agent_status>";
     const { pi, fire } = fakePi();
     makeAgentStatusExt({ renderStatus: () => fresh })(pi as never);
 
     const res = fire([userMsg("hello"), userMsg(stale)]);
     const msgs = (res as { messages: FakeMsg[] }).messages;
     // exactly one status block, and it is the fresh one
-    const blocks = msgs.filter((m) => (m.content[0].text ?? "").startsWith("<agent_status>"));
+    const blocks = msgs.filter((m) =>
+      (m.content[0].text ?? "").startsWith("<internal_agent_status>"),
+    );
     expect(blocks).toHaveLength(1);
     expect(blocks[0].content[0].text).toBe(fresh);
     // the real user message survives
