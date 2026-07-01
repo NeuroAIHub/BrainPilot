@@ -63,10 +63,7 @@ export function extractCommand(toolInput: unknown): string {
 export interface ActiveScript {
   id: string;
   agent: string;
-  toolName: string;
   command: string;
-  /** Raw arg string as seen so far — useful for a debug/details view. */
-  rawInput: string;
 }
 
 /**
@@ -84,9 +81,7 @@ export function selectActiveScripts(messages: ChatMessage[]): ActiveScript[] {
     out.push({
       id: m.id,
       agent: m.agent ?? "principal",
-      toolName: m.toolName ?? "bash",
       command: extractCommand(m.toolInput),
-      rawInput: typeof m.toolInput === "string" ? m.toolInput : "",
     });
   }
   return out;

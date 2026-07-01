@@ -2,7 +2,8 @@ import { ChevronDown, Square } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../contracts/backend";
 import { useT } from "../../i18n/useT";
-import { selectActiveScripts, type ActiveScript } from "./runningScripts";
+import { formatElapsed } from "../../utils/format";
+import { selectActiveScripts } from "./runningScripts";
 
 interface Props {
   messages: ChatMessage[];
@@ -10,44 +11,27 @@ interface Props {
 }
 
 /**
- * Compact elapsed formatter shared with MessageStream's turn footer:
- * "3.2s" under a minute, "1m 05s" above. Kept inline (rather than pulled
- * into utils) to keep the panel a single-file drop-in.
- */
-function formatElapsed(ms: number): string {
-  const secondsTotal = ms / 1000;
-  if (secondsTotal < 60) return `${secondsTotal.toFixed(1)}s`;
-  const m = Math.floor(secondsTotal / 60);
-  const s = Math.floor(secondsTotal % 60);
-  return `${m}m ${String(s).padStart(2, "0")}s`;
-}
-
-/**
- * "Running scripts" panel — sits immediately above the composer while any
- * bash tool call is in flight, and disappears the moment the last one ends.
+ * "Running scripts" panel — sits directly above the composer while any bash
+ * tool call is in flight, and unmounts the moment the last one ends.
  *
- * Rationale for its own component (rather than a tab or a message-stream
- * insert): the user's Stop and "what's happening right now" needs are
- * always about the *current* turn, not history. Anchoring the panel to
- * the composer means it's always in the user's line of sight while they
- * consider their next prompt — the same visual weight class as the
- * `.agent-running-toast` it replaces the Stop button of.
+ * The message-stream activity block folds a whole turn's reasoning + tool
+ * calls into one collapsed history entry; the composer toast only names the
+ * working agent. Neither answers what users most often ask when they see the
+ * agent pause: "what shell command is running right now, and can I kill it?"
  *
- * Per-script elapsed timing is derived locally from a Map keyed by
- * `toolCallId`: the first render that sees a script stamps its start,
- * subsequent renders read back that stamp, and a 1s tick drives the
- * displayed value. We can't use the AG-UI event timestamps here because
- * the runtime doesn't emit them on tool_call_start; per-second precision
- * is fine for a "how long has this been running" affordance.
+ * Per-script elapsed timing is derived locally from a ref-held Map keyed by
+ * `toolCallId` — the runtime doesn't emit a start timestamp on
+ * `tool_call_start`, and per-second precision is fine for a "how long has
+ * this been going" affordance. `role="status"` (no `aria-live`) so the
+ * once-a-second tick doesn't spam screen readers with elapsed digits.
  */
 export function RunningScriptsPanel({ messages, onStop }: Props) {
   const t = useT();
   const scripts = useMemo(() => selectActiveScripts(messages), [messages]);
 
-  // Track per-script start times across renders. New scripts get a stamp
-  // the first render they appear in; finished scripts are pruned so a
-  // future call with the same tool-call-id (shouldn't happen, but let's
-  // be defensive) would restart the clock.
+  // New scripts get a stamp the first render they appear in; finished ones
+  // are pruned so a re-appearing tool-call-id (shouldn't happen, but be
+  // defensive) restarts its clock cleanly.
   const startedAt = useRef<Map<string, number>>(new Map());
   useEffect(() => {
     const now = performance.now();
@@ -69,48 +53,30 @@ export function RunningScriptsPanel({ messages, onStop }: Props) {
     return () => window.clearInterval(id);
   }, [scripts.length]);
 
-  // Open by default — the whole point of the panel is that the user can
-  // see what's running. `<details>` preserves the user's toggle across
-  // re-renders as long as the DOM node is reused (which it is: the panel
-  // itself doesn't remount while scripts come and go).
+  // Open by default — the whole point of the panel is that the user sees
+  // what's running. `<details>` preserves the user's toggle across re-renders
+  // as long as the DOM node is reused (which it is: the panel itself doesn't
+  // remount while scripts come and go).
   const [open, setOpen] = useState(true);
 
   if (scripts.length === 0) return null;
 
   const now = performance.now();
-  const elapsedFor = (script: ActiveScript): string => {
-    const start = startedAt.current.get(script.id);
-    if (start === undefined) return "";
-    return formatElapsed(Math.max(0, now - start));
-  };
-  // Total = wall-clock elapsed of the oldest still-running script. That
-  // matches how a shell user thinks about "how long has this batch been
-  // going": the first thing that started is still going, so its age is
-  // the batch's age.
-  const oldestStart = Array.from(startedAt.current.values()).reduce(
-    (min, v) => (v < min ? v : min),
-    Number.POSITIVE_INFINITY,
-  );
-  const totalElapsed = Number.isFinite(oldestStart)
-    ? formatElapsed(Math.max(0, now - oldestStart))
-    : "";
+  const starts = Array.from(startedAt.current.values());
+  const oldest = starts.length > 0 ? Math.min(...starts) : now;
 
   return (
-    <div className="running-scripts" role="status" aria-live="polite">
+    <div className="running-scripts" role="status">
       <details
         open={open}
         onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}
       >
-        <summary className="running-scripts__summary">
+        <summary>
           <span className="running-scripts__dot" aria-hidden="true" />
-          <ChevronDown
-            size={14}
-            className="running-scripts__chevron"
-            aria-hidden="true"
-          />
+          <ChevronDown size={14} className="running-scripts__chevron" aria-hidden="true" />
           <span className="running-scripts__label">
             {t("chat.runningScripts.count", { count: scripts.length })}
-            {totalElapsed ? ` · ${totalElapsed}` : ""}
+            {` · ${formatElapsed(now - oldest)}`}
           </span>
           <button
             className="running-scripts__stop"
@@ -129,20 +95,22 @@ export function RunningScriptsPanel({ messages, onStop }: Props) {
           </button>
         </summary>
         <ul className="running-scripts__list">
-          {scripts.map((s) => (
-            <li className="running-scripts__item" key={s.id}>
-              <div className="running-scripts__item-head">
-                <span className="running-scripts__item-agent">{s.agent}</span>
-                <span className="running-scripts__item-name">bash</span>
-                <span className="running-scripts__item-elapsed">
-                  {elapsedFor(s)}
-                </span>
-              </div>
-              <pre className="running-scripts__cmd">
-                {s.command || t("chat.runningScripts.pending")}
-              </pre>
-            </li>
-          ))}
+          {scripts.map((s) => {
+            const start = startedAt.current.get(s.id);
+            const elapsed = start === undefined ? "" : formatElapsed(now - start);
+            return (
+              <li className="running-scripts__item" key={s.id}>
+                <div className="running-scripts__item-head">
+                  <span className="running-scripts__item-agent">{s.agent}</span>
+                  <span className="running-scripts__item-name">bash</span>
+                  <span className="running-scripts__item-elapsed">{elapsed}</span>
+                </div>
+                <pre className="running-scripts__cmd">
+                  {s.command || t("chat.runningScripts.pending")}
+                </pre>
+              </li>
+            );
+          })}
         </ul>
       </details>
     </div>
