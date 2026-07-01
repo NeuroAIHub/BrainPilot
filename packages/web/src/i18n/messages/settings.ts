@@ -76,6 +76,8 @@ export default defineMessages(
     "settings.providerForm.models": "模型",
     "settings.providerForm.addModel": "添加模型",
     "settings.providerForm.removeModel": "移除模型",
+    "settings.providerForm.modelsHint":
+      "示例模型仅作占位，保存前请改成你的网关支持的模型，否则发消息时才会报模型不可用。",
     "settings.providerForm.useColor": "使用颜色 {color}",
     "settings.providerForm.color": "颜色",
     "settings.providerForm.cancel": "取消",
@@ -166,6 +168,8 @@ export default defineMessages(
     "settings.providerForm.models": "Models",
     "settings.providerForm.addModel": "Add model",
     "settings.providerForm.removeModel": "Remove model",
+    "settings.providerForm.modelsHint":
+      "The example model is only a placeholder — replace it with one your gateway supports before saving, or the model will be rejected when you send a message.",
     "settings.providerForm.useColor": "Use color {color}",
     "settings.providerForm.color": "Color",
     "settings.providerForm.cancel": "Cancel",

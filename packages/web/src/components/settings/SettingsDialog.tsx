@@ -6,6 +6,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
+import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 
@@ -29,7 +30,7 @@ const DEFAULT_PROVIDER_FORM = {
   api: "anthropic-messages" as ProviderApi,
   apiKey: "",
   apiKeyMasked: "",
-  models: ["claude-opus-4-6"],
+  models: [EXAMPLE_MODEL],
   iconColor: "#111111",
   notes: "",
 };
@@ -611,7 +612,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 {providerForm.models.map((model, index) => (
                   <label className="provider-model-row" key={`${index}-${providerForm.models.length}`}>
                     <input
-                      placeholder="claude-sonnet-4-6"
+                      placeholder={EXAMPLE_MODEL}
                       value={model}
                       onChange={(event) => updateProviderModel(index, event.target.value)}
                     />
@@ -626,6 +627,9 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   </label>
                 ))}
               </div>
+              <p className="provider-form__models-hint">
+                {t("settings.providerForm.modelsHint")}
+              </p>
             </div>
 
             <div className="provider-form__appearance">

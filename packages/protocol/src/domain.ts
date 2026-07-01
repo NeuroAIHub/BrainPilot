@@ -7,6 +7,20 @@
 import { z } from "zod";
 
 /* ------------------------------------------------------------------ *
+ * Example model string (#207)
+ * ------------------------------------------------------------------ */
+
+/**
+ * #207: the single canonical example model string. UI form defaults, the
+ * provider-form placeholder, and the scaffold's `providers.json` example all
+ * reference this so they can never drift apart again. It is *only* a
+ * placeholder — many gateways (e.g. non-Anthropic ones) won't accept it, so
+ * callers should treat it as "replace me with a model your gateway supports",
+ * not a working default.
+ */
+export const EXAMPLE_MODEL = "claude-sonnet-4-6";
+
+/* ------------------------------------------------------------------ *
  * Session
  * ------------------------------------------------------------------ */
 
