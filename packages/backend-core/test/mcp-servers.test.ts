@@ -83,13 +83,14 @@ describe("MCP Servers CRUD (/api/mcp-servers)", () => {
     expect(entry.headers).toEqual({ Authorization: "Bearer t" });
   });
 
-  it("POST with an existing name overwrites", async () => {
+  it("#204 POST with an existing name returns 409 and does not overwrite", async () => {
     const { app } = await setup();
-    await post(app, { name: "s", config: { type: "stdio", command: "old" } });
-    await post(app, { name: "s", config: { type: "stdio", command: "new" } });
+    expect((await post(app, { name: "s", config: { type: "stdio", command: "old" } })).status).toBe(201);
+    const dup = await post(app, { name: "s", config: { type: "stdio", command: "new" } });
+    expect(dup.status).toBe(409);
     const list = await (await app.request("/api/mcp-servers")).json();
     expect(list).toHaveLength(1);
-    expect(list[0].command).toBe("new");
+    expect(list[0].command).toBe("old"); // original preserved, not overwritten
   });
 
   it("POST returns 400 when name or config is missing", async () => {
@@ -167,6 +168,24 @@ describe("MCP Servers CRUD (/api/mcp-servers)", () => {
       await post(app, { name: "s", config: { type: "stdio", command: "a" } });
       expect((await put(app, "s", { type: "http" })).status).toBe(400);
       expect((await put(app, "s", { type: "wat", url: "http://x" })).status).toBe(400);
+    });
+
+    it("#203 rejects a non-URL http/sse url with 400", async () => {
+      const { app } = await setup();
+      expect((await post(app, { name: "a", config: { type: "http", url: "not a url" } })).status).toBe(400);
+      expect((await post(app, { name: "b", config: { type: "sse", url: "not a url" } })).status).toBe(400);
+      // a non-http scheme is rejected too
+      expect((await post(app, { name: "c", config: { type: "http", url: "ftp://h/x" } })).status).toBe(400);
+    });
+
+    it("#203 accepts localhost / 127.0.0.1 http urls", async () => {
+      const { app } = await setup();
+      expect(
+        (await post(app, { name: "a", config: { type: "http", url: "http://localhost:8080/mcp" } })).status,
+      ).toBe(201);
+      expect(
+        (await post(app, { name: "b", config: { type: "sse", url: "http://127.0.0.1:3000/sse" } })).status,
+      ).toBe(201);
     });
   });
 

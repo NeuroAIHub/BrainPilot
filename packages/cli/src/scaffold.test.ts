@@ -3,6 +3,7 @@ import { mkdtemp, rm, readFile, stat, writeFile, readdir } from "node:fs/promise
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { scaffold, isScaffolded } from "./scaffold.js";
+import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 
 let dir: string;
 
@@ -109,5 +110,13 @@ describe("scaffold", () => {
     const { paths } = await scaffold(join(dir, "bp"));
     const providers = JSON.parse(await readFile(paths.bpTemplateProviders, "utf8"));
     expect(providers.profiles).toEqual([]);
+  });
+
+  it("#207 providers.example.json uses the shared EXAMPLE_MODEL constant", async () => {
+    const { paths } = await scaffold(join(dir, "bp"));
+    const example = JSON.parse(
+      await readFile(join(paths.bpTemplate, "providers.example.json"), "utf8"),
+    );
+    expect(example.profiles[0].models).toEqual([EXAMPLE_MODEL]);
   });
 });

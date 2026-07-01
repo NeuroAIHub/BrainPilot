@@ -141,11 +141,44 @@ export class PortInUseError extends Error {
   }
 }
 
+/**
+ * #201: raised when binding the probe socket is *forbidden* (EPERM/EACCES)
+ * rather than the port being taken. Switching ports won't help — the
+ * environment disallows the listen, so we say so instead of crying "in use".
+ */
+export class PortPermissionError extends Error {
+  constructor(
+    public readonly port: number,
+    public readonly host: string,
+    public readonly code: string,
+  ) {
+    super(
+      `Not permitted to listen on ${host}:${port} (${code}).\n` +
+        "  This is an environment/permission problem, not a port conflict — " +
+        "changing the port won't help.\n" +
+        "  Check your sandbox, container privileges, system security policy, or CI permissions.",
+    );
+    this.name = "PortPermissionError";
+  }
+}
+
+/**
+ * Probe whether a TCP port is free.
+ *
+ * Resolves `true` when the port is bindable, `false` only for a genuine
+ * `EADDRINUSE` (the port is taken). Any *other* bind failure — `EPERM`/`EACCES`
+ * (#201) or an unexpected errno — is **rejected** so the caller can tell a
+ * permission/environment problem apart from a real conflict instead of
+ * mislabelling everything "already in use".
+ */
 const realIsPortFree = async (port: number, host: string): Promise<boolean> => {
   const net = await import("node:net");
-  return new Promise((resolve) => {
+  return new Promise((resolve, reject) => {
     const srv = net.createServer();
-    srv.once("error", () => resolve(false));
+    srv.once("error", (err: NodeJS.ErrnoException) => {
+      if (err.code === "EADDRINUSE") resolve(false);
+      else reject(err);
+    });
     srv.once("listening", () => srv.close(() => resolve(true)));
     srv.listen(port, host);
   });
@@ -253,7 +286,18 @@ export async function up(
 
   // 4. Pre-check ports (backend + runtime, §11A.5).
   for (const p of [cfg.port, cfg.runtimePort]) {
-    if (!(await isPortFree(p, host))) throw new PortInUseError(p);
+    let free: boolean;
+    try {
+      free = await isPortFree(p, host);
+    } catch (err) {
+      // #201: distinguish "not allowed to listen here" from "port taken".
+      const code = (err as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") {
+        throw new PortPermissionError(p, host, code);
+      }
+      throw err;
+    }
+    if (!free) throw new PortInUseError(p);
   }
 
   const url = `http://${host}:${cfg.port}`;

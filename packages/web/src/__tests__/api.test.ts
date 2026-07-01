@@ -260,3 +260,46 @@ describe("api.sandbox.uploadFile — #47 base64 upload to the workspace", () => 
     await expect(api.sandbox.uploadFile("s1", "big.bin", new Blob(["hi"]))).rejects.toThrow("file too large");
   });
 });
+
+// #206: parseError previously read only `detail`, so the backend's Zod shape
+// `{ error, details }` and bare `{ error }` (e.g. 409) degraded to the generic
+// "Request failed (...)". Driven through api.providers.create (handleJson path).
+describe("#206 parseError surfaces { error, details }", () => {
+  const validCreate = { name: "x", baseUrl: "https://x", apiKey: "k", models: ["m"] } as never;
+
+  it("renders field-level Zod issues from { error, details }", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        ok: false,
+        status: 400,
+        contentType: "application/json",
+        json: {
+          error: "invalid provider profile",
+          details: [{ path: ["base_url"], message: "must be a valid URL" }],
+        },
+      }),
+    );
+    await expect(api.providers.create(validCreate)).rejects.toThrow(
+      "invalid provider profile (base_url: must be a valid URL)",
+    );
+  });
+
+  it("surfaces a bare { error } (409 conflict) message", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        ok: false,
+        status: 409,
+        contentType: "application/json",
+        json: { error: 'a provider named "sqz" already exists' },
+      }),
+    );
+    await expect(api.providers.create(validCreate)).rejects.toThrow('a provider named "sqz" already exists');
+  });
+
+  it("still prefers a plain { detail } string", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { detail: "nope" } }),
+    );
+    await expect(api.providers.create(validCreate)).rejects.toThrow("nope");
+  });
+});

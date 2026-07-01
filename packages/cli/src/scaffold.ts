@@ -25,6 +25,7 @@ import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { join } from "node:path";
 import { materializeSkills } from "@brainpilot/runtime";
+import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { dataPaths, type DataPaths } from "./paths.js";
 
 /** Default backend port (§11A.5 决策 D). Runtime uses port+1 (stride-2 §16). */
@@ -60,7 +61,7 @@ const TEMPLATE_PROVIDERS_EXAMPLE = JSON.stringify(
         name: "Example Gateway",
         baseUrl: "https://your-gateway.example.com",
         apiKey: "sk-...",
-        models: ["claude-sonnet-4-6"],
+        models: [EXAMPLE_MODEL],
       },
     ],
     selectedProfileId: "example",

@@ -124,27 +124,16 @@ npm run build        # 构建所有包
 npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 ```
 
-然后打开打印出的地址。无 Key 冒烟运行：`BP_MOCK=1 npm run bp -- up`。完整开发流程（端口、分支模型、
-测试）见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+然后打开打印出的地址。完整开发流程（端口、分支模型、测试）见
+[`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ### 让你的智能体替你部署
 
-已经在用 **Claude Code** 或 **OpenAI Codex**？那就不用手动跑上面的步骤了 —— 一句话把整套安装交给智能体，
-它会帮你装好 CLI、启动 BrainPilot，并把本地访问地址回给你：
+已经在用 **Claude Code** 或 **OpenAI Codex**？直接告诉你的智能体：
 
-```bash
-# Claude Code
-claude "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
-
-# OpenAI Codex
-codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
+```text
+全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。
 ```
-
-默认情况下，智能体在每条命令前都会停下来等你确认。几个小提示：
-
-- **无人值守跑完** —— 加上 `--dangerously-skip-permissions`（Claude Code）或 `--dangerously-bypass-approvals-and-sandbox`（Codex）。
-- **仅在你信任的目录里这么做** —— 这些 flag 会让智能体不再逐条确认就执行命令。
-- **还没有 API Key？** —— 让它*“用 mock 模式启动”*，它会以 `BP_MOCK=1` 拉起来。
 
 > [!TIP]
 > ### <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/openclaw.png" height="28" align="top"/> OpenClaw —— 从聊天应用里驱动 BrainPilot
@@ -254,15 +243,22 @@ repo-to-skill、批量提取流水线和公开技能合集。
 - **把关键论文转成技能**，让方法学常驻在智能体上下文里 —— 这是不搭建检索服务的轻量替代方案。见
   **[技能与知识库文档](https://brainpilot.chat/docs/zh-cn/skills-knowledge-base)**。
 
-#### 🚧 用我们的同款流水线构建你自己的知识库（即将开放）
+#### 🧪 用我们自带的同款流水线构建你自己的知识库
 
-我们托管 demo 背后的知识库与论文库，是用一套内部的入库流水线（ingestion pipeline）构建的。我们
-计划把这套 **同款流水线** 开源出来，让你能用我们同样的方式构建属于自己的知识库与论文库，再接入
-BrainPilot —— 把它对准 **你自己的** 论文和语料，`librarian` 智能体就能像检索任何其他来源一样去
-检索它。
+BrainPilot 现已自带一套端到端的入库流水线，位于
+[`KnowledgeBase/`](./KnowledgeBase/README.md) 目录。把 PDF 拷到 `KnowledgeBase/source/pdf/`，
+点击 **设置 → 知识库 → 构建知识库**（或者命令行执行 `python KnowledgeBase/scripts/build_kb.py`），
+agent 就会立刻获得两个内置工具：
 
-> 🚧 这套流水线，以及一个开箱即用的托管知识库，都已在路线图上。在此之前，上面两条路径已经能让自
-> 部署的 BrainPilot 立刻跑在 *你自己的* 文献之上。
+- **`get_domain_knowledge_local`** —— 基于 bge-m3 召回 + bge-reranker-v2-m3 精排的本地向量检索。
+- **`search_papers_local`** —— 针对 `KB_source.json` 论文库的多条件元数据过滤 + 关键词排序检索。
+
+嵌入和重排序模型**全部在本机运行** —— runtime 会自动 spawn 一个仅监听 loopback 的单用户 sidecar，
+不需要 systemd daemon、不开公网端口、不依赖任何第三方检索服务。你只需要准备两个 API key
+（OCR 用 SiliconFlow；元数据抽取用任意 OpenAI 兼容端点，可以直接复用 agent 已配置好的 LLM key）。
+
+完整流水线说明、增量构建语义、FAQ 与离线模式请见
+[`KnowledgeBase/README.md`](./KnowledgeBase/README.md)。
 
 ---
 

@@ -66,13 +66,44 @@ function authHeaders(json = true): Record<string, string> {
   return json ? { "Content-Type": "application/json" } : {};
 }
 
+/**
+ * #206: build a readable message from a Zod issue list. The backend returns
+ * `details: parsed.error.issues` — each issue has a `path` (field) and a
+ * `message`. We render `field: message` per issue so a validation 400 tells the
+ * user *which* field is wrong (empty name, invalid url, …) instead of degrading
+ * to a generic "Request failed (400)".
+ */
+function formatIssues(details: unknown): string | null {
+  if (!Array.isArray(details) || details.length === 0) return null;
+  const parts: string[] = [];
+  for (const issue of details) {
+    if (!issue || typeof issue !== "object") continue;
+    const { path, message } = issue as { path?: unknown; message?: unknown };
+    if (typeof message !== "string" || message.length === 0) continue;
+    const field = Array.isArray(path) ? path.filter((p) => p !== "" && p != null).join(".") : "";
+    parts.push(field ? `${field}: ${message}` : message);
+  }
+  return parts.length > 0 ? parts.join("; ") : null;
+}
+
 async function parseError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
-    const body = (await res.json().catch(() => null)) as { detail?: unknown } | null;
-    if (typeof body?.detail === "string") {
+    // #206: the backend uses two shapes — `{ detail }` (single string) and the
+    // Zod validation shape `{ error, details }`. parseError previously read only
+    // `detail`, so every `{ error, details }` 400/409 fell through to the generic
+    // text fallback. Read all three: detail → error(+formatted details) → error.
+    const body = (await res.json().catch(() => null)) as
+      | { detail?: unknown; error?: unknown; details?: unknown }
+      | null;
+    if (typeof body?.detail === "string" && body.detail.length > 0) {
       return body.detail;
     }
+    const issues = formatIssues(body?.details);
+    if (typeof body?.error === "string" && body.error.length > 0) {
+      return issues ? `${body.error} (${issues})` : body.error;
+    }
+    if (issues) return issues;
   }
   const text = await res.text().catch(() => "");
   return text || `Request failed (${res.status})`;
@@ -733,6 +764,90 @@ export const api = {
         }),
       );
       return normalizeProviderProfile(raw as Parameters<typeof normalizeProviderProfile>[0]);
+    },
+  },
+
+  // Knowledge Base — local pipeline build orchestration.
+  // Mirrors the backend /api/kb/* routes. The SSE event stream is consumed
+  // directly via `new EventSource()` in the panel component (so it can stay
+  // attached for the lifetime of the dialog), so we don't expose a helper
+  // here for it.
+  kb: {
+    async build(opts: {
+      ocrApiKey?: string;
+      metaApiKey?: string;
+      metaBaseUrl?: string;
+      metaModel?: string;
+      kbRoot?: string;
+      ocrConcurrency?: number;
+      ocrLimit?: number;
+      skip?: Array<"ocr" | "extract" | "chunk" | "vectorize">;
+      only?: Array<"ocr" | "extract" | "chunk" | "vectorize">;
+    }): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/build`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `kb build failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    async status(): Promise<{
+      active: boolean;
+      startedAt: number | null;
+      finishedAt: number | null;
+      exitCode: number | null | undefined;
+      error?: string;
+      recentEvents: Array<{
+        ts: string;
+        stage: string;
+        event: string;
+        msg: string;
+        [k: string]: unknown;
+      }>;
+      environment: {
+        python: string;
+        pythonIsVenv: boolean;
+        venvExists: boolean;
+        expectedVenvPath: string;
+        scriptsPresent: boolean;
+        kbRoot: string;
+      };
+    }> {
+      return handleJson(await apiFetch(`${API_BASE}/kb/status`));
+    },
+
+    async cancel(): Promise<{ ok: boolean; message?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/cancel`, { method: "POST" });
+      return res.json().catch(() => ({ ok: false }));
+    },
+
+    // Bootstrap the Python venv (KnowledgeBase/.venv) before the first
+    // build can run. Streams progress on the same SSE channel as `build`,
+    // so the panel only needs one EventSource subscription.
+    async setupEnv(opts: {
+      python?: string;
+      reinstall?: boolean;
+      kbRoot?: string;
+    } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/setup-env`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `setup-env failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    eventsUrl(): string {
+      return `${API_BASE}/kb/events`;
     },
   },
 };

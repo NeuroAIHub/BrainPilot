@@ -129,28 +129,16 @@ npm run build        # build all packages
 npm run bp -- up     # launch from source (the -- forwards flags to the CLI)
 ```
 
-Then open the printed URL. For a no-key smoke run: `BP_MOCK=1 npm run bp -- up`. See
-[`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev workflow (ports, branch model, tests).
+Then open the printed URL. See [`CONTRIBUTING.md`](CONTRIBUTING.md) for the full dev
+workflow (ports, branch model, tests).
 
 ### Let your agent deploy it
 
-Already working inside **Claude Code** or **OpenAI Codex**? You don't have to run the steps
-above by hand — hand the whole setup to the agent in one sentence and it installs the CLI,
-launches BrainPilot, and hands you back the local URL:
+Already working inside **Claude Code** or **OpenAI Codex**? Tell your agent:
 
-```bash
-# Claude Code
-claude "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
-
-# OpenAI Codex
-codex exec "Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open."
+```text
+Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open.
 ```
-
-By default the agent pauses for approval before each command. A few tips:
-
-- **Run unattended** — add `--dangerously-skip-permissions` (Claude Code) or `--dangerously-bypass-approvals-and-sandbox` (Codex).
-- **Only in a directory you trust** — those flags let the agent run commands without asking.
-- **No API key yet?** — ask it to *"start in mock mode"* and it'll launch with `BP_MOCK=1`.
 
 > [!TIP]
 > ### <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/openclaw.png" height="28" align="top"/> OpenClaw — drive BrainPilot from your chat app
@@ -276,16 +264,27 @@ papers, web sources, and knowledge bases through whatever retrieval tools you gi
   lightweight alternative to standing up a retrieval service. See
   **[Skills and Knowledge Base](https://brainpilot.chat/docs/skills-knowledge-base)**.
 
-#### 🚧 Build your own knowledge base with our pipeline (coming soon)
+#### 🧪 Build your own knowledge base with the bundled pipeline
 
-The knowledge base and paper library behind our hosted demo are built with an in-house
-ingestion pipeline. We plan to open-source that **same pipeline** so you can build your own
-knowledge base and paper library the way we do, then connect it to BrainPilot — point it at
-your own papers and corpora, and the `librarian` agent searches it like any other retrieval
-source.
+BrainPilot now ships an end-to-end ingestion pipeline under
+[`KnowledgeBase/`](./KnowledgeBase/README.md). Drop your PDFs into
+`KnowledgeBase/source/pdf/`, click **Settings → Knowledge Base → Build Knowledge Base**
+(or run `python KnowledgeBase/scripts/build_kb.py` from a shell), and the agent gets two
+new built-in tools:
 
-> 🚧 The pipeline and a turnkey, hosted knowledge base are on the roadmap. Until then, the
-> two paths above already let a self-hosted BrainPilot work against *your* literature today.
+- **`get_domain_knowledge_local`** — bge-m3 embedding retrieval + bge-reranker-v2-m3 rerank
+  over your local vector store.
+- **`search_papers_local`** — multi-criteria metadata search + keyword ranking over your
+  `KB_source.json` paper library.
+
+The embedding and reranker models run **on your own machine** — a single-user loopback
+sidecar is auto-spawned by the runtime, so there is no systemd daemon, no public port, and
+no third-party retrieval service. You supply just two API keys (SiliconFlow for OCR, any
+OpenAI-compatible endpoint for metadata extraction — the latter can reuse your agent's
+existing LLM key).
+
+See [`KnowledgeBase/README.md`](./KnowledgeBase/README.md) for the full pipeline walkthrough,
+incremental-build semantics, FAQ and offline mode.
 
 ---
 

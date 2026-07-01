@@ -4755,6 +4755,13 @@ button {
   gap: 8px;
 }
 
+.provider-form__models-hint {
+  margin: 8px 0 0;
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .provider-model-row {
   display: grid !important;
   grid-template-columns: minmax(0, 1fr) 40px;

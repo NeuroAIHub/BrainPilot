@@ -1,15 +1,17 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Check, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
+import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 
-type SettingsTab = "account" | "providers" | "mcp" | "preferences";
+type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
 
 type SettingsDialogProps = {
   isOpen: boolean;
@@ -20,6 +22,7 @@ const tabs: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
   { id: "account", labelKey: "settings.tab.account", icon: UserRound },
   { id: "providers", labelKey: "settings.tab.providers", icon: SlidersHorizontal },
   { id: "mcp", labelKey: "settings.tab.mcp", icon: Plug },
+  { id: "knowledgeBase", labelKey: "settings.tab.knowledgeBase", icon: Database },
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
 
@@ -29,7 +32,7 @@ const DEFAULT_PROVIDER_FORM = {
   api: "anthropic-messages" as ProviderApi,
   apiKey: "",
   apiKeyMasked: "",
-  models: ["claude-opus-4-6"],
+  models: [EXAMPLE_MODEL],
   iconColor: "#111111",
   notes: "",
 };
@@ -493,6 +496,8 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
               </section>
             ) : null}
 
+            {activeTab === "knowledgeBase" ? <KnowledgeBasePanel /> : null}
+
             {activeTab === "preferences" ? (
               <section className="settings-section">
                 <h3>{t("settings.prefs.title")}</h3>
@@ -611,7 +616,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                 {providerForm.models.map((model, index) => (
                   <label className="provider-model-row" key={`${index}-${providerForm.models.length}`}>
                     <input
-                      placeholder="claude-sonnet-4-6"
+                      placeholder={EXAMPLE_MODEL}
                       value={model}
                       onChange={(event) => updateProviderModel(index, event.target.value)}
                     />
@@ -626,6 +631,9 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   </label>
                 ))}
               </div>
+              <p className="provider-form__models-hint">
+                {t("settings.providerForm.modelsHint")}
+              </p>
             </div>
 
             <div className="provider-form__appearance">

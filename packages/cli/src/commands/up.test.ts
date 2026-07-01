@@ -7,6 +7,7 @@ import {
   buildStartServerOptions,
   resolveUpMode,
   PortInUseError,
+  PortPermissionError,
   portFlagHint,
   type ResolvedUpConfig,
 } from "./up.js";
@@ -201,6 +202,101 @@ describe("up — provider key resolution", () => {
     );
     expect(started).toBe(true);
     expect(result.url).toBe("http://127.0.0.1:9800");
+  });
+});
+
+describe("up — port precheck (#201)", () => {
+  const startNoop = async () =>
+    ({ stop: async () => {} }) as unknown as RunningServer;
+
+  it("throws PortInUseError when the probe reports the port taken", async () => {
+    const root = join(dir, "bp");
+    await expect(
+      up(
+        { dir: root, port: 9820, foreground: true, open: false },
+        {
+          env: { BP_MOCK: "1" },
+          startServer: startNoop,
+          isPortFree: async () => false,
+          webDist: () => null,
+          log: () => {},
+        },
+      ),
+    ).rejects.toBeInstanceOf(PortInUseError);
+  });
+
+  it("translates an EPERM bind rejection into a PortPermissionError, not 'in use'", async () => {
+    const root = join(dir, "bp");
+    const eperm = Object.assign(new Error("listen EPERM"), { code: "EPERM" });
+    let err: unknown;
+    try {
+      await up(
+        { dir: root, port: 9821, foreground: true, open: false },
+        {
+          env: { BP_MOCK: "1" },
+          startServer: startNoop,
+          isPortFree: async () => {
+            throw eperm;
+          },
+          webDist: () => null,
+          log: () => {},
+        },
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBeInstanceOf(PortPermissionError);
+    expect(err).not.toBeInstanceOf(PortInUseError);
+    const msg = (err as Error).message;
+    expect(msg).toContain("EPERM");
+    expect(msg).toContain("environment");
+    expect(msg).not.toContain("already in use");
+  });
+
+  it("maps EACCES to PortPermissionError too", async () => {
+    const root = join(dir, "bp");
+    const eacces = Object.assign(new Error("listen EACCES"), { code: "EACCES" });
+    await expect(
+      up(
+        { dir: root, port: 9822, foreground: true, open: false },
+        {
+          env: { BP_MOCK: "1" },
+          startServer: startNoop,
+          isPortFree: async () => {
+            throw eacces;
+          },
+          webDist: () => null,
+          log: () => {},
+        },
+      ),
+    ).rejects.toBeInstanceOf(PortPermissionError);
+  });
+
+  it("re-throws an unexpected bind errno unchanged (neither in-use nor permission)", async () => {
+    const root = join(dir, "bp");
+    const weird = Object.assign(new Error("listen ENOTFOUND"), {
+      code: "ENOTFOUND",
+    });
+    let err: unknown;
+    try {
+      await up(
+        { dir: root, port: 9823, foreground: true, open: false },
+        {
+          env: { BP_MOCK: "1" },
+          startServer: startNoop,
+          isPortFree: async () => {
+            throw weird;
+          },
+          webDist: () => null,
+          log: () => {},
+        },
+      );
+    } catch (e) {
+      err = e;
+    }
+    expect(err).toBe(weird);
+    expect(err).not.toBeInstanceOf(PortPermissionError);
+    expect(err).not.toBeInstanceOf(PortInUseError);
   });
 });
 
