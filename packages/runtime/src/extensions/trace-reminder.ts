@@ -88,12 +88,13 @@ export interface TraceReminderDeps {
  */
 const PI_ALLOWED_TOOLS = new Set([
   // information-gathering / read-only
-  "Read",
-  "Grep",
-  "Glob",
-  "LS",
-  "WebFetch",
-  "WebSearch",
+  "read",
+  "grep",
+  "glob",
+  "lS",
+  "webfetch",
+  "websearch",
+  "find",
   // management / coordination
   "create_agent",
   "destroy_agent",
@@ -182,8 +183,10 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       if (t === "send_message") replied = true;
       if (t === "create_agent") delegated = true;
       // 意图三: any successful call NOT in the allow-set (a write/run, or an
-      // external MCP/domain tool) is the principal doing the work itself.
-      if (deps.role === "principal" && !PI_ALLOWED_TOOLS.has(t)) didSubstantiveWork = true;
+      // external MCP/domain tool) is the principal doing the work itself. Match
+      // case-insensitively — Pi emits builtins lowercase, but normalizing here
+      // keeps the exemption working if a tool ever surfaces in another case.
+      if (deps.role === "principal" && !PI_ALLOWED_TOOLS.has(t.toLowerCase())) didSubstantiveWork = true;
     });
 
     pi.on("agent_end", (e) => {
