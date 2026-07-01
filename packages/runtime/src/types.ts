@@ -69,7 +69,26 @@ export type PiAgentEvent =
     }
   | { type: "auto_retry_start"; attempt: number; maxAttempts: number; delayMs: number; errorMessage: string }
   | { type: "auto_retry_end"; success: boolean; attempt: number; finalError?: string }
-  // Internal / suppressed (compaction, queue, etc.) — kept loose.
+  // Pi SDK context compaction (auto/manual). Surfaced onto the AG-UI CUSTOM
+  // channel (`name:"compaction"`) so clients can render the compaction event
+  // rather than silently seeing the history collapse. `result` mirrors Pi's
+  // `CompactionResult`; loose here because Pi may extend the shape.
+  | { type: "compaction_start"; reason: "manual" | "threshold" | "overflow" }
+  | {
+      type: "compaction_end";
+      reason: "manual" | "threshold" | "overflow";
+      aborted?: boolean;
+      willRetry?: boolean;
+      errorMessage?: string;
+      result?: {
+        summary?: string;
+        firstKeptEntryId?: string;
+        tokensBefore?: number;
+        estimatedTokensAfter?: number;
+        [k: string]: unknown;
+      };
+    }
+  // Internal / suppressed (queue, etc.) — kept loose.
   | { type: string; [k: string]: unknown };
 
 /** Pi assistant streaming sub-event (carried by `message_update`). */

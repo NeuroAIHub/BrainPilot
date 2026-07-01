@@ -8,7 +8,13 @@
  * `agent_name` + `_ts`; `run_id` when known.
  */
 import { randomUUID } from "node:crypto";
-import type { AgUiEvent } from "@brainpilot/protocol";
+import type {
+  AgUiEvent,
+  CompactionEndValue,
+  CompactionReason,
+  CompactionStartValue,
+} from "@brainpilot/protocol";
+import { CUSTOM_EVENT } from "@brainpilot/protocol";
 
 function ts(): string {
   return new Date().toISOString();
@@ -177,5 +183,31 @@ export const ev = {
   },
   custom(ctx: Ctx, name: string, value: unknown): AgUiEvent {
     return { type: "CUSTOM", ...envelope(ctx), name, value } as AgUiEvent;
+  },
+  /**
+   * Pi SDK auto/manual compaction — the runtime translates Pi's internal
+   * `compaction_start` / `compaction_end` events onto the AG-UI CUSTOM channel
+   * so clients can render a "context being compacted" indicator instead of
+   * silently seeing the assistant's history collapse. Wire form:
+   *   { type:"CUSTOM", name:"compaction", value: { op:"start", reason, ... } }
+   */
+  compactionStart(ctx: Ctx, reason: CompactionReason): AgUiEvent {
+    const value: CompactionStartValue = { op: "start", reason };
+    return { type: "CUSTOM", ...envelope(ctx), name: CUSTOM_EVENT.COMPACTION, value } as AgUiEvent;
+  },
+  compactionEnd(
+    ctx: Ctx,
+    v: {
+      reason: CompactionReason;
+      aborted: boolean;
+      willRetry: boolean;
+      errorMessage?: string;
+      tokensBefore?: number;
+      estimatedTokensAfter?: number;
+      firstKeptEntryId?: string;
+    },
+  ): AgUiEvent {
+    const value: CompactionEndValue = { op: "end", ...v };
+    return { type: "CUSTOM", ...envelope(ctx), name: CUSTOM_EVENT.COMPACTION, value } as AgUiEvent;
   },
 };

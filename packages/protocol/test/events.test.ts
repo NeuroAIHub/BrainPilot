@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   AG_UI_EVENT_TYPES,
   AgUiEventSchema,
+  CompactionCustomValueSchema,
+  CUSTOM_EVENT,
   isAgUiEvent,
   parseEvent,
   safeParseEvent,
@@ -188,6 +190,35 @@ describe("discriminated union behavior", () => {
     for (const t of AG_UI_EVENT_TYPES) {
       expect(optionTypes.has(t)).toBe(true);
     }
+  });
+
+  it("CUSTOM(name=compaction) value schema validates start + end shapes", () => {
+    const start = CompactionCustomValueSchema.parse({ op: "start", reason: "threshold" });
+    expect(start.op).toBe("start");
+
+    const end = CompactionCustomValueSchema.parse({
+      op: "end",
+      reason: "threshold",
+      aborted: false,
+      willRetry: false,
+      tokensBefore: 195000,
+      estimatedTokensAfter: 24000,
+      firstKeptEntryId: "u_42",
+    });
+    if (end.op === "end") expect(end.tokensBefore).toBe(195000);
+
+    // Wrapped as an AG-UI CUSTOM event — full-union round trip.
+    const wrapped = parseEvent({
+      type: "CUSTOM",
+      session_id: "s1",
+      name: CUSTOM_EVENT.COMPACTION,
+      value: { op: "start", reason: "overflow" },
+    });
+    expect((wrapped as { name?: string }).name).toBe("compaction");
+
+    // Rejects unknown op / reason.
+    expect(CompactionCustomValueSchema.safeParse({ op: "middle", reason: "threshold" }).success).toBe(false);
+    expect(CompactionCustomValueSchema.safeParse({ op: "start", reason: "nope" }).success).toBe(false);
   });
 
   it("passthrough keeps forward-compat extras", () => {
