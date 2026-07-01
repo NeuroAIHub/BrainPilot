@@ -41,10 +41,12 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return c.json({ id: session.id, session }, 201);
   });
 
-  app.get("/sessions", (c) => c.json({ sessions: manager.listSessions() }));
+  app.get("/sessions", async (c) => c.json({ sessions: await manager.listSessions() }));
 
-  app.get("/sessions/:id", (c) => {
-    const s = manager.getSession(c.req.param("id"));
+  app.get("/sessions/:id", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const s = manager.getSession(id);
     return s ? c.json(s) : c.json({ error: "not found" }, 404);
   });
 
@@ -61,13 +63,17 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return c.json({ id, deleted }, deleted ? 200 : 404);
   });
 
-  app.get("/sessions/:id/state", (c) => {
-    const state = manager.getSessionState(c.req.param("id"));
+  app.get("/sessions/:id/state", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const state = manager.getSessionState(id);
     return state ? c.json(state) : c.json({ error: "not found" }, 404);
   });
 
-  app.get("/sessions/:id/trace", (c) => {
-    const graph = manager.getTrace(c.req.param("id"));
+  app.get("/sessions/:id/trace", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const graph = manager.getTrace(id);
     return graph ? c.json(graph) : c.json({ error: "not found" }, 404);
   });
 
@@ -90,6 +96,7 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const body = await safeBody(c);
     const parsed = SendMessageRequestSchema.safeParse(body);
     if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+    await manager.ensureLoaded(id);
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
 
     // ask_user reply branch: resolve the outstanding request.
@@ -112,11 +119,16 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const body = await safeBody(c);
     const parsed = InterruptRequestSchema.safeParse(body);
     const agent = parsed.success ? parsed.data.agent : undefined;
+    await manager.ensureLoaded(id);
     const interrupted = await manager.interrupt(id, agent);
     return c.json({ interrupted });
   });
 
-  app.get("/sessions/:id/agents", (c) => c.json({ agents: manager.listAgents(c.req.param("id")) }));
+  app.get("/sessions/:id/agents", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    return c.json({ agents: manager.listAgents(id) });
+  });
 
   app.post("/sessions/:id/evict", async (c) => {
     const res = await manager.evictSession(c.req.param("id"));
@@ -188,7 +200,8 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     }
   });
 
-  const sseHandler = (id: string, c: import("hono").Context) => {
+  const sseHandler = async (id: string, c: import("hono").Context) => {
+    await manager.ensureLoaded(id);
     if (!manager.getSession(id)) return c.json({ error: "not found" }, 404);
     c.header("Content-Type", "text/event-stream");
     c.header("Cache-Control", "no-cache");

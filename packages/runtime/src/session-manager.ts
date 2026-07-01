@@ -55,6 +55,15 @@ function makeDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+/** Shape of the persisted `.bp/<id>/meta.json` (all fields optional/defensive). */
+interface SessionMeta {
+  id?: string;
+  title?: string;
+  createdAt?: string;
+  updatedAt?: string;
+  lastActivityAt?: number;
+}
+
 interface SessionEntry {
   id: string;
   title: string;
@@ -183,6 +192,12 @@ function formatBytes(n: number): string {
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
+  /**
+   * In-flight `restoreOne` promises, keyed by session id. Guards against a
+   * refreshed UI firing `state` + `sse` (+ `messages`) near-simultaneously and
+   * racing two `createSession` restores for the same evicted session.
+   */
+  private readonly loading = new Map<string, Promise<boolean>>();
   private readonly dataRoot: string;
   private readonly agentFactory: AgentSessionFactory;
   private readonly persist: boolean;
@@ -664,8 +679,61 @@ export class SessionManager {
     return this.toSession(e);
   }
 
-  listSessions(): Session[] {
-    return [...this.sessions.values()].map((e) => this.toSession(e));
+  /**
+   * List sessions, merging live in-memory entries with persisted-but-evicted
+   * ones discovered on disk (#223). Without this, a session dropped by
+   * `evictSession` (or an idle reaper) vanishes from the sidebar even though its
+   * `.bp/<sid>/` transcript is intact — a refresh then looks like total loss.
+   *
+   * Discovery is metadata-only: we read each `meta.json` but do NOT revive the
+   * full runtime entry (bus/mailbox/trace/agents), so listing stays cheap and
+   * eviction keeps saving memory. The session is lazily revived by
+   * `ensureLoaded` only when it's actually opened. In-memory entries win on id
+   * collision. Ordering is left to the caller (the web sorts by updatedAt).
+   */
+  async listSessions(): Promise<Session[]> {
+    const out = new Map<string, Session>();
+    for (const e of this.sessions.values()) out.set(e.id, this.toSession(e));
+    if (this.persist) {
+      const root = join(this.dataRoot, ".bp");
+      let ids: string[];
+      try {
+        ids = await readdir(root);
+      } catch {
+        ids = []; // .bp/ doesn't exist yet — only in-memory sessions
+      }
+      for (const id of ids) {
+        if (out.has(id)) continue;
+        const meta = await this.readMeta(id);
+        if (!meta) continue;
+        const sid = meta.id ?? id;
+        if (out.has(sid)) continue;
+        out.set(sid, {
+          id: sid,
+          title: meta.title ?? "Untitled session",
+          createdAt: meta.createdAt ?? "",
+          updatedAt: meta.updatedAt ?? "",
+        });
+      }
+    }
+    return [...out.values()];
+  }
+
+  /**
+   * Ensure a persisted session is live in memory, reviving it from disk if it
+   * was evicted (#223). Returns true when the session is available afterwards.
+   * Concurrent calls for the same id share one restore via `this.loading`.
+   */
+  async ensureLoaded(id: string): Promise<boolean> {
+    if (this.sessions.has(id)) return true;
+    if (!this.persist) return false;
+    const inflight = this.loading.get(id);
+    if (inflight) return inflight;
+    const p = this.restoreOne(id)
+      .then((sid) => sid !== null)
+      .finally(() => this.loading.delete(id));
+    this.loading.set(id, p);
+    return p;
   }
 
   async deleteSession(id: string): Promise<boolean> {
@@ -1688,40 +1756,56 @@ export class SessionManager {
       return restored; // .bp/ doesn't exist yet — fresh install
     }
     for (const id of ids) {
-      if (this.sessions.has(id)) continue;
-      const metaPath = join(root, id, "meta.json");
-      let raw: string;
-      try {
-        raw = await readFile(metaPath, "utf8");
-      } catch {
-        continue; // not a session dir (no meta.json) — silent skip
-      }
-      try {
-        const meta = JSON.parse(raw) as {
-          id?: string;
-          title?: string;
-          createdAt?: string;
-          updatedAt?: string;
-          lastActivityAt?: number;
-        };
-        const sid = meta.id ?? id;
-        if (this.sessions.has(sid)) continue;
-        const now = new Date().toISOString();
-        await this.createSession(
-          { id: sid, title: meta.title },
-          {
-            createdAt: meta.createdAt ?? now,
-            updatedAt: meta.updatedAt ?? now,
-            lastActivityAt:
-              typeof meta.lastActivityAt === "number" ? meta.lastActivityAt : Date.now(),
-          },
-        );
-        restored.push(sid);
-      } catch (err) {
-        // eslint-disable-next-line no-console
-        console.warn(`[runtime] skipping ${id}: ${(err as Error).message}`);
-      }
+      const sid = await this.restoreOne(id);
+      if (sid !== null) restored.push(sid);
     }
     return restored;
+  }
+
+  /**
+   * Read and parse `.bp/<id>/meta.json`. Returns null when the directory has no
+   * meta.json (not a session dir) or the file is malformed. Shared by
+   * `restoreOne`, `restoreFromDisk`, and the discovery path in `listSessions`.
+   */
+  private async readMeta(id: string): Promise<SessionMeta | null> {
+    try {
+      const raw = await readFile(join(this.dataRoot, ".bp", id, "meta.json"), "utf8");
+      return JSON.parse(raw) as SessionMeta;
+    } catch {
+      return null;
+    }
+  }
+
+  /**
+   * Revive a single persisted session from disk into memory. Returns the
+   * restored session id only when it was **freshly** loaded this call — null
+   * when the session is already in memory (idempotent no-op) or there's no valid
+   * meta.json on disk. `restoreFromDisk` relies on this to report only newly
+   * restored ids; `ensureLoaded` layers "already loaded" on top separately.
+   * §10 策略A: agents start idle and are lazily spawned on the next message.
+   */
+  private async restoreOne(id: string): Promise<string | null> {
+    if (this.sessions.has(id)) return null;
+    const meta = await this.readMeta(id);
+    if (!meta) return null;
+    const sid = meta.id ?? id;
+    if (this.sessions.has(sid)) return null;
+    try {
+      const now = new Date().toISOString();
+      await this.createSession(
+        { id: sid, title: meta.title },
+        {
+          createdAt: meta.createdAt ?? now,
+          updatedAt: meta.updatedAt ?? now,
+          lastActivityAt:
+            typeof meta.lastActivityAt === "number" ? meta.lastActivityAt : Date.now(),
+        },
+      );
+      return sid;
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn(`[runtime] skipping ${id}: ${(err as Error).message}`);
+      return null;
+    }
   }
 }

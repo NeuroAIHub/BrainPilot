@@ -42,10 +42,10 @@ describe("SessionManager (mock mode)", () => {
   it("lists and deletes sessions", async () => {
     const a = await m.createSession({ title: "A" });
     const b = await m.createSession({ title: "B" });
-    expect(m.listSessions().map((s) => s.id).sort()).toEqual([a.id, b.id].sort());
+    expect((await m.listSessions()).map((s) => s.id).sort()).toEqual([a.id, b.id].sort());
     expect(await m.deleteSession(a.id)).toBe(true);
     expect(m.getSession(a.id)).toBeUndefined();
-    expect(m.listSessions()).toHaveLength(1);
+    expect(await m.listSessions()).toHaveLength(1);
   });
 
   it("auto-creates the principal on first message", async () => {
