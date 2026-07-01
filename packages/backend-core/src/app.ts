@@ -202,6 +202,15 @@ export function createApp(options: CreateAppOptions): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid provider profile", details: parsed.error.issues }, 400);
     }
+    // #205: reject a duplicate name (trimmed, case-insensitive) so the list
+    // can't grow two indistinguishable same-named profiles where `Use` is
+    // ambiguous. Enforced here at the route layer only — internal callers
+    // (scaffold / writeLocalSettings) intentionally bypass this.
+    const name = parsed.data.name.trim().toLowerCase();
+    const { profiles } = await readProviders(dataDir);
+    if (profiles.some((p) => p.name.trim().toLowerCase() === name)) {
+      return c.json({ error: `a provider named "${parsed.data.name.trim()}" already exists` }, 409);
+    }
     const created = await createProfile(dataDir, fromHttpBody(parsed.data));
     const { selectedProfileId } = await readProviders(dataDir);
     return c.json(toHttpProfile(created, selectedProfileId), 201);
@@ -280,6 +289,13 @@ export function createApp(options: CreateAppOptions): Hono {
     const parsed = McpServerConfigSchema.safeParse(config);
     if (!parsed.success) {
       return c.json({ error: "invalid mcp server config", details: parsed.error.issues }, 400);
+    }
+    // #204: POST creates — a name that already exists is a conflict, not a
+    // silent overwrite (which lost the prior config, e.g. a token-bearing URL).
+    // Editing an existing server goes through PUT /mcp-servers/:name instead.
+    const existing = await readMcpServers(dataDir);
+    if (existing.some((s) => s.name === name)) {
+      return c.json({ error: `an MCP server named "${name}" already exists` }, 409);
     }
     return c.json(await createMcpServer(dataDir, name, parsed.data), 201);
   });

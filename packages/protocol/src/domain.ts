@@ -208,6 +208,29 @@ export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
  * 400 and never reach disk.
  */
 const nonEmpty = z.string().trim().min(1);
+/** #203: true when the string parses as a WHATWG URL. */
+function isParseableUrl(value: string): boolean {
+  try {
+    new URL(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+/**
+ * #203: a syntactically valid http(s) URL. Bare-non-empty (`nonEmpty`) let typos
+ * like `"not a url"` save successfully and only fail later at provider test /
+ * runtime / tool-call time. This trims, requires a parseable URL, and restricts
+ * the scheme to http/https — which still admits the local-dev cases the issue
+ * calls out (`http://localhost`, `http://127.0.0.1`). The custom message keeps
+ * the field-level Zod issue readable once the UI surfaces `details` (#206).
+ */
+const httpUrl = z
+  .string()
+  .trim()
+  .refine((u) => /^https?:\/\//i.test(u) && isParseableUrl(u), {
+    message: "must be a valid http(s) URL (e.g. https://host/path)",
+  });
 export const McpServerConfigSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("stdio"),
@@ -218,13 +241,13 @@ export const McpServerConfigSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("http"),
-    url: nonEmpty,
+    url: httpUrl,
     headers: z.record(z.string(), z.string()).optional(),
     timeout: z.number().optional(),
   }),
   z.object({
     type: z.literal("sse"),
-    url: nonEmpty,
+    url: httpUrl,
     headers: z.record(z.string(), z.string()).optional(),
     timeout: z.number().optional(),
   }),
@@ -335,10 +358,24 @@ const modelsField = z
   })
   .min(1, "models must not be empty");
 
+/**
+ * #203: provider base URL — optional, but when a non-empty value is present it
+ * must be a valid http(s) URL. Empty string / omitted stays allowed (the base
+ * URL is optional and defaults downstream), so only a real typo like
+ * `"not a url"` 400s. `localhost`/`127.0.0.1` pass (see `httpUrl`).
+ */
+const optionalHttpUrl = z
+  .string()
+  .trim()
+  .refine((u) => u === "" || (/^https?:\/\//i.test(u) && isParseableUrl(u)), {
+    message: "base_url must be a valid URL (e.g. https://host) or empty",
+  })
+  .optional();
+
 export const ProviderProfileCreateSchema = z.object({
   name: z.string().trim().min(1, "name is required"),
-  base_url: z.string().optional(),
-  baseUrl: z.string().optional(),
+  base_url: optionalHttpUrl,
+  baseUrl: optionalHttpUrl,
   // #63: provider wire protocol. Optional on create (defaults to
   // anthropic-messages downstream); on update, omit to leave unchanged.
   api: ProviderApiSchema.optional(),

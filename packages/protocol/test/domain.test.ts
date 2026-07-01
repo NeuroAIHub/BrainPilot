@@ -3,6 +3,7 @@ import {
   AgentStateSchema,
   FileContentSchema,
   FileEntrySchema,
+  McpServerConfigSchema,
   McpServerEntrySchema,
   ProviderProfileSchema,
   ProviderProfileCreateSchema,
@@ -152,5 +153,33 @@ describe("domain schemas", () => {
   it("validates UserRole", () => {
     expect(UserRoleSchema.parse("admin")).toBe("admin");
     expect(UserRoleSchema.safeParse("root").success).toBe(false);
+  });
+
+  // #203: http/sse url and provider base_url must be syntactically valid URLs,
+  // while local-dev (localhost / 127.0.0.1) and an empty provider base_url stay
+  // allowed.
+  describe("#203 URL validation", () => {
+    it("rejects a non-URL http/sse url", () => {
+      expect(McpServerConfigSchema.safeParse({ type: "http", url: "not a url" }).success).toBe(false);
+      expect(McpServerConfigSchema.safeParse({ type: "sse", url: "not a url" }).success).toBe(false);
+      // non-http scheme rejected
+      expect(McpServerConfigSchema.safeParse({ type: "http", url: "ftp://h/x" }).success).toBe(false);
+    });
+
+    it("accepts a valid + localhost http/sse url", () => {
+      expect(McpServerConfigSchema.safeParse({ type: "http", url: "https://host/mcp" }).success).toBe(true);
+      expect(McpServerConfigSchema.safeParse({ type: "http", url: "http://localhost:8080" }).success).toBe(true);
+      expect(McpServerConfigSchema.safeParse({ type: "sse", url: "http://127.0.0.1:3000/sse" }).success).toBe(true);
+    });
+
+    it("rejects a non-URL provider base_url but allows empty / localhost", () => {
+      const base = { name: "x", models: ["m"] };
+      expect(ProviderProfileCreateSchema.safeParse({ ...base, base_url: "not a url" }).success).toBe(false);
+      expect(ProviderProfileCreateSchema.safeParse({ ...base, base_url: "" }).success).toBe(true);
+      expect(ProviderProfileCreateSchema.safeParse({ ...base, base_url: "http://127.0.0.1:1234" }).success).toBe(true);
+      expect(ProviderProfileCreateSchema.safeParse({ ...base, base_url: "https://api.x.com" }).success).toBe(true);
+      // omitted entirely is fine (optional)
+      expect(ProviderProfileCreateSchema.safeParse(base).success).toBe(true);
+    });
   });
 });
