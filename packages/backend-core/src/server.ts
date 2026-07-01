@@ -7,7 +7,7 @@ import { pathToFileURL } from "node:url";
 import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
-import { bootstrapEnvProvider } from "./config.js";
+import { bootstrapEnvProvider, migrateLegacySettings } from "./config.js";
 import type { Orchestrator, OrchestratorMode } from "./orchestrator.js";
 
 export interface StartServerOptions extends Partial<CreateAppOptions> {
@@ -91,12 +91,24 @@ export async function startServer(
     env: options.env,
   });
 
+  const providerDataDir = options.dataDir ?? process.env.BP_DATA_DIR ?? "./brainpilot";
+
+  // #202: migrate a legacy plaintext-key settings.json (pre-rewrite layout) into
+  // providers.json before the env fallback runs — settings.json was a user's
+  // explicit config, so it outranks env projection. No-op once providers.json
+  // has any profile. Best-effort: a failure must not block startup.
+  try {
+    await migrateLegacySettings(providerDataDir);
+  } catch {
+    // ignore — legacy migration is a convenience, not a startup gate
+  }
+
   // #51: seed a provider profile from env on first launch so an env-only
   // quick-start (ANTHROPIC_API_KEY etc.) surfaces an active provider in the Web
   // UI. No-op once providers.json has any profile. Best-effort: a failure here
   // must not block the server from starting.
   try {
-    await bootstrapEnvProvider(options.dataDir ?? process.env.BP_DATA_DIR ?? "./brainpilot", options.env);
+    await bootstrapEnvProvider(providerDataDir, options.env);
   } catch {
     // ignore — env projection is a convenience, not a startup gate
   }

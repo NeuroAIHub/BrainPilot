@@ -6,6 +6,7 @@ import {
   resolveProvider,
   writeLocalSettings,
   bootstrapEnvProvider,
+  migrateLegacySettings,
   parseDotenv,
   describeProviderConfig,
   formatProviderGuidance,
@@ -225,6 +226,89 @@ describe("providers registry (CRUD + selection)", () => {
     const dir = await tmp();
     const resolved = await resolveProvider({ dataDir: dir, env: { ANTHROPIC_API_KEY: "sk-env" } });
     expect(resolved.apiKey).toBe("sk-env");
+  });
+});
+
+describe("migrateLegacySettings (#202)", () => {
+  it("folds a legacy plaintext-key settings.json into a selected profile and strips the key", async () => {
+    const dir = await tmp();
+    const legacyPath = path.join(dir, "bp_template", "settings.json");
+    await mkdir(path.join(dir, "bp_template"), { recursive: true });
+    await writeFile(
+      legacyPath,
+      JSON.stringify({ apiKey: "sk-legacy", baseUrl: "https://old", model: "m-old", logLevel: "info" }),
+      { mode: 0o644 },
+    );
+
+    const profile = await migrateLegacySettings(dir);
+    expect(profile).not.toBeNull();
+    expect(profile?.apiKey).toBe("sk-legacy");
+    expect(profile?.baseUrl).toBe("https://old");
+    expect(profile?.models).toContain("m-old");
+
+    // providers.json now holds the key and is selected
+    const { profiles, selectedProfileId } = await readProviders(dir);
+    expect(profiles).toHaveLength(1);
+    expect(selectedProfileId).toBe(profile?.id);
+
+    // the plaintext key is gone from settings.json, other fields kept
+    const legacy = JSON.parse(await readFile(legacyPath, "utf8"));
+    expect(legacy.apiKey).toBeUndefined();
+    expect(legacy.logLevel).toBe("info");
+
+    // settings.json tightened to 0600 (POSIX only)
+    if (process.platform !== "win32") {
+      const { stat } = await import("node:fs/promises");
+      expect((await stat(legacyPath)).mode & 0o777).toBe(0o600);
+    }
+  });
+
+  it("migrates a nested provider.apiKey shape too", async () => {
+    const dir = await tmp();
+    await mkdir(path.join(dir, "bp_template"), { recursive: true });
+    await writeFile(
+      path.join(dir, "bp_template", "settings.json"),
+      JSON.stringify({ provider: { apiKey: "sk-nested", baseUrl: "https://n", model: "mn" } }),
+    );
+    const profile = await migrateLegacySettings(dir);
+    expect(profile?.apiKey).toBe("sk-nested");
+    expect(profile?.baseUrl).toBe("https://n");
+    const legacy = JSON.parse(
+      await readFile(path.join(dir, "bp_template", "settings.json"), "utf8"),
+    );
+    expect(legacy.provider.apiKey).toBeUndefined();
+  });
+
+  it("is a no-op when providers.json already has a profile", async () => {
+    const dir = await tmp();
+    await createProfile(dir, { name: "Existing", apiKey: "sk-keep", models: ["m"] });
+    await mkdir(path.join(dir, "bp_template"), { recursive: true });
+    await writeFile(
+      path.join(dir, "bp_template", "settings.json"),
+      JSON.stringify({ apiKey: "sk-legacy" }),
+    );
+    expect(await migrateLegacySettings(dir)).toBeNull();
+    const { profiles } = await readProviders(dir);
+    expect(profiles).toHaveLength(1);
+    expect(profiles[0].name).toBe("Existing");
+    // legacy file untouched
+    const legacy = JSON.parse(
+      await readFile(path.join(dir, "bp_template", "settings.json"), "utf8"),
+    );
+    expect(legacy.apiKey).toBe("sk-legacy");
+  });
+
+  it("is a no-op when there's no legacy key to migrate", async () => {
+    const dir = await tmp();
+    expect(await migrateLegacySettings(dir)).toBeNull();
+    // legacy file without a key → still no-op
+    await mkdir(path.join(dir, "bp_template"), { recursive: true });
+    await writeFile(
+      path.join(dir, "bp_template", "settings.json"),
+      JSON.stringify({ model: "m-only" }),
+    );
+    expect(await migrateLegacySettings(dir)).toBeNull();
+    expect((await readProviders(dir)).profiles).toHaveLength(0);
   });
 });
 
