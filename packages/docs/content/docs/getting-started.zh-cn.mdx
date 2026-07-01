@@ -1,0 +1,77 @@
+---
+title: 快速上手
+description: 通过 npm 安装 BrainPilot，在本地启动，并在 Web 界面配置第一个模型服务商。
+---
+
+BrainPilot 是一个面向脑科学研究的开源、人在回路智能体工作台。它在本机运行，通过浏览器使用，可以协调专业智能体、领域技能、MCP 工具和模型服务商。
+
+## 环境要求
+
+- **Node.js 22 或更高版本**
+- **npm**，随 Node.js 一起安装
+- 一个模型服务商 API key；如果只是冒烟测试，可以使用 `BP_MOCK=1`
+
+先检查 Node 版本：
+
+```bash
+node -v
+```
+
+如果版本低于 `v22`，请先升级 Node.js。
+
+## 通过 npm 安装
+
+```bash
+npm install -g @brainpilot/app
+```
+
+安装后会得到 `brainpilot` 命令。`bnpt` 也可以作为同一个命令的短别名使用。
+
+## 启动
+
+```bash
+brainpilot up
+```
+
+启动完成后，终端会打印一个本地访问地址，在浏览器里打开即可。
+
+如果还没有真实模型 key，可以先跑无 Key 冒烟测试：
+
+```bash
+BP_MOCK=1 brainpilot up
+```
+
+默认是前台运行。在终端按 `Ctrl-C` 可以停止。
+
+## 配置第一个模型服务商
+
+打开 **Settings -> Providers（服务商）**，点击 **Add Provider（添加服务商）**，填写：
+
+| 字段 | 示例 |
+| --- | --- |
+| Provider name | `my-gateway` |
+| Base URL | `https://your-gateway.example.com` |
+| Protocol | `Anthropic Messages` |
+| API key | `<your-api-key>` |
+| Models | `glm-5.2` |
+
+保存后，点击该服务商上的 **Use（使用）**，把它设为当前默认服务商。
+
+## 添加 MCP 工具
+
+打开 **Settings -> MCP**，点击 **Add Server（添加服务器）**，选择服务器使用的传输方式。对于 HTTP MCP 服务，可以这样填：
+
+| 字段 | 示例 |
+| --- | --- |
+| Name | `web_search` |
+| Transport | `http` |
+| URL | `https://your-mcp.example.com/mcp` |
+
+保存后，建议新建一个会话，让智能体刷新可用工具列表。
+
+## 下一步
+
+- 阅读[安装说明](https://brainpilot.chat/docs/zh-cn/installation)，了解更新、数据目录和隔离边界。
+- 阅读[模型服务商](https://brainpilot.chat/docs/zh-cn/providers)，了解支持的协议和 UI 配置细节。
+- 阅读[MCP 工具](https://brainpilot.chat/docs/zh-cn/mcp)，了解 stdio、HTTP、SSE 三种接入方式。
+- 如果 npm、启动、provider 或 MCP 配置异常，查看[故障排查](https://brainpilot.chat/docs/zh-cn/troubleshooting)。

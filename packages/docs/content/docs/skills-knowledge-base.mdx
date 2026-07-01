@@ -1,0 +1,76 @@
+---
+title: Skills and Knowledge Base
+description: Understand BrainPilot's built-in skills and options for connecting your own research corpus.
+---
+
+BrainPilot ships with a built-in brain science skills library. Skills are not MCP servers; they are structured methodology documents that agents can discover and read when relevant.
+
+## Built-in Skills
+
+Skills live in the repository under:
+
+```text
+packages/skills/skills/
+```
+
+At runtime, they are materialized into the data directory:
+
+```text
+brainpilot/bp_template/skills/
+```
+
+The runtime does not overwrite existing user-edited skills when scaffolding the data directory.
+
+## What a Skill Contains
+
+Each skill has a `SKILL.md` file with required frontmatter:
+
+```yaml
+---
+name: "skill-name"
+description: "A keyword-rich summary used for matching."
+domain: "brain-science"
+version: "1.0.0"
+---
+```
+
+The description helps the agent decide when the skill is relevant. Keep it clear, specific, and searchable.
+
+## Add a Skill
+
+To contribute a built-in skill:
+
+1. Choose an existing category under `packages/skills/skills/`, or add a new category.
+2. Create `<category>/<skill-name>/SKILL.md`.
+3. Put long reference tables, examples, or raw material under `references/`.
+4. Run the skills package build before opening a PR:
+
+```bash
+npm run build -w @brainpilot/skills
+```
+
+## Grow Your Own Skill Library
+
+The skills in the demo are extracted from paper and methodology libraries. You can build your own library the same way by pointing BrainPilot's tools at the papers, codebases, and methods you care about:
+
+- **`paper-to-skill`**: give an agent a paper, PDF, or text source and ask it to turn the method into a skill. It creates a first-draft `SKILL.md` focused on reproducible methodology.
+- **`repo-to-skill`**: give an agent a GitHub URL or local repository path. It converts the codebase into a structured skill with progressive disclosure through `references/`.
+- **Batch extraction pipeline**: for a folder of papers or transcripts, use the `pipeline/` tool in [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills). Configure the pipeline, add `.txt` or `.md` sources, set your API key, and run `python pipeline/extract.py --config pipeline/config.yaml`.
+- **Pre-built collections**: copy ready-made skills from [`awesome_cognitive_and_neuroscience_skills`](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills) or [`nature-skills`](https://github.com/Yuan1z0825/nature-skills) into `<data-dir>/bp_template/skills/`.
+
+The resulting folders should follow the normal `<category>/<skill-name>/SKILL.md` structure. Restart BrainPilot or start a new session after adding skills.
+
+## Knowledge Base Strategy
+
+BrainPilot does not ship a hosted public knowledge base inside the open-source package. Instead, connect your own retrieval services through MCP:
+
+- a vector search service over your lab's papers
+- a paper search service
+- a filesystem or database-backed retrieval tool
+- an internal literature review API
+
+You can also convert important papers or methods into skills so agents have reliable methodology available without a remote retrieval service.
+
+## Verification Reminder
+
+Some skills may be generated from papers or codebases. Verify numerical parameters, citations, and methodological assumptions before using outputs in real research.

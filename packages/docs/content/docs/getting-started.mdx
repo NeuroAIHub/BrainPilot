@@ -1,0 +1,77 @@
+---
+title: Getting Started
+description: Install BrainPilot from npm, launch it locally, and configure your first provider in the web UI.
+---
+
+BrainPilot is an open-source, human-in-the-loop research workspace for brain science. It runs locally, opens in your browser, and coordinates specialist agents, domain skills, MCP tools, and model providers.
+
+## Requirements
+
+- **Node.js 22 or later**
+- **npm**, bundled with Node.js
+- A model provider API key, or `BP_MOCK=1` for a no-key smoke run
+
+Check your Node version first:
+
+```bash
+node -v
+```
+
+If it prints a version below `v22`, install a newer Node.js release before continuing.
+
+## Install From npm
+
+```bash
+npm install -g @brainpilot/app
+```
+
+This installs the `brainpilot` command. `bnpt` is also available as a short alias.
+
+## Launch
+
+```bash
+brainpilot up
+```
+
+When startup finishes, the terminal prints a local URL. Open that URL in your browser.
+
+For a first smoke test without a real model key:
+
+```bash
+BP_MOCK=1 brainpilot up
+```
+
+The process runs in the foreground. Press `Ctrl-C` in the terminal to stop it.
+
+## Configure Your First Provider
+
+Open **Settings -> Providers**, click **Add Provider**, and fill in the provider details:
+
+| Field | Example |
+| --- | --- |
+| Provider name | `my-gateway` |
+| Base URL | `https://your-gateway.example.com` |
+| Protocol | `Anthropic Messages` |
+| API key | `<your-api-key>` |
+| Models | `glm-5.2` |
+
+Save the provider, then click **Use** to make it the active provider.
+
+## Add MCP Tools
+
+Open **Settings -> MCP**, click **Add Server**, and choose the transport your server uses. For a hosted HTTP MCP server, use:
+
+| Field | Example |
+| --- | --- |
+| Name | `web_search` |
+| Transport | `http` |
+| URL | `https://your-mcp.example.com/mcp` |
+
+Save the server and start a new session so agents can see the tool list.
+
+## Next Steps
+
+- Read [installation](https://brainpilot.chat/docs/installation) for updates, data directories, and isolation notes.
+- Read [providers](https://brainpilot.chat/docs/providers) for supported protocols and UI setup details.
+- Read [MCP](https://brainpilot.chat/docs/mcp) for stdio, HTTP, and SSE server configuration.
+- Read [troubleshooting](https://brainpilot.chat/docs/troubleshooting) if npm, launch, provider, or MCP setup behaves oddly.

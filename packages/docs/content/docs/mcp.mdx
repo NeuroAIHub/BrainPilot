@@ -1,0 +1,84 @@
+---
+title: MCP Tools
+description: Connect stdio, HTTP, and SSE Model Context Protocol servers to BrainPilot.
+---
+
+BrainPilot can connect agents to tools exposed through the Model Context Protocol. Configured tools appear to agents as namespaced tools such as `mcp__server_name__tool_name`.
+
+## Add a Server in the UI
+
+1. Start BrainPilot.
+2. Open **Settings -> MCP**.
+3. Click **Add Server**.
+4. Choose a transport: `stdio`, `http`, or `sse`.
+5. Fill in the transport-specific fields.
+6. Save the server.
+7. Start a new session so the tool list is refreshed.
+
+## HTTP Server Example
+
+| Field | Value |
+| --- | --- |
+| Name | `paper_search` |
+| Transport | `http` |
+| URL | `https://your-mcp.example.com/mcp` |
+
+If the MCP endpoint needs authentication, use the headers field when available or follow the server provider's instructions.
+
+## stdio Server Example
+
+Local MCP servers can be launched as child processes:
+
+```json
+{
+  "mcpServers": {
+    "filesystem": {
+      "type": "stdio",
+      "command": "npx",
+      "args": [
+        "-y",
+        "@modelcontextprotocol/server-filesystem",
+        "/path/to/allowed/folder"
+      ],
+      "env": {}
+    }
+  }
+}
+```
+
+Use a narrow folder path for filesystem tools. Avoid granting access to your whole home directory.
+
+## Config File Format
+
+BrainPilot writes MCP config under the data directory:
+
+```text
+brainpilot/bp_template/mcp_servers.json
+```
+
+The file follows the common `mcpServers` map:
+
+```json
+{
+  "mcpServers": {
+    "web_search": {
+      "type": "http",
+      "url": "https://your-mcp.example.com/mcp",
+      "headers": {
+        "Authorization": "Bearer <token>"
+      }
+    },
+    "events": {
+      "type": "sse",
+      "url": "https://your-mcp.example.com/sse"
+    }
+  }
+}
+```
+
+## Safety Notes
+
+- Treat MCP servers like code or services you trust; agents can call their tools.
+- Do not commit API keys in MCP URLs or headers.
+- Prefer descriptive server names because they become part of the agent-facing tool namespace.
+- Restart or create a fresh session after changing MCP servers.
