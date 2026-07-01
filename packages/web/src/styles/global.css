@@ -1683,7 +1683,10 @@ button {
 .prompt-home--active .prompt-home__inner {
   width: min(1040px, 100%);
   height: 100%;
-  grid-template-rows: minmax(0, 1fr) auto auto;
+  /* Rows: message stream (fills) | toast | running-scripts panel | composer.
+   * The two middle rows are optional and collapse to zero when their children
+   * are unmounted (empty child on `auto` row occupies no space). */
+  grid-template-rows: minmax(0, 1fr) auto auto auto;
   align-content: end;
   gap: 16px;
   justify-items: stretch;
@@ -1963,6 +1966,134 @@ button {
   border-radius: 50%;
   background: var(--color-info);
   animation: pulse 1.5s infinite;
+}
+
+/* Running-scripts panel — sits directly above the composer while any bash
+ * tool call is streaming. Collapses/expands with a native <details>. Visual
+ * weight matches .agent-running-toast so the two stack cleanly. */
+.running-scripts {
+  justify-self: stretch;
+  width: 100%;
+  margin: 0 0 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 12px;
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+  font-size: 13px;
+  overflow: hidden;
+  animation: fadeSlideIn var(--ease-layout) both;
+}
+.running-scripts > details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 10px 8px 14px;
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+.running-scripts > details > summary::-webkit-details-marker {
+  display: none;
+}
+.running-scripts__dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--color-info);
+  animation: pulse 1.5s infinite;
+  flex: 0 0 auto;
+}
+.running-scripts__chevron {
+  transition: transform var(--ease-standard);
+  flex: 0 0 auto;
+  color: var(--color-text-subtle);
+}
+.running-scripts > details:not([open]) .running-scripts__chevron {
+  transform: rotate(-90deg);
+}
+.running-scripts__label {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.running-scripts__stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  height: 22px;
+  padding: 0 9px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  cursor: pointer;
+  transition:
+    background var(--ease-standard),
+    border-color var(--ease-standard),
+    color var(--ease-standard);
+}
+.running-scripts__stop:hover {
+  background: var(--color-danger-soft);
+  border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
+  color: var(--color-danger);
+}
+.running-scripts__list {
+  list-style: none;
+  margin: 0;
+  padding: 0 10px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.running-scripts__item {
+  border: 1px solid var(--color-border);
+  border-radius: 10px;
+  background: var(--color-surface);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.running-scripts__item-head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+  color: var(--color-text-subtle);
+}
+.running-scripts__item-agent {
+  padding: 1px 8px;
+  border-radius: 999px;
+  background: var(--color-hover);
+  color: var(--color-text);
+  font-size: 11px;
+}
+.running-scripts__item-name {
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  color: var(--color-text);
+}
+.running-scripts__item-elapsed {
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+.running-scripts__cmd {
+  margin: 0;
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--color-surface-raised);
+  color: var(--color-text);
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  font-size: 12px;
+  line-height: 1.45;
+  white-space: pre-wrap;
+  word-break: break-word;
+  overflow-x: auto;
+  max-height: 180px;
 }
 
 .command-picker {
