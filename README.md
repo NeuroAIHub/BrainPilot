@@ -136,7 +136,9 @@ workflow (ports, branch model, tests).
 
 Already working inside **Claude Code** or **OpenAI Codex**? Tell your agent:
 
-> Globally install the `@brainpilot/app` npm package, then run `brainpilot up` and give me the URL to open.
+```text
+Globally install the @brainpilot/app npm package, then run brainpilot up and give me the URL to open.
+```
 
 > [!TIP]
 > ### <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/openclaw.png" height="28" align="top"/> OpenClaw — drive BrainPilot from your chat app

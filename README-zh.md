@@ -131,7 +131,9 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 
 已经在用 **Claude Code** 或 **OpenAI Codex**？直接告诉你的智能体：
 
-> 全局安装 `@brainpilot/app` 这个 npm 包，然后运行 `brainpilot up`，并把可以打开的地址给我。
+```text
+全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。
+```
 
 > [!TIP]
 > ### <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/openclaw.png" height="28" align="top"/> OpenClaw —— 从聊天应用里驱动 BrainPilot
