@@ -8,6 +8,7 @@ import { SystemMessageBubble } from "./SystemMessageBubble";
 import { AskUserCard } from "./AskUserCard";
 import { AutoRetryIndicator } from "./AutoRetryIndicator";
 import { formatToolName, formatPayload } from "../../utils/toolDisplay";
+import { formatElapsed } from "../../utils/format";
 import { getChatScroll, setChatScroll, resolveScrollTop } from "./chatScrollMemory";
 
 interface MessageStreamProps {
@@ -60,17 +61,6 @@ function mergeName(message: ChatMessage): string {
   return message.agent || (message.role === "system" ? "system" : "principal");
 }
 
-// Compact elapsed formatter: "3.2s" under a minute, "1m 05s" above.
-function formatElapsed(ms: number): string {
-  if (ms < 0) ms = 0;
-  const totalSeconds = ms / 1000;
-  if (totalSeconds < 60) {
-    return `${totalSeconds.toFixed(1)}s`;
-  }
-  const minutes = Math.floor(totalSeconds / 60);
-  const seconds = Math.floor(totalSeconds % 60);
-  return `${minutes}m ${String(seconds).padStart(2, "0")}s`;
-}
 
 /**
  * Presentational chat message stack — message bubbles, agent rows, hook notes,
