@@ -87,13 +87,15 @@ export interface TraceReminderDeps {
  * substantive work and arms the delegate reminder.
  */
 const PI_ALLOWED_TOOLS = new Set([
-  // information-gathering / read-only
+  // information-gathering / read-only. These MUST be Pi's real emitted tool
+  // names, which are lowercase (see BUILTIN_TOOL_CONFIG in tools/system-tools.ts:
+  // principal = ["read","write","edit","bash","grep","find","glob","ls"]). Names
+  // are matched case-insensitively below, but keep them lowercase to match the
+  // source of truth. (The principal has no WebFetch/WebSearch tool — omitted.)
   "read",
   "grep",
   "glob",
-  "lS",
-  "webfetch",
-  "websearch",
+  "ls",
   "find",
   // management / coordination
   "create_agent",
