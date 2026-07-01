@@ -124,27 +124,14 @@ npm run build        # 构建所有包
 npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 ```
 
-然后打开打印出的地址。无 Key 冒烟运行：`BP_MOCK=1 npm run bp -- up`。完整开发流程（端口、分支模型、
-测试）见 [`CONTRIBUTING.md`](CONTRIBUTING.md)。
+然后打开打印出的地址。完整开发流程（端口、分支模型、测试）见
+[`CONTRIBUTING.md`](CONTRIBUTING.md)。
 
 ### 让你的智能体替你部署
 
-已经在用 **Claude Code** 或 **OpenAI Codex**？那就不用手动跑上面的步骤了 —— 一句话把整套安装交给智能体，
-它会帮你装好 CLI、启动 BrainPilot，并把本地访问地址回给你：
+已经在用 **Claude Code** 或 **OpenAI Codex**？直接告诉你的智能体：
 
-```bash
-# Claude Code
-claude "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
-
-# OpenAI Codex
-codex exec "全局安装 @brainpilot/app 这个 npm 包，然后运行 brainpilot up，并把可以打开的地址给我。"
-```
-
-默认情况下，智能体在每条命令前都会停下来等你确认。几个小提示：
-
-- **无人值守跑完** —— 加上 `--dangerously-skip-permissions`（Claude Code）或 `--dangerously-bypass-approvals-and-sandbox`（Codex）。
-- **仅在你信任的目录里这么做** —— 这些 flag 会让智能体不再逐条确认就执行命令。
-- **还没有 API Key？** —— 让它*“用 mock 模式启动”*，它会以 `BP_MOCK=1` 拉起来。
+> 全局安装 `@brainpilot/app` 这个 npm 包，然后运行 `brainpilot up`，并把可以打开的地址给我。
 
 > [!TIP]
 > ### <img src="https://cdn.jsdelivr.net/gh/homarr-labs/dashboard-icons/png/openclaw.png" height="28" align="top"/> OpenClaw —— 从聊天应用里驱动 BrainPilot
