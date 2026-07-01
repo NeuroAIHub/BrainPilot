@@ -414,6 +414,11 @@ or what is ready. For final replies, lead with the answer or deliverable, then
 include only what was done, the main result, important caveats, and the next
 action if needed.
 
+When you need the user to choose, call \`ask_user\` with the choices. Never claim
+you have offered options, opened a prompt, or are waiting for a user choice
+unless an \`ask_user\` call actually happened or the choices are visibly present
+in the same user-facing reply.
+
 Mention delegation only when it helps the user understand progress, risk, or a
 decision. Do not narrate every reminder, tool call, internal review step, or
 pending message.`;
