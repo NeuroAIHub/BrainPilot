@@ -119,6 +119,92 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(agent.status).toBe("error");
   });
 
+  // Pi's compaction lifecycle used to be silently suppressed. It now surfaces on
+  // the AG-UI CUSTOM channel (name:"compaction") + a friendly system_message so
+  // clients see auto-compaction rather than a mid-run context reset.
+  describe("compaction translation", () => {
+    // Drive a MasAgent with a minimal fake Pi session that replays scripted events.
+    async function driveCompaction(events: unknown[]): Promise<AgUiEvent[]> {
+      const bus = new EventBus();
+      const captured: AgUiEvent[] = [];
+      bus.subscribe((e) => captured.push(e));
+      let listener: ((e: unknown) => void) | undefined;
+      const session = {
+        subscribe(l: (e: unknown) => void) {
+          listener = l;
+          return () => {};
+        },
+        async prompt() {
+          for (const e of events) listener?.(e);
+        },
+        async abort() {},
+        dispose() {},
+      };
+      const agent = new MasAgent({
+        sessionId: "s-compact",
+        name: "principal",
+        role: "principal",
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        session: session as any,
+        bus,
+      });
+      await agent.prompt("go");
+      for (const e of captured) expect(() => parseEvent(e)).not.toThrow();
+      return captured;
+    }
+
+    it("success path → 2 CUSTOM(name=compaction) + 2 info system_messages", async () => {
+      const captured = await driveCompaction([
+        { type: "compaction_start", reason: "threshold" },
+        {
+          type: "compaction_end",
+          reason: "threshold",
+          aborted: false,
+          willRetry: false,
+          result: { tokensBefore: 195000, estimatedTokensAfter: 24000, firstKeptEntryId: "u_42" },
+        },
+      ]);
+      const customs = captured.filter(
+        (e) => e.type === "CUSTOM" && (e as { name?: string }).name === "compaction",
+      ) as Array<{ value: Record<string, unknown> }>;
+      expect(customs).toHaveLength(2);
+      expect(customs[0].value).toMatchObject({ op: "start", reason: "threshold" });
+      expect(customs[1].value).toMatchObject({
+        op: "end",
+        reason: "threshold",
+        aborted: false,
+        willRetry: false,
+        tokensBefore: 195000,
+        estimatedTokensAfter: 24000,
+        firstKeptEntryId: "u_42",
+      });
+      const sys = captured.filter((e) => e.type === "system_message") as Array<{
+        level: string;
+        message: string;
+      }>;
+      expect(sys.some((s) => s.level === "info" && /压缩上下文/.test(s.message))).toBe(true);
+      expect(sys.some((s) => s.level === "info" && /压缩完成/.test(s.message))).toBe(true);
+    });
+
+    it("failure path → warning system_message with provider detail", async () => {
+      const captured = await driveCompaction([
+        { type: "compaction_start", reason: "overflow" },
+        {
+          type: "compaction_end",
+          reason: "overflow",
+          aborted: false,
+          willRetry: false,
+          errorMessage: "provider 429 during summarization",
+        },
+      ]);
+      const warn = captured.find(
+        (e) => e.type === "system_message" && (e as { level?: string }).level === "warning",
+      ) as { message: string; details?: string } | undefined;
+      expect(warn?.message).toMatch(/压缩失败/);
+      expect(warn?.details).toContain("provider 429");
+    });
+  });
+
   // #63: a provider/HTTP failure surfaces as a finalized assistant message with
   // stopReason "error" (Pi does NOT throw). The runtime must turn that into a
   // visible error, not an empty assistant bubble + RUN_FINISHED.

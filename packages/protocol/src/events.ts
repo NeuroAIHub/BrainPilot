@@ -286,13 +286,58 @@ export type CustomEvent = z.infer<typeof CustomEventSchema>;
  * - `session_heartbeat` — liveness timestamp.
  * - `trace_node` — a Graph-of-Trace node was created/updated (#79); `value` is
  *   `{ op: "created" | "updated", node: TraceNode }`.
+ * - `compaction` — Pi SDK auto/manual context compaction lifecycle. `value` is
+ *   `CompactionStartValue | CompactionEndValue`. Emitted verbatim from the
+ *   Pi `compaction_start` / `compaction_end` events (mas-agent.ts) so clients
+ *   can render compaction transparently instead of a mid-run context reset.
  */
 export const CUSTOM_EVENT = {
   SESSION_STATE: "session_state",
   SESSION_TITLE: "session_title",
   SESSION_HEARTBEAT: "session_heartbeat",
   TRACE_NODE: "trace_node",
+  COMPACTION: "compaction",
 } as const;
+
+/**
+ * `CUSTOM.value` shape for `name: "compaction"` — mirrors Pi SDK's
+ * `compaction_start` / `compaction_end` fields, plus an `op` discriminator so
+ * one channel carries both edges. Kept passthrough-friendly (all optional past
+ * the required core) because Pi may add fields.
+ */
+export const CompactionReasonSchema = z.enum(["manual", "threshold", "overflow"]);
+export type CompactionReason = z.infer<typeof CompactionReasonSchema>;
+
+export const CompactionStartValueSchema = z
+  .object({
+    op: z.literal("start"),
+    reason: CompactionReasonSchema,
+  })
+  .passthrough();
+export type CompactionStartValue = z.infer<typeof CompactionStartValueSchema>;
+
+export const CompactionEndValueSchema = z
+  .object({
+    op: z.literal("end"),
+    reason: CompactionReasonSchema,
+    aborted: z.boolean(),
+    willRetry: z.boolean(),
+    errorMessage: z.string().optional(),
+    /** Provider-reported tokens before compaction (present on success). */
+    tokensBefore: z.number().optional(),
+    /** Estimated tokens after compaction (present on success). */
+    estimatedTokensAfter: z.number().optional(),
+    /** ID of the first entry kept after the compaction boundary (debug/UX). */
+    firstKeptEntryId: z.string().optional(),
+  })
+  .passthrough();
+export type CompactionEndValue = z.infer<typeof CompactionEndValueSchema>;
+
+export const CompactionCustomValueSchema = z.discriminatedUnion("op", [
+  CompactionStartValueSchema,
+  CompactionEndValueSchema,
+]);
+export type CompactionCustomValue = z.infer<typeof CompactionCustomValueSchema>;
 
 /* ------------------------------------------------------------------ *
  * agent_status_update  (§10 state authority)

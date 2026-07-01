@@ -245,6 +245,13 @@ export class MasAgent {
     this.setStatus("stopped");
   }
 
+  /** Emit a compaction-related system_message with the agent tag pre-filled. */
+  private emitCompactionSystemMessage(level: "info" | "warning", message: string, details?: string): void {
+    this.bus.emit(
+      ev.systemMessage(this.sessionId, level, message, { agent: this.name, details, recoverable: true }),
+    );
+  }
+
   private recordError(message: string, details?: string, raw?: string): void {
     const prev = this.lastError?.consecutiveCount ?? 0;
     this.lastError = { message, timestamp: new Date().toISOString(), consecutiveCount: prev + 1 };
@@ -269,13 +276,59 @@ export class MasAgent {
       case "agent_end":
       case "turn_start":
       case "turn_end":
-      case "compaction_start":
-      case "compaction_end":
       case "queue_update":
-        // Internal / suppressed (§6 table: turn_*, compaction_* not exposed).
+        // Internal / suppressed (§6 table: turn_*, queue_update not exposed).
         // Behavioural reactions to turn_*/agent_end now live in the Pi-native
         // trace-reminder extension, not here.
         return;
+
+      // Pi auto-compacts when context nears the model window (threshold) or an
+      // overflow error came back. Surface both edges on the AG-UI CUSTOM channel
+      // (structured, name:"compaction") plus a `system_message` so text-only UIs
+      // see them too.
+      case "compaction_start": {
+        const cs = e as Extract<PiAgentEvent, { type: "compaction_start" }>;
+        const reason = normalizeCompactionReason(cs.reason);
+        this.bus.emit(ev.compactionStart(ctx, reason));
+        this.emitCompactionSystemMessage(
+          "info",
+          `🗜️ Agent ${this.name} 正在压缩上下文 (${COMPACTION_REASON_LABEL[reason]})…`,
+        );
+        return;
+      }
+
+      case "compaction_end": {
+        const ce = e as Extract<PiAgentEvent, { type: "compaction_end" }>;
+        const reason = normalizeCompactionReason(ce.reason);
+        const { aborted, willRetry, errorMessage } = ce;
+        const r = ce.result as
+          | { tokensBefore?: number; estimatedTokensAfter?: number; firstKeptEntryId?: string }
+          | undefined;
+        this.bus.emit(
+          ev.compactionEnd(ctx, {
+            reason,
+            aborted: Boolean(aborted),
+            willRetry: Boolean(willRetry),
+            errorMessage,
+            tokensBefore: r?.tokensBefore,
+            estimatedTokensAfter: r?.estimatedTokensAfter,
+            firstKeptEntryId: r?.firstKeptEntryId,
+          }),
+        );
+        const label = COMPACTION_REASON_LABEL[reason];
+        if (errorMessage) {
+          this.emitCompactionSystemMessage("warning", `⚠️ Agent ${this.name} 上下文压缩失败 (${label})`, errorMessage);
+        } else if (aborted) {
+          this.emitCompactionSystemMessage("info", `🛑 Agent ${this.name} 上下文压缩已中止`);
+        } else {
+          const delta =
+            r?.tokensBefore !== undefined && r?.estimatedTokensAfter !== undefined
+              ? `：${r.tokensBefore.toLocaleString()} → ~${r.estimatedTokensAfter.toLocaleString()} tokens`
+              : "";
+          this.emitCompactionSystemMessage("info", `✅ Agent ${this.name} 上下文压缩完成 (${label})${delta}`);
+        }
+        return;
+      }
 
       case "message_start": {
         const msg = e as Extract<PiAgentEvent, { type: "message_start" }>;
@@ -434,6 +487,17 @@ export class MasAgent {
     }
   }
 }
+
+type CompactionReason = "manual" | "threshold" | "overflow";
+/** Coerce Pi's `reason` field to the wire enum. Defaults to "manual" on unknown. */
+function normalizeCompactionReason(r: unknown): CompactionReason {
+  return r === "threshold" || r === "overflow" ? r : "manual";
+}
+const COMPACTION_REASON_LABEL: Record<CompactionReason, string> = {
+  manual: "手动",
+  threshold: "接近上下文上限",
+  overflow: "上下文溢出",
+};
 
 function safeStringify(v: unknown): string {
   if (v === undefined || v === null) return "";
