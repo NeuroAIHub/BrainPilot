@@ -550,7 +550,14 @@ export const api = {
         `${API_BASE}/sessions/${sessionId}/history${qs}`,
         { headers: authHeaders() },
       );
-      if (!res.ok) return { events: [], total: 0, truncated: false };
+      // A 404 means the session has no transcript on disk (genuinely empty) —
+      // return an empty history. Any OTHER non-OK status is a real failure
+      // (routing / storage / auth); surface it instead of silently rendering an
+      // empty transcript, which historically masked broken rehydrates (#223).
+      if (res.status === 404) return { events: [], total: 0, truncated: false };
+      if (!res.ok) {
+        throw new Error(`history fetch failed: ${res.status} ${res.statusText}`);
+      }
       const raw = (await res.json().catch(() => null)) as
         | { events?: unknown[]; total?: number; truncated?: boolean }
         | null;
