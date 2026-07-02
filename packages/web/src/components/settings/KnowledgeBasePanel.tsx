@@ -54,6 +54,41 @@ function isKnownStage(stage: string): stage is Stage {
   return (STAGES as string[]).includes(stage);
 }
 
+interface SetupState {
+  percent: number;
+  msg: string;
+  status: "pending" | "running" | "done" | "error";
+}
+
+// Small progress bar used for the venv + model download rows in the env
+// card. Kept local to this file so we don't grow a shared "ProgressBar"
+// component just for two sites — one file, one style.
+function SetupProgressRow({
+  label,
+  state,
+}: {
+  label: string;
+  state: SetupState;
+}) {
+  const pct = Math.max(0, Math.min(100, state.percent));
+  return (
+    <div className="kb-setup-row">
+      <div className="kb-setup-row__head">
+        <span className="kb-setup-row__label">{label}</span>
+        <span className="kb-setup-row__pct">{state.status === "done" ? "✓ 100%" : `${pct}%`}</span>
+      </div>
+      <div className="kb-setup-row__track" aria-hidden="true">
+        <span className={`kb-setup-row__fill kb-setup-row__fill--${state.status}`} style={{ width: `${pct}%` }} />
+      </div>
+      {state.msg ? (
+        <div className={`kb-setup-row__msg ${state.status === "error" ? "kb-setup-row__msg--error" : ""}`}>
+          {state.msg}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 export function KnowledgeBasePanel() {
   const t = useT();
   const [ocrApiKey, setOcrApiKey] = useState("");
@@ -61,6 +96,7 @@ export function KnowledgeBasePanel() {
   const [metaBaseUrl, setMetaBaseUrl] = useState("");
   const [metaModel, setMetaModel] = useState("");
   const [reuseAgentKey, setReuseAgentKey] = useState(true);
+  const [useHfMirror, setUseHfMirror] = useState(false);
   const [skip, setSkip] = useState<Record<Stage, boolean>>({
     ocr: false,
     extract: false,
@@ -71,8 +107,10 @@ export function KnowledgeBasePanel() {
   const [stages, setStages] = useState<Record<Stage, StageState>>(INITIAL_STAGE_STATE);
   const [active, setActive] = useState(false);
   /** Distinguishes "the build is running" from "env setup is running" so the
-   *  UI can show the right spinner / disable the right buttons. */
-  const [activeJob, setActiveJob] = useState<"build" | "setup-env" | null>(null);
+   *  UI can show the right spinner / disable the right buttons.
+   *  "setup-full" covers the one-click orchestration that runs venv + model
+   *  download back-to-back. */
+  const [activeJob, setActiveJob] = useState<"build" | "setup-env" | "setup-full" | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [env, setEnv] = useState<{
     python: string;
@@ -83,13 +121,39 @@ export function KnowledgeBasePanel() {
     kbRoot: string;
   } | null>(null);
   const [envBusy, setEnvBusy] = useState(false);
+  // Model download runs in parallel with env setup; it needs its own
+  // progress row and busy flag so the UI can show both in flight at once.
+  const [modelBusy, setModelBusy] = useState(false);
+  const [envProgress, setEnvProgress] = useState<SetupState>(
+    { percent: 0, msg: "", status: "pending" },
+  );
+  const [modelProgress, setModelProgress] = useState<SetupState>(
+    { percent: 0, msg: "", status: "pending" },
+  );
+  // Persisted OCR key state: true iff the backend confirms one is on disk.
+  // When true, the input shows a masked preview + "Change" button so the
+  // user doesn't have to re-type it on every page reload.
+  const [ocrKeySaved, setOcrKeySaved] = useState(false);
+  const [ocrKeyPreview, setOcrKeyPreview] = useState("");
+  const [ocrKeyEditing, setOcrKeyEditing] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const sseRef = useRef<EventSource | null>(null);
 
   // Hydrate from server: if a build is already running (e.g. user reopened
   // the dialog mid-build), show its current status + replay recent events.
+  // Also fetch the persisted OCR key state so the input can show "saved".
   useEffect(() => {
     let cancelled = false;
+    void (async () => {
+      try {
+        const cfg = await api.kb.getApiConfig();
+        if (cancelled) return;
+        setOcrKeySaved(cfg.hasOcrApiKey);
+        setOcrKeyPreview(cfg.ocrApiKeyPreview);
+      } catch {
+        /* api-config fetch is best-effort */
+      }
+    })();
     void (async () => {
       try {
         const status = await api.kb.status();
@@ -98,6 +162,7 @@ export function KnowledgeBasePanel() {
         if (status.recentEvents?.length) {
           setEvents(status.recentEvents);
           replayStages(status.recentEvents);
+          replaySetupProgress(status.recentEvents);
         }
         if (status.active) {
           // Guess which job is running from the most recent event with a
@@ -163,6 +228,40 @@ export function KnowledgeBasePanel() {
     }
   }
 
+  // Replay setup-env / setup-models progress from a fresh snapshot (used on
+  // page reload when there might be a job already in flight — the SSE stream
+  // gives us subsequent events, this fills in whatever happened before).
+  function replaySetupProgress(history: BuildEvent[]) {
+    let envP: SetupState = { percent: 0, msg: "", status: "pending" };
+    let modelP: SetupState = { percent: 0, msg: "", status: "pending" };
+    for (const ev of history) {
+      if (ev.stage === "setup-env") {
+        envP = deriveSetupState(envP, ev);
+      } else if (ev.stage === "setup-models") {
+        modelP = deriveSetupState(modelP, ev);
+      }
+    }
+    setEnvProgress(envP);
+    setModelProgress(modelP);
+  }
+
+  function deriveSetupState(prev: SetupState, ev: BuildEvent): SetupState {
+    if (ev.event === "progress") {
+      const pct = typeof ev.percent === "number" ? ev.percent : prev.percent;
+      return { status: "running", percent: pct, msg: ev.msg };
+    }
+    if (ev.event === "info") {
+      return { ...prev, status: "running", msg: ev.msg };
+    }
+    if (ev.event === "done") {
+      return { status: "done", percent: 100, msg: ev.msg };
+    }
+    if (ev.event === "error") {
+      return { ...prev, status: "error", msg: ev.msg };
+    }
+    return prev;
+  }
+
   async function refreshEnv() {
     try {
       const s = await api.kb.status();
@@ -188,12 +287,27 @@ export function KnowledgeBasePanel() {
       setActive(false);
       setActiveJob(null);
     }
-    if (ev.stage === "setup-env" && (ev.event === "done" || ev.event === "error")) {
-      setEnvBusy(false);
+    if (ev.stage === "setup-env") {
+      setEnvProgress((prev) => deriveSetupState(prev, ev));
+      if (ev.event === "done" || ev.event === "error") {
+        setEnvBusy(false);
+        // Re-fetch environment so the banner flips from yellow to green
+        // (or stays yellow with the right error).
+        void refreshEnv();
+      }
+    }
+    if (ev.stage === "setup-models") {
+      setModelProgress((prev) => deriveSetupState(prev, ev));
+      if (ev.event === "info" && !modelBusy) setModelBusy(true);
+      if (ev.event === "done" || ev.event === "error") {
+        setModelBusy(false);
+      }
+    }
+    // The whole "setup-full" umbrella job clears activeJob only when both
+    // constituent jobs are done (or one failed). setup-full emits its own
+    // synthetic done/error event that we key off here.
+    if (ev.stage === "setup-full" && (ev.event === "done" || ev.event === "error")) {
       setActiveJob(null);
-      // Re-fetch environment so the banner flips from yellow to green
-      // (or stays yellow with the right error).
-      void refreshEnv();
     }
   }
 
@@ -227,7 +341,7 @@ export function KnowledgeBasePanel() {
   }
 
   const formInvalid = useMemo(() => {
-    if (skip.ocr === false && !ocrApiKey.trim()) {
+    if (skip.ocr === false && !ocrApiKey.trim() && !ocrKeySaved) {
       return t("settings.kb.error.missingOcrKey");
     }
     if (skip.extract === false) {
@@ -236,7 +350,7 @@ export function KnowledgeBasePanel() {
       }
     }
     return null;
-  }, [ocrApiKey, metaApiKey, reuseAgentKey, skip.ocr, skip.extract, t]);
+  }, [ocrApiKey, ocrKeySaved, metaApiKey, reuseAgentKey, skip.ocr, skip.extract, t]);
 
   async function startBuild() {
     setError(null);
@@ -260,6 +374,7 @@ export function KnowledgeBasePanel() {
         metaBaseUrl: metaBaseUrl.trim() || undefined,
         metaModel: metaModel.trim() || undefined,
         skip: skipList.length ? skipList : undefined,
+        hfMirror: useHfMirror ? "https://hf-mirror.com" : undefined,
       });
       if (!r.ok) {
         setError(r.error || "build start failed");
@@ -288,11 +403,13 @@ export function KnowledgeBasePanel() {
     // distinct from prior [build:...] / [ocr:...] lines.
     setEnvBusy(true);
     setActiveJob("setup-env");
+    setEnvProgress({ percent: 0, msg: "", status: "running" });
     try {
       const r = await api.kb.setupEnv({ reinstall });
       if (!r.ok) {
         setEnvBusy(false);
         setActiveJob(null);
+        setEnvProgress({ percent: 0, msg: r.error || "start failed", status: "error" });
         setError(r.error || "setup-env start failed");
         return;
       }
@@ -300,6 +417,62 @@ export function KnowledgeBasePanel() {
     } catch (err) {
       setEnvBusy(false);
       setActiveJob(null);
+      setEnvProgress({ percent: 0, msg: String(err), status: "error" });
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** One-click: create venv, then download bge models. The backend chains
+   *  the two jobs — venv completes first, models kick off automatically. */
+  async function startFullSetup() {
+    setError(null);
+    setEnvBusy(true);
+    setModelBusy(true);
+    setActiveJob("setup-full");
+    setEnvProgress({ percent: 0, msg: "", status: "running" });
+    setModelProgress({ percent: 0, msg: "waiting for venv…", status: "pending" });
+    try {
+      const r = await api.kb.setupFull({
+        hfMirror: useHfMirror ? "https://hf-mirror.com" : undefined,
+      });
+      if (!r.ok) {
+        setEnvBusy(false);
+        setModelBusy(false);
+        setActiveJob(null);
+        setEnvProgress({ percent: 0, msg: r.error || "start failed", status: "error" });
+        setError(r.error || "setup-full start failed");
+        return;
+      }
+      openSse();
+    } catch (err) {
+      setEnvBusy(false);
+      setModelBusy(false);
+      setActiveJob(null);
+      setEnvProgress({ percent: 0, msg: String(err), status: "error" });
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
+  /** Save the OCR API key to disk (backend → API_config.json). Called on
+   *  blur when the user typed something new. */
+  async function saveOcrKey(value: string) {
+    if (!value.trim()) return;
+    try {
+      const r = await api.kb.saveApiConfig({ ocrApiKey: value.trim() });
+      if (!r.ok) {
+        setError(r.error || "failed to save OCR key");
+        return;
+      }
+      setOcrKeySaved(true);
+      // The backend gives us the masked preview on GET; refresh so the UI
+      // shows "...abcd" matching what's actually on disk.
+      const cfg = await api.kb.getApiConfig();
+      setOcrKeyPreview(cfg.ocrApiKeyPreview);
+      setOcrKeyEditing(false);
+      // Clear the input value now that it's persisted — subsequent builds
+      // pick it up from the backend's saved copy.
+      setOcrApiKey("");
+    } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   }
@@ -308,7 +481,7 @@ export function KnowledgeBasePanel() {
     <section className="settings-section">
       <div className="settings-section__header">
         <div>
-          <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h3 className="kb-panel__title">
             <Database size={18} aria-hidden />
             {t("settings.kb.title")}
           </h3>
@@ -319,94 +492,113 @@ export function KnowledgeBasePanel() {
       </div>
 
       {env ? (
-        <div
-          style={{
-            marginBottom: 12,
-            padding: 10,
-            border: `1px solid ${env.venvExists ? "#bbf7d0" : "#fde68a"}`,
-            background: env.venvExists ? "#f0fdf4" : "#fffbeb",
-            borderRadius: 6,
-            fontSize: 12,
-            color: "#334155",
-          }}
-        >
-          <div style={{ marginBottom: 4 }}>
-            <strong>{t("settings.kb.env.title")}</strong>
+        <div className={`kb-env kb-env--${env.venvExists ? "ready" : "missing"}`}>
+          <div className="kb-env__head">
+            <span className={`sandbox-chip sandbox-chip--${env.venvExists ? "ok" : "off"}`}>
+              <Wrench size={13} />
+              {t("settings.kb.env.title")}
+              <i className="sandbox-chip__dot" aria-hidden="true" />
+            </span>
           </div>
-          <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
-            KB_ROOT: {env.kbRoot}
-            <br />
-            Python:  {env.python}
-            {env.pythonIsVenv ? " ✓ venv" : ""}
-          </div>
+          <dl className="kb-env__facts">
+            <div>
+              <dt>KB_ROOT</dt>
+              <dd>{env.kbRoot}</dd>
+            </div>
+            <div>
+              <dt>Python</dt>
+              <dd>{env.python}{env.pythonIsVenv ? " · venv" : ""}</dd>
+            </div>
+          </dl>
           {!env.venvExists ? (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ marginBottom: 6 }}>{t("settings.kb.env.venvMissing")}</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="kb-env__action">
+              <p className="kb-env__note">{t("settings.kb.env.venvMissing")}</p>
+              <div className="kb-env__buttons">
                 <button
                   type="button"
                   className="settings-button"
-                  onClick={() => void startEnvSetup(false)}
-                  disabled={envBusy || activeJob !== null}
-                  title={t("settings.kb.env.setupHint")}
+                  onClick={() => void startFullSetup()}
+                  disabled={envBusy || modelBusy || activeJob !== null}
+                  title={t("settings.kb.env.setupFullHint")}
                 >
-                  <Wrench size={14} style={{ marginRight: 4 }} aria-hidden />
-                  {t("settings.kb.env.setupButton")}
+                  <Wrench size={14} aria-hidden />
+                  {t("settings.kb.env.setupFullButton")}
                 </button>
-                {envBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
+                {envBusy || modelBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
               </div>
-              <details style={{ marginTop: 6 }}>
-                <summary style={{ cursor: "pointer", color: "#64748b" }}>
-                  {t("settings.kb.env.cliFallback")}
-                </summary>
-                <pre
-                  style={{
-                    marginTop: 4,
-                    padding: 8,
-                    background: "#0f172a",
-                    color: "#e2e8f0",
-                    borderRadius: 4,
-                    overflowX: "auto",
-                    fontSize: 12,
-                  }}
-                >
-                  {`bash ${env.kbRoot}/scripts/setup_env.sh`}
+              <details className="kb-env__fallback">
+                <summary>{t("settings.kb.env.cliFallback")}</summary>
+                <pre className="kb-code">
+                  {`bash ${env.kbRoot}/scripts/setup_env.sh
+${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
                 </pre>
-                <div style={{ color: "#64748b", marginTop: 4 }}>
-                  {t("settings.kb.env.venvHint")}
-                </div>
+                <p className="kb-env__note">{t("settings.kb.env.venvHint")}</p>
               </details>
             </div>
           ) : (
-            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="kb-env__buttons">
               <button
                 type="button"
-                className="settings-button"
+                className="settings-button settings-button--ghost"
                 onClick={() => void startEnvSetup(true)}
-                disabled={envBusy || activeJob !== null}
+                disabled={envBusy || modelBusy || activeJob !== null}
                 title={t("settings.kb.env.reinstallHint")}
-                style={{ background: "transparent", border: "1px solid #cbd5e1", color: "#334155" }}
               >
-                <RefreshCw size={14} style={{ marginRight: 4 }} aria-hidden />
+                <RefreshCw size={14} aria-hidden />
                 {t("settings.kb.env.reinstallButton")}
               </button>
-              {envBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
+              {envBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
             </div>
           )}
+
+          {/* Setup progress rows: shown any time either job is/was active. */}
+          {(envProgress.status !== "pending" || modelProgress.status !== "pending") ? (
+            <div className="kb-setup-rows">
+              <SetupProgressRow
+                label={t("settings.kb.env.venvProgressLabel")}
+                state={envProgress}
+              />
+              <SetupProgressRow
+                label={t("settings.kb.env.modelProgressLabel")}
+                state={modelProgress}
+              />
+            </div>
+          ) : null}
         </div>
       ) : null}
 
-      <div className="settings-field-grid">
+      <div className="kb-fields">
         <label className="settings-field">
           <span>{t("settings.kb.ocrKey")}</span>
-          <input
-            type="password"
-            value={ocrApiKey}
-            onChange={(e) => setOcrApiKey(e.target.value)}
-            placeholder="sk-..."
-            autoComplete="off"
-            disabled={active || skip.ocr}
-          />
+          {ocrKeySaved && !ocrKeyEditing ? (
+            <div className="kb-key-saved-row">
+              <div className="kb-key-saved">
+                {t("settings.kb.ocrKeySaved")} {ocrKeyPreview}
+              </div>
+              <button
+                type="button"
+                className="settings-button settings-button--ghost"
+                onClick={() => setOcrKeyEditing(true)}
+                disabled={active || skip.ocr}
+              >
+                {t("settings.kb.ocrKeyChange")}
+              </button>
+            </div>
+          ) : (
+            <input
+              type="password"
+              value={ocrApiKey}
+              onChange={(e) => setOcrApiKey(e.target.value)}
+              onBlur={(e) => {
+                // Persist on blur so the user doesn't have to remember to
+                // save. Empty input (they cleared it) → treat as no-op.
+                if (e.target.value.trim()) void saveOcrKey(e.target.value);
+              }}
+              placeholder="sk-..."
+              autoComplete="off"
+              disabled={active || skip.ocr}
+            />
+          )}
         </label>
 
         <label className="settings-check">
@@ -457,11 +649,24 @@ export function KnowledgeBasePanel() {
           </>
         ) : null}
 
-        <fieldset className="settings-field" style={{ border: "none", padding: 0 }}>
+        <label className="settings-check">
+          <input
+            type="checkbox"
+            checked={useHfMirror}
+            onChange={(e) => setUseHfMirror(e.target.checked)}
+            disabled={active}
+          />
+          <span>{t("settings.kb.useHfMirror")}</span>
+        </label>
+        <p className="kb-field-hint">
+          {t("settings.kb.useHfMirrorHint")}
+        </p>
+
+        <fieldset className="kb-stages">
           <legend>{t("settings.kb.stages")}</legend>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div className="kb-stages__row">
             {STAGES.map((s) => (
-              <label key={s} className="settings-check" style={{ margin: 0 }}>
+              <label key={s} className="settings-check kb-stages__item">
                 <input
                   type="checkbox"
                   checked={!skip[s]}
@@ -477,7 +682,7 @@ export function KnowledgeBasePanel() {
         </fieldset>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+      <div className="kb-actions">
         {!active ? (
           <button
             className="settings-button"
@@ -493,7 +698,7 @@ export function KnowledgeBasePanel() {
                     : undefined)
             }
           >
-            <Play size={14} style={{ marginRight: 4 }} aria-hidden />
+            <Play size={14} aria-hidden />
             {t("settings.kb.start")}
           </button>
         ) : (
@@ -502,91 +707,50 @@ export function KnowledgeBasePanel() {
             type="button"
             onClick={() => void cancelBuild()}
           >
-            <Square size={14} style={{ marginRight: 4 }} aria-hidden />
+            <Square size={14} aria-hidden />
             {t("settings.kb.cancel")}
           </button>
         )}
-        {active ? <Loader2 size={16} className="animate-spin" aria-hidden /> : null}
+        {active ? <Loader2 size={16} className="spin" aria-hidden /> : null}
       </div>
 
-      {error ? (
-        <p style={{ color: "var(--color-danger, #d92d20)", marginTop: 8 }}>
-          {error}
-        </p>
-      ) : null}
+      {error ? <p className="settings-note settings-note--error kb-error">{error}</p> : null}
 
-      <div style={{ marginTop: 16 }}>
-        <h4 style={{ margin: "0 0 8px" }}>{t("settings.kb.progress")}</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 60px", rowGap: 6, columnGap: 8, alignItems: "center" }}>
+      <div className="kb-block">
+        <h4 className="kb-block__title">{t("settings.kb.progress")}</h4>
+        <div className="kb-progress">
           {STAGES.map((s) => {
             const st = stages[s];
-            const color =
-              st.status === "done" ? "#16a34a" :
-              st.status === "error" ? "#d92d20" :
-              st.status === "running" ? "#2563eb" : "#cbd5e1";
+            const pct = Math.min(100, Math.max(0, st.percent));
             return (
-              <div key={s} style={{ display: "contents" }}>
-                <strong>{STAGE_LABELS[s]}</strong>
-                <div style={{
-                  background: "#f1f5f9",
-                  borderRadius: 4,
-                  overflow: "hidden",
-                  height: 8,
-                }}>
-                  <div style={{
-                    width: `${Math.min(100, Math.max(0, st.percent))}%`,
-                    background: color,
-                    height: "100%",
-                    transition: "width 200ms linear",
-                  }} />
+              <div key={s} className="kb-progress__row">
+                <strong className="kb-progress__label">{STAGE_LABELS[s]}</strong>
+                <div className="kb-progress__track" aria-hidden="true">
+                  <span
+                    className={`kb-progress__fill kb-progress__fill--${st.status}`}
+                    style={{ width: `${pct}%` }}
+                  />
                 </div>
-                <span style={{ fontVariantNumeric: "tabular-nums", color: "#64748b" }}>
+                <span className="kb-progress__pct">
                   {st.status === "done" ? "✓" : `${Math.round(st.percent)}%`}
                 </span>
-                {st.msg ? (
-                  <div style={{ gridColumn: "2 / -1", fontSize: 12, color: "#64748b" }}>
-                    {st.msg}
-                  </div>
-                ) : null}
+                {st.msg ? <div className="kb-progress__msg">{st.msg}</div> : null}
               </div>
             );
           })}
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <h4 style={{ margin: "0 0 8px" }}>{t("settings.kb.log")}</h4>
-        <div
-          ref={logRef}
-          style={{
-            background: "#0f172a",
-            color: "#e2e8f0",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 12,
-            padding: 8,
-            borderRadius: 4,
-            maxHeight: 220,
-            overflowY: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
+      <div className="kb-block">
+        <h4 className="kb-block__title">{t("settings.kb.log")}</h4>
+        <div ref={logRef} className="kb-log">
           {events.length === 0 ? (
-            <span style={{ color: "#64748b" }}>
-              {t("settings.kb.logEmpty")}
-            </span>
-          ) : events.map((ev, i) => {
-            const color =
-              ev.event === "error" ? "#fca5a5" :
-              ev.event === "warn" ? "#fbbf24" :
-              ev.event === "done" ? "#86efac" :
-              ev.event === "progress" ? "#93c5fd" : "#e2e8f0";
-            return (
-              <div key={i} style={{ color }}>
-                [{ev.stage}:{ev.event}] {ev.msg}
-              </div>
-            );
-          })}
+            <span className="kb-log__empty">{t("settings.kb.logEmpty")}</span>
+          ) : events.map((ev, i) => (
+            <div key={i} className={`kb-log__line kb-log__line--${ev.event}`}>
+              [{ev.stage}:{ev.event}] {ev.msg}
+            </div>
+          ))}
         </div>
       </div>
     </section>

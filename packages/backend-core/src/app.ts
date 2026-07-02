@@ -42,12 +42,17 @@ import {
   updateMcpServer,
   deleteMcpServer,
   type StoredProviderProfile,
+  readKbApiConfig,
+  writeKbApiConfig,
 } from "./config.js";
 import {
   cancelKbBuild,
+  findKbRoot,
   getKbBuildStatus,
   startKbBuild,
   startKbEnvSetup,
+  startKbFullSetup,
+  startKbModelSetup,
   subscribeKbBuild,
 } from "./kb-builder.js";
 
@@ -337,15 +342,41 @@ export function createApp(options: CreateAppOptions): Hono {
   // POST /api/kb/cancel
   api.post("/kb/build", async (c) => {
     const body = await safeJson(c);
+    // When the frontend sends no metaApiKey (i.e. "reuse the agent's active
+    // LLM key" is checked), fill in the credentials from the selected provider
+    // profile so the Python extract_meta.py script receives them.
+    let metaApiKey = typeof body.metaApiKey === "string" ? body.metaApiKey : undefined;
+    let metaBaseUrl = typeof body.metaBaseUrl === "string" ? body.metaBaseUrl : undefined;
+    let metaModel = typeof body.metaModel === "string" ? body.metaModel : undefined;
+    if (!metaApiKey) {
+      const { profiles, selectedProfileId } = await readProviders(dataDir);
+      const profile =
+        profiles.find((p) => p.id === selectedProfileId) ?? profiles[0];
+      if (profile) {
+        metaApiKey = profile.apiKey || undefined;
+        if (!metaBaseUrl) metaBaseUrl = profile.baseUrl || undefined;
+        if (!metaModel) metaModel = profile.models[0] || undefined;
+      }
+    }
+    // Same shape for the OCR key: if the frontend didn't send one, load the
+    // persisted value from <KB_ROOT>/source/API_config.json so the user's
+    // saved key survives page reloads without ever leaving the backend.
+    let ocrApiKey = typeof body.ocrApiKey === "string" ? body.ocrApiKey : undefined;
+    if (!ocrApiKey) {
+      const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : findKbRoot();
+      const saved = await readKbApiConfig(kbRoot);
+      ocrApiKey = saved.ocrApiKey || undefined;
+    }
     const result = startKbBuild({
       kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
-      ocrApiKey: typeof body.ocrApiKey === "string" ? body.ocrApiKey : undefined,
+      ocrApiKey,
       ocrConcurrency:
         typeof body.ocrConcurrency === "number" ? body.ocrConcurrency : undefined,
       ocrLimit: typeof body.ocrLimit === "number" ? body.ocrLimit : undefined,
-      metaApiKey: typeof body.metaApiKey === "string" ? body.metaApiKey : undefined,
-      metaBaseUrl: typeof body.metaBaseUrl === "string" ? body.metaBaseUrl : undefined,
-      metaModel: typeof body.metaModel === "string" ? body.metaModel : undefined,
+      metaApiKey,
+      metaBaseUrl,
+      metaModel,
+      hfMirror: typeof body.hfMirror === "string" ? body.hfMirror : undefined,
       skip: Array.isArray(body.skip)
         ? (body.skip.filter((s) =>
             typeof s === "string" && ["ocr", "extract", "chunk", "vectorize"].includes(s),
@@ -376,6 +407,52 @@ export function createApp(options: CreateAppOptions): Hono {
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
     return c.json({ ok: true, startedAt: result.startedAt });
+  });
+
+  // Download bge-m3 + bge-reranker-v2-m3 weights (~2.5 GB). Runs in its
+  // own slot so it can execute concurrently with venv setup (the "full
+  // setup" one-shot endpoint below chains the two together).
+  api.post("/kb/setup-models", async (c) => {
+    const body = await safeJson(c);
+    const result = startKbModelSetup({
+      hfMirror: typeof body.hfMirror === "string" ? body.hfMirror : undefined,
+      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+    });
+    if (!result.ok) return c.json({ error: result.message }, 409);
+    return c.json({ ok: true, startedAt: result.startedAt });
+  });
+
+  // Combined one-click: creates the venv and then (upon success) downloads
+  // the bge models. The frontend uses this by default so the user only
+  // has to click once to get an end-to-end-ready KB pipeline.
+  api.post("/kb/setup-full", async (c) => {
+    const body = await safeJson(c);
+    const result = startKbFullSetup({
+      python: typeof body.python === "string" ? body.python : undefined,
+      reinstall: typeof body.reinstall === "boolean" ? body.reinstall : undefined,
+      hfMirror: typeof body.hfMirror === "string" ? body.hfMirror : undefined,
+      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+    });
+    if (!result.ok) return c.json({ error: result.message }, 409);
+    return c.json({ ok: true, startedAt: result.startedAt });
+  });
+
+  // Persisted KB API config (currently just the SiliconFlow OCR key).
+  // GET returns a masked preview only — the plaintext never leaves backend.
+  api.get("/kb/api-config", async (c) => {
+    const cfg = await readKbApiConfig(findKbRoot());
+    return c.json({
+      hasOcrApiKey: Boolean(cfg.ocrApiKey),
+      ocrApiKeyPreview: cfg.ocrApiKey ? `...${cfg.ocrApiKey.slice(-4)}` : "",
+    });
+  });
+
+  api.put("/kb/api-config", async (c) => {
+    const body = await safeJson(c);
+    const patch: { ocrApiKey?: string } = {};
+    if (typeof body.ocrApiKey === "string") patch.ocrApiKey = body.ocrApiKey.trim();
+    await writeKbApiConfig(findKbRoot(), patch);
+    return c.json({ ok: true });
   });
 
   api.post("/kb/cancel", (c) => {

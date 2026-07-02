@@ -55,6 +55,62 @@ function makeDeferred<T>(): Deferred<T> {
   return { promise, resolve, reject };
 }
 
+/** #167 default concurrent-provider-calls cap when nothing is configured. */
+const DEFAULT_MAX_CONCURRENT_AGENTS = 4;
+
+/**
+ * Resolve the per-session provider concurrency cap: explicit option wins, else
+ * `BP_MAX_CONCURRENT_AGENTS`, else the default. Non-integer / empty env falls
+ * back to the default; 0 or negative is honored as "throttling disabled".
+ */
+function resolveMaxConcurrentAgents(opt?: number): number {
+  if (typeof opt === "number" && Number.isFinite(opt)) return Math.trunc(opt);
+  const env = process.env.BP_MAX_CONCURRENT_AGENTS?.trim();
+  if (env !== undefined && env !== "") {
+    const n = Number(env);
+    if (Number.isFinite(n)) return Math.trunc(n);
+  }
+  return DEFAULT_MAX_CONCURRENT_AGENTS;
+}
+
+/**
+ * A minimal FIFO counting semaphore. `acquire()` resolves with a `release` fn
+ * once a slot is free; excess acquirers queue in order. Used per-session to
+ * bound concurrent provider calls (#167). Not reentrant; callers must release
+ * exactly once (we do so in a `finally`).
+ */
+class ProviderSemaphore {
+  private available: number;
+  private readonly waiters: Array<() => void> = [];
+
+  constructor(limit: number) {
+    this.available = Math.max(1, limit);
+  }
+
+  acquire(): Promise<() => void> {
+    return new Promise<() => void>((resolve) => {
+      const grant = () => {
+        let released = false;
+        resolve(() => {
+          if (released) return;
+          released = true;
+          const next = this.waiters.shift();
+          if (next) next();
+          else this.available++;
+        });
+      };
+      if (this.available > 0) {
+        this.available--;
+        grant();
+      } else {
+        // Queue: when a slot frees, this waiter is handed the slot directly
+        // (available stays decremented — ownership transfers, no double count).
+        this.waiters.push(grant);
+      }
+    });
+  }
+}
+
 /** Shape of the persisted `.bp/<id>/meta.json` (all fields optional/defensive). */
 interface SessionMeta {
   id?: string;
@@ -146,6 +202,13 @@ export interface SessionManagerOptions {
    * Env override: BP_MAX_TOOL_RESULT_TOKENS.
    */
   maxToolResultTokens?: number;
+  /**
+   * #167: max concurrent provider calls per session (throttle to avoid
+   * self-inflicted 429s on a wide multi-agent fan-out). Default 4; env override
+   * `BP_MAX_CONCURRENT_AGENTS` (intended range ~2–6). 0 or negative disables
+   * throttling. Tests inject this directly.
+   */
+  maxConcurrentAgents?: number;
 }
 
 /** Roles inferred from agent name. */
@@ -232,6 +295,15 @@ export class SessionManager {
   // Tool result truncation (issue #80). 0 = disabled.
   private readonly maxToolResultTokens: number;
 
+  // #167: per-session cap on concurrent provider calls. Each agent's delivery
+  // loop is already serial, but distinct experts run independently, so a wide
+  // delegation fan-out can fire N provider requests at once and self-inflict
+  // 429s. A per-session semaphore bounds in-flight `prompt()`s; excess calls
+  // queue (they don't fail). Default 4, tunable via BP_MAX_CONCURRENT_AGENTS
+  // (intended range ~2–6 for shared/rate-limited gateways).
+  private readonly maxConcurrentAgents: number;
+  private readonly providerSlots = new Map<string, ProviderSemaphore>();
+
   constructor(opts: SessionManagerOptions = {}) {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
@@ -254,6 +326,8 @@ export class SessionManager {
     // format; `skill_search` reads from here, Pi never sees it.
     this.routerSkillsDir =
       opts.routerSkillsDir ?? join(this.dataRoot, "bp_template", "skills-router");
+
+    this.maxConcurrentAgents = resolveMaxConcurrentAgents(opts.maxConcurrentAgents);
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -639,8 +713,20 @@ export class SessionManager {
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
     };
     this.sessions.set(id, entry);
-    if (!_restore) this.touch(entry);
-    else this.lastActivityAt = entry.lastActivityAt;
+    if (!_restore) {
+      this.touch(entry);
+    } else {
+      // #242: a restored session keeps its OLD per-session `entry.lastActivityAt`
+      // (historical "last active" for UI/history), but the PROCESS-level liveness
+      // anchor must reflect activity since THIS process/container started — not a
+      // timestamp frozen on disk days ago. Otherwise a hosted reaper computing
+      // `now - metrics.lastActivityAt` sees a huge idle for a freshly-restarted
+      // container and kills it immediately (start → reaped → start death spiral).
+      // Take the newest activity the process has seen so multi-session restore
+      // stays monotonic. Per-session `entry.lastActivityAt` is intentionally
+      // untouched here.
+      this.lastActivityAt = Math.max(this.lastActivityAt, Date.now());
+    }
 
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
@@ -742,6 +828,7 @@ export class SessionManager {
     for (const a of e.agents.values()) a.stop();
     e.bus.clear();
     this.sessions.delete(id);
+    this.providerSlots.delete(id);
     if (this.persist) {
       await rm(this.bpDir(id), { recursive: true, force: true }).catch(() => {});
       await rm(this.workspaceDir(id), { recursive: true, force: true }).catch(() => {});
@@ -767,6 +854,7 @@ export class SessionManager {
       e.pendingInputs.delete(id2);
     }
     this.sessions.delete(id);
+    this.providerSlots.delete(id);
     return { evicted: true, agentsKilled: killed };
   }
 
@@ -778,7 +866,7 @@ export class SessionManager {
     content: string,
     agentName = "principal",
     opts: { uuid?: string } = {},
-  ): Promise<{ accepted: boolean; runId?: string }> {
+  ): Promise<{ accepted: boolean; runId?: string; queued?: boolean }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
     this.touch(entry);
@@ -798,6 +886,22 @@ export class SessionManager {
     // session's workspace (the agent's cwd) before it runs, so it can read the
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
+
+    // Concurrent send: the target agent is still streaming its previous run.
+    // A plain prompt() would hit the SDK's "already processing" guard. Queue
+    // the message as a follow-up onto the current run instead — no new runId,
+    // no new run bookkeeping; the SDK loop drains it before agent_end and the
+    // events keep flowing under the in-flight run. The user prompt is still
+    // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
+    if (agent.isStreaming) {
+      const runId = entry.activeRunId ?? undefined;
+      entry.bus.emit(
+        ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
+      );
+      void agent.followUp(content);
+      return { accepted: true, runId, queued: true };
+    }
+
     entry.runActive = true;
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
@@ -816,8 +920,8 @@ export class SessionManager {
       ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
     );
     // Fire-and-track: don't block the HTTP response on the full run.
-    void agent
-      .prompt(content)
+    // #167: the principal's own turn also counts against the session provider cap.
+    void this.withProviderSlot(sessionId, () => agent.prompt(content))
       .catch((err) => {
         entry.bus.emit(
           ev.systemMessage(sessionId, "error", `发送消息失败: ${(err as Error).message}`, { agent: agentName }),
@@ -1213,6 +1317,26 @@ export class SessionManager {
     entry.agents.delete(name); // history on disk is kept (§5).
   }
 
+  /**
+   * #167: run `fn` (an `agent.prompt(...)` call) under the session's provider
+   * concurrency cap. `agent.prompt` is error-isolated (never throws), so the
+   * slot is always released. A cap of 0/negative disables throttling.
+   */
+  private async withProviderSlot<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+    if (this.maxConcurrentAgents <= 0) return fn();
+    let sem = this.providerSlots.get(sessionId);
+    if (!sem) {
+      sem = new ProviderSemaphore(this.maxConcurrentAgents);
+      this.providerSlots.set(sessionId, sem);
+    }
+    const release = await sem.acquire();
+    try {
+      return await fn();
+    } finally {
+      release();
+    }
+  }
+
   /* ------------------------- mailbox delivery (#76) ------------------------- */
 
   /**
@@ -1269,7 +1393,8 @@ export class SessionManager {
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
-      await agent.prompt(this.renderEnvelopes(msgs, name));
+      // #167: cap concurrent provider calls across experts in this session.
+      await this.withProviderSlot(sessionId, () => agent.prompt(this.renderEnvelopes(msgs, name)));
 
       // #97 error path. A delegated run that ended in `error` is handled here
       // (the trace-reminder extension bails on an errored run, leaving the host

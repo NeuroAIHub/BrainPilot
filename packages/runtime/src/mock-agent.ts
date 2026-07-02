@@ -12,7 +12,7 @@
  *     args and emits tool_execution_start/end around it.
  *   - contains "[[error]]": emits an agent-level failure (auto_retry then end).
  */
-import type { IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
+import type { IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
 
 export interface MockSessionConfig {
   sessionId: string;
@@ -30,10 +30,15 @@ export class MockAgentSession implements IAgentSession {
   private readonly toolMap: Map<string, SystemTool>;
   private aborted = false;
   private disposed = false;
+  private processing = false;
 
   constructor(private readonly cfg: MockSessionConfig) {
     this.sessionId = cfg.sessionId;
     this.toolMap = new Map(cfg.systemTools.map((t) => [t.name, t]));
+  }
+
+  get isStreaming(): boolean {
+    return this.processing;
   }
 
   subscribe(listener: (e: PiAgentEvent) => void): () => void {
@@ -51,9 +56,21 @@ export class MockAgentSession implements IAgentSession {
     }
   }
 
-  async prompt(text: string): Promise<void> {
+  // The mock ignores streamingBehavior — it processes each prompt to completion
+  // synchronously within the await, so there is no real streaming window to
+  // queue against. The opts param keeps the IAgentSession contract.
+  async prompt(text: string, _opts?: PromptOptions): Promise<void> {
     if (this.disposed) return;
     this.aborted = false;
+    this.processing = true;
+    try {
+      await this.runPrompt(text);
+    } finally {
+      this.processing = false;
+    }
+  }
+
+  private async runPrompt(text: string): Promise<void> {
     this.emit({ type: "agent_start" });
     this.emit({ type: "turn_start" });
 

@@ -197,6 +197,29 @@ def is_fallback_record(rec: dict) -> bool:
 
 # ── per-record worker ─────────────────────────────────────────────────────
 
+# Process-wide flag: set once we see a provider reject `temperature`, so
+# every subsequent call in the batch skips the param.
+_TEMPERATURE_UNSUPPORTED = False
+
+
+def _mark_temperature_unsupported() -> None:
+    global _TEMPERATURE_UNSUPPORTED
+    _TEMPERATURE_UNSUPPORTED = True
+
+
+def _is_temperature_unsupported_error(err_msg: str) -> bool:
+    """True if the provider's 4xx complains specifically about `temperature`.
+    Matches both the AWS Bedrock wording ('temperature is deprecated for this
+    model') and OpenAI-style ('unsupported_parameter … temperature')."""
+    m = err_msg.lower()
+    return "temperature" in m and (
+        "deprecated" in m
+        or "unsupported" in m
+        or "not supported" in m
+        or "invalid" in m
+    )
+
+
 def read_snippet(mmd_path: str) -> str:
     try:
         with open(mmd_path, "r", encoding="utf-8", errors="replace") as f:
@@ -220,22 +243,42 @@ def extract_one(client: OpenAI, model: str, entry: dict) -> tuple[bool, dict, st
     last_err = ""
     for attempt in range(RETRY_ATTEMPTS):
         try:
-            resp = client.chat.completions.create(
-                model=model,
-                messages=[
+            kwargs = {
+                "model": model,
+                "messages": [
                     {"role": "system", "content": SYSTEM_PROMPT},
                     {"role": "user", "content": prompt},
                 ],
-                temperature=0,
-                timeout=REQUEST_TIMEOUT,
-                response_format={"type": "json_object"},
-            )
+                "timeout": REQUEST_TIMEOUT,
+                "response_format": {"type": "json_object"},
+            }
+            # Some providers (e.g. Bedrock-hosted models) reject `temperature`
+            # outright. `_TEMPERATURE_UNSUPPORTED` starts False and flips to
+            # True the first time we see that error, so subsequent calls skip
+            # the parameter entirely instead of burning retries on 400s.
+            if not _TEMPERATURE_UNSUPPORTED:
+                kwargs["temperature"] = 0
+            resp = client.chat.completions.create(**kwargs)
             raw = resp.choices[0].message.content or ""
             data = parse_model_json(raw)
             return True, normalize(data, fallback_title, mmd_path, status="ok"), "ok"
         except Exception as exc:  # noqa: BLE001
             last_err = str(exc)
+            # Detect providers that reject `temperature` and disable it
+            # process-wide, then immediately retry this same paper without
+            # counting it as a real attempt.
+            if _is_temperature_unsupported_error(last_err) and not _TEMPERATURE_UNSUPPORTED:
+                _mark_temperature_unsupported()
+                emit_event("extract", "warn",
+                           "provider rejected temperature=0; retrying without it "
+                           "for the rest of this run")
+                continue
             if attempt == RETRY_ATTEMPTS - 1:
+                # Surface the real API error so the operator can see WHY every
+                # paper is falling back, not just that it did. Without this
+                # the run silently succeeds with 14 empty rows.
+                emit_event("extract", "warn",
+                           f"fallback for {os.path.basename(mmd_path)}: {last_err[:280]}")
                 return True, normalize({"title": fallback_title}, fallback_title, mmd_path,
                                        status="fallback"), f"fallback: {last_err}"
             time.sleep(min(2 ** attempt, 16))
@@ -413,6 +456,54 @@ def main() -> None:
             a, b, c = process_batch(client, model, pending, out,
                                     kb.kb_source_json, args.workers)
             n_ok += a; n_fallback += b; n_empty += c
+
+    # ── Phase 3: auto-retry stubborn fallbacks ─────────────────────────
+    # After the normal pass, count how many records still failed. Auto-retry
+    # up to MAX_AUTO_RETRIES times; give up early if a retry pass makes no
+    # progress (fallback count unchanged) — that means the failure is
+    # deterministic (bad key / unsupported param / broken mmd) and hammering
+    # the API more won't help.
+    MAX_AUTO_RETRIES = 3
+    if not args.no_retry_failed:
+        prev_count = len(find_fallback_indices(out))
+        for attempt in range(1, MAX_AUTO_RETRIES + 1):
+            if prev_count == 0:
+                break
+            emit_event(
+                "extract", "info",
+                f"auto-retry {attempt}/{MAX_AUTO_RETRIES}: "
+                f"{prev_count} fallback record(s) remain",
+                attempt=attempt, remaining=prev_count,
+            )
+            fallback_idx = find_fallback_indices(out)
+            ocred_by_path = {e.get("mmd_path", ""): e for e in ocred}
+            retry_entries = [
+                ocred_by_path.get(path, {"mmd_path": path,
+                                         "title": out["papers"][fallback_idx[path]].get("title", "")})
+                for path in fallback_idx
+            ]
+            a, b, c = process_batch(client, model, retry_entries, out,
+                                    kb.kb_source_json, args.workers,
+                                    in_place_indices=fallback_idx)
+            n_ok += a; n_fallback += b; n_empty += c
+            new_count = len(find_fallback_indices(out))
+            if new_count >= prev_count:
+                emit_event(
+                    "extract", "warn",
+                    f"auto-retry {attempt}: no progress "
+                    f"({new_count} still fallback); stopping early",
+                    attempt=attempt, remaining=new_count,
+                )
+                break
+            prev_count = new_count
+        remaining = len(find_fallback_indices(out))
+        if remaining > 0:
+            emit_event(
+                "extract", "warn",
+                f"there are still {remaining} fallback(s) after "
+                f"{MAX_AUTO_RETRIES} retries",
+                remaining=remaining, max_retries=MAX_AUTO_RETRIES,
+            )
 
     emit_event(
         "extract", "done",

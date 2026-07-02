@@ -171,4 +171,32 @@ describe("SessionManager.restoreFromDisk", () => {
     expect(typeof s.createdAt).toBe("string");
     expect(typeof s.updatedAt).toBe("string");
   });
+
+  // #242: restoring an old session must NOT freeze the process-level liveness
+  // metric at the session's stale on-disk time — otherwise a hosted reaper doing
+  // `now - metrics.lastActivityAt` mis-kills a freshly-restarted container.
+  it("resets process-level /metrics.lastActivityAt to ~now on restore (not stale disk time)", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-"));
+    const staleMs = Date.parse("2020-01-01T00:00:00.000Z"); // years ago
+    await writeMeta(dataRoot, "ffffffff-ffff-ffff-ffff-ffffffffffff", {
+      id: "ffffffff-ffff-ffff-ffff-ffffffffffff",
+      title: "Stale session",
+      createdAt: "2020-01-01T00:00:00.000Z",
+      updatedAt: "2020-01-01T00:00:00.000Z",
+      lastActivityAt: staleMs,
+    });
+    const before = Date.now();
+    const m = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+    await m.restoreFromDisk();
+
+    // Process-level liveness anchor reflects "this process is freshly alive".
+    const metricTs = Date.parse(m.metrics().lastActivityAt!);
+    expect(metricTs).toBeGreaterThanOrEqual(before);
+    expect(metricTs).toBeGreaterThan(staleMs);
+
+    // Per-session historical timestamps are still preserved (UI/history intact).
+    const s = (await m.listSessions()).find((x) => x.id === "ffffffff-ffff-ffff-ffff-ffffffffffff")!;
+    expect(s.createdAt).toBe("2020-01-01T00:00:00.000Z");
+    expect(s.updatedAt).toBe("2020-01-01T00:00:00.000Z");
+  });
 });

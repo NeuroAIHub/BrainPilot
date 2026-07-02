@@ -81,13 +81,28 @@ async def lifespan(app: FastAPI):
     )
     logger.info("bge-m3 loaded")
 
+    # bge-reranker-v2-m3 is an XLM-Roberta cross-encoder. We load it via
+    # transformers directly instead of FlagEmbedding.FlagReranker because
+    # FlagEmbedding 1.4.0's compute_score() path calls
+    # tokenizer.prepare_for_model() — a method the slow XLMRobertaTokenizer
+    # dropped in transformers >= 5. Using AutoTokenizer(use_fast=True) +
+    # AutoModelForSequenceClassification sidesteps that bug entirely and
+    # gives us the same score semantics (sigmoid-normalised logits).
     logger.info("loading bge-reranker-v2-m3 from %s", KB.reranker_model)
-    from FlagEmbedding import FlagReranker
-    reranker = FlagReranker(
-        str(KB.reranker_model),
-        use_fp16=use_fp16,
-        device=device,
+    from transformers import AutoModelForSequenceClassification, AutoTokenizer
+    reranker_tokenizer = AutoTokenizer.from_pretrained(
+        str(KB.reranker_model), use_fast=True,
     )
+    # transformers >= 5 renamed torch_dtype → dtype; use the new name.
+    reranker_model = AutoModelForSequenceClassification.from_pretrained(
+        str(KB.reranker_model),
+        dtype=torch.float16 if use_fp16 else torch.float32,
+    ).to(device).eval()
+    reranker = {
+        "tokenizer": reranker_tokenizer,
+        "model": reranker_model,
+        "device": device,
+    }
     logger.info("bge-reranker-v2-m3 loaded")
 
     yield
@@ -161,10 +176,22 @@ async def embed(req: EmbedRequest):
 @app.post("/rerank", response_model=RerankResponse)
 async def rerank(req: RerankRequest):
     assert reranker is not None, "reranker not loaded yet"
+    tokenizer = reranker["tokenizer"]
+    model = reranker["model"]
+    device = reranker["device"]
     pairs = [[req.query, doc] for doc in req.documents]
-    scores = reranker.compute_score(pairs, max_length=req.max_length, normalize=True)
-    if isinstance(scores, (int, float)):
-        scores = [scores]
+    with torch.no_grad():
+        inputs = tokenizer(
+            pairs,
+            padding=True,
+            truncation=True,
+            max_length=req.max_length or DEFAULT_MAX_LENGTH,
+            return_tensors="pt",
+        ).to(device)
+        # bge-reranker outputs a single logit per pair; sigmoid to [0, 1]
+        # matches FlagReranker(..., normalize=True) semantics.
+        logits = model(**inputs, return_dict=True).logits.view(-1)
+        scores = torch.sigmoid(logits).cpu().tolist()
     ranked = sorted(
         [RerankResult(index=i, score=float(s), text=req.documents[i])
          for i, s in enumerate(scores)],

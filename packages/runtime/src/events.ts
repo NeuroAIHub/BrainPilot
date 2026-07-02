@@ -168,11 +168,14 @@ export const ev = {
     sessionId: string,
     level: "info" | "warning" | "error" | "fatal",
     message: string,
-    opts?: { agent?: string; details?: string; recoverable?: boolean },
+    opts?: { agent?: string; details?: string; recoverable?: boolean; id?: string },
   ): AgUiEvent {
     return {
       type: "system_message",
       session_id: sessionId,
+      // #167: optional stable id lets the client coalesce repeated messages
+      // (e.g. retry warnings) into one updating bubble instead of appending.
+      ...(opts?.id ? { id: opts.id } : {}),
       agent: opts?.agent,
       level,
       message,

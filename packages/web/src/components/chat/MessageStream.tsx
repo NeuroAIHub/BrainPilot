@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy } from "lucide-react";
+import { Check, ChevronDown, Copy, Users } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../contracts/backend";
 import { buildRenderItems } from "../../contexts/messageGroups";
@@ -46,6 +46,12 @@ interface MessageStreamProps {
    * (demo replay), where messages are already terminal.
    */
   runningAgents?: ReadonlySet<string>;
+  /**
+   * #219 — fold non-PI (specialist) agent activity into collapsible per-run
+   * groups so the Principal narrative reads cleanly by default. Off by default
+   * so demo replay keeps its flat, curated presentation.
+   */
+  groupExpertActivity?: boolean;
 }
 
 // Whether this message participates in same-agent avatar merging. User
@@ -80,15 +86,24 @@ function MessageStreamImpl({
   onAskUserSubmit,
   onRetryCancel,
   runningAgents,
+  groupExpertActivity = false,
 }: MessageStreamProps) {
   const t = useT();
   const [copiedId, setCopiedId] = useState<string | null>(null);
+  // #219 — audit mode: force every specialist group open (reasoning/tool folds
+  // inside stay independent, per issue).
+  const [expandAll, setExpandAll] = useState(false);
   const stackRef = useRef<HTMLDivElement | null>(null);
   const isPinnedRef = useRef(true);
 
   const renderItems = useMemo(
-    () => buildRenderItems(messages, runningAgents),
-    [messages, runningAgents],
+    () => buildRenderItems(messages, runningAgents, groupExpertActivity),
+    [messages, runningAgents, groupExpertActivity],
+  );
+
+  const hasExpertGroup = useMemo(
+    () => renderItems.some((item) => item.type === "expertGroup"),
+    [renderItems],
   );
 
   // Avatar merging: a mergeable assistant/system row whose immediately
@@ -98,17 +113,26 @@ function MessageStreamImpl({
   const continuationIds = useMemo(() => {
     const set = new Set<string>();
     let prevName: string | null = null;
-    for (const item of renderItems) {
-      if (item.type === "single" && isMergeable(item.message)) {
-        const name = mergeName(item.message);
-        if (prevName === name) {
-          set.add(item.message.id);
+    const walk = (items: typeof renderItems) => {
+      for (const item of items) {
+        if (item.type === "single" && isMergeable(item.message)) {
+          const name = mergeName(item.message);
+          if (prevName === name) {
+            set.add(item.message.id);
+          }
+          prevName = name;
+        } else if (item.type === "expertGroup") {
+          // A group is its own merge scope: the first row inside always shows
+          // its avatar, and the group boundary breaks the outer run.
+          prevName = null;
+          walk(item.items);
+          prevName = null;
+        } else {
+          prevName = null;
         }
-        prevName = name;
-      } else {
-        prevName = null;
       }
-    }
+    };
+    walk(renderItems);
     return set;
   }, [renderItems]);
 
@@ -452,6 +476,58 @@ function MessageStreamImpl({
     return t("chat.thinking");
   };
 
+  // A folded reasoning/tool activity block. Extracted so it renders identically
+  // at the top level and nested inside an expert group (#219).
+  const renderActivityBlock = (id: string, steps: ChatMessage[], streaming: boolean) => (
+    <div className="activity-block" key={id}>
+      <details>
+        <summary className="activity-summary" aria-label={t("chat.aria.expandThinking")}>
+          {streaming ? <span className="activity-summary__dot" /> : null}
+          <ChevronDown size={14} className="activity-summary__chevron" aria-hidden="true" />
+          <span className="activity-summary__subtitle">{activitySubtitle(steps, streaming)}</span>
+        </summary>
+        <div className="activity-steps">{steps.map(renderActivityStep)}</div>
+      </details>
+    </div>
+  );
+
+  // Render one top-level or nested render item (single row or activity block).
+  // expertGroup is handled by renderExpertGroup, not here.
+  const renderItem = (item: (typeof renderItems)[number]) => {
+    if (item.type === "single") {
+      return renderSingle(item.message, continuationIds.has(item.message.id));
+    }
+    if (item.type === "activity") {
+      return renderActivityBlock(item.id, item.steps, item.streaming);
+    }
+    return null;
+  };
+
+  // #219 — a collapsed run of specialist-agent activity. Summary names the
+  // agent(s) and item count; the body reuses the normal single/activity
+  // renderers so reasoning/tool folds inside are preserved. `expandAll` (audit
+  // mode) forces every group open.
+  const renderExpertGroup = (item: Extract<(typeof renderItems)[number], { type: "expertGroup" }>) => {
+    const count = item.items.length;
+    const summary =
+      item.agents.length === 1
+        ? t("chat.expertGroup.summary", { agent: item.agents[0], count })
+        : t("chat.expertGroup.summaryMulti", { n: item.agents.length, count });
+    return (
+      <div className="expert-group" key={item.id}>
+        <details open={expandAll || undefined}>
+          <summary className="expert-group__summary" aria-label={t("chat.aria.expandExpert")}>
+            {item.streaming ? <span className="activity-summary__dot" /> : null}
+            <ChevronDown size={14} className="activity-summary__chevron" aria-hidden="true" />
+            <Users size={13} className="expert-group__icon" aria-hidden="true" />
+            <span className="activity-summary__subtitle">{summary}</span>
+          </summary>
+          <div className="expert-group__body">{item.items.map(renderItem)}</div>
+        </details>
+      </div>
+    );
+  };
+
   return (
     <div
       className={`message-stack ${className ?? ""}`}
@@ -459,30 +535,24 @@ function MessageStreamImpl({
       onScroll={handleScroll}
       ref={stackRef}
     >
-      {showToolbarCount ? (
+      {showToolbarCount || hasExpertGroup ? (
         <div className="message-stack__toolbar">
-          <span>{t("chat.messageCount", { count: messages.length })}</span>
+          {showToolbarCount ? <span>{t("chat.messageCount", { count: messages.length })}</span> : <span />}
+          {hasExpertGroup ? (
+            <button
+              className={`message-stack__audit-toggle ${expandAll ? "is-active" : ""}`}
+              onClick={() => setExpandAll((v) => !v)}
+              type="button"
+              aria-pressed={expandAll}
+            >
+              <Users size={12} aria-hidden="true" />
+              {expandAll ? t("chat.expertGroup.collapseAll") : t("chat.expertGroup.expandAll")}
+            </button>
+          ) : null}
         </div>
       ) : null}
       {renderItems.map((item) =>
-        item.type === "single" ? (
-          renderSingle(item.message, continuationIds.has(item.message.id))
-        ) : (
-          <div className="activity-block" key={item.id}>
-            <details>
-              <summary className="activity-summary" aria-label={t("chat.aria.expandThinking")}>
-                {item.streaming ? <span className="activity-summary__dot" /> : null}
-                <ChevronDown size={14} className="activity-summary__chevron" aria-hidden="true" />
-                <span className="activity-summary__subtitle">
-                  {activitySubtitle(item.steps, item.streaming)}
-                </span>
-              </summary>
-              <div className="activity-steps">
-                {item.steps.map(renderActivityStep)}
-              </div>
-            </details>
-          </div>
-        ),
+        item.type === "expertGroup" ? renderExpertGroup(item) : renderItem(item),
       )}
       {showTiming && turnTiming && turnTiming.elapsedMs !== null ? (
         <div className="message-stack__total" role="status">

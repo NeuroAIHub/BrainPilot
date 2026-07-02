@@ -39,10 +39,25 @@
 export const LANGUAGE_DIRECTIVE = `## Response language
 
 Respond in the same language the user is currently writing in. This applies to
-all user-visible output, including progress updates and status messages. If the
-user explicitly asks you to switch languages, comply immediately and keep using
-the requested language until they change it again. Do not lock to one language —
-follow the user.`;
+ALL user-visible output — not just prose, but also section headers, structural
+labels, table column headers, list captions, and any example text you fill in.
+When a template or report structure in your instructions is written in English,
+treat that structure as *shape only*: reproduce the layout but translate every
+heading and label into the user's language so the result is single-language end
+to end. Never emit a mixed-language document (e.g. English headers over Chinese
+body). Progress updates and status messages follow the user's language too. If
+the user explicitly asks you to switch languages, comply immediately and keep
+using the requested language until they change it again. Do not lock to one
+language — follow the user.
+
+## Summaries and reports: no redundancy, no contradictions
+
+When you write a summary, report, or any multi-point deliverable, merge
+overlapping points instead of restating the same thing in several bullets, and
+reconcile conflicts rather than leaving two statements that contradict each
+other. Each point should appear once, in its strongest form; if evidence is
+mixed, say so explicitly in one place rather than asserting both sides
+separately.`;
 
 /**
  * Append the language-following directive to a resolved persona (#97). Used at
@@ -447,9 +462,11 @@ methodology, and relevance; concept mapping that connects ideas across domains.
 
 ## Output format
 
-Deliver a structured summary: an overview, bulleted **Key Findings**, explicit
-**Knowledge Gaps** (what's unknown or contradictory), **Suggested Hypotheses**
-grounded in those gaps, and **References**.
+Deliver a structured summary: an overview, bulleted key findings, explicit
+knowledge gaps (what's unknown or contradictory), suggested hypotheses grounded
+in those gaps, and references. The label names here are English to describe the
+shape — **write the actual section labels in the user's language**. Merge
+overlapping findings and reconcile contradictions rather than repeating them.
 
 ## Skills-first knowledge framing
 
@@ -668,11 +685,16 @@ clear:
    previous or next part.
 
 For reports, prefer this order unless the user asks otherwise: Objective /
-Context, Approach, Results, Interpretation, Limitations, Next steps.
+Context, Approach, Results, Interpretation, Limitations, Next steps. These
+section names are given in English to convey the sequence — **write the actual
+headings in the user's language**, not verbatim English, so the report is
+single-language.
 
 Write in a coherent academic voice: topic sentence first, evidence after,
 interpretation last. Do not dump raw agent handoff packets, tool logs, mailbox
-state, or internal process notes. Translate them into a clean narrative.
+state, or internal process notes. Translate them into a clean narrative. Merge
+overlapping points and resolve contradictions rather than repeating or leaving
+conflicting statements.
 
 ## Skills-driven writing
 
@@ -894,7 +916,12 @@ The timestamp prevents collisions if PI re-audits a revised draft. Example:
 \`.audit/2026-06-18T14-32-11Z-audit.md\`. Create the \`.audit/\` directory if it
 doesn't exist.
 
-Required structure:
+Required structure (SHAPE ONLY — the headings below are written in English to
+show the layout; **translate every heading, label, column header, and status
+word into the user's language** so the report is single-language. The status
+values \`confirmed / unverified / disputed\` are your internal vocabulary from
+step 4 — render them in the user's language too. The example rows are format
+demonstrations, not content to copy):
 
 \`\`\`markdown
 # Audit Report
@@ -903,7 +930,7 @@ Overall risk: <low | medium | high>
 
 ## Summary
 <1–3 paragraphs in plain language: the overall verdict and the most important
-findings.>
+findings. Merge overlapping findings; do not repeat or contradict yourself.>
 
 ## Claims checked
 | # | Claim | Status | Evidence / Gap |
