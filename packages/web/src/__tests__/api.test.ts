@@ -183,10 +183,15 @@ describe("api.sessions.getHistory — persisted events.jsonl rehydration", () =>
     expect(url).toContain("/sessions/s1/history?limit=42");
   });
 
-  it("returns the empty envelope on a non-ok response", async () => {
+  it("returns the empty envelope on a 404 (session has no transcript)", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ ok: false, status: 404 }));
     const out = await api.sessions.getHistory("s1");
     expect(out).toEqual({ events: [], total: 0, truncated: false });
+  });
+
+  it("throws on a non-404 failure instead of masking it as empty (#223)", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ ok: false, status: 500 }));
+    await expect(api.sessions.getHistory("s1")).rejects.toThrow(/history fetch failed: 500/);
   });
 
   it("returns the empty envelope when the body is null", async () => {

@@ -56,7 +56,7 @@ describe("SessionManager.restoreFromDisk", () => {
       "22222222-2222-2222-2222-222222222222",
     ]);
 
-    const sessions = m.listSessions();
+    const sessions = await m.listSessions();
     expect(sessions).toHaveLength(2);
     const a = sessions.find((s) => s.id === "11111111-1111-1111-1111-111111111111")!;
     expect(a.title).toBe("Old session A");
@@ -113,9 +113,9 @@ describe("SessionManager.restoreFromDisk", () => {
     expect(first).toHaveLength(1);
     const second = await m.restoreFromDisk();
     expect(second).toEqual([]);
-    expect(m.listSessions()).toHaveLength(1);
+    expect(await m.listSessions()).toHaveLength(1);
     // Timestamps still original after the second pass
-    expect(m.listSessions()[0]!.createdAt).toBe("2026-03-01T00:00:00.000Z");
+    expect((await m.listSessions())[0]!.createdAt).toBe("2026-03-01T00:00:00.000Z");
   });
 
   it("returns empty when .bp/ does not exist", async () => {
@@ -166,7 +166,7 @@ describe("SessionManager.restoreFromDisk", () => {
       agentFactory: mockAgentFactory,
     });
     await m.restoreFromDisk();
-    const s = m.listSessions()[0]!;
+    const s = (await m.listSessions())[0]!;
     expect(s.id).toBe("eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee");
     expect(typeof s.createdAt).toBe("string");
     expect(typeof s.updatedAt).toBe("string");
@@ -195,7 +195,7 @@ describe("SessionManager.restoreFromDisk", () => {
     expect(metricTs).toBeGreaterThan(staleMs);
 
     // Per-session historical timestamps are still preserved (UI/history intact).
-    const s = m.listSessions().find((x) => x.id === "ffffffff-ffff-ffff-ffff-ffffffffffff")!;
+    const s = (await m.listSessions()).find((x) => x.id === "ffffffff-ffff-ffff-ffff-ffffffffffff")!;
     expect(s.createdAt).toBe("2020-01-01T00:00:00.000Z");
     expect(s.updatedAt).toBe("2020-01-01T00:00:00.000Z");
   });
