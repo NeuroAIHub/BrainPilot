@@ -49,12 +49,14 @@ import {
   cancelKbBuild,
   findKbRoot,
   getKbBuildStatus,
+  probeKbEnvironment,
   startKbBuild,
   startKbEnvSetup,
   startKbFullSetup,
   startKbModelSetup,
   subscribeKbBuild,
 } from "./kb-builder.js";
+import { computeKbInventory } from "./kb-inventory.js";
 
 export interface CreateAppOptions {
   orchestrator: Orchestrator;
@@ -394,6 +396,25 @@ export function createApp(options: CreateAppOptions): Hono {
 
   api.get("/kb/status", (c) => c.json(getKbBuildStatus()));
 
+  // Force-refresh the env-completeness probe. /kb/status returns a cached
+  // reading (60s TTL) so opening the panel is cheap; this endpoint is what
+  // the "Re-check" button hits when the user has just installed something
+  // externally and wants an immediate answer.
+  api.post("/kb/probe", async (c) => {
+    const body = await safeJson(c);
+    const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : undefined;
+    return c.json({ environment: probeKbEnvironment(kbRoot) });
+  });
+
+  // Read-only inventory of the four-stage KB pipeline. Streams the ledger
+  // files, tail-scans oversized chunks.json, and reports a consistency
+  // rollup ("healthy" or a list of gap-count issues). Cheap enough to call
+  // on every KB tab open. GET so the panel can just fetch() with no body.
+  api.get("/kb/inventory", async (c) => {
+    const inv = await computeKbInventory();
+    return c.json({ inventory: inv });
+  });
+
   // Bootstrap the KnowledgeBase Python venv. Shares the same run slot /
   // SSE stream as /kb/build (both surfaces are in the same panel and
   // pipeline-mutate the same on-disk state, so only one Python job runs
@@ -403,6 +424,8 @@ export function createApp(options: CreateAppOptions): Hono {
     const result = startKbEnvSetup({
       python: typeof body.python === "string" ? body.python : undefined,
       reinstall: typeof body.reinstall === "boolean" ? body.reinstall : undefined,
+      pipIndexUrl: typeof body.pipIndexUrl === "string" && body.pipIndexUrl.trim()
+        ? body.pipIndexUrl.trim() : undefined,
       kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
@@ -416,6 +439,8 @@ export function createApp(options: CreateAppOptions): Hono {
     const body = await safeJson(c);
     const result = startKbModelSetup({
       hfMirror: typeof body.hfMirror === "string" ? body.hfMirror : undefined,
+      hfToken: typeof body.hfToken === "string" && body.hfToken.trim()
+        ? body.hfToken.trim() : undefined,
       kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
@@ -431,6 +456,10 @@ export function createApp(options: CreateAppOptions): Hono {
       python: typeof body.python === "string" ? body.python : undefined,
       reinstall: typeof body.reinstall === "boolean" ? body.reinstall : undefined,
       hfMirror: typeof body.hfMirror === "string" ? body.hfMirror : undefined,
+      hfToken: typeof body.hfToken === "string" && body.hfToken.trim()
+        ? body.hfToken.trim() : undefined,
+      pipIndexUrl: typeof body.pipIndexUrl === "string" && body.pipIndexUrl.trim()
+        ? body.pipIndexUrl.trim() : undefined,
       kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
