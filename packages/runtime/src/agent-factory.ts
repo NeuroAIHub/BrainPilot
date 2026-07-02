@@ -14,7 +14,7 @@
  *   - `SystemTool` is adapted to Pi's `defineTool` (params is a plain JSON
  *     schema, which `defineTool` accepts — verified empirically).
  */
-import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
+import type { AgentSessionFactory, IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
@@ -145,11 +145,14 @@ class RealAgentSession implements IAgentSession {
   get sessionId(): string {
     return this.s.sessionId;
   }
+  get isStreaming(): boolean {
+    return this.s.isStreaming;
+  }
   subscribe(listener: (e: PiAgentEvent) => void): () => void {
     return this.s.subscribe((e: unknown) => listener(e as PiAgentEvent));
   }
-  prompt(text: string): Promise<void> {
-    return this.s.prompt(text);
+  prompt(text: string, opts?: PromptOptions): Promise<void> {
+    return this.s.prompt(text, opts);
   }
   abort(): Promise<void> {
     return this.s.abort();
@@ -162,8 +165,9 @@ class RealAgentSession implements IAgentSession {
 /* ---- Minimal structural types for the Pi SDK (avoids hard type-coupling) ---- */
 interface PiSession {
   readonly sessionId: string;
+  readonly isStreaming: boolean;
   subscribe(listener: (e: unknown) => void): () => void;
-  prompt(text: string): Promise<void>;
+  prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
   abort(): Promise<void>;
   dispose(): void;
 }
