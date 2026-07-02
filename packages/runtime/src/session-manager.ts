@@ -710,7 +710,7 @@ export class SessionManager {
     content: string,
     agentName = "principal",
     opts: { uuid?: string } = {},
-  ): Promise<{ accepted: boolean; runId?: string }> {
+  ): Promise<{ accepted: boolean; runId?: string; queued?: boolean }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
     this.touch(entry);
@@ -730,6 +730,22 @@ export class SessionManager {
     // session's workspace (the agent's cwd) before it runs, so it can read the
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
+
+    // Concurrent send: the target agent is still streaming its previous run.
+    // A plain prompt() would hit the SDK's "already processing" guard. Queue
+    // the message as a follow-up onto the current run instead — no new runId,
+    // no new run bookkeeping; the SDK loop drains it before agent_end and the
+    // events keep flowing under the in-flight run. The user prompt is still
+    // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
+    if (agent.isStreaming) {
+      const runId = entry.activeRunId ?? undefined;
+      entry.bus.emit(
+        ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
+      );
+      void agent.followUp(content);
+      return { accepted: true, runId, queued: true };
+    }
+
     entry.runActive = true;
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;

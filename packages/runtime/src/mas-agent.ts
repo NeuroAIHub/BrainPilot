@@ -178,6 +178,39 @@ export class MasAgent {
     return p;
   }
 
+  /** True while a run is streaming — a plain prompt() would be rejected. */
+  get isStreaming(): boolean {
+    return this.session.isStreaming;
+  }
+
+  /**
+   * Queue a user message onto the *in-flight* run instead of starting a new one
+   * (#: concurrent send). The SDK's agent loop drains follow-ups before it emits
+   * agent_end, so the message is handled after the current turn without a fresh
+   * RUN_STARTED/runId — the events keep flowing under the current run. Unlike
+   * `prompt()`, this does NOT open a new run lifecycle. Error-isolated: a queue
+   * failure is surfaced as a run error, never thrown to the caller.
+   *
+   * Falls back to a normal `prompt()` if the run has already drained (not
+   * streaming anymore) by the time this lands, so a race can't drop the message.
+   */
+  followUp(text: string): Promise<void> {
+    if (!this.session.isStreaming) {
+      // Race: the run finished between the caller's check and here — just start
+      // a normal run so the message isn't lost.
+      return this.prompt(text);
+    }
+    return this.session.prompt(text, { streamingBehavior: "followUp" }).catch((err) => {
+      const raw = (err as Error)?.message ?? String(err);
+      const { message, details } = normalizeAgentError(raw);
+      this.recordError(message, details, raw);
+      this.bus.emit(
+        ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+      );
+      this.setStatus("error");
+    });
+  }
+
   private async runPrompt(text: string): Promise<void> {
     this.currentRunId = newRunId();
     this.setStatus("running");
