@@ -17,12 +17,30 @@ export type AgentRole = "principal" | "expert" | "trace";
  * stream. Both speak the SAME Pi event vocabulary so the translator (§6) is
  * exercised identically in tests and production.
  */
+/** How a prompt sent while the agent is already streaming should be queued. */
+export type StreamingBehavior = "steer" | "followUp";
+
+export interface PromptOptions {
+  /**
+   * When the agent is already streaming, the underlying SDK refuses a plain
+   * prompt and requires a queueing mode: "steer" interrupts the current turn,
+   * "followUp" waits for it to finish then continues. Ignored when idle.
+   */
+  streamingBehavior?: StreamingBehavior;
+}
+
 export interface IAgentSession {
   readonly sessionId: string;
+  /**
+   * True while a run is in flight (the SDK is streaming). A plain `prompt()`
+   * during this window throws in the real SDK; callers must pass
+   * `streamingBehavior` to queue the message instead.
+   */
+  readonly isStreaming: boolean;
   /** Subscribe to Pi events. Returns an unsubscribe fn. */
   subscribe(listener: (event: PiAgentEvent) => void): () => void;
   /** Send a prompt. Resolves when the run completes (or is aborted). */
-  prompt(text: string): Promise<void>;
+  prompt(text: string, opts?: PromptOptions): Promise<void>;
   /**
    * Hard-abort the active run. For the real Pi session this aborts the provider
    * stream AND awaits the agent returning to idle (SDK `AgentSession.abort()`

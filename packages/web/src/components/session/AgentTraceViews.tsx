@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Network, Pause, Play, RefreshCw, Search, UserRoundCog, X } from "lucide-react";
+import { Network, Pause, Play, RefreshCw, Search, X } from "lucide-react";
 import { TraceNode } from "../../contracts/backend";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
@@ -24,14 +24,10 @@ export function AgentsPanel() {
     <section className="workspace-panel" aria-labelledby="agents-panel-heading">
       <div className="workspace-panel__inner workspace-panel__inner--trace">
         <header className="workspace-panel__header">
-          <div>
-            <span className="workspace-panel__eyebrow">
-              <Network size={11} style={{ marginRight: 4, verticalAlign: "-1px" }} />
-              {t("trace.agents.eyebrow")}
-            </span>
-            <h2 id="agents-panel-heading">{t("trace.agents.title")}</h2>
-          </div>
-          <UserRoundCog size={18} />
+          <h2 id="agents-panel-heading" className="workspace-panel__title-icon">
+            <Network size={18} />
+            {t("trace.agents.eyebrow")}
+          </h2>
         </header>
 
         {!currentSession ? (

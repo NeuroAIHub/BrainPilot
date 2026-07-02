@@ -807,6 +807,17 @@ button {
   letter-spacing: -0.01em;
 }
 
+.workspace-panel__title-icon {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.workspace-panel__title-icon svg {
+  color: var(--color-text-subtle);
+  flex: 0 0 auto;
+}
+
 .workspace-panel__eyebrow {
   color: var(--color-text-muted);
   font-size: 12px;
@@ -2807,6 +2818,88 @@ button {
   cursor: pointer;
 }
 
+/* #219 — expert-agent activity group: one more disclosure level that folds a
+   run of specialist-agent items behind the PI narrative. Reuses the activity
+   summary idiom (chevron rotate, pulse dot) with its own slightly stronger
+   framing so it reads as a distinct grouping, not just another thinking fold. */
+.expert-group {
+  max-width: 760px;
+}
+
+.expert-group > details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 5px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  transition: background var(--ease-standard), color var(--ease-standard), border-color var(--ease-standard);
+}
+
+.expert-group > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.expert-group > details > summary:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.expert-group__icon {
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+.expert-group > details[open] > summary .activity-summary__chevron {
+  transform: rotate(180deg);
+}
+
+/* Nested items keep their own indentation; the left rule ties them to the
+   group header so the hierarchy (PI timeline → specialist group → reasoning/
+   tool folds) stays legible. */
+.expert-group__body {
+  display: grid;
+  gap: 12px;
+  margin: 10px 0 4px 6px;
+  padding-left: 14px;
+  border-left: 2px solid var(--color-border);
+}
+
+/* Audit-mode toggle in the stream toolbar — quiet until hovered/active. */
+.message-stack__audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--ease-standard), color var(--ease-standard), border-color var(--ease-standard);
+}
+
+.message-stack__audit-toggle:hover,
+.message-stack__audit-toggle:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-hover);
+  color: var(--color-text);
+  outline: none;
+}
+
+.message-stack__audit-toggle.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
 /* Expand animations — the activity body slides in when opened, its steps
    stagger, and nested tool/hook bodies reveal on their own [open] toggle. */
 @media (prefers-reduced-motion: no-preference) {
@@ -3313,49 +3406,216 @@ button {
   pointer-events: auto;
 }
 
-.sandbox-status__header {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 12px;
-  padding-bottom: 12px;
-  border-bottom: 1px solid var(--color-border);
-}
-
+/* Small muted eyebrow — also reused by the app-bootstrapping splash. */
 .sandbox-status__eyebrow {
   color: var(--color-text-muted);
   font-size: 12px;
 }
 
-.sandbox-status__header strong {
+/* Status hero: one colored dot + a primary state word + a small subtitle. */
+.sandbox-status__hero {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid var(--color-border);
+}
+
+.sandbox-status__hero-dot {
+  width: 9px;
+  height: 9px;
+  margin-top: 5px;
+  flex: 0 0 9px;
+  border-radius: 999px;
+  background: var(--color-text-subtle);
+}
+
+.sandbox-status__hero--connected .sandbox-status__hero-dot {
+  background: var(--color-success);
+}
+
+.sandbox-status__hero--disconnected .sandbox-status__hero-dot {
+  background: var(--color-danger);
+}
+
+.sandbox-status__hero--connecting .sandbox-status__hero-dot {
+  background: var(--color-info);
+  animation: sandbox-status-pulse 1.4s ease-in-out infinite;
+}
+
+.sandbox-status__hero--creating .sandbox-status__hero-dot {
+  background: var(--color-warning);
+  animation: sandbox-status-pulse 1.4s ease-in-out infinite;
+}
+
+.sandbox-status__hero-text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.sandbox-status__hero-text strong {
   color: var(--color-text);
   font-size: 14px;
 }
 
-.sandbox-status__notice {
-  margin: 12px 0 0;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface-soft);
+.sandbox-status__hero-text span {
   color: var(--color-text-muted);
-  padding: 9px 10px;
   font-size: 12px;
+  line-height: 1.45;
 }
 
-.sandbox-status__notice.is-loading::before {
+.sandbox-status__hero-text span.is-loading::before {
   display: inline-block;
-  width: 7px;
-  height: 7px;
-  margin-right: 7px;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
   border-radius: 999px;
   background: var(--color-info);
   content: "";
+  animation: sandbox-status-pulse 1.4s ease-in-out infinite;
+}
+
+/* Resource meters: three thin horizontal bars (memory / disk / cpu). */
+.sandbox-status__meters {
+  display: grid;
+  gap: 12px;
+  margin: 14px 0;
+}
+
+.sandbox-meter {
+  display: grid;
+  gap: 5px;
+}
+
+.sandbox-meter__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sandbox-meter__head span {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.sandbox-meter__head strong {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 560;
+  font-variant-numeric: tabular-nums;
+}
+
+.sandbox-meter__track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+}
+
+.sandbox-meter__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-accent);
+  transition: width var(--ease-layout);
+}
+
+.sandbox-meter__fill--warning {
+  background: var(--color-warning);
+}
+
+.sandbox-meter__fill--critical {
+  background: var(--color-danger);
+}
+
+.sandbox-meter small {
+  color: var(--color-text-subtle);
+  font-size: 11px;
+}
+
+/* Health chips: icon + label + status dot, color-coded. */
+.sandbox-status__chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.sandbox-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  padding: 4px 10px;
+  font-size: 12px;
+}
+
+.sandbox-chip svg {
+  color: var(--color-text-subtle);
+}
+
+.sandbox-chip__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 999px;
+  background: var(--color-text-subtle);
+}
+
+.sandbox-chip--ok .sandbox-chip__dot {
+  background: var(--color-success);
+}
+
+.sandbox-chip--off .sandbox-chip__dot {
+  background: var(--color-danger);
+}
+
+.sandbox-chip--unknown .sandbox-chip__dot {
+  background: var(--color-text-subtle);
+}
+
+/* Collapsible identity details. */
+.sandbox-status__details {
+  margin-top: 12px;
+}
+
+.sandbox-status__details > summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+}
+
+.sandbox-status__details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.sandbox-status__details > summary::before {
+  display: inline-block;
+  margin-right: 6px;
+  content: "▸";
+  color: var(--color-text-subtle);
+  transition: transform var(--ease-standard);
+}
+
+.sandbox-status__details[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.sandbox-status__details > summary:hover,
+.sandbox-status__details > summary:focus-visible {
+  color: var(--color-text);
+  outline: none;
 }
 
 .sandbox-status__grid {
   display: grid;
   gap: 8px;
-  margin: 12px 0;
+  margin: 10px 0 0;
 }
 
 .sandbox-status__grid div {
@@ -3365,9 +3625,7 @@ button {
   gap: 10px;
 }
 
-.sandbox-status__grid dt,
-.sandbox-status__metrics span,
-.sandbox-status__metrics small {
+.sandbox-status__grid dt {
   color: var(--color-text-muted);
 }
 
@@ -3381,67 +3639,6 @@ button {
 .sandbox-status__grid dd {
   overflow: hidden;
   color: var(--color-text);
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sandbox-status__metrics {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-}
-
-.sandbox-status__metrics div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface-soft);
-  padding: 9px 10px;
-}
-
-.sandbox-status__metrics span,
-.sandbox-status__metrics small {
-  font-size: 11px;
-}
-
-.sandbox-status__metrics strong {
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: 12px;
-  font-weight: 560;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.sandbox-status__health {
-  display: grid;
-  grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 8px;
-  margin-top: 8px;
-}
-
-.sandbox-status__health div {
-  display: grid;
-  min-width: 0;
-  gap: 2px;
-  border: 1px solid var(--color-border);
-  border-radius: 10px;
-  background: var(--color-surface);
-  padding: 8px 9px;
-}
-
-.sandbox-status__health span {
-  color: var(--color-text-muted);
-  font-size: 11px;
-}
-
-.sandbox-status__health strong {
-  overflow: hidden;
-  color: var(--color-text);
-  font-size: 12px;
-  font-weight: 560;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3492,6 +3689,12 @@ button {
   border-color: var(--color-border-strong);
   background: var(--color-hover);
   outline: none;
+}
+
+.sandbox-status__actions button.is-active {
+  border-color: var(--color-border-strong);
+  background: var(--color-active);
+  color: var(--color-text);
 }
 
 .sandbox-status__actions button:disabled {
@@ -4494,7 +4697,7 @@ button {
   width: min(1040px, calc(100vw - 64px));
   height: min(585px, calc(100vh - 64px));
   aspect-ratio: 16 / 9;
-  grid-template-rows: auto minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   transform: translate(-50%, -50%);
   border: 1px solid var(--color-border);
@@ -5185,6 +5388,17 @@ button {
   font-family: var(--font-mono);
 }
 
+.settings-modal__footer {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-soft);
+  padding: 8px 18px;
+}
+
+/* Inline checkbox row — used by the Knowledge Base panel (reuse-agent-key,
+   per-stage toggles). Preferences uses .settings-toggle-row instead. */
 .settings-check {
   display: flex !important;
   grid-template-columns: none !important;
@@ -5218,6 +5432,448 @@ button {
   border-width: 0 2px 2px 0;
   content: "";
   transform: rotate(45deg);
+}
+
+/* ── Settings: empty states, preference groups, toggle rows ─────── */
+
+.settings-empty {
+  display: grid;
+  justify-items: center;
+  gap: 8px;
+  border: 1px dashed var(--color-border-strong);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  padding: 32px 24px;
+  text-align: center;
+}
+
+.settings-empty svg {
+  color: var(--color-text-subtle);
+}
+
+.settings-empty strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.settings-empty p {
+  max-width: 360px;
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.settings-empty .settings-button {
+  margin-top: 4px;
+}
+
+.settings-group {
+  display: grid;
+  gap: 10px;
+}
+
+.settings-group__title {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+}
+
+.settings-field--split {
+  grid-template-columns: minmax(0, 1fr) 200px;
+  align-items: center;
+  gap: 16px;
+}
+
+.settings-field__label {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-field__label span {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.settings-field__label small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-toggle-row {
+  display: flex !important;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface);
+  padding: 12px;
+  cursor: pointer;
+}
+
+.settings-toggle-row:hover {
+  border-color: var(--color-border-strong);
+}
+
+.settings-toggle-row__text {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.settings-toggle-row__text span {
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.settings-toggle-row__text small {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.settings-toggle-row input {
+  flex: 0 0 16px;
+  width: 16px;
+  height: 16px;
+  position: relative;
+  appearance: none;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 4px;
+  background: var(--color-surface);
+  padding: 0;
+  cursor: pointer;
+}
+
+.settings-toggle-row input:checked {
+  border-color: var(--color-text);
+  background: var(--color-text);
+}
+
+.settings-toggle-row input:checked::after {
+  position: absolute;
+  top: 1px;
+  left: 4px;
+  width: 5px;
+  height: 9px;
+  border: solid var(--color-canvas);
+  border-width: 0 2px 2px 0;
+  content: "";
+  transform: rotate(45deg);
+}
+
+/* MCP transport chip — small colored label beside a server name. */
+.mcp-transport-chip {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.2px;
+  text-transform: uppercase;
+}
+
+.mcp-transport-chip--stdio {
+  border-color: var(--color-accent-soft);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
+.mcp-transport-chip--http {
+  border-color: var(--color-success-soft);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+}
+
+.mcp-transport-chip--sse {
+  border-color: var(--color-warning-soft);
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+}
+
+/* ── Knowledge Base panel (Settings › Knowledge Base) ───────────── */
+
+.kb-panel__title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-panel__title svg {
+  color: var(--color-text-subtle);
+}
+
+/* Environment status card. */
+.kb-env {
+  display: grid;
+  gap: 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  padding: 12px;
+}
+
+.kb-env--missing {
+  border-color: var(--color-warning-soft);
+}
+
+.kb-env__head {
+  display: flex;
+}
+
+.kb-env__facts {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.kb-env__facts div {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  gap: 10px;
+  min-width: 0;
+}
+
+.kb-env__facts dt {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.kb-env__facts dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kb-env__action {
+  display: grid;
+  gap: 8px;
+}
+
+.kb-env__note {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.kb-env__buttons {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kb-env__fallback > summary {
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  list-style: none;
+  user-select: none;
+}
+
+.kb-env__fallback > summary::-webkit-details-marker {
+  display: none;
+}
+
+.kb-env__fallback > summary::before {
+  display: inline-block;
+  margin-right: 6px;
+  content: "▸";
+  color: var(--color-text-subtle);
+  transition: transform var(--ease-standard);
+}
+
+.kb-env__fallback[open] > summary::before {
+  transform: rotate(90deg);
+}
+
+.kb-env__fallback > summary:hover {
+  color: var(--color-text);
+}
+
+/* Shared mono code block (CLI fallback). */
+.kb-code {
+  margin: 8px 0 6px;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-code-bg);
+  color: var(--color-text);
+  padding: 9px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+}
+
+/* Key inputs + stages. */
+.kb-fields {
+  display: grid;
+  gap: 14px;
+  margin-top: 14px;
+}
+
+.kb-stages {
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.kb-stages > legend {
+  margin-bottom: 8px;
+  padding: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.kb-stages__row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.kb-stages__item {
+  margin: 0 !important;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  padding: 7px 10px;
+  cursor: pointer;
+}
+
+.kb-stages__item:hover {
+  border-color: var(--color-border-strong);
+}
+
+.kb-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 14px;
+}
+
+.kb-error {
+  margin-top: 10px;
+}
+
+/* Blocks: progress + log. */
+.kb-block {
+  margin-top: 18px;
+}
+
+.kb-block__title {
+  margin: 0 0 10px;
+  color: var(--color-text);
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Stage progress strip. */
+.kb-progress {
+  display: grid;
+  gap: 10px;
+}
+
+.kb-progress__row {
+  display: grid;
+  grid-template-columns: 88px minmax(0, 1fr) 44px;
+  align-items: center;
+  gap: 10px;
+}
+
+.kb-progress__label {
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.kb-progress__track {
+  height: 6px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+}
+
+.kb-progress__fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  background: var(--color-border-strong);
+  transition: width var(--ease-standard);
+}
+
+.kb-progress__fill--running {
+  background: var(--color-accent);
+}
+
+.kb-progress__fill--done {
+  background: var(--color-success);
+}
+
+.kb-progress__fill--error {
+  background: var(--color-danger);
+}
+
+.kb-progress__pct {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.kb-progress__msg {
+  grid-column: 2 / -1;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+}
+
+/* Live log — mono terminal block using code-surface tokens. */
+.kb-log {
+  max-height: 220px;
+  overflow-y: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-code-bg);
+  color: var(--color-text);
+  padding: 9px 10px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.55;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.kb-log__empty {
+  color: var(--color-text-subtle);
+}
+
+.kb-log__line--error {
+  color: var(--color-danger);
+}
+
+.kb-log__line--warn {
+  color: var(--color-warning);
+}
+
+.kb-log__line--done {
+  color: var(--color-success);
+}
+
+.kb-log__line--progress {
+  color: var(--color-accent);
 }
 
 @media (max-width: 860px) {

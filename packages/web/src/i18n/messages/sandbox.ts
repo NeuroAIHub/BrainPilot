@@ -45,6 +45,8 @@ export default defineMessages(
     "sandbox.logs.loading": "正在加载日志…",
     "sandbox.logs.empty": "尚未加载沙盒日志。",
     "sandbox.logs.failed": "加载沙盒详情失败。",
+    // details
+    "sandbox.details.more": "更多详情",
     // actions
     "sandbox.action.rebuild": "重建",
     "sandbox.action.refresh": "刷新",
@@ -100,6 +102,7 @@ export default defineMessages(
     "sandbox.logs.loading": "Loading logs...",
     "sandbox.logs.empty": "No sandbox logs loaded.",
     "sandbox.logs.failed": "Failed to load sandbox details.",
+    "sandbox.details.more": "More details",
     "sandbox.action.rebuild": "Rebuild",
     "sandbox.action.refresh": "Refresh",
     "sandbox.action.logs": "Logs",
