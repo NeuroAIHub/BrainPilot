@@ -19,6 +19,8 @@ openai>=1.40          # OpenAI-compatible client (used by SiliconFlow and the
 # from https://pytorch.org/get-started/locally/ then re-run this file.
 FlagEmbedding>=1.2.10
 huggingface_hub>=0.24  # used by setup_models.py to fetch model weights
+httpx[socks]>=0.27     # SOCKS proxy support for huggingface_hub (users behind
+                       # ALL_PROXY=socks5h://... otherwise hit ImportError)
 fastapi>=0.110         # local model_server.py sidecar
 uvicorn>=0.27
 pydantic>=2.6

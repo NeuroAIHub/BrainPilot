@@ -24,7 +24,13 @@ export interface RetrievalResult {
 
 const EMB_MAX_LENGTH = 512;
 const RERANK_MAX_LENGTH = 1024;
-const HTTP_TIMEOUT_MS = 60_000;
+// 5 min. Rerank on CPU is the bottleneck: bge-reranker-v2-m3 (XLM-Roberta
+// large, 560M params) can spend ~1.2s per pair, so a topk=5 × multiplier=10
+// batch of 50 pairs at max_length=1024 lands around 60-90s on a machine
+// without GPU/MPS — the previous 60s cap fired intermittently and surfaced
+// as "This operation was aborted". Keeping headroom for slower hardware
+// and background CPU contention.
+const HTTP_TIMEOUT_MS = 300_000;
 
 async function postJson<T>(url: string, body: unknown): Promise<T> {
   const ctl = new AbortController();
