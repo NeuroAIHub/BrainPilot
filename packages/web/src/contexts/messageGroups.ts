@@ -2,12 +2,17 @@ import { ChatMessage } from "../contracts/backend";
 
 /**
  * A unit of rendering in the chat stream. Either a single standalone message
- * (user prompt, assistant text, error, hook note) or an "activity" group that
- * folds adjacent reasoning and tool calls/results into one collapsible block.
+ * (user prompt, assistant text, error, hook note), an "activity" group that
+ * folds adjacent reasoning and tool calls/results into one collapsible block,
+ * or (#219) an "expertGroup" that folds a run of non-PI (specialist) agent
+ * render items behind one more level of disclosure so the PI narrative reads
+ * cleanly by default. An expertGroup nests already-built single/activity items
+ * so the reasoning/tool folds inside it are preserved when expanded.
  */
 export type RenderItem =
   | { type: "single"; message: ChatMessage }
-  | { type: "activity"; id: string; steps: ChatMessage[]; streaming: boolean };
+  | { type: "activity"; id: string; steps: ChatMessage[]; streaming: boolean }
+  | { type: "expertGroup"; id: string; agents: string[]; items: RenderItem[]; streaming: boolean };
 
 /**
  * #134 — tool visibility model. Internal tools are part of the agent's plumbing
@@ -101,6 +106,7 @@ function isStandalone(message: ChatMessage): boolean {
 export function buildRenderItems(
   messages: ChatMessage[],
   runningAgents?: ReadonlySet<string>,
+  groupExpert = false,
 ): RenderItem[] {
   const items: RenderItem[] = [];
   // #134 — internal tools (trace bookkeeping) are hidden from the chat UI.
@@ -129,5 +135,105 @@ export function buildRenderItems(
     }
   }
   flush();
-  return items;
+  // #219 — second pass: fold consecutive specialist (non-PI) items into
+  // collapsible expert groups. Off by default (demo replay / legacy callers).
+  return groupExpert ? groupExpertItems(items, runningAgents) : items;
+}
+
+/* -------------------------------------------------------------------------- *
+ * #219 — expert-agent activity grouping.
+ * -------------------------------------------------------------------------- */
+
+/** The principal (PI) agent name; unattributed items default to it. */
+const PRINCIPAL = "principal";
+
+/**
+ * Important events stay visible even when they come from a specialist agent —
+ * they must never be buried inside a collapsed group (issue #219 UX goal:
+ * "avoid hiding important failures, blockers, or user-action-required events").
+ * Errors, approval/user-input requests, and warning+ system messages / hooks
+ * escape grouping and render standalone.
+ */
+function isImportantEvent(message: ChatMessage): boolean {
+  if (message.kind === "error" || message.kind === "ask_user") return true;
+  if (message.kind === "system_message") {
+    const level = message.systemMessage?.level;
+    return level === "warning" || level === "error" || level === "fatal";
+  }
+  if (message.kind === "hook") {
+    return message.hookLevel === "warning" || message.hookLevel === "error";
+  }
+  return false;
+}
+
+/** Owning agent of a render item: the message's agent, or the activity's first step. */
+function itemAgent(item: RenderItem): string {
+  if (item.type === "single") return item.message.agent ?? PRINCIPAL;
+  if (item.type === "activity") return item.steps[0]?.agent ?? PRINCIPAL;
+  return PRINCIPAL;
+}
+
+/**
+ * A render item is a foldable specialist item when it belongs to a non-PI agent
+ * AND (for singles) is not an important event that must stay surfaced. User
+ * prompts and PI/unattributed items always break the run.
+ */
+function isFoldableExpertItem(item: RenderItem): boolean {
+  if (itemAgent(item) === PRINCIPAL) return false;
+  if (item.type === "single") {
+    if (item.message.role === "user") return false;
+    if (isImportantEvent(item.message)) return false;
+  }
+  return true;
+}
+
+function itemStreaming(item: RenderItem, runningAgents?: ReadonlySet<string>): boolean {
+  if (item.type === "activity") return item.streaming;
+  if (item.type === "single") {
+    return !!item.message.streaming || (runningAgents?.has(itemAgent(item)) ?? false);
+  }
+  return false;
+}
+
+/** Fold consecutive foldable specialist items into one expertGroup each. */
+function groupExpertItems(items: RenderItem[], runningAgents?: ReadonlySet<string>): RenderItem[] {
+  const out: RenderItem[] = [];
+  let run: RenderItem[] = [];
+  const flushRun = () => {
+    if (run.length === 0) return;
+    // A lone expert `activity` item is already collapsed on its own — wrapping
+    // it in a second disclosure level just makes the user click twice. Leave it.
+    // A lone expert `single` (standalone text) still gets grouped so specialist
+    // chatter is collapsed by default (issue #219 acceptance criteria).
+    if (run.length === 1 && run[0].type === "activity") {
+      out.push(run[0]);
+      run = [];
+      return;
+    }
+    const agents = Array.from(new Set(run.map(itemAgent)));
+    out.push({
+      type: "expertGroup",
+      id: `expert-${idOf(run[0])}`,
+      agents,
+      items: run,
+      streaming: run.some((it) => itemStreaming(it, runningAgents)),
+    });
+    run = [];
+  };
+  for (const item of items) {
+    if (isFoldableExpertItem(item)) {
+      run.push(item);
+    } else {
+      flushRun();
+      out.push(item);
+    }
+  }
+  flushRun();
+  return out;
+}
+
+/** Stable id for a render item (drives <details> DOM reuse across re-renders). */
+function idOf(item: RenderItem): string {
+  if (item.type === "single") return item.message.id;
+  return item.id;
 }

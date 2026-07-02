@@ -614,7 +614,7 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
           {condensedMessages.length === 0 ? (
             <p className="demo-panel__empty">{t("demo.conversation.empty")}</p>
           ) : (
-            <MessageStream messages={condensedMessages} showToolbarCount={false} className="demo-message-stream" />
+            <MessageStream messages={condensedMessages} showToolbarCount={false} groupExpertActivity className="demo-message-stream" />
           )}
         </section>
 
