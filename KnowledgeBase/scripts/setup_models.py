@@ -77,22 +77,56 @@ def main() -> None:
     kb = KbPaths(resolve_kb_root(args.kb_root))
     kb.mkdir()
 
+    # Stage name is "setup-models" (not just "setup") so the frontend's
+    # KnowledgeBase panel can route these events to their own progress row
+    # separate from the venv "setup-env" row — the two setups run in
+    # parallel when triggered from the one-click "Set up" button.
     if args.hf_mirror:
         os.environ["HF_ENDPOINT"] = args.hf_mirror
-        emit_event("setup", "info", f"using HF mirror: {args.hf_mirror}")
+        emit_event("setup-models", "info", f"using HF mirror: {args.hf_mirror}")
 
     try:
-        for repo_id, sub in REPOS:
+        n = len(REPOS)
+        emit_event("setup-models", "progress", "starting model download",
+                   percent=0, done=0, total=n)
+        for i, (repo_id, sub) in enumerate(REPOS):
             target = kb.models_dir / sub
-            if (target / "config.json").exists():
-                emit_event("setup", "info", f"{sub}: already present, skipping")
+            # A completed download must have BOTH the config AND at least one
+            # weight file. Using config.json alone is unsafe: HF pulls small
+            # files first, so a Ctrl-C mid-download leaves config.json on disk
+            # while the multi-GB weights are missing — the next run would then
+            # skip and vectorize would OSError on load. When either check
+            # fails we re-run snapshot_download, which resumes any partial
+            # files via HF Hub's on-disk cache.
+            has_weights = any(
+                (target / name).exists()
+                for name in ("model.safetensors", "pytorch_model.bin")
+            )
+            if (target / "config.json").exists() and has_weights:
+                emit_event("setup-models", "info", f"{sub}: already present, skipping",
+                           done=i + 1, total=n, percent=int((i + 1) * 100 / n))
                 continue
-            emit_event("setup", "info", f"downloading {repo_id} -> {target}")
+            if target.exists() and not has_weights:
+                emit_event("setup-models", "info",
+                           f"{sub}: partial download detected, resuming…")
+            # Emit a "progress" *before* the download so the progress bar
+            # jumps to the correct start position; the actual HF tqdm bytes
+            # come through as `log` events under the log panel.
+            emit_event(
+                "setup-models", "progress",
+                f"downloading {repo_id} ({i + 1}/{n}) → {target.name}",
+                done=i, total=n, percent=int(i * 100 / n),
+            )
             download_one(repo_id, target)
-            emit_event("setup", "info", f"{sub}: download complete")
-        emit_event("setup", "done", "models ready", models_dir=str(kb.models_dir))
+            emit_event("setup-models", "progress",
+                       f"{sub}: download complete",
+                       done=i + 1, total=n, percent=int((i + 1) * 100 / n))
+        emit_event("setup-models", "progress", "all models ready",
+                   percent=100, done=n, total=n)
+        emit_event("setup-models", "done", "models ready",
+                   models_dir=str(kb.models_dir))
     except Exception as exc:  # noqa: BLE001
-        emit_fatal("setup", "model download failed", exc)
+        emit_fatal("setup-models", "model download failed", exc)
 
 
 if __name__ == "__main__":

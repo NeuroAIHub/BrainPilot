@@ -43,6 +43,7 @@ interface CacheEntry {
   count: number;
   dim: number;
   metaCount: number; // value read from meta.json — used for freshness checks
+  metaUpdatedAt: string | null; // meta.json.updated_at — used for metadata-only refreshes
 }
 
 let CACHE: { paths: KbPaths; entry: CacheEntry } | null = null;
@@ -58,6 +59,28 @@ async function readMetaCount(kb: KbPaths): Promise<number | null> {
     return typeof v === "number" ? v : null;
   } catch {
     return null;
+  }
+}
+
+/**
+ * Read count + updated_at from meta.json in one pass. The updated_at field
+ * lets us invalidate the cache after a metadata-only refresh (e.g. chunk.py
+ * re-syncing chunks.jsonl with fresh titles/authors from a re-run of
+ * extract_meta.py) without needing the row count to change.
+ */
+async function readMetaSnapshot(kb: KbPaths): Promise<{
+  count: number | null;
+  updatedAt: string | null;
+}> {
+  try {
+    const raw = await readFile(kb.metaJson, "utf8");
+    const j = JSON.parse(raw);
+    return {
+      count: typeof j?.count === "number" ? j.count : null,
+      updatedAt: typeof j?.updated_at === "string" ? j.updated_at : null,
+    };
+  } catch {
+    return { count: null, updatedAt: null };
   }
 }
 
@@ -142,8 +165,15 @@ async function loadFresh(kb: KbPaths): Promise<CacheEntry> {
   const buf = await readFile(kb.embeddingsNpy);
   const { data, rows, cols } = parseNpyFloat32(buf);
   const chunks = await readChunksJsonl(kb.chunksJsonl, rows);
-  const metaCount = (await readMetaCount(kb)) ?? rows;
-  return { embeddings: data, chunks, count: rows, dim: cols, metaCount };
+  const { count, updatedAt } = await readMetaSnapshot(kb);
+  return {
+    embeddings: data,
+    chunks,
+    count: rows,
+    dim: cols,
+    metaCount: count ?? rows,
+    metaUpdatedAt: updatedAt,
+  };
 }
 
 /**
@@ -155,8 +185,17 @@ async function loadFresh(kb: KbPaths): Promise<CacheEntry> {
 export async function getStore(rootOverride?: string): Promise<CacheEntry & { paths: KbPaths }> {
   const kb = resolveKbPaths(rootOverride);
   if (CACHE && CACHE.paths.root === kb.root) {
-    const diskCount = await readMetaCount(kb);
-    if (diskCount === null || diskCount === CACHE.entry.metaCount) {
+    // Cache freshness: both row count AND updated_at must match. The
+    // updated_at check catches metadata-only rewrites (chunk.py re-syncing
+    // chunks.jsonl after extract_meta fixed fallback rows) where count
+    // stays constant but chunk metadata changed. A missing field on disk
+    // (null) is treated as "no signal" — we fall back to the other check
+    // rather than always invalidating.
+    const { count: diskCount, updatedAt: diskUpdatedAt } = await readMetaSnapshot(kb);
+    const staleCount = diskCount !== null && diskCount !== CACHE.entry.metaCount;
+    const staleUpdatedAt =
+      diskUpdatedAt !== null && diskUpdatedAt !== CACHE.entry.metaUpdatedAt;
+    if (!staleCount && !staleUpdatedAt) {
       return { ...CACHE.entry, paths: kb };
     }
     // stale — fall through to a fresh load
