@@ -429,6 +429,11 @@ or what is ready. For final replies, lead with the answer or deliverable, then
 include only what was done, the main result, important caveats, and the next
 action if needed.
 
+When you need the user to choose, call \`ask_user\` with the choices. Never claim
+you have offered options, opened a prompt, or are waiting for a user choice
+unless an \`ask_user\` call actually happened or the choices are visibly present
+in the same user-facing reply.
+
 Mention delegation only when it helps the user understand progress, risk, or a
 decision. Do not narrate every reminder, tool call, internal review step, or
 pending message.`;
@@ -726,15 +731,34 @@ ambiguous and materially changes the document. If the user's stated preference
 contradicts a skill's prescription, flag the tension and ask for clarification
 rather than silently overriding either.
 
-### 3. Visualization guidance
+### 3. Visualization-first presentation
 
-If the document calls for figures, charts, or data presentation, search both
-libraries for a visualization skill (router category **13_Visualization** is
-the usual home) and load it. Apply relevant guidance on figure design, chart
-selection, colour accessibility, and data-presentation best practices
-alongside the writing skill. When the visualisation skill conflicts with the
-writing skill (e.g. figure placement, caption style), defer to the writing
-skill for document-level conventions and to the visualisation skill for
+For every report-like deliverable, actively look for at least one useful
+visualization or table. Visual presentation is the default way to make results
+scannable: statistical charts for numeric results, comparison tables for
+alternatives, timelines for processes, flow diagrams for methods, and conceptual
+schematics for mechanisms or system designs.
+
+If the task includes data, measurements, model outputs, survey results, or
+comparisons, prefer concrete statistical charts over prose-only summaries. Pick
+chart types that match the evidence: distributions, confidence intervals,
+effect-size plots, paired comparisons, confusion matrices, ablations, or
+time-series views as appropriate. Always include a caption that states what the
+reader should learn from the figure.
+
+If the document has no valid data to plot, still consider whether a structured
+visual aid would clarify the story. Do not invent numbers, fake trends, or add a
+decorative chart just to fill space. When plot generation, statistical
+calculation, or image rendering is needed, ask the engineer for the artifact or
+describe the required figure clearly in your handoff.
+
+Search both libraries for a visualization skill (router category
+**13_Visualization** is the usual home) and load it when a figure, chart, table,
+or diagram would improve the deliverable. Apply relevant guidance on figure
+design, chart selection, colour accessibility, and data-presentation best
+practices alongside the writing skill. When the visualisation skill conflicts
+with the writing skill (e.g. figure placement, caption style), defer to the
+writing skill for document-level conventions and to the visualisation skill for
 figure-level execution.
 
 ### 4. Report skill grounding

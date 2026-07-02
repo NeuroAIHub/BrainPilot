@@ -104,9 +104,20 @@ describe("personas", () => {
     expect(pi).toContain("User-facing communication style");
     expect(pi).toContain("unread-message counts");
     expect(pi).toContain("agent-status blocks");
+    expect(pi).toContain("Never claim");
+    expect(pi).toContain("offered options");
     expect(writer).toContain("Academic report narrative");
     expect(writer).toContain("Purpose");
     expect(writer).toContain("Translate them into a clean narrative");
+  });
+
+  it("writer persona encourages evidence-grounded visual presentation", () => {
+    const writer = PERSONAS.writer!;
+    expect(writer).toContain("Visualization-first presentation");
+    expect(writer).toContain("For every report-like deliverable");
+    expect(writer).toContain("statistical charts");
+    expect(writer).toContain("Do not invent numbers");
+    expect(writer).toContain("ask the engineer");
   });
 
   it("auditor persona constrains scope, bash, and followup count", () => {
