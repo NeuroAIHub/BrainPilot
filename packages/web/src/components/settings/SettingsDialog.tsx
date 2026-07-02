@@ -6,6 +6,7 @@ import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
+import { runtimeConfig } from "../../config";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
@@ -18,13 +19,19 @@ type SettingsDialogProps = {
   onClose: () => void;
 };
 
-const tabs: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
+const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
   { id: "account", labelKey: "settings.tab.account", icon: UserRound },
   { id: "providers", labelKey: "settings.tab.providers", icon: SlidersHorizontal },
   { id: "mcp", labelKey: "settings.tab.mcp", icon: Plug },
   { id: "knowledgeBase", labelKey: "settings.tab.knowledgeBase", icon: Database },
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
+
+// Local single-user mode has no host-managed identity — the account tab would
+// only show placeholder "local / local / 1970" values, so drop it entirely.
+const tabs = runtimeConfig.localMode
+  ? ALL_TABS.filter((tab) => tab.id !== "account")
+  : ALL_TABS;
 
 const DEFAULT_PROVIDER_FORM = {
   name: "",
@@ -59,7 +66,7 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
   const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
-  const [activeTab, setActiveTab] = useState<SettingsTab>("account");
+  const [activeTab, setActiveTab] = useState<SettingsTab>(tabs[0].id);
   const [providers, setProviders] = useState<ProviderProfile[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
   const [providerForm, setProviderForm] = useState(DEFAULT_PROVIDER_FORM);
@@ -367,7 +374,6 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                   </div>
                 </dl>
                 <p className="settings-note">{t("settings.account.managedByHost")}</p>
-                {version ? <span className="settings-version">{version}</span> : null}
               </section>
             ) : null}
 
@@ -443,6 +449,19 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     </article>
                   );
 
+                  if (providers.length === 0) {
+                    return (
+                      <div className="settings-empty">
+                        <SlidersHorizontal size={22} />
+                        <strong>{t("settings.providers.empty")}</strong>
+                        <p>{t("settings.providers.emptyHint")}</p>
+                        <button className="settings-button" onClick={openProviderForm} type="button">
+                          {t("settings.providers.add")}
+                        </button>
+                      </div>
+                    );
+                  }
+
                   return (
                     <>
                       {sharedProviders.length > 0 ? (
@@ -478,21 +497,34 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     {t("settings.mcp.addServer")}
                   </button>
                 </div>
-                <div className="settings-list">
-                  {mcpServers.map((server) => (
-                    <article className="settings-list-item" key={server.name}>
-                      <div>
-                        <strong>{server.name}</strong>
-                        <span>{server.type === "stdio" ? [server.command, ...(server.args || [])].filter(Boolean).join(" ") : server.url}</span>
-                        <small>{server.type}</small>
-                      </div>
-                      <div className="settings-list-item__actions mcp-actions">
-                        <button onClick={() => editMcpServer(server)} type="button">{t("settings.mcp.edit")}</button>
-                        <button onClick={() => void removeMcpServer(server.name)} type="button">{t("settings.mcp.remove")}</button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
+                {mcpServers.length === 0 ? (
+                  <div className="settings-empty">
+                    <Plug size={22} />
+                    <strong>{t("settings.mcp.empty")}</strong>
+                    <p>{t("settings.mcp.emptyHint")}</p>
+                    <button className="settings-button" onClick={openMcpForm} type="button">
+                      {t("settings.mcp.addServer")}
+                    </button>
+                  </div>
+                ) : (
+                  <div className="settings-list">
+                    {mcpServers.map((server) => (
+                      <article className="settings-list-item" key={server.name}>
+                        <div>
+                          <strong>
+                            {server.name}
+                            <span className={`mcp-transport-chip mcp-transport-chip--${server.type}`}>{server.type}</span>
+                          </strong>
+                          <span>{server.type === "stdio" ? [server.command, ...(server.args || [])].filter(Boolean).join(" ") : server.url}</span>
+                        </div>
+                        <div className="settings-list-item__actions mcp-actions">
+                          <button onClick={() => editMcpServer(server)} type="button">{t("settings.mcp.edit")}</button>
+                          <button onClick={() => void removeMcpServer(server.name)} type="button">{t("settings.mcp.remove")}</button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
               </section>
             ) : null}
 
@@ -501,51 +533,77 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             {activeTab === "preferences" ? (
               <section className="settings-section">
                 <h3>{t("settings.prefs.title")}</h3>
-                <div className="settings-field">
-                  <span>{t("settings.prefs.theme")}</span>
-                  <CustomSelect
-                    ariaLabel={t("settings.prefs.theme")}
-                    onChange={(value) => preferences.setTheme(value as typeof preferences.theme)}
-                    options={[
-                      { label: t("settings.prefs.themeLight"), value: "light" },
-                      { label: t("settings.prefs.themeDark"), value: "dark" },
-                      { label: t("settings.prefs.themeSystem"), value: "system" },
-                    ]}
-                    value={preferences.theme}
-                  />
+
+                <div className="settings-group">
+                  <h4 className="settings-group__title">{t("settings.prefs.groupAppearance")}</h4>
+                  <div className="settings-field settings-field--split">
+                    <div className="settings-field__label">
+                      <span>{t("settings.prefs.theme")}</span>
+                      <small>{t("settings.prefs.themeDesc")}</small>
+                    </div>
+                    <CustomSelect
+                      ariaLabel={t("settings.prefs.theme")}
+                      onChange={(value) => preferences.setTheme(value as typeof preferences.theme)}
+                      options={[
+                        { label: t("settings.prefs.themeLight"), value: "light" },
+                        { label: t("settings.prefs.themeDark"), value: "dark" },
+                        { label: t("settings.prefs.themeSystem"), value: "system" },
+                      ]}
+                      value={preferences.theme}
+                    />
+                  </div>
+                  <div className="settings-field settings-field--split">
+                    <div className="settings-field__label">
+                      <span>{t("settings.prefs.language")}</span>
+                      <small>{t("settings.prefs.languageDesc")}</small>
+                    </div>
+                    <CustomSelect
+                      ariaLabel={t("settings.prefs.language")}
+                      onChange={(value) => preferences.setLanguage(value as typeof preferences.language)}
+                      options={[
+                        { label: "简体中文", value: "zh-CN" },
+                        { label: "English", value: "en-US" },
+                      ]}
+                      value={preferences.language}
+                    />
+                  </div>
                 </div>
-                <div className="settings-field">
-                  <span>{t("settings.prefs.language")}</span>
-                  <CustomSelect
-                    ariaLabel={t("settings.prefs.language")}
-                    onChange={(value) => preferences.setLanguage(value as typeof preferences.language)}
-                    options={[
-                      { label: "简体中文", value: "zh-CN" },
-                      { label: "English", value: "en-US" },
-                    ]}
-                    value={preferences.language}
-                  />
+
+                <div className="settings-group">
+                  <h4 className="settings-group__title">{t("settings.prefs.groupBehavior")}</h4>
+                  <label className="settings-toggle-row">
+                    <span className="settings-toggle-row__text">
+                      <span>{t("settings.prefs.confirmDangerous")}</span>
+                      <small>{t("settings.prefs.confirmDangerousDesc")}</small>
+                    </span>
+                    <input
+                      checked={preferences.security.confirmDangerousActions}
+                      onChange={(event) => preferences.setSecurity({ ...preferences.security, confirmDangerousActions: event.target.checked })}
+                      type="checkbox"
+                    />
+                  </label>
+                  <label className="settings-toggle-row">
+                    <span className="settings-toggle-row__text">
+                      <span>{t("settings.prefs.notifyDone")}</span>
+                      <small>{t("settings.prefs.notifyDoneDesc")}</small>
+                    </span>
+                    <input
+                      checked={preferences.notifications.agentDone}
+                      onChange={(event) => preferences.setNotifications({ ...preferences.notifications, agentDone: event.target.checked })}
+                      type="checkbox"
+                    />
+                  </label>
                 </div>
-                <label className="settings-check">
-                  <input
-                    checked={preferences.security.confirmDangerousActions}
-                    onChange={(event) => preferences.setSecurity({ ...preferences.security, confirmDangerousActions: event.target.checked })}
-                    type="checkbox"
-                  />
-                  <span>{t("settings.prefs.confirmDangerous")}</span>
-                </label>
-                <label className="settings-check">
-                  <input
-                    checked={preferences.notifications.agentDone}
-                    onChange={(event) => preferences.setNotifications({ ...preferences.notifications, agentDone: event.target.checked })}
-                    type="checkbox"
-                  />
-                  <span>{t("settings.prefs.notifyDone")}</span>
-                </label>
               </section>
             ) : null}
           </div>
         </div>
+
+        {version ? (
+          <footer className="settings-modal__footer">
+            <span className="settings-version">{version}</span>
+          </footer>
+        ) : null}
       </section>
 
       {isProviderFormOpen ? (

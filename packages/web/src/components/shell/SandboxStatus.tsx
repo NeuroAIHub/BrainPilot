@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { Radio, Server } from "lucide-react";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
@@ -22,6 +23,13 @@ function formatBytes(bytes?: number) {
   const index = Math.min(Math.floor(Math.log(bytes) / Math.log(1024)), units.length - 1);
   const value = bytes / 1024 ** index;
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
+}
+
+/** Clamp a percentage into [0, 100] and pick a severity band for the meter fill. */
+function meterLevel(percent?: number): { pct: number; level: "ok" | "warning" | "critical" } {
+  const pct = Math.max(0, Math.min(100, Math.round(percent ?? 0)));
+  const level = pct >= 90 ? "critical" : pct >= 75 ? "warning" : "ok";
+  return { pct, level };
 }
 
 function getConnectionState(status: string, isConnected: boolean): SandboxConnectionState {
@@ -64,6 +72,7 @@ function getStatusKey(status: string, isConnected: boolean) {
 export function SandboxStatus() {
   const [isOpen, setIsOpen] = useState(false);
   const [logs, setLogs] = useState("");
+  const [showLogs, setShowLogs] = useState(false);
   const [health, setHealth] = useState<Record<string, unknown> | null>(null);
   const [detailsLoading, setDetailsLoading] = useState(false);
   const rootRef = useRef<HTMLDivElement | null>(null);
@@ -157,98 +166,119 @@ export function SandboxStatus() {
         id="sandbox-status-popover"
         role="dialog"
       >
-        <div className="sandbox-status__header">
-          <span className="sandbox-status__eyebrow">Sandbox</span>
-          <strong>{t(connectionLabelKey[connection])}</strong>
+        <div className={`sandbox-status__hero sandbox-status__hero--${connection}`}>
+          <span className="sandbox-status__hero-dot" aria-hidden="true" />
+          <div className="sandbox-status__hero-text">
+            <strong>{t(connectionLabelKey[connection])}</strong>
+            <span className={isLoading ? "is-loading" : ""}>
+              {(() => {
+                const notice = getStatusKey(effectiveStatus, isConnected);
+                return t(notice.key, notice.vars);
+              })()}
+            </span>
+          </div>
         </div>
-
-        <p className={`sandbox-status__notice ${isLoading ? "is-loading" : ""}`}>
-          {(() => {
-            const notice = getStatusKey(effectiveStatus, isConnected);
-            return t(notice.key, notice.vars);
-          })()}
-        </p>
         {error ? <p className="sandbox-status__empty">{error}</p> : null}
 
         {hasSandbox ? (
           <>
-            <dl className="sandbox-status__grid">
-              <div>
-                <dt>{t("sandbox.label.name")}</dt>
-                <dd>{currentSandbox.name}</dd>
-              </div>
-              <div>
-                <dt>{t("sandbox.label.id")}</dt>
-                <dd>{currentSandbox.id}</dd>
-              </div>
-              <div>
-                <dt>{t("sandbox.label.container")}</dt>
-                <dd>{currentSandbox.containerName || "-"}</dd>
-              </div>
-              <div>
-                <dt>{t("sandbox.label.hostApi")}</dt>
-                <dd>{currentSandbox.hostApiUrl || "-"}</dd>
-              </div>
-              <div>
-                <dt>{t("sandbox.label.port")}</dt>
-                <dd>{currentSandbox.port ?? "-"}</dd>
-              </div>
-              <div>
-                <dt>{t("sandbox.label.created")}</dt>
-                <dd>{new Date(currentSandbox.createdAt).toLocaleString()}</dd>
-              </div>
-            </dl>
-
-            <div className="sandbox-status__metrics">
-              <div>
-                <span>{t("sandbox.label.memory")}</span>
-                <strong>
-                  {formatBytes(stats?.memory.usedBytes)} / {formatBytes(stats?.memory.limitBytes)}
-                </strong>
-                <small>{stats?.memory.percent ?? 0}%</small>
-              </div>
-              <div>
-                <span>{t("sandbox.label.cpu")}</span>
-                <strong>{t("sandbox.cpuUsed", { percent: stats?.cpu.usedPercent ?? 0 })}</strong>
-                <small>
-                  {t("sandbox.cpuQuota", { quota: stats?.cpu.quotaPercent ?? 0, cpus: stats?.cpu.onlineCpus ?? 0 })}
-                </small>
-              </div>
-              <div>
-                <span>{t("sandbox.label.pids")}</span>
-                <strong>
-                  {stats?.pids.current ?? 0} / {stats?.pids.limit ?? t("sandbox.unlimited")}
-                </strong>
-              </div>
-              <div>
-                <span>{t("sandbox.label.disk")}</span>
-                <strong>
-                  {formatBytes(stats?.disk.workspaceUsedBytes)} / {formatBytes(stats?.disk.quotaBytes)}
-                </strong>
-                <small>{stats?.disk.percentOfQuota ?? 0}%</small>
-              </div>
+            <div className="sandbox-status__meters">
+              {(() => {
+                const rows: Array<{ label: string; percent?: number; detail: string }> = [
+                  {
+                    label: t("sandbox.label.memory"),
+                    percent: stats?.memory.percent,
+                    detail: `${formatBytes(stats?.memory.usedBytes)} / ${formatBytes(stats?.memory.limitBytes)}`,
+                  },
+                  {
+                    label: t("sandbox.label.disk"),
+                    percent: stats?.disk.percentOfQuota,
+                    detail: `${formatBytes(stats?.disk.workspaceUsedBytes)} / ${formatBytes(stats?.disk.quotaBytes)}`,
+                  },
+                  {
+                    label: t("sandbox.label.cpu"),
+                    percent: stats?.cpu.usedPercent,
+                    detail: t("sandbox.cpuQuota", { quota: stats?.cpu.quotaPercent ?? 0, cpus: stats?.cpu.onlineCpus ?? 0 }),
+                  },
+                ];
+                return rows.map((row) => {
+                  const { pct, level } = meterLevel(row.percent);
+                  return (
+                    <div className="sandbox-meter" key={row.label}>
+                      <div className="sandbox-meter__head">
+                        <span>{row.label}</span>
+                        <strong>{pct}%</strong>
+                      </div>
+                      <div className="sandbox-meter__track" aria-hidden="true">
+                        <span className={`sandbox-meter__fill sandbox-meter__fill--${level}`} style={{ width: `${pct}%` }} />
+                      </div>
+                      <small>{row.detail}</small>
+                    </div>
+                  );
+                });
+              })()}
             </div>
 
-            <div className="sandbox-status__health">
-              <div>
-                <span>{t("sandbox.label.health")}</span>
-                <strong>{String(health?.status ?? (detailsLoading ? t("sandbox.health.checking") : t("sandbox.health.unknown")))}</strong>
-              </div>
-              <div>
-                <span>{t("sandbox.label.runtime")}</span>
-                <strong>{health?.agent_runtime === false ? t("sandbox.health.offline") : health?.agent_runtime ? t("sandbox.health.online") : "-"}</strong>
-              </div>
-              <div>
-                <span>{t("sandbox.label.sse")}</span>
-                <strong>{isConnected ? t("sandbox.health.connected") : t("sandbox.health.offline")}</strong>
-              </div>
-              <div>
-                <span>{t("sandbox.label.checked")}</span>
-                <strong>{health?.checked_at ? new Date(String(health.checked_at)).toLocaleTimeString() : "-"}</strong>
-              </div>
+            <div className="sandbox-status__chips">
+              {(() => {
+                const runtimeOnline = health?.agent_runtime !== false && !!health?.agent_runtime;
+                const runtimeKnown = health?.agent_runtime !== undefined;
+                return (
+                  <span className={`sandbox-chip sandbox-chip--${runtimeKnown ? (runtimeOnline ? "ok" : "off") : "unknown"}`}>
+                    <Server size={13} />
+                    {t("sandbox.label.runtime")}
+                    <i className="sandbox-chip__dot" aria-hidden="true" />
+                  </span>
+                );
+              })()}
+              <span className={`sandbox-chip sandbox-chip--${isConnected ? "ok" : "off"}`}>
+                <Radio size={13} />
+                {t("sandbox.label.sse")}
+                <i className="sandbox-chip__dot" aria-hidden="true" />
+              </span>
             </div>
 
-            <pre className="sandbox-status__logs">{detailsLoading ? t("sandbox.logs.loading") : logs || t("sandbox.logs.empty")}</pre>
+            <details className="sandbox-status__details">
+              <summary>{t("sandbox.details.more")}</summary>
+              <dl className="sandbox-status__grid">
+                <div>
+                  <dt>{t("sandbox.label.name")}</dt>
+                  <dd>{currentSandbox.name}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.id")}</dt>
+                  <dd>{currentSandbox.id}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.container")}</dt>
+                  <dd>{currentSandbox.containerName || "-"}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.hostApi")}</dt>
+                  <dd>{currentSandbox.hostApiUrl || "-"}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.port")}</dt>
+                  <dd>{currentSandbox.port ?? "-"}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.pids")}</dt>
+                  <dd>{stats?.pids.current ?? 0} / {stats?.pids.limit ?? t("sandbox.unlimited")}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.created")}</dt>
+                  <dd>{new Date(currentSandbox.createdAt).toLocaleString()}</dd>
+                </div>
+                <div>
+                  <dt>{t("sandbox.label.checked")}</dt>
+                  <dd>{health?.checked_at ? new Date(String(health.checked_at)).toLocaleTimeString() : "-"}</dd>
+                </div>
+              </dl>
+            </details>
+
+            {showLogs ? (
+              <pre className="sandbox-status__logs">{detailsLoading ? t("sandbox.logs.loading") : logs || t("sandbox.logs.empty")}</pre>
+            ) : null}
           </>
         ) : (
           <p className="sandbox-status__empty">{t("sandbox.empty")}</p>
@@ -263,7 +293,21 @@ export function SandboxStatus() {
               <button disabled={isLoading} onClick={() => void refresh()} type="button">
                 {t("sandbox.action.refresh")}
               </button>
-              <button disabled={detailsLoading} onClick={() => void loadDetails()} type="button">
+              <button
+                aria-pressed={showLogs}
+                className={showLogs ? "is-active" : ""}
+                disabled={detailsLoading}
+                onClick={() => {
+                  setShowLogs((current) => {
+                    const next = !current;
+                    if (next) {
+                      void loadDetails();
+                    }
+                    return next;
+                  });
+                }}
+                type="button"
+              >
                 {t("sandbox.action.logs")}
               </button>
               <button
