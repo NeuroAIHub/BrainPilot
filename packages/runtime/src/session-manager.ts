@@ -698,8 +698,20 @@ export class SessionManager {
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
     };
     this.sessions.set(id, entry);
-    if (!_restore) this.touch(entry);
-    else this.lastActivityAt = entry.lastActivityAt;
+    if (!_restore) {
+      this.touch(entry);
+    } else {
+      // #242: a restored session keeps its OLD per-session `entry.lastActivityAt`
+      // (historical "last active" for UI/history), but the PROCESS-level liveness
+      // anchor must reflect activity since THIS process/container started — not a
+      // timestamp frozen on disk days ago. Otherwise a hosted reaper computing
+      // `now - metrics.lastActivityAt` sees a huge idle for a freshly-restarted
+      // container and kills it immediately (start → reaped → start death spiral).
+      // Take the newest activity the process has seen so multi-session restore
+      // stays monotonic. Per-session `entry.lastActivityAt` is intentionally
+      // untouched here.
+      this.lastActivityAt = Math.max(this.lastActivityAt, Date.now());
+    }
 
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
