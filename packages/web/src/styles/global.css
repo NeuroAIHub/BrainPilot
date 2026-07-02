@@ -2818,6 +2818,88 @@ button {
   cursor: pointer;
 }
 
+/* #219 — expert-agent activity group: one more disclosure level that folds a
+   run of specialist-agent items behind the PI narrative. Reuses the activity
+   summary idiom (chevron rotate, pulse dot) with its own slightly stronger
+   framing so it reads as a distinct grouping, not just another thinking fold. */
+.expert-group {
+  max-width: 760px;
+}
+
+.expert-group > details > summary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  list-style: none;
+  font-size: 12px;
+  color: var(--color-text-muted);
+  padding: 5px 10px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  transition: background var(--ease-standard), color var(--ease-standard), border-color var(--ease-standard);
+}
+
+.expert-group > details > summary::-webkit-details-marker {
+  display: none;
+}
+
+.expert-group > details > summary:hover {
+  background: var(--color-hover);
+  color: var(--color-text);
+  border-color: var(--color-border-strong);
+}
+
+.expert-group__icon {
+  flex: none;
+  color: var(--color-text-subtle);
+}
+
+.expert-group > details[open] > summary .activity-summary__chevron {
+  transform: rotate(180deg);
+}
+
+/* Nested items keep their own indentation; the left rule ties them to the
+   group header so the hierarchy (PI timeline → specialist group → reasoning/
+   tool folds) stays legible. */
+.expert-group__body {
+  display: grid;
+  gap: 12px;
+  margin: 10px 0 4px 6px;
+  padding-left: 14px;
+  border-left: 2px solid var(--color-border);
+}
+
+/* Audit-mode toggle in the stream toolbar — quiet until hovered/active. */
+.message-stack__audit-toggle {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-pill);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  padding: 3px 10px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: background var(--ease-standard), color var(--ease-standard), border-color var(--ease-standard);
+}
+
+.message-stack__audit-toggle:hover,
+.message-stack__audit-toggle:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-hover);
+  color: var(--color-text);
+  outline: none;
+}
+
+.message-stack__audit-toggle.is-active {
+  border-color: var(--color-accent);
+  background: var(--color-accent-soft);
+  color: var(--color-accent-strong);
+}
+
 /* Expand animations — the activity body slides in when opened, its steps
    stagger, and nested tool/hook bodies reveal on their own [open] toggle. */
 @media (prefers-reduced-motion: no-preference) {

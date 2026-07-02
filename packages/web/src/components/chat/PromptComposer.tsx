@@ -308,6 +308,7 @@ export function PromptComposer() {
             showTiming
             turnTiming={turnTiming}
             runningAgents={runningAgents}
+            groupExpertActivity
             onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
             onRetryCancel={() => void interruptCurrent()}
           />
