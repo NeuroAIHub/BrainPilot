@@ -39,6 +39,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from _common import (  # noqa: E402
+    KbPaths,
     add_json_arg,
     add_kb_root_arg,
     emit_event,
@@ -50,6 +51,50 @@ from _common import (  # noqa: E402
 
 STAGES = ["ocr", "extract", "chunk", "vectorize"]
 SCRIPT_DIR = Path(__file__).resolve().parent
+
+
+def _model_ready(model_dir: Path) -> bool:
+    """A model dir is 'ready' only when config.json AND a weight file exist.
+    (config.json alone is not enough: HF snapshot_download pulls small files
+    first, so a Ctrl-C mid-download can leave config.json behind while the
+    multi-GB weights are still missing.)"""
+    if not (model_dir / "config.json").exists():
+        return False
+    return any(
+        (model_dir / name).exists()
+        for name in ("model.safetensors", "pytorch_model.bin")
+    )
+
+
+def _ensure_models(kb_root: Path, py: str, args: argparse.Namespace) -> None:
+    """Auto-download bge-m3 + bge-reranker-v2-m3 if missing (or partial)."""
+    kb = KbPaths(kb_root)
+    embed_ok = _model_ready(kb.embed_model)
+    reranker_ok = _model_ready(kb.reranker_model)
+    if embed_ok and reranker_ok:
+        return
+    missing = []
+    if not embed_ok:
+        missing.append("bge-m3")
+    if not reranker_ok:
+        missing.append("bge-reranker-v2-m3")
+    emit_event("build", "info",
+               f"model weights missing or incomplete ({', '.join(missing)}), downloading automatically…",
+               stage_started="setup_models")
+    cmd = [py, str(SCRIPT_DIR / "setup_models.py"), "--kb-root", str(kb_root)]
+    if args.json:
+        cmd.append("--json")
+    if args.hf_mirror:
+        cmd += ["--hf-mirror", args.hf_mirror]
+    try:
+        proc = subprocess.run(cmd, check=False)
+    except FileNotFoundError as exc:
+        emit_fatal("build", "could not launch setup_models.py", exc)
+    if proc.returncode != 0:
+        emit_fatal("build",
+                   f"model download failed (exit code {proc.returncode})")
+    emit_event("build", "info", "<- setup_models ok",
+               stage_finished="setup_models")
 
 
 def _resolve_python(kb_root: Path) -> str:
@@ -131,6 +176,9 @@ def main() -> None:
     ap.add_argument("--vec-server-url", default=None,
                     help="Pass-through to vectorize.py; if set, batches go to "
                          "an already-running model_server.py.")
+    ap.add_argument("--hf-mirror", default=None,
+                    help="HuggingFace mirror URL for auto model download "
+                         "(e.g. https://hf-mirror.com for users in CN).")
     args = ap.parse_args()
 
     enable_json_mode(args.json)
@@ -145,6 +193,11 @@ def main() -> None:
     emit_event("build", "info", f"pipeline stages: {stages} | python={py}", stages=stages, python=py)
 
     for stage in stages:
+        # vectorize needs bge-m3 + reranker weights on disk; auto-download
+        # them the first time (skipped when --vec-server-url is set, since
+        # then a remote model_server owns the weights).
+        if stage == "vectorize" and not args.vec_server_url:
+            _ensure_models(kb_root, py, args)
         cmd = stage_command(stage, args, kb_root, py)
         emit_event("build", "info", f"-> {stage}", stage_started=stage)
         try:

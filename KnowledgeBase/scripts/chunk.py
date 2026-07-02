@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import hashlib
+import json
 import os
 import re
 import sys
@@ -174,6 +175,106 @@ def chunk_one_paper(paper: dict) -> list[dict]:
     return out
 
 
+# ── metadata refresh (in-place backfill from KB_source.json) ──────────────
+
+# Paper-level fields we copy from KB_source.json into every chunk's metadata.
+# The chunk-level fields (mmd_path/chunk_index/char_start/char_end) live in
+# the same dict but are never touched here.
+PAPER_META_FIELDS = ("title", "authors", "journal", "published_date",
+                     "abstract", "pdf_url")
+
+
+def _paper_meta_by_path(papers: list[dict]) -> dict[str, dict]:
+    """Index papers by mmd_path so we can look up latest metadata per chunk."""
+    idx: dict[str, dict] = {}
+    for p in papers:
+        path = p.get("mmd_path", "")
+        if not path:
+            continue
+        idx[path] = {
+            k: p.get(k, [] if k == "authors" else "") for k in PAPER_META_FIELDS
+        }
+    return idx
+
+
+def _refresh_chunk_metadata(chunks: list[dict], papers: list[dict]) -> int:
+    """Copy paper-level fields from ``KB_source.json`` into every chunk's
+    metadata dict, in place. Returns the number of chunks whose metadata
+    actually changed — used to decide whether to rewrite chunks.jsonl.
+
+    Rationale: extract_meta.py is often re-run to fix fallback rows (bad
+    API key, provider-specific parameter errors, etc.). Without this step
+    the operator would have to re-chunk AND re-embed just to propagate
+    fresh titles/authors to the agent — an ~20× cost multiplier over
+    just re-writing metadata."""
+    lookup = _paper_meta_by_path(papers)
+    n_changed = 0
+    for c in chunks:
+        meta = c.get("metadata", {})
+        src = lookup.get(meta.get("mmd_path", ""))
+        if not src:
+            continue
+        changed_here = False
+        for k in PAPER_META_FIELDS:
+            if meta.get(k) != src[k]:
+                meta[k] = src[k]
+                changed_here = True
+        if changed_here:
+            n_changed += 1
+    return n_changed
+
+
+def _sync_chunks_jsonl(kb: KbPaths, chunks: list[dict]) -> tuple[bool, str]:
+    """Rewrite ``vectorstore/chunks.jsonl`` with updated metadata, preserving
+    line order (which MUST equal ``embeddings.npy`` row order — that
+    ordering is defined by each chunk_id's position in
+    ``vectorstore/index.json``).
+
+    Returns ``(ok, reason)``: ``ok=True`` on successful rewrite;
+    ``ok=False`` with a reason string when the vector store isn't built
+    yet, or has drifted from chunks.json (missing chunk_ids) — in the
+    drift case the caller should surface it as a warning so the operator
+    knows to re-run vectorize."""
+    if not kb.chunks_jsonl.exists() or not kb.index_json.exists():
+        return False, "vectorstore not built yet"
+    index = load_json(kb.index_json, default={})
+    if not index:
+        return False, "vectorstore index is empty"
+    by_id = {c["chunk_id"]: c for c in chunks}
+    rows: list[dict | None] = [None] * len(index)
+    for chunk_id, row in index.items():
+        if chunk_id in by_id and 0 <= row < len(rows):
+            rows[row] = by_id[chunk_id]
+    missing = sum(1 for r in rows if r is None)
+    if missing:
+        return False, (f"{missing} row(s) in vectorstore/index.json have no "
+                       f"matching chunk in chunks.json — re-run vectorize")
+    tmp = kb.chunks_jsonl.with_suffix(".jsonl.tmp")
+    with open(tmp, "w", encoding="utf-8") as f:
+        for r in rows:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+    tmp.replace(kb.chunks_jsonl)
+
+    # Bump meta.json's updated_at so the runtime's in-memory store cache
+    # invalidates and re-reads chunks.jsonl on the next retrieval call. The
+    # row count itself is unchanged (this is a metadata-only rewrite), so
+    # without this bump the cache would happily serve the stale chunks and
+    # the agent would keep seeing empty authors/journal until BrainPilot
+    # restarts. Best-effort: on-disk data is already consistent whether
+    # this succeeds or not.
+    try:
+        from datetime import datetime, timezone
+        meta = load_json(kb.meta_json, default={})
+        if meta:
+            meta["updated_at"] = datetime.now(timezone.utc).isoformat(
+                timespec="seconds")
+            save_json_atomic(kb.meta_json, meta)
+    except Exception:  # noqa: BLE001
+        pass
+
+    return True, ""
+
+
 # ── driver ────────────────────────────────────────────────────────────────
 
 def load_existing_chunks(chunks_json: Path) -> list[dict]:
@@ -205,42 +306,75 @@ def run_pipeline(kb: KbPaths, rebuild: bool, workers: int) -> None:
     emit_event("chunk", "info", f"pending papers to chunk: {len(pending)}",
                pending=len(pending))
 
-    if not pending:
-        save_json_atomic(kb.chunks_json,
-                         {"chunks": existing_chunks, "total_chunks": len(existing_chunks)})
-        emit_event("chunk", "done", f"nothing new to chunk ({len(existing_chunks)} total)",
-                   total_chunks=len(existing_chunks))
-        return
-
-    workers = max(1, workers)
+    # Chunk any new papers (may be empty when we're only refreshing metadata).
     new_chunks: list[dict] = []
-    done = 0
-    n_total = len(pending)
-    with ProcessPoolExecutor(max_workers=workers) as ex:
-        futures = {ex.submit(chunk_one_paper, p): p for p in pending}
-        for fut in as_completed(futures):
-            chunks = fut.result()
-            new_chunks.extend(chunks)
-            done += 1
-            if done % 50 == 0 or done == n_total:
-                emit_event(
-                    "chunk", "progress",
-                    f"{done}/{n_total} papers | {len(new_chunks)} new chunks",
-                    done=done, total=n_total,
-                    new_chunks=len(new_chunks),
-                    percent=round(done * 100 / n_total, 1),
-                )
+    if pending:
+        workers = max(1, workers)
+        done = 0
+        n_total = len(pending)
+        with ProcessPoolExecutor(max_workers=workers) as ex:
+            futures = {ex.submit(chunk_one_paper, p): p for p in pending}
+            for fut in as_completed(futures):
+                chunks = fut.result()
+                new_chunks.extend(chunks)
+                done += 1
+                if done % 50 == 0 or done == n_total:
+                    emit_event(
+                        "chunk", "progress",
+                        f"{done}/{n_total} papers | {len(new_chunks)} new chunks",
+                        done=done, total=n_total,
+                        new_chunks=len(new_chunks),
+                        percent=round(done * 100 / n_total, 1),
+                    )
 
     all_chunks = existing_chunks + new_chunks
     all_chunks.sort(key=lambda c: (c["metadata"]["mmd_path"],
                                    c["metadata"]["chunk_index"]))
+
+    # Always refresh chunk-level metadata from KB_source.json before writing.
+    # This lets an operator re-run extract_meta to fix bad rows (e.g. all
+    # fallback because the provider rejected `temperature`) and pick up the
+    # new title/authors/journal by just re-running chunk — no re-embedding
+    # needed. The chunks.jsonl sync below propagates the update to the
+    # file that the agent runtime actually reads at query time.
+    n_updated = _refresh_chunk_metadata(all_chunks, papers)
+    if n_updated:
+        emit_event("chunk", "info",
+                   f"refreshed metadata on {n_updated} chunk(s) from KB_source.json",
+                   updated=n_updated)
+
     save_json_atomic(kb.chunks_json,
                      {"chunks": all_chunks, "total_chunks": len(all_chunks)})
-    emit_event(
-        "chunk", "done",
-        f"added {len(new_chunks)} chunks; store now {len(all_chunks)}",
-        added=len(new_chunks), total_chunks=len(all_chunks),
-    )
+
+    # Sync updated metadata to the vector store's chunks.jsonl so the
+    # runtime sees fresh titles/authors without a re-embed. Skipped
+    # silently when vectorize hasn't been run yet.
+    if n_updated:
+        ok, reason = _sync_chunks_jsonl(kb, all_chunks)
+        if ok:
+            emit_event("chunk", "info",
+                       "synced updated metadata to vectorstore/chunks.jsonl",
+                       synced=True)
+        elif reason and reason != "vectorstore not built yet":
+            emit_event("chunk", "warn",
+                       f"could not sync chunks.jsonl: {reason}",
+                       synced=False)
+
+    if not pending:
+        emit_event(
+            "chunk", "done",
+            f"nothing new to chunk ({len(all_chunks)} total; "
+            f"metadata refreshed on {n_updated} chunk(s))",
+            total_chunks=len(all_chunks), refreshed=n_updated,
+        )
+    else:
+        emit_event(
+            "chunk", "done",
+            f"added {len(new_chunks)} chunks; store now {len(all_chunks)} "
+            f"(metadata refreshed on {n_updated} chunk(s))",
+            added=len(new_chunks), total_chunks=len(all_chunks),
+            refreshed=n_updated,
+        )
 
 
 def main() -> None:

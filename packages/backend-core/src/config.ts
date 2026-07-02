@@ -674,3 +674,52 @@ export async function deleteMcpServer(dataDir: string, name: string): Promise<bo
   await writeMcpServersRaw(dataDir, servers);
   return true;
 }
+
+/* ---------------------- KnowledgeBase API config -------------------------
+ * OCR + metadata-extract API keys the Python pipeline reads at build time.
+ * Stored at ``<KB_ROOT>/source/API_config.json`` — the exact path
+ * ``ocr_pdfs.py`` and ``extract_meta.py`` already consult as their 3rd-tier
+ * fallback (after CLI flag and env var). Same on-disk file: no drift.
+ *
+ * Only ``ocrApiKey`` (siliconflow.API_KEY) is user-editable from the UI
+ * today. Metadata-extract creds go through the provider system, so we
+ * intentionally do not shadow them here.
+ *
+ * Written 0o600 through the same tmp+rename dance as providers.json /
+ * mcp_servers.json. Preserves any other siliconflow.* fields (or unrelated
+ * top-level keys) the user may have hand-edited into the file. */
+
+export interface KbApiConfig {
+  ocrApiKey?: string;
+}
+
+export function kbApiConfigPath(kbRoot: string): string {
+  return path.join(kbRoot, "source", "API_config.json");
+}
+
+export async function readKbApiConfig(kbRoot: string): Promise<KbApiConfig> {
+  const raw = await readJsonSafe(kbApiConfigPath(kbRoot));
+  const sf =
+    raw && typeof raw === "object" && raw.siliconflow && typeof raw.siliconflow === "object"
+      ? (raw.siliconflow as Record<string, unknown>)
+      : undefined;
+  const key = typeof sf?.API_KEY === "string" ? sf.API_KEY : undefined;
+  return { ocrApiKey: key };
+}
+
+export async function writeKbApiConfig(kbRoot: string, patch: KbApiConfig): Promise<void> {
+  const target = kbApiConfigPath(kbRoot);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const existing = ((await readJsonSafe(target)) ?? {}) as Record<string, unknown>;
+  const sf: Record<string, unknown> = {
+    ...((existing.siliconflow as Record<string, unknown> | undefined) ?? {}),
+  };
+  if (patch.ocrApiKey !== undefined) {
+    if (patch.ocrApiKey === "") delete sf.API_KEY;
+    else sf.API_KEY = patch.ocrApiKey;
+  }
+  const next = { ...existing, siliconflow: sf };
+  const tmp = `${target}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
+  await fs.rename(tmp, target);
+}

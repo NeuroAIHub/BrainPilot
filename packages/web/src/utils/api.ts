@@ -783,6 +783,7 @@ export const api = {
       ocrLimit?: number;
       skip?: Array<"ocr" | "extract" | "chunk" | "vectorize">;
       only?: Array<"ocr" | "extract" | "chunk" | "vectorize">;
+      hfMirror?: string;
     }): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/build`, {
         method: "POST",
@@ -842,6 +843,68 @@ export const api = {
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         return { ok: false, error: body.error || `setup-env failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    // Download bge-m3 + bge-reranker-v2-m3 model weights (~2.5 GB) via
+    // `scripts/setup_models.py`. Independent slot from setupEnv — the two
+    // can run concurrently, and setupFull() chains them.
+    async setupModels(opts: {
+      hfMirror?: string;
+      kbRoot?: string;
+    } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/setup-models`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `setup-models failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    // One-click orchestration: create venv, then download models when venv
+    // exits 0. Preferred entry point from the KB panel — one button, two
+    // progress rows in the UI.
+    async setupFull(opts: {
+      python?: string;
+      reinstall?: boolean;
+      hfMirror?: string;
+      kbRoot?: string;
+    } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/setup-full`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(opts),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `setup-full failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
+    // Persisted KB API config (SiliconFlow OCR key today). Backend never
+    // returns the plaintext — only a masked preview + boolean — so the
+    // browser can indicate "already saved" without ever holding the secret.
+    async getApiConfig(): Promise<{ hasOcrApiKey: boolean; ocrApiKeyPreview: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/api-config`);
+      if (!res.ok) return { hasOcrApiKey: false, ocrApiKeyPreview: "" };
+      return handleJson(res);
+    },
+
+    async saveApiConfig(patch: { ocrApiKey?: string }): Promise<{ ok: boolean; error?: string }> {
+      const res = await apiFetch(`${API_BASE}/kb/api-config`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(patch),
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `save failed (${res.status})` };
       }
       return handleJson(res);
     },
