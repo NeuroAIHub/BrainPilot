@@ -70,41 +70,18 @@ function SetupProgressRow({
   label: string;
   state: SetupState;
 }) {
-  const barColor =
-    state.status === "done" ? "#22c55e"
-    : state.status === "error" ? "#ef4444"
-    : "#3b82f6";
   const pct = Math.max(0, Math.min(100, state.percent));
   return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, marginBottom: 3 }}>
-        <span style={{ fontWeight: 500 }}>{label}</span>
-        <span style={{ color: "#64748b" }}>
-          {state.status === "done" ? "✓ 100%" : `${pct}%`}
-        </span>
+    <div className="kb-setup-row">
+      <div className="kb-setup-row__head">
+        <span className="kb-setup-row__label">{label}</span>
+        <span className="kb-setup-row__pct">{state.status === "done" ? "✓ 100%" : `${pct}%`}</span>
       </div>
-      <div style={{
-        height: 6,
-        background: "#e2e8f0",
-        borderRadius: 3,
-        overflow: "hidden",
-      }}>
-        <div style={{
-          width: `${pct}%`,
-          height: "100%",
-          background: barColor,
-          transition: "width 250ms ease-out",
-        }} />
+      <div className="kb-setup-row__track" aria-hidden="true">
+        <span className={`kb-setup-row__fill kb-setup-row__fill--${state.status}`} style={{ width: `${pct}%` }} />
       </div>
       {state.msg ? (
-        <div style={{
-          fontSize: 11,
-          color: state.status === "error" ? "#b91c1c" : "#64748b",
-          marginTop: 2,
-          overflow: "hidden",
-          textOverflow: "ellipsis",
-          whiteSpace: "nowrap",
-        }}>
+        <div className={`kb-setup-row__msg ${state.status === "error" ? "kb-setup-row__msg--error" : ""}`}>
           {state.msg}
         </div>
       ) : null}
@@ -544,36 +521,22 @@ export function KnowledgeBasePanel() {
                   disabled={envBusy || modelBusy || activeJob !== null}
                   title={t("settings.kb.env.setupFullHint")}
                 >
-                  <Wrench size={14} style={{ marginRight: 4 }} aria-hidden />
+                  <Wrench size={14} aria-hidden />
                   {t("settings.kb.env.setupFullButton")}
                 </button>
-                {envBusy || modelBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
+                {envBusy || modelBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
               </div>
-              <details style={{ marginTop: 6 }}>
-                <summary style={{ cursor: "pointer", color: "#64748b" }}>
-                  {t("settings.kb.env.cliFallback")}
-                </summary>
-                <pre
-                  style={{
-                    marginTop: 4,
-                    padding: 8,
-                    background: "#0f172a",
-                    color: "#e2e8f0",
-                    borderRadius: 4,
-                    overflowX: "auto",
-                    fontSize: 12,
-                  }}
-                >
+              <details className="kb-env__fallback">
+                <summary>{t("settings.kb.env.cliFallback")}</summary>
+                <pre className="kb-code">
                   {`bash ${env.kbRoot}/scripts/setup_env.sh
 ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
                 </pre>
-                <div style={{ color: "#64748b", marginTop: 4 }}>
-                  {t("settings.kb.env.venvHint")}
-                </div>
+                <p className="kb-env__note">{t("settings.kb.env.venvHint")}</p>
               </details>
             </div>
           ) : (
-            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
+            <div className="kb-env__buttons">
               <button
                 type="button"
                 className="settings-button settings-button--ghost"
@@ -590,7 +553,7 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
 
           {/* Setup progress rows: shown any time either job is/was active. */}
           {(envProgress.status !== "pending" || modelProgress.status !== "pending") ? (
-            <div style={{ marginTop: 12, display: "flex", flexDirection: "column", gap: 8 }}>
+            <div className="kb-setup-rows">
               <SetupProgressRow
                 label={t("settings.kb.env.venvProgressLabel")}
                 state={envProgress}
@@ -608,25 +571,15 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
         <label className="settings-field">
           <span>{t("settings.kb.ocrKey")}</span>
           {ocrKeySaved && !ocrKeyEditing ? (
-            <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
-              <div style={{
-                flex: 1,
-                padding: "6px 10px",
-                background: "#f0fdf4",
-                border: "1px solid #bbf7d0",
-                borderRadius: 4,
-                fontSize: 13,
-                fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-                color: "#166534",
-              }}>
+            <div className="kb-key-saved-row">
+              <div className="kb-key-saved">
                 {t("settings.kb.ocrKeySaved")} {ocrKeyPreview}
               </div>
               <button
                 type="button"
-                className="settings-button"
+                className="settings-button settings-button--ghost"
                 onClick={() => setOcrKeyEditing(true)}
                 disabled={active || skip.ocr}
-                style={{ background: "transparent", border: "1px solid #cbd5e1", color: "#334155" }}
               >
                 {t("settings.kb.ocrKeyChange")}
               </button>
@@ -705,11 +658,11 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
           />
           <span>{t("settings.kb.useHfMirror")}</span>
         </label>
-        <p style={{ margin: "-4px 0 8px 24px", fontSize: 12, opacity: 0.7 }}>
+        <p className="kb-field-hint">
           {t("settings.kb.useHfMirrorHint")}
         </p>
 
-        <fieldset className="settings-field" style={{ border: "none", padding: 0 }}>
+        <fieldset className="kb-stages">
           <legend>{t("settings.kb.stages")}</legend>
           <div className="kb-stages__row">
             {STAGES.map((s) => (
