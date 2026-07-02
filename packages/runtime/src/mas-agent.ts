@@ -442,6 +442,11 @@ export class MasAgent {
       }
 
       case "auto_retry_start": {
+        // #167: coalesce retry warnings. Instead of a fresh bubble per attempt
+        // (which stacked into N messages during a rate-limit window), emit the
+        // warning with a STABLE id keyed on (agent, run) + an incrementing
+        // attempt count. The web reducer updates the existing bubble in place,
+        // so the user sees one live "retrying (n/N)" line that ticks up.
         const r = e as Extract<PiAgentEvent, { type: "auto_retry_start" }>;
         this.bus.emit(
           ev.systemMessage(
@@ -450,7 +455,11 @@ export class MasAgent {
             `⏳ Agent ${this.name} 遇到 API 错误，正在自动重试 (${r.attempt}/${r.maxAttempts})，${
               r.delayMs / 1000
             }秒后重试...`,
-            { agent: this.name, recoverable: true },
+            {
+              agent: this.name,
+              recoverable: true,
+              id: `retry-${this.name}-${this.currentRunId ?? "run"}`,
+            },
           ),
         );
         return;
