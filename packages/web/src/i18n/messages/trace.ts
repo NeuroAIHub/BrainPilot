@@ -4,7 +4,6 @@ export default defineMessages(
   {
     // AgentsPanel
     "trace.agents.eyebrow": "实时 Agent 网络",
-    "trace.agents.title": "Agents",
     "trace.agents.emptyNoSession": "创建或选择会话后，这里会显示参与当前任务的 Agent 与它们之间的消息流。",
     "trace.agents.emptyNoEvents": "当前会话还没有 Agent 状态事件。",
     // TracePanel
@@ -70,7 +69,6 @@ export default defineMessages(
     },
     {
     "trace.agents.eyebrow": "Live agent network",
-    "trace.agents.title": "Agents",
     "trace.agents.emptyNoSession": "Once you create or select a session, the agents involved in the current task and the message flow between them will appear here.",
     "trace.agents.emptyNoEvents": "No agent status events in this session yet.",
     "trace.eyebrow": "Reasoning trace",

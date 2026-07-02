@@ -308,7 +308,7 @@ export function KnowledgeBasePanel() {
     <section className="settings-section">
       <div className="settings-section__header">
         <div>
-          <h3 style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <h3 className="kb-panel__title">
             <Database size={18} aria-hidden />
             {t("settings.kb.title")}
           </h3>
@@ -319,30 +319,28 @@ export function KnowledgeBasePanel() {
       </div>
 
       {env ? (
-        <div
-          style={{
-            marginBottom: 12,
-            padding: 10,
-            border: `1px solid ${env.venvExists ? "#bbf7d0" : "#fde68a"}`,
-            background: env.venvExists ? "#f0fdf4" : "#fffbeb",
-            borderRadius: 6,
-            fontSize: 12,
-            color: "#334155",
-          }}
-        >
-          <div style={{ marginBottom: 4 }}>
-            <strong>{t("settings.kb.env.title")}</strong>
+        <div className={`kb-env kb-env--${env.venvExists ? "ready" : "missing"}`}>
+          <div className="kb-env__head">
+            <span className={`sandbox-chip sandbox-chip--${env.venvExists ? "ok" : "off"}`}>
+              <Wrench size={13} />
+              {t("settings.kb.env.title")}
+              <i className="sandbox-chip__dot" aria-hidden="true" />
+            </span>
           </div>
-          <div style={{ fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace" }}>
-            KB_ROOT: {env.kbRoot}
-            <br />
-            Python:  {env.python}
-            {env.pythonIsVenv ? " ✓ venv" : ""}
-          </div>
+          <dl className="kb-env__facts">
+            <div>
+              <dt>KB_ROOT</dt>
+              <dd>{env.kbRoot}</dd>
+            </div>
+            <div>
+              <dt>Python</dt>
+              <dd>{env.python}{env.pythonIsVenv ? " · venv" : ""}</dd>
+            </div>
+          </dl>
           {!env.venvExists ? (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ marginBottom: 6 }}>{t("settings.kb.env.venvMissing")}</div>
-              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+            <div className="kb-env__action">
+              <p className="kb-env__note">{t("settings.kb.env.venvMissing")}</p>
+              <div className="kb-env__buttons">
                 <button
                   type="button"
                   className="settings-button"
@@ -350,53 +348,36 @@ export function KnowledgeBasePanel() {
                   disabled={envBusy || activeJob !== null}
                   title={t("settings.kb.env.setupHint")}
                 >
-                  <Wrench size={14} style={{ marginRight: 4 }} aria-hidden />
+                  <Wrench size={14} aria-hidden />
                   {t("settings.kb.env.setupButton")}
                 </button>
-                {envBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
+                {envBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
               </div>
-              <details style={{ marginTop: 6 }}>
-                <summary style={{ cursor: "pointer", color: "#64748b" }}>
-                  {t("settings.kb.env.cliFallback")}
-                </summary>
-                <pre
-                  style={{
-                    marginTop: 4,
-                    padding: 8,
-                    background: "#0f172a",
-                    color: "#e2e8f0",
-                    borderRadius: 4,
-                    overflowX: "auto",
-                    fontSize: 12,
-                  }}
-                >
-                  {`bash ${env.kbRoot}/scripts/setup_env.sh`}
-                </pre>
-                <div style={{ color: "#64748b", marginTop: 4 }}>
-                  {t("settings.kb.env.venvHint")}
-                </div>
+              <details className="kb-env__fallback">
+                <summary>{t("settings.kb.env.cliFallback")}</summary>
+                <pre className="kb-code">{`bash ${env.kbRoot}/scripts/setup_env.sh`}</pre>
+                <p className="kb-env__note">{t("settings.kb.env.venvHint")}</p>
               </details>
             </div>
           ) : (
-            <div style={{ marginTop: 8, display: "flex", alignItems: "center", gap: 8 }}>
+            <div className="kb-env__buttons">
               <button
                 type="button"
-                className="settings-button"
+                className="settings-button settings-button--ghost"
                 onClick={() => void startEnvSetup(true)}
                 disabled={envBusy || activeJob !== null}
                 title={t("settings.kb.env.reinstallHint")}
-                style={{ background: "transparent", border: "1px solid #cbd5e1", color: "#334155" }}
               >
-                <RefreshCw size={14} style={{ marginRight: 4 }} aria-hidden />
+                <RefreshCw size={14} aria-hidden />
                 {t("settings.kb.env.reinstallButton")}
               </button>
-              {envBusy ? <Loader2 size={14} className="animate-spin" aria-hidden /> : null}
+              {envBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
             </div>
           )}
         </div>
       ) : null}
 
-      <div className="settings-field-grid">
+      <div className="kb-fields">
         <label className="settings-field">
           <span>{t("settings.kb.ocrKey")}</span>
           <input
@@ -457,11 +438,11 @@ export function KnowledgeBasePanel() {
           </>
         ) : null}
 
-        <fieldset className="settings-field" style={{ border: "none", padding: 0 }}>
+        <fieldset className="kb-stages">
           <legend>{t("settings.kb.stages")}</legend>
-          <div style={{ display: "flex", gap: 12, flexWrap: "wrap" }}>
+          <div className="kb-stages__row">
             {STAGES.map((s) => (
-              <label key={s} className="settings-check" style={{ margin: 0 }}>
+              <label key={s} className="settings-check kb-stages__item">
                 <input
                   type="checkbox"
                   checked={!skip[s]}
@@ -477,7 +458,7 @@ export function KnowledgeBasePanel() {
         </fieldset>
       </div>
 
-      <div style={{ display: "flex", gap: 8, marginTop: 12 }}>
+      <div className="kb-actions">
         {!active ? (
           <button
             className="settings-button"
@@ -493,7 +474,7 @@ export function KnowledgeBasePanel() {
                     : undefined)
             }
           >
-            <Play size={14} style={{ marginRight: 4 }} aria-hidden />
+            <Play size={14} aria-hidden />
             {t("settings.kb.start")}
           </button>
         ) : (
@@ -502,91 +483,50 @@ export function KnowledgeBasePanel() {
             type="button"
             onClick={() => void cancelBuild()}
           >
-            <Square size={14} style={{ marginRight: 4 }} aria-hidden />
+            <Square size={14} aria-hidden />
             {t("settings.kb.cancel")}
           </button>
         )}
-        {active ? <Loader2 size={16} className="animate-spin" aria-hidden /> : null}
+        {active ? <Loader2 size={16} className="spin" aria-hidden /> : null}
       </div>
 
-      {error ? (
-        <p style={{ color: "var(--color-danger, #d92d20)", marginTop: 8 }}>
-          {error}
-        </p>
-      ) : null}
+      {error ? <p className="settings-note settings-note--error kb-error">{error}</p> : null}
 
-      <div style={{ marginTop: 16 }}>
-        <h4 style={{ margin: "0 0 8px" }}>{t("settings.kb.progress")}</h4>
-        <div style={{ display: "grid", gridTemplateColumns: "100px 1fr 60px", rowGap: 6, columnGap: 8, alignItems: "center" }}>
+      <div className="kb-block">
+        <h4 className="kb-block__title">{t("settings.kb.progress")}</h4>
+        <div className="kb-progress">
           {STAGES.map((s) => {
             const st = stages[s];
-            const color =
-              st.status === "done" ? "#16a34a" :
-              st.status === "error" ? "#d92d20" :
-              st.status === "running" ? "#2563eb" : "#cbd5e1";
+            const pct = Math.min(100, Math.max(0, st.percent));
             return (
-              <div key={s} style={{ display: "contents" }}>
-                <strong>{STAGE_LABELS[s]}</strong>
-                <div style={{
-                  background: "#f1f5f9",
-                  borderRadius: 4,
-                  overflow: "hidden",
-                  height: 8,
-                }}>
-                  <div style={{
-                    width: `${Math.min(100, Math.max(0, st.percent))}%`,
-                    background: color,
-                    height: "100%",
-                    transition: "width 200ms linear",
-                  }} />
+              <div key={s} className="kb-progress__row">
+                <strong className="kb-progress__label">{STAGE_LABELS[s]}</strong>
+                <div className="kb-progress__track" aria-hidden="true">
+                  <span
+                    className={`kb-progress__fill kb-progress__fill--${st.status}`}
+                    style={{ width: `${pct}%` }}
+                  />
                 </div>
-                <span style={{ fontVariantNumeric: "tabular-nums", color: "#64748b" }}>
+                <span className="kb-progress__pct">
                   {st.status === "done" ? "✓" : `${Math.round(st.percent)}%`}
                 </span>
-                {st.msg ? (
-                  <div style={{ gridColumn: "2 / -1", fontSize: 12, color: "#64748b" }}>
-                    {st.msg}
-                  </div>
-                ) : null}
+                {st.msg ? <div className="kb-progress__msg">{st.msg}</div> : null}
               </div>
             );
           })}
         </div>
       </div>
 
-      <div style={{ marginTop: 16 }}>
-        <h4 style={{ margin: "0 0 8px" }}>{t("settings.kb.log")}</h4>
-        <div
-          ref={logRef}
-          style={{
-            background: "#0f172a",
-            color: "#e2e8f0",
-            fontFamily: "ui-monospace, SFMono-Regular, Menlo, monospace",
-            fontSize: 12,
-            padding: 8,
-            borderRadius: 4,
-            maxHeight: 220,
-            overflowY: "auto",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          }}
-        >
+      <div className="kb-block">
+        <h4 className="kb-block__title">{t("settings.kb.log")}</h4>
+        <div ref={logRef} className="kb-log">
           {events.length === 0 ? (
-            <span style={{ color: "#64748b" }}>
-              {t("settings.kb.logEmpty")}
-            </span>
-          ) : events.map((ev, i) => {
-            const color =
-              ev.event === "error" ? "#fca5a5" :
-              ev.event === "warn" ? "#fbbf24" :
-              ev.event === "done" ? "#86efac" :
-              ev.event === "progress" ? "#93c5fd" : "#e2e8f0";
-            return (
-              <div key={i} style={{ color }}>
-                [{ev.stage}:{ev.event}] {ev.msg}
-              </div>
-            );
-          })}
+            <span className="kb-log__empty">{t("settings.kb.logEmpty")}</span>
+          ) : events.map((ev, i) => (
+            <div key={i} className={`kb-log__line kb-log__line--${ev.event}`}>
+              [{ev.stage}:{ev.event}] {ev.msg}
+            </div>
+          ))}
         </div>
       </div>
     </section>
