@@ -56,6 +56,38 @@ describe("system_message mapping", () => {
     expect(out[0].systemMessage?.level).toBe("warning");
     expect(out[0].content).toBe("watch out");
   });
+
+  it("#167: coalesces repeated system_messages sharing a stable id (retry ticks)", () => {
+    const mk = (attempt: number) =>
+      ({
+        type: "system_message",
+        id: "retry-librarian-run_1",
+        level: "warning",
+        message: `retrying (${attempt}/3)`,
+        agent: "librarian",
+      }) as WebSocketEvent;
+    let msgs = reduceMessagesForEvent([], mk(1));
+    msgs = reduceMessagesForEvent(msgs, mk(2));
+    msgs = reduceMessagesForEvent(msgs, mk(3));
+    // One bubble, updated in place to the latest attempt.
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0].id).toBe("retry-librarian-run_1");
+    expect(msgs[0].content).toBe("retrying (3/3)");
+  });
+
+  it("#167: system_messages without a stable id still append", () => {
+    let msgs = reduceMessagesForEvent([], {
+      type: "system_message",
+      level: "warning",
+      message: "one",
+    } as WebSocketEvent);
+    msgs = reduceMessagesForEvent(msgs, {
+      type: "system_message",
+      level: "warning",
+      message: "two",
+    } as WebSocketEvent);
+    expect(msgs).toHaveLength(2);
+  });
 });
 
 describe("ask_user mapping + submit + reducer round-trip", () => {

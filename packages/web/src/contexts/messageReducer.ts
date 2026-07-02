@@ -338,7 +338,17 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
 
     // 修正6 — system_message: 4-level styled bubble in the conversation stream.
     case "system_message": {
-      return [...existing, systemMessageToChatMessage(event)];
+      const msg = systemMessageToChatMessage(event);
+      // #167: coalesce by stable id — a repeated system_message carrying an id
+      // that already exists (e.g. an agent's retry warning ticking n/N) updates
+      // the existing bubble in place instead of stacking a new one. Messages
+      // without a stable id (random-id path) always append, as before.
+      const e = event as Record<string, unknown>;
+      const hasStableId = typeof (e.id ?? e.messageId) === "string";
+      if (hasStableId && existing.some((m) => m.id === msg.id)) {
+        return existing.map((m) => (m.id === msg.id ? msg : m));
+      }
+      return [...existing, msg];
     }
 
     // 修正6 — user_input_request (ask_user): interactive card. Keyed by
