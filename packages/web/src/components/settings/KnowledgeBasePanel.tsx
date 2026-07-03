@@ -447,9 +447,53 @@ function SetupProgressRow({
   );
 }
 
+/**
+ * OCR provider presets exposed in the UI dropdown. Kept in sync with the
+ * Python-side ``OCR_PRESETS`` in ``KnowledgeBase/scripts/ocr_pdfs.py`` —
+ * the frontend only advertises presets; the pipeline resolves them by name.
+ *
+ * The empty-string entry is rendered as "-- select a provider --" and is
+ * used to force new users through an explicit provider choice (no silent
+ * default to SiliconFlow — that surprises international users who don't
+ * have a SiliconFlow account).
+ */
+const OCR_PRESET_OPTIONS = [
+  { id: "", labelKey: "settings.kb.ocrPreset.chooseHint" },
+  { id: "siliconflow", labelKey: "settings.kb.ocrPreset.siliconflow" },
+  { id: "openai", labelKey: "settings.kb.ocrPreset.openai" },
+  { id: "anthropic", labelKey: "settings.kb.ocrPreset.anthropic" },
+  { id: "mistral", labelKey: "settings.kb.ocrPreset.mistral" },
+  { id: "zhipu", labelKey: "settings.kb.ocrPreset.zhipu" },
+  { id: "qwen", labelKey: "settings.kb.ocrPreset.qwen" },
+  { id: "custom", labelKey: "settings.kb.ocrPreset.custom" },
+] as const;
+
+/** Default base_url + model + placeholder for each preset. Purely a UX
+ *  helper — when the user picks a preset and hasn't overridden the URL /
+ *  model fields yet, we pre-fill them. The authoritative defaults live in
+ *  ``OCR_PRESETS`` inside ocr_pdfs.py; these are just the visible echo. */
+const OCR_PRESET_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
+  siliconflow: { baseUrl: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-OCR" },
+  openai:      { baseUrl: "https://api.openai.com/v1", model: "gpt-4o" },
+  anthropic:   { baseUrl: "https://api.anthropic.com/v1", model: "claude-sonnet-5" },
+  mistral:     { baseUrl: "https://api.mistral.ai/v1", model: "pixtral-large-latest" },
+  zhipu:       { baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4v-plus" },
+  qwen:        { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-vl-max" },
+  custom:      { baseUrl: "", model: "" },
+};
+
 export function KnowledgeBasePanel() {
   const t = useT();
   const [ocrApiKey, setOcrApiKey] = useState("");
+  // OCR provider selection. All four fields are independent — the user
+  // can e.g. pick the openai preset but override just the base URL to point
+  // at a proxy. Blank strings mean "let the backend use the preset default"
+  // for base_url / model / prompt, and "no key configured yet" for the key.
+  const [ocrPreset, setOcrPreset] = useState<string>("");
+  const [ocrBaseUrl, setOcrBaseUrl] = useState("");
+  const [ocrModel, setOcrModel] = useState("");
+  const [ocrPrompt, setOcrPrompt] = useState("");
+  const [ocrPromptOpen, setOcrPromptOpen] = useState(false);
   const [metaApiKey, setMetaApiKey] = useState("");
   const [metaBaseUrl, setMetaBaseUrl] = useState("");
   const [metaModel, setMetaModel] = useState("");
@@ -533,6 +577,15 @@ export function KnowledgeBasePanel() {
         if (cancelled) return;
         setOcrKeySaved(cfg.hasOcrApiKey);
         setOcrKeyPreview(cfg.ocrApiKeyPreview);
+        // Only hydrate a saved preset; leave the field blank if the
+        // backend has never persisted one so the user is forced to make
+        // an explicit choice on first setup (no silent SiliconFlow default
+        // for a US user who's confused why their OCR is going to
+        // api.siliconflow.cn).
+        if (cfg.ocrPreset) setOcrPreset(cfg.ocrPreset);
+        if (cfg.ocrBaseUrl) setOcrBaseUrl(cfg.ocrBaseUrl);
+        if (cfg.ocrModel) setOcrModel(cfg.ocrModel);
+        if (cfg.ocrPrompt) setOcrPrompt(cfg.ocrPrompt);
       } catch {
         /* api-config fetch is best-effort */
       }
@@ -574,11 +627,17 @@ export function KnowledgeBasePanel() {
             setActive(true);
             setActiveJob("build");
           }
-          openSse();
         }
       } catch {
         /* status fetch is best-effort */
       }
+      // Always open the SSE stream as soon as the panel mounts, regardless
+      // of whether a build is currently running. The backend keeps the
+      // connection warm across build starts/stops now, so a build the
+      // user kicks off later will stream progress into THIS connection
+      // without any reconnect ceremony. Fixes the "have to refresh the
+      // page after clicking Build to see progress" bug.
+      if (!cancelled) openSse();
     })();
     return () => {
       cancelled = true;
@@ -852,18 +911,24 @@ export function KnowledgeBasePanel() {
     es.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data) as BuildEvent;
-        if (ev.event === "stream-end" || ev.event === "idle") {
-          es.close();
-          sseRef.current = null;
-          return;
-        }
+        // `idle` is a keepalive/marker from the server saying "connected,
+        // no active build" — we do NOT close on it (that would defeat the
+        // whole point of the long-lived stream: future builds should flow
+        // into this same connection without a manual reconnect).
+        // `stream-end` is legacy — the backend no longer emits it, but we
+        // still tolerate it in case a mixed-version peer sends one.
+        if (ev.event === "idle" || ev.event === "stream-end") return;
         pushEvent(ev);
       } catch {
         /* swallow malformed event */
       }
     };
     es.onerror = () => {
-      // Browser auto-retries; nothing to do.
+      // Browser auto-retries on transient network hiccups. If the server
+      // actively closed (e.g. process restart), EventSource enters CLOSED
+      // and won't reconnect on its own; the panel will show stale state
+      // until the user reopens it, which is acceptable — a live restart
+      // of the backend is a rare, high-touch operation.
     };
   }
 
@@ -875,8 +940,22 @@ export function KnowledgeBasePanel() {
   }
 
   const formInvalid = useMemo(() => {
-    if (skip.ocr === false && !ocrApiKey.trim() && !ocrKeySaved) {
-      return t("settings.kb.error.missingOcrKey");
+    if (skip.ocr === false) {
+      // Preset is required even when a key is already saved — a v3-era
+      // saved key still applies to the SiliconFlow preset, but for a
+      // fresh install with no preset picked yet we can't guess.
+      if (!ocrPreset) return t("settings.kb.error.missingOcrPreset");
+      if (!ocrApiKey.trim() && !ocrKeySaved) {
+        return t("settings.kb.error.missingOcrKey");
+      }
+      // Custom preset needs an explicit base_url + model (no defaults to
+      // fall back on). Other presets can leave them blank.
+      if (ocrPreset === "custom") {
+        const effBase = ocrBaseUrl.trim() || OCR_PRESET_DEFAULTS[ocrPreset]?.baseUrl || "";
+        const effModel = ocrModel.trim() || OCR_PRESET_DEFAULTS[ocrPreset]?.model || "";
+        if (!effBase) return t("settings.kb.error.missingOcrBaseUrl");
+        if (!effModel) return t("settings.kb.error.missingOcrModel");
+      }
     }
     if (skip.extract === false) {
       if (!metaApiKey.trim() && !reuseAgentKey) {
@@ -884,7 +963,8 @@ export function KnowledgeBasePanel() {
       }
     }
     return null;
-  }, [ocrApiKey, ocrKeySaved, metaApiKey, reuseAgentKey, skip.ocr, skip.extract, t]);
+  }, [ocrApiKey, ocrKeySaved, ocrPreset, ocrBaseUrl, ocrModel,
+      metaApiKey, reuseAgentKey, skip.ocr, skip.extract, t]);
 
   async function startBuild() {
     setError(null);
@@ -912,6 +992,13 @@ export function KnowledgeBasePanel() {
     const skipList = STAGES.filter((s) => skip[s]);
     try {
       const r = await api.kb.build({
+        // OCR provider config — send the preset always so a saved key
+        // gets paired with the correct base_url on the backend, even
+        // when the user didn't touch the other fields.
+        ocrPreset: ocrPreset || undefined,
+        ocrBaseUrl: ocrBaseUrl.trim() || undefined,
+        ocrModel: ocrModel.trim() || undefined,
+        ocrPrompt: ocrPrompt.trim() || undefined,
         ocrApiKey: ocrApiKey.trim() || undefined,
         metaApiKey: metaKey || undefined,
         metaBaseUrl: metaBaseUrl.trim() || undefined,
@@ -1036,7 +1123,19 @@ export function KnowledgeBasePanel() {
   async function saveOcrKey(value: string) {
     if (!value.trim()) return;
     try {
-      const r = await api.kb.saveApiConfig({ ocrApiKey: value.trim() });
+      // Persist the whole provider tuple together — the preset alone
+      // decides which base_url a saved key gets paired with, and skipping
+      // any subset here would leave stale prior-preset defaults on disk.
+      const r = await api.kb.saveApiConfig({
+        ocrApiKey: value.trim(),
+        // Persist the preset when the user has explicitly picked one;
+        // leave the field alone otherwise so we don't clobber a value
+        // the user set through a different code path.
+        ocrPreset: ocrPreset || undefined,
+        ocrBaseUrl: ocrBaseUrl.trim() || undefined,
+        ocrModel: ocrModel.trim() || undefined,
+        ocrPrompt: ocrPrompt.trim() || undefined,
+      });
       if (!r.ok) {
         setError(r.error || "failed to save OCR key");
         return;
@@ -1053,6 +1152,28 @@ export function KnowledgeBasePanel() {
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
+  }
+
+  /** Called when the user picks a different provider from the dropdown.
+   *  Pre-fills base_url / model with the preset's defaults *only if* the
+   *  current values are still blank or match a different preset's default
+   *  — that way an operator who typed in a custom base URL to reach a
+   *  proxy doesn't have it silently overwritten just because they clicked
+   *  a preset. */
+  function selectOcrPreset(next: string) {
+    setOcrPreset(next);
+    if (!next) return;
+    const defaults = OCR_PRESET_DEFAULTS[next];
+    if (!defaults) return;
+    // If the field currently matches ANY preset's default (or is empty),
+    // treat it as auto-filled and safe to replace. If it matches nothing
+    // known, leave it alone — the user typed a custom value.
+    const isAutoBase = !ocrBaseUrl || Object.values(OCR_PRESET_DEFAULTS)
+      .some((p) => p.baseUrl && p.baseUrl === ocrBaseUrl.trim());
+    const isAutoModel = !ocrModel || Object.values(OCR_PRESET_DEFAULTS)
+      .some((p) => p.model && p.model === ocrModel.trim());
+    if (isAutoBase) setOcrBaseUrl(defaults.baseUrl);
+    if (isAutoModel) setOcrModel(defaults.model);
   }
 
   return (
@@ -1283,6 +1404,81 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
       ) : null}
 
       <div className="kb-fields">
+        {/* OCR provider selector. Extracted from the raw "paste your
+            SiliconFlow key" input the v3 UI shipped so the pipeline can
+            drive OpenAI / Anthropic / Mistral / self-hosted endpoints too.
+            Picking a preset pre-fills base_url + model but the user can
+            still override any field individually. */}
+        <label className="settings-field">
+          <span>{t("settings.kb.ocrPreset.label")}</span>
+          <select
+            value={ocrPreset}
+            onChange={(e) => selectOcrPreset(e.target.value)}
+            disabled={active || skip.ocr}
+          >
+            {OCR_PRESET_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>{t(opt.labelKey)}</option>
+            ))}
+          </select>
+          <p className="kb-field-hint">{t("settings.kb.ocrPreset.hint")}</p>
+        </label>
+
+        {/* Base URL + model — visible once a preset is picked. Both are
+            editable so users can point at proxies or newer model IDs
+            without waiting for a preset bump. */}
+        {ocrPreset ? (
+          <>
+            <label className="settings-field">
+              <span>{t("settings.kb.ocrBaseUrl")}</span>
+              <input
+                type="url"
+                value={ocrBaseUrl}
+                onChange={(e) => setOcrBaseUrl(e.target.value)}
+                placeholder={
+                  OCR_PRESET_DEFAULTS[ocrPreset]?.baseUrl || "https://api.example.com/v1"
+                }
+                disabled={active || skip.ocr}
+                autoComplete="off"
+              />
+            </label>
+            <label className="settings-field">
+              <span>{t("settings.kb.ocrModel")}</span>
+              <input
+                type="text"
+                value={ocrModel}
+                onChange={(e) => setOcrModel(e.target.value)}
+                placeholder={
+                  OCR_PRESET_DEFAULTS[ocrPreset]?.model || "model-id"
+                }
+                disabled={active || skip.ocr}
+                autoComplete="off"
+              />
+            </label>
+            {/* Custom prompt — hidden behind a collapsible so the average
+                user isn't scared by DeepSeek-OCR's grounding tokens. The
+                Python resolver falls back to a sane per-preset default
+                when this is blank. */}
+            <details
+              className="kb-advanced"
+              open={ocrPromptOpen}
+              onToggle={(e) => setOcrPromptOpen((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>{t("settings.kb.ocrPrompt.advanced")}</summary>
+              <label className="settings-field">
+                <span>{t("settings.kb.ocrPrompt.label")}</span>
+                <textarea
+                  value={ocrPrompt}
+                  onChange={(e) => setOcrPrompt(e.target.value)}
+                  placeholder={t("settings.kb.ocrPrompt.placeholder")}
+                  rows={3}
+                  disabled={active || skip.ocr}
+                />
+                <p className="kb-field-hint">{t("settings.kb.ocrPrompt.hint")}</p>
+              </label>
+            </details>
+          </>
+        ) : null}
+
         <label className="settings-field">
           <span>{t("settings.kb.ocrKey")}</span>
           {ocrKeySaved && !ocrKeyEditing ? (

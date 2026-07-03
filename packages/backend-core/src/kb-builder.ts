@@ -24,7 +24,17 @@ import { fileURLToPath } from "node:url";
 export interface KbBuildOptions {
   /** Per-run override of the KnowledgeBase root. Falls through to env / default. */
   kbRoot?: string;
-  /** SiliconFlow API key for OCR; forwarded as --ocr-api-key. */
+  /** OCR provider preset (siliconflow | openai | anthropic | mistral | zhipu
+   *  | qwen | custom). Sets defaults for base_url / model / prompt; the
+   *  three individual fields below override that field-by-field. */
+  ocrPreset?: string;
+  /** OpenAI-compatible base URL for the OCR vision endpoint. */
+  ocrBaseUrl?: string;
+  /** Vision model id (e.g. "gpt-4o", "deepseek-ai/DeepSeek-OCR"). */
+  ocrModel?: string;
+  /** Custom instruction sent alongside each rendered page image. */
+  ocrPrompt?: string;
+  /** Bearer token for the OCR endpoint. */
   ocrApiKey?: string;
   /** Per-PDF concurrency; forwarded as --ocr-concurrency. */
   ocrConcurrency?: number;
@@ -132,10 +142,27 @@ function defaultBuildScript(): string {
 function buildArgv(opts: KbBuildOptions, script: string): string[] {
   const argv = [script, "--json"];
   if (opts.kbRoot) argv.push("--kb-root", opts.kbRoot);
-  if (opts.ocrApiKey) argv.push("--ocr-api-key", opts.ocrApiKey);
+  // OCR provider config — every field is optional; ocr_pdfs.py merges
+  // CLI / env / API_config.json / preset defaults itself.
+  //
+  // NOTE: the API-key flags (--ocr-api-key, --meta-api-key) are
+  // deliberately NOT pushed onto argv here — they get injected as env
+  // vars in buildChildEnv() instead. Two reasons:
+  //   1. argv lands in the OS process list (`ps` on Unix, Task Manager
+  //      on Windows), so any local user could otherwise scrape the key
+  //      while the build is running.
+  //   2. spawnLog() below broadcasts `spawned <argv...>` as an SSE
+  //      event, which is buffered for hundreds of events and rendered
+  //      into the log panel DOM. A key on argv there = key in every
+  //      SSE subscriber's browser and in every log screenshot.
+  // Passing via env avoids both leaks; ocr_pdfs.py / extract_meta.py
+  // already resolve those env vars as their 2nd-tier fallback.
+  if (opts.ocrPreset) argv.push("--ocr-preset", opts.ocrPreset);
+  if (opts.ocrBaseUrl) argv.push("--ocr-base-url", opts.ocrBaseUrl);
+  if (opts.ocrModel) argv.push("--ocr-model", opts.ocrModel);
+  if (opts.ocrPrompt) argv.push("--ocr-prompt", opts.ocrPrompt);
   if (opts.ocrConcurrency != null) argv.push("--ocr-concurrency", String(opts.ocrConcurrency));
   if (opts.ocrLimit != null) argv.push("--ocr-limit", String(opts.ocrLimit));
-  if (opts.metaApiKey) argv.push("--meta-api-key", opts.metaApiKey);
   if (opts.metaBaseUrl) argv.push("--meta-base-url", opts.metaBaseUrl);
   if (opts.metaModel) argv.push("--meta-model", opts.metaModel);
   if (opts.hfMirror) argv.push("--hf-mirror", opts.hfMirror);
@@ -145,6 +172,66 @@ function buildArgv(opts: KbBuildOptions, script: string): string[] {
     for (const s of opts.skip) argv.push(`--skip-${s}`);
   }
   return argv;
+}
+
+/**
+ * Compose the child process environment for a KB build, injecting API keys
+ * as env vars instead of argv flags. See buildArgv() for the rationale.
+ *
+ * We use the generic ``OCR_API_KEY`` (rather than the preset-specific env
+ * name like SILICONFLOW_API_KEY) so a mid-build preset change doesn't
+ * require the caller to know which env var maps to which provider —
+ * ocr_pdfs.py's resolver checks OCR_API_KEY after the preset-specific one,
+ * so this always wins for the key coming from the UI.
+ */
+function buildChildEnv(opts: KbBuildOptions, root: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BP_KB_ROOT: root,
+    // BP_KB_PYTHON is set by the caller so both this env-injection path
+    // and any other spawn share the same interpreter.
+  };
+  if (opts.ocrApiKey) env.OCR_API_KEY = opts.ocrApiKey;
+  if (opts.metaApiKey) env.META_LLM_API_KEY = opts.metaApiKey;
+  return env;
+}
+
+/**
+ * Redact secret values in a copy of argv so it's safe to broadcast into an
+ * SSE event / dump to a log file. Kept as a belt-and-braces defence: the
+ * key flags are supposed to be routed through env vars (buildChildEnv) and
+ * never end up on argv, but if a future contributor adds a new secret flag
+ * and forgets, this catches it before the value hits every log listener.
+ *
+ * Matching strategy: any flag whose name contains "key", "token", "secret",
+ * or "password" (case-insensitive) is treated as sensitive. Both
+ * ``--api-key VALUE`` and ``--api-key=VALUE`` forms are handled.
+ */
+function redactArgvForLog(argv: readonly string[]): string[] {
+  const secretPat = /(key|token|secret|password)/i;
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    // "--foo-key=sk-..." → mask the RHS.
+    const eq = a.indexOf("=");
+    if (a.startsWith("--") && eq > 0) {
+      const name = a.slice(0, eq);
+      const val = a.slice(eq + 1);
+      if (secretPat.test(name) && val) {
+        out.push(`${name}=***${val.slice(-4)}`);
+        continue;
+      }
+    }
+    // "--foo-key sk-..." → mask the NEXT argv item.
+    if (a.startsWith("--") && secretPat.test(a) && i + 1 < argv.length) {
+      const val = argv[i + 1]!;
+      out.push(a, `***${val.slice(-4)}`);
+      i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
 }
 
 function broadcast(ev: KbBuildEvent): void {
@@ -278,7 +365,7 @@ export function startKbEnvSetup(opts: {
     ts: new Date().toISOString(),
     stage: "setup-env",
     event: "info",
-    msg: `spawned ${bootstrapPython} ${argv.join(" ")}`,
+    msg: `spawned ${bootstrapPython} ${redactArgvForLog(argv).join(" ")}`,
   });
 
   pipeOutput(proc.stdout!);
@@ -369,7 +456,7 @@ export function startKbModelSetup(opts: { hfMirror?: string; hfToken?: string; k
     ts: new Date().toISOString(),
     stage: "setup-models",
     event: "info",
-    msg: `spawned ${py} ${argv.join(" ")}`,
+    msg: `spawned ${py} ${redactArgvForLog(argv).join(" ")}`,
   });
 
   pipeOutput(proc.stdout!);
@@ -527,28 +614,32 @@ export function startKbBuild(opts: KbBuildOptions = {}): StartResult {
   }
   const argv = buildArgv(opts, script);
   const py = pythonBin(opts.kbRoot);
+  const kbRootAbs = opts.kbRoot ? resolve(opts.kbRoot) : env.kbRoot;
+  const childEnv = {
+    ...buildChildEnv(opts, kbRootAbs),
+    // Make sure the build_kb.py orchestrator AND every stage it spawns
+    // share the same interpreter — without this, each `subprocess.run`
+    // call in build_kb.py would re-resolve via PATH and could land on a
+    // different python (e.g. system python3 without our deps installed).
+    BP_KB_PYTHON: py,
+  };
   const proc = spawn(py, argv, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      ...(opts.kbRoot ? { BP_KB_ROOT: resolve(opts.kbRoot) } : {}),
-      // Make sure the build_kb.py orchestrator AND every stage it spawns
-      // share the same interpreter — without this, each `subprocess.run`
-      // call in build_kb.py would re-resolve via PATH and could land on a
-      // different python (e.g. system python3 without our deps installed).
-      BP_KB_PYTHON: py,
-    },
+    env: childEnv,
   });
 
   const slot: JobSlot = { startedAt: Date.now(), proc };
   SLOTS.build = slot;
 
-  // Banner so the SSE consumer sees something immediately.
+  // Banner so the SSE consumer sees something immediately. Argv is
+  // redacted for the log (see redactArgvForLog) — the OCR / meta keys
+  // are already routed via env vars in buildChildEnv, but this guards
+  // against a future contributor adding a new secret flag on argv.
   broadcast({
     ts: new Date().toISOString(),
     stage: "build",
     event: "info",
-    msg: `spawned ${py} ${argv.join(" ")}`,
+    msg: `spawned ${py} ${redactArgvForLog(argv).join(" ")}`,
   });
 
   pipeOutput(proc.stdout!);

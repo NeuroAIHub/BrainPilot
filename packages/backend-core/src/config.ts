@@ -681,15 +681,25 @@ export async function deleteMcpServer(dataDir: string, name: string): Promise<bo
  * ``ocr_pdfs.py`` and ``extract_meta.py`` already consult as their 3rd-tier
  * fallback (after CLI flag and env var). Same on-disk file: no drift.
  *
- * Only ``ocrApiKey`` (siliconflow.API_KEY) is user-editable from the UI
- * today. Metadata-extract creds go through the provider system, so we
- * intentionally do not shadow them here.
+ * OCR config is now a full provider descriptor (preset + base_url + model
+ * + api_key + optional prompt) so international users can point at OpenAI /
+ * Anthropic / Mistral / any OpenAI-compatible endpoint instead of being
+ * pinned to SiliconFlow. Metadata-extract creds still go through the main
+ * provider system.
  *
  * Written 0o600 through the same tmp+rename dance as providers.json /
- * mcp_servers.json. Preserves any other siliconflow.* fields (or unrelated
- * top-level keys) the user may have hand-edited into the file. */
+ * mcp_servers.json. Preserves unrelated top-level keys the user may have
+ * hand-edited into the file, and keeps the legacy ``siliconflow.API_KEY``
+ * shape readable so upgrading from v3 doesn't invalidate saved keys. */
 
 export interface KbApiConfig {
+  /** Provider preset id. One of siliconflow | openai | anthropic | mistral
+   *  | zhipu | qwen | custom. Sets defaults for the fields below when the
+   *  file / UI leaves them blank. */
+  ocrPreset?: string;
+  ocrBaseUrl?: string;
+  ocrModel?: string;
+  ocrPrompt?: string;
   ocrApiKey?: string;
 }
 
@@ -697,28 +707,81 @@ export function kbApiConfigPath(kbRoot: string): string {
   return path.join(kbRoot, "source", "API_config.json");
 }
 
+/** Read the OCR provider config, tolerating both the new schema
+ *  (``{"ocr":{"PRESET","BASE_URL","MODEL","API_KEY","PROMPT"}}``) and the
+ *  legacy shape (``{"siliconflow":{"API_KEY":"…"}}``) so v3 setups keep
+ *  working after this upgrade. Only field values are returned — never any
+ *  key stored under a name we don't recognise, in case the file was
+ *  hand-edited with typos. */
 export async function readKbApiConfig(kbRoot: string): Promise<KbApiConfig> {
   const raw = await readJsonSafe(kbApiConfigPath(kbRoot));
+  if (!raw || typeof raw !== "object") return {};
+  const ocr =
+    raw.ocr && typeof raw.ocr === "object"
+      ? (raw.ocr as Record<string, unknown>)
+      : undefined;
   const sf =
-    raw && typeof raw === "object" && raw.siliconflow && typeof raw.siliconflow === "object"
+    raw.siliconflow && typeof raw.siliconflow === "object"
       ? (raw.siliconflow as Record<string, unknown>)
       : undefined;
-  const key = typeof sf?.API_KEY === "string" ? sf.API_KEY : undefined;
-  return { ocrApiKey: key };
+  const pick = (o: Record<string, unknown> | undefined, k: string) => {
+    if (!o) return undefined;
+    const v = o[k];
+    return typeof v === "string" ? v : undefined;
+  };
+  const preset = pick(ocr, "PRESET") ?? (sf ? "siliconflow" : undefined);
+  const key = pick(ocr, "API_KEY") ?? pick(sf, "API_KEY");
+  return {
+    ocrPreset: preset,
+    ocrBaseUrl: pick(ocr, "BASE_URL"),
+    ocrModel: pick(ocr, "MODEL"),
+    ocrPrompt: pick(ocr, "PROMPT"),
+    ocrApiKey: key,
+  };
 }
 
-export async function writeKbApiConfig(kbRoot: string, patch: KbApiConfig): Promise<void> {
+/** Patch the OCR provider config. Fields left undefined are kept as-is;
+ *  fields set to the empty string are removed from disk. Legacy
+ *  ``siliconflow.API_KEY`` is migrated into the new ``ocr.*`` block the
+ *  first time the user saves via the new UI — but we don't nuke the
+ *  siliconflow block outright, so a mixed setup (someone still driving
+ *  ocr_pdfs.py from the shell) keeps working. */
+export async function writeKbApiConfig(
+  kbRoot: string, patch: KbApiConfig,
+): Promise<void> {
   const target = kbApiConfigPath(kbRoot);
   await fs.mkdir(path.dirname(target), { recursive: true });
   const existing = ((await readJsonSafe(target)) ?? {}) as Record<string, unknown>;
-  const sf: Record<string, unknown> = {
-    ...((existing.siliconflow as Record<string, unknown> | undefined) ?? {}),
+  const ocr: Record<string, unknown> = {
+    ...((existing.ocr as Record<string, unknown> | undefined) ?? {}),
   };
+  const setOrDelete = (jsonKey: string, v: string | undefined) => {
+    if (v === undefined) return;
+    if (v === "") delete ocr[jsonKey];
+    else ocr[jsonKey] = v;
+  };
+  setOrDelete("PRESET", patch.ocrPreset);
+  setOrDelete("BASE_URL", patch.ocrBaseUrl);
+  setOrDelete("MODEL", patch.ocrModel);
+  setOrDelete("PROMPT", patch.ocrPrompt);
+  setOrDelete("API_KEY", patch.ocrApiKey);
+  const next: Record<string, unknown> = { ...existing, ocr };
+  // Mirror the OCR key back into the legacy siliconflow.API_KEY slot when
+  // preset=siliconflow. Users who upgrade halfway (backend updated, CLI
+  // scripts pinned) still read their key from the shape the older script
+  // expected. Harmless duplication; costs one extra JSON key on disk.
   if (patch.ocrApiKey !== undefined) {
-    if (patch.ocrApiKey === "") delete sf.API_KEY;
-    else sf.API_KEY = patch.ocrApiKey;
+    const sf: Record<string, unknown> = {
+      ...((existing.siliconflow as Record<string, unknown> | undefined) ?? {}),
+    };
+    if (patch.ocrApiKey === "" || (patch.ocrPreset && patch.ocrPreset !== "siliconflow")) {
+      delete sf.API_KEY;
+    } else if (patch.ocrPreset === "siliconflow" || !patch.ocrPreset) {
+      sf.API_KEY = patch.ocrApiKey;
+    }
+    if (Object.keys(sf).length) next.siliconflow = sf;
+    else delete next.siliconflow;
   }
-  const next = { ...existing, siliconflow: sf };
   const tmp = `${target}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(next, null, 2), { encoding: "utf8", mode: 0o600 });
   await fs.rename(tmp, target);
