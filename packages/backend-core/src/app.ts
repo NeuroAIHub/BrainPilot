@@ -360,17 +360,28 @@ export function createApp(options: CreateAppOptions): Hono {
         if (!metaModel) metaModel = profile.models[0] || undefined;
       }
     }
-    // Same shape for the OCR key: if the frontend didn't send one, load the
-    // persisted value from <KB_ROOT>/source/API_config.json so the user's
-    // saved key survives page reloads without ever leaving the backend.
-    let ocrApiKey = typeof body.ocrApiKey === "string" ? body.ocrApiKey : undefined;
-    if (!ocrApiKey) {
-      const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : findKbRoot();
-      const saved = await readKbApiConfig(kbRoot);
-      ocrApiKey = saved.ocrApiKey || undefined;
-    }
+    // Same shape for the OCR credentials: whichever fields the frontend
+    // didn't send, fall back to the persisted API_config.json so the user's
+    // saved provider config survives page reloads without ever leaving the
+    // backend. Each field falls back independently — a user can override
+    // just the base URL for one build without re-typing the key.
+    const kbRootForCfg = typeof body.kbRoot === "string" ? body.kbRoot : findKbRoot();
+    const savedOcr = await readKbApiConfig(kbRootForCfg);
+    const pickStr = (b: unknown, s: string | undefined) => {
+      if (typeof b === "string" && b.trim()) return b;
+      return s || undefined;
+    };
+    const ocrPreset = pickStr(body.ocrPreset, savedOcr.ocrPreset);
+    const ocrBaseUrl = pickStr(body.ocrBaseUrl, savedOcr.ocrBaseUrl);
+    const ocrModel = pickStr(body.ocrModel, savedOcr.ocrModel);
+    const ocrPrompt = pickStr(body.ocrPrompt, savedOcr.ocrPrompt);
+    const ocrApiKey = pickStr(body.ocrApiKey, savedOcr.ocrApiKey);
     const result = startKbBuild({
       kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+      ocrPreset,
+      ocrBaseUrl,
+      ocrModel,
+      ocrPrompt,
       ocrApiKey,
       ocrConcurrency:
         typeof body.ocrConcurrency === "number" ? body.ocrConcurrency : undefined,
@@ -466,20 +477,44 @@ export function createApp(options: CreateAppOptions): Hono {
     return c.json({ ok: true, startedAt: result.startedAt });
   });
 
-  // Persisted KB API config (currently just the SiliconFlow OCR key).
-  // GET returns a masked preview only — the plaintext never leaves backend.
+  // Persisted KB API config. GET returns non-secret fields verbatim plus a
+  // masked preview of the API key — the plaintext key never leaves the
+  // backend. The extra fields (preset / base URL / model / prompt) are not
+  // secret, so returning them lets the UI show the current provider and
+  // pre-fill the form for edits.
   api.get("/kb/api-config", async (c) => {
     const cfg = await readKbApiConfig(findKbRoot());
     return c.json({
       hasOcrApiKey: Boolean(cfg.ocrApiKey),
       ocrApiKeyPreview: cfg.ocrApiKey ? `...${cfg.ocrApiKey.slice(-4)}` : "",
+      ocrPreset: cfg.ocrPreset ?? "",
+      ocrBaseUrl: cfg.ocrBaseUrl ?? "",
+      ocrModel: cfg.ocrModel ?? "",
+      ocrPrompt: cfg.ocrPrompt ?? "",
     });
   });
 
   api.put("/kb/api-config", async (c) => {
     const body = await safeJson(c);
-    const patch: { ocrApiKey?: string } = {};
-    if (typeof body.ocrApiKey === "string") patch.ocrApiKey = body.ocrApiKey.trim();
+    // Each field is patched independently — omitting a key leaves the
+    // stored value alone, sending "" removes it. This lets the UI PATCH
+    // just the field the user changed without having to fetch-and-resend
+    // the whole record.
+    const patch: {
+      ocrPreset?: string;
+      ocrBaseUrl?: string;
+      ocrModel?: string;
+      ocrPrompt?: string;
+      ocrApiKey?: string;
+    } = {};
+    const trimIfString = (v: unknown, key: keyof typeof patch) => {
+      if (typeof v === "string") patch[key] = v.trim();
+    };
+    trimIfString(body.ocrPreset, "ocrPreset");
+    trimIfString(body.ocrBaseUrl, "ocrBaseUrl");
+    trimIfString(body.ocrModel, "ocrModel");
+    trimIfString(body.ocrPrompt, "ocrPrompt");
+    trimIfString(body.ocrApiKey, "ocrApiKey");
     await writeKbApiConfig(findKbRoot(), patch);
     return c.json({ ok: true });
   });
@@ -492,46 +527,87 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/kb/events", (c) => {
     // SSE: stream every NDJSON event from the active build, plus a snapshot
     // of buffered events so a late subscriber doesn't see a blank panel.
+    //
+    // The stream stays open even when no build is running — every listener
+    // is registered on the shared bus, so a subsequent build's events flow
+    // through this same connection without the client needing to reconnect
+    // when it hits "Build Knowledge Base". This eliminates the race where
+    // the panel opens the SSE (server sees idle → sends `idle` + closes),
+    // then a moment later startBuild spawns the child and events fire into
+    // a bus that no live client is subscribed to — the classic "have to
+    // refresh to see progress" bug.
+    //
+    // We still emit an `idle` marker on subscribe so any client that WAS
+    // treating that as end-of-stream keeps working; the frontend has been
+    // updated to keep the connection open on `idle` and act on it purely
+    // as an informational tick. `stream-end` fires only when a build slot
+    // transitions to done — but crucially, we then loop back to waiting
+    // for the next slot instead of tearing the connection down.
+    // Shared teardown state — populated inside start(), consumed by
+    // cancel(). Kept in closure (rather than on `this`) because the
+    // ReadableStream underlying-source's `this` binding across start /
+    // cancel is set by property lookup, and stashing state on the
+    // controller pollutes its TS typings.
+    let closed = false;
+    let cleanup: () => void = () => { closed = true; };
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
         const enc = new TextEncoder();
         const send = (ev: unknown) => {
-          controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+          if (closed) return;
+          try {
+            controller.enqueue(enc.encode(`data: ${JSON.stringify(ev)}\n\n`));
+          } catch {
+            /* controller was torn down between checks */
+          }
         };
         const handle = subscribeKbBuild(send);
-        // Replay buffered history immediately
+        // Replay buffered history immediately so a late subscriber gets
+        // the context it missed (e.g. a build that started before the
+        // panel opened, or events already produced since the last event
+        // buffer flush).
         for (const ev of handle.history) send(ev);
+        // Non-terminal "idle" tick lets the frontend distinguish "server
+        // ack'd, waiting for events" from "no HTTP response yet". The
+        // client keeps the connection open on this — the stream is
+        // long-lived across build starts and stops now, matching how
+        // MCP-style tool panels stream too.
         if (!getKbBuildStatus().active) {
-          // No active run; flush a sentinel and close.
           send({ stage: "build", event: "idle", msg: "no active build" });
-          controller.close();
-          handle.unsubscribe();
-          return;
         }
-        // Heartbeat every 15 s so intermediaries don't kill the connection.
+        // Heartbeat every 15 s so proxies / load balancers don't kill
+        // the connection during a long idle stretch. Comment-only SSE
+        // frames (":ping") aren't dispatched as events by the browser —
+        // they just reset the intermediary's idle timer.
         const hb = setInterval(() => {
+          if (closed) return;
           try {
             controller.enqueue(enc.encode(": ping\n\n"));
           } catch {
             /* connection torn down */
           }
         }, 15_000);
-        void handle.done.then(() => {
+        // Terminal `stream-end` on build completion is deliberately NOT
+        // emitted here anymore. The frontend already reacts to the real
+        // `build:done` / `build:error` events (they flow through the
+        // subscribe listener alongside everything else) — sending an
+        // extra stream-end used to also close the connection client-side,
+        // which caused the "have to refresh the page to see the next
+        // build" bug. The bus listener persists across builds; the
+        // connection stays warm.
+        cleanup = () => {
+          closed = true;
           clearInterval(hb);
-          try {
-            send({ stage: "build", event: "stream-end", msg: "build completed" });
-          } catch {
-            /* ignore */
-          }
-          try {
-            controller.close();
-          } catch {
-            /* already closed */
-          }
           handle.unsubscribe();
-        });
-        // If the client disconnects, hono will GC the controller; the
-        // listener stays attached but cheap (single Set entry).
+        };
+        // Two paths can tear the stream down: the Fetch request's abort
+        // signal (client hangup / tab close), and the ReadableStream's
+        // cancel() hook. Wire both — whichever fires first calls cleanup
+        // (idempotent via the `closed` guard).
+        c.req.raw.signal?.addEventListener("abort", () => cleanup());
+      },
+      cancel() {
+        cleanup();
       },
     });
     return new Response(stream, {

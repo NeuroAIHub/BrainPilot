@@ -1,6 +1,6 @@
 """
-Stage 1 / 4 — OCR every PDF under ``source/pdf/`` via the SiliconFlow
-DeepSeek-OCR API.
+Stage 1 / 4 — OCR every PDF under ``source/pdf/`` via any OpenAI-compatible
+vision endpoint (SiliconFlow / OpenAI / Anthropic / Mistral / self-hosted).
 
 Output layout (mirrors KB_v3):
 
@@ -13,18 +13,57 @@ without ``.pdf``) is already present is skipped on the next invocation.
 
 Design notes
 ------------
-The script is intentionally a near-1:1 port of
-``/srv/DeepSeek-OCR-2/.../pdf_to_mmd_KBv3_sf.py`` so we inherit:
-  - one API call per rendered page (DeepSeek-OCR only accepts 1 page at a time)
+The script is a near-1:1 port of the v3 SiliconFlow driver, generalised so
+international users aren't forced onto SiliconFlow:
+  - one API call per rendered page (DeepSeek-OCR historically only accepted
+    1 page at a time; GPT-4o / Claude / Gemini vision endpoints all also
+    take one image per turn cleanly, so this constraint carries over)
   - a shared, process-wide rate-limit gate so a single 429 immediately backs
     OFF every concurrent worker — bursting them was the root cause of the
     TPM-cap pileup we saw on 58-page books in the v3 run.
   - atomic writes so a SIGKILL mid-write never leaves a half-written .mmd.
 
-The user supplies the SiliconFlow API key one of three ways (priority order):
-  1. ``--api-key sk-...`` on the command line
-  2. ``SILICONFLOW_API_KEY`` env var
-  3. ``source/API_config.json``  (``{"siliconflow": {"API_KEY": "sk-..."}}``)
+OCR provider config (priority order for EACH of base_url / model / api_key /
+prompt): ``--ocr-*`` CLI flag → env var → ``source/API_config.json``.
+
+Supported CLI flags::
+
+    --base-url    OpenAI-compatible base URL (e.g. https://api.openai.com/v1)
+    --model       vision model id           (e.g. gpt-4o, deepseek-ai/DeepSeek-OCR)
+    --api-key     bearer token
+    --prompt      instruction that steers the model to emit markdown
+    --preset      shorthand for a known provider (siliconflow | openai |
+                  anthropic | mistral | zhipu | qwen | custom).
+                  Sets base_url + a sane default model + a sane default
+                  prompt; any of the three individual flags above still
+                  overrides that preset field-by-field.
+
+Env vars (each preset resolves its OWN key env first for backwards compat
+with the individual providers' docs, then falls back to the generic
+``OCR_API_KEY``)::
+
+    SILICONFLOW_API_KEY   (siliconflow preset)
+    OPENAI_API_KEY        (openai preset)
+    ANTHROPIC_API_KEY     (anthropic preset)
+    MISTRAL_API_KEY       (mistral preset)
+    ZHIPU_API_KEY         (zhipu preset)
+    DASHSCOPE_API_KEY     (qwen preset)
+    OCR_API_KEY           (generic fallback for any preset)
+    OCR_BASE_URL / OCR_MODEL / OCR_PROMPT  (override any preset field)
+
+Persisted config (``source/API_config.json``)::
+
+    {
+      "ocr": {
+        "PRESET":  "openai",
+        "BASE_URL":"https://api.openai.com/v1",
+        "MODEL":   "gpt-4o",
+        "API_KEY": "sk-...",
+        "PROMPT":  "..."
+      }
+      # legacy shape still recognised:
+      # { "siliconflow": { "API_KEY": "sk-..." } }  → equivalent to preset=siliconflow
+    }
 """
 from __future__ import annotations
 
@@ -60,11 +99,86 @@ from _common import (  # noqa: E402
 )
 
 
-# ── API knobs ─────────────────────────────────────────────────────────────
+# ── OCR provider presets ──────────────────────────────────────────────────
+# Each preset is a template: a base_url + default model + default prompt +
+# env vars the provider's own docs recommend. All of them can be overridden
+# by --base-url / --model / --api-key / --prompt individually.
+#
+# The default prompt for a "generic" vision endpoint (openai / anthropic /
+# mistral / …) just asks the model to emit clean markdown; the DeepSeek-OCR
+# prompt uses their special grounding tokens which the generic models don't
+# understand and would echo verbatim.
+DEFAULT_GENERIC_PROMPT = (
+    "You are an OCR engine. Transcribe the following document page into "
+    "clean, well-formatted Markdown. Preserve headings, lists, tables (as "
+    "GitHub-flavoured markdown tables), and math (as LaTeX inside $...$ or "
+    "$$...$$). Return ONLY the Markdown, no commentary."
+)
+DEFAULT_DEEPSEEK_OCR_PROMPT = "<image>\n<|grounding|>Convert the document to markdown."
 
-BASE_URL = "https://api.siliconflow.cn/v1"
-MODEL_ID = "deepseek-ai/DeepSeek-OCR"
-PROMPT = "<image>\n<|grounding|>Convert the document to markdown."
+OCR_PRESETS: dict[str, dict[str, str]] = {
+    "siliconflow": {
+        "base_url": "https://api.siliconflow.cn/v1",
+        "model": "deepseek-ai/DeepSeek-OCR",
+        "prompt": DEFAULT_DEEPSEEK_OCR_PROMPT,
+        "key_env": "SILICONFLOW_API_KEY",
+        "label": "SiliconFlow (DeepSeek-OCR)",
+    },
+    "openai": {
+        "base_url": "https://api.openai.com/v1",
+        "model": "gpt-4o",
+        "prompt": DEFAULT_GENERIC_PROMPT,
+        "key_env": "OPENAI_API_KEY",
+        "label": "OpenAI (gpt-4o)",
+    },
+    "anthropic": {
+        # Anthropic exposes an OpenAI-compatible shim; images ride under
+        # image_url just like everyone else. See
+        # https://docs.anthropic.com/en/api/openai-sdk .
+        "base_url": "https://api.anthropic.com/v1",
+        "model": "claude-sonnet-5",
+        "prompt": DEFAULT_GENERIC_PROMPT,
+        "key_env": "ANTHROPIC_API_KEY",
+        "label": "Anthropic (Claude Sonnet, OpenAI-compat)",
+    },
+    "mistral": {
+        # Mistral has a first-class OCR endpoint too; we use their vision
+        # chat because it round-trips through the same OpenAI SDK path
+        # we already have wired up.
+        "base_url": "https://api.mistral.ai/v1",
+        "model": "pixtral-large-latest",
+        "prompt": DEFAULT_GENERIC_PROMPT,
+        "key_env": "MISTRAL_API_KEY",
+        "label": "Mistral (Pixtral Large)",
+    },
+    "zhipu": {
+        "base_url": "https://open.bigmodel.cn/api/paas/v4",
+        "model": "glm-4v-plus",
+        "prompt": DEFAULT_GENERIC_PROMPT,
+        "key_env": "ZHIPU_API_KEY",
+        "label": "Zhipu (GLM-4V)",
+    },
+    "qwen": {
+        # Alibaba DashScope's OpenAI-compatible endpoint.
+        "base_url": "https://dashscope.aliyuncs.com/compatible-mode/v1",
+        "model": "qwen-vl-max",
+        "prompt": DEFAULT_GENERIC_PROMPT,
+        "key_env": "DASHSCOPE_API_KEY",
+        "label": "Qwen (qwen-vl-max, DashScope)",
+    },
+    "custom": {
+        # Placeholder — the caller must supply base_url + model themselves.
+        "base_url": "",
+        "model": "",
+        "prompt": DEFAULT_GENERIC_PROMPT,
+        "key_env": "OCR_API_KEY",
+        "label": "Custom OpenAI-compatible endpoint",
+    },
+}
+DEFAULT_PRESET = "siliconflow"  # backwards compat with v3 setups on CN
+
+
+# ── request knobs ─────────────────────────────────────────────────────────
 
 RENDER_DPI = 144              # ≈ vLLM-pipeline parity
 REQUEST_TIMEOUT = 180         # per-page HTTP timeout (s)
@@ -160,7 +274,8 @@ def _is_rate_limit_error(exc: BaseException) -> bool:
     return "429" in msg or "rate limit" in msg.lower() or "tpm limit" in msg.lower()
 
 
-def ocr_one_page(client: OpenAI, page_idx: int, png_bytes: bytes) -> dict:
+def ocr_one_page(client: OpenAI, model: str, prompt: str,
+                 page_idx: int, png_bytes: bytes) -> dict:
     data_uri = png_to_data_uri(png_bytes)
     last_err = ""
     transient = 0
@@ -170,12 +285,12 @@ def ocr_one_page(client: OpenAI, page_idx: int, png_bytes: bytes) -> dict:
         _wait_for_rate_limit_window()
         try:
             resp = client.chat.completions.create(
-                model=MODEL_ID,
+                model=model,
                 messages=[{
                     "role": "user",
                     "content": [
                         {"type": "image_url", "image_url": {"url": data_uri}},
-                        {"type": "text", "text": PROMPT},
+                        {"type": "text", "text": prompt},
                     ],
                 }],
                 temperature=0,
@@ -231,6 +346,8 @@ def clean_page_text(raw: str) -> str:
 
 def pdf_to_mmd(
     client: OpenAI,
+    model: str,
+    prompt: str,
     pdf_path: Path,
     output_dir: Path,
     concurrency: int,
@@ -257,7 +374,7 @@ def pdf_to_mmd(
     t0 = time.time()
     results: dict[int, dict] = {}
     with ThreadPoolExecutor(max_workers=concurrency) as ex:
-        futures = {ex.submit(ocr_one_page, client, i, png): i
+        futures = {ex.submit(ocr_one_page, client, model, prompt, i, png): i
                    for i, png in enumerate(pages_png)}
         for fut in as_completed(futures):
             r = fut.result()
@@ -304,25 +421,120 @@ def pdf_to_mmd(
 
 # ── top-level driver ──────────────────────────────────────────────────────
 
-def resolve_api_key(cli: str | None, kb: KbPaths) -> str:
-    if cli:
-        return cli
-    env = os.environ.get("SILICONFLOW_API_KEY")
-    if env:
-        return env
-    cfg = load_json(kb.api_config, default={}) or {}
-    sf = cfg.get("siliconflow") or cfg.get("ocr") or {}
-    return (sf.get("API_KEY") or sf.get("api_key") or "").strip()
+class OcrConfig:
+    """Resolved OCR provider settings for one pipeline run.
+
+    ``preset`` picks a template from :data:`OCR_PRESETS`; any of the four
+    fields below can then be overridden individually via CLI / env /
+    ``API_config.json``. Priority is CLI > env > file > preset default;
+    each field is resolved independently so a user can e.g. keep the
+    openai preset but point ``base_url`` at a proxy.
+    """
+    __slots__ = ("preset", "base_url", "model", "prompt", "api_key")
+
+    def __init__(self, preset: str, base_url: str, model: str,
+                 prompt: str, api_key: str):
+        self.preset = preset
+        self.base_url = base_url
+        self.model = model
+        self.prompt = prompt
+        self.api_key = api_key
+
+    def missing(self) -> list[str]:
+        gaps: list[str] = []
+        if not self.base_url:
+            gaps.append("base_url")
+        if not self.model:
+            gaps.append("model")
+        if not self.api_key:
+            gaps.append("api_key")
+        return gaps
+
+    def describe(self) -> str:
+        # Never log the key value — only the preset label + tail.
+        tail = f"…{self.api_key[-4:]}" if len(self.api_key) >= 4 else "(none)"
+        return (
+            f"preset={self.preset} base_url={self.base_url} "
+            f"model={self.model} api_key={tail}"
+        )
+
+
+def resolve_ocr_config(
+    cli_preset: str | None,
+    cli_base_url: str | None,
+    cli_model: str | None,
+    cli_prompt: str | None,
+    cli_api_key: str | None,
+    kb: KbPaths,
+) -> OcrConfig:
+    """Merge CLI / env / API_config.json / preset defaults into one
+    :class:`OcrConfig`. Never fails on missing fields — the caller's
+    ``missing()`` check surfaces gaps with a helpful message that mentions
+    every fallback source at once."""
+    cfg_file = load_json(kb.api_config, default={}) or {}
+
+    # ── preset selection ────────────────────────────────────────────
+    # Priority: CLI → file's ocr.PRESET → env → legacy siliconflow.* → default
+    file_ocr = cfg_file.get("ocr") if isinstance(cfg_file.get("ocr"), dict) else {}
+    file_sf = cfg_file.get("siliconflow") if isinstance(cfg_file.get("siliconflow"), dict) else {}
+    preset = (
+        cli_preset
+        or file_ocr.get("PRESET")
+        or os.environ.get("OCR_PRESET")
+        or ("siliconflow" if file_sf else None)
+        or DEFAULT_PRESET
+    )
+    if preset not in OCR_PRESETS:
+        # Unknown preset name — treat as custom, don't blow up.
+        emit_event("ocr", "warn",
+                   f"unknown --preset '{preset}', using 'custom'",
+                   preset=preset)
+        preset = "custom"
+    tpl = OCR_PRESETS[preset]
+
+    # ── field-by-field resolution ──────────────────────────────────
+    base_url = (
+        cli_base_url
+        or os.environ.get("OCR_BASE_URL")
+        or file_ocr.get("BASE_URL")
+        or tpl["base_url"]
+        # Legacy: v3-era file only had siliconflow.API_KEY, no base_url —
+        # honour the preset default for that.
+    )
+    model = (
+        cli_model
+        or os.environ.get("OCR_MODEL")
+        or file_ocr.get("MODEL")
+        or tpl["model"]
+    )
+    prompt = (
+        cli_prompt
+        or os.environ.get("OCR_PROMPT")
+        or file_ocr.get("PROMPT")
+        or tpl["prompt"]
+    )
+    # API key: CLI > provider-specific env > generic OCR_API_KEY > file.
+    # We check file last (not first) because env is standard practice for
+    # secrets in CI / container setups.
+    api_key = (
+        (cli_api_key or "").strip()
+        or (os.environ.get(tpl["key_env"], "") or "").strip()
+        or (os.environ.get("OCR_API_KEY", "") or "").strip()
+        or (file_ocr.get("API_KEY") or "").strip()
+        or (file_sf.get("API_KEY") or "").strip()
+    )
+    return OcrConfig(preset=preset, base_url=base_url, model=model,
+                     prompt=prompt, api_key=api_key)
 
 
 def run_pipeline(
     kb: KbPaths,
-    api_key: str,
+    cfg: OcrConfig,
     concurrency: int,
     limit: int | None,
 ) -> None:
     kb.mkdir()
-    client = OpenAI(api_key=api_key, base_url=BASE_URL)
+    client = OpenAI(api_key=cfg.api_key, base_url=cfg.base_url)
 
     papers = list_pdfs(kb.pdf_dir)
     done = load_ocred_titles(kb.ocred_json)
@@ -352,7 +564,8 @@ def run_pipeline(
             continue
         out_dir = kb.mmd_dir / safe_dirname(title)
         label = f"[{idx}/{n_total}] {title}"
-        ok, mmd_path = pdf_to_mmd(client, pdf_path, out_dir, concurrency, label)
+        ok, mmd_path = pdf_to_mmd(client, cfg.model, cfg.prompt,
+                                  pdf_path, out_dir, concurrency, label)
         if ok:
             append_ocred(kb.ocred_json, {
                 "title": title,
@@ -378,8 +591,28 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__)
     add_kb_root_arg(ap)
     add_json_arg(ap)
+    # OCR provider config — all four fields are optional individually; the
+    # resolver merges CLI / env / file / preset defaults.
+    ap.add_argument("--preset", default=None,
+                    choices=list(OCR_PRESETS.keys()),
+                    help=("OCR provider preset. Sets sane defaults for "
+                          "base_url / model / prompt. Any of --base-url / "
+                          "--model / --prompt still overrides field-by-field. "
+                          f"Presets: {', '.join(OCR_PRESETS)}"))
+    ap.add_argument("--base-url", default=None,
+                    help="OpenAI-compatible base URL (overrides preset).")
+    ap.add_argument("--model", default=None,
+                    help="Vision model id (overrides preset).")
+    ap.add_argument("--prompt", default=None,
+                    help="Instruction fed alongside every page image. "
+                         "For DeepSeek-OCR this must contain the grounding "
+                         "tokens; for GPT-4o / Claude / Pixtral a plain "
+                         "'transcribe as markdown' instruction works.")
     ap.add_argument("--api-key", default=None,
-                    help="SiliconFlow API key (overrides env / API_config.json).")
+                    help="Bearer token for the OCR endpoint. Falls back to "
+                         "the preset's provider-specific env var "
+                         "(SILICONFLOW_API_KEY / OPENAI_API_KEY / …), then "
+                         "OCR_API_KEY, then API_config.json.")
     ap.add_argument("--limit", type=int, default=None,
                     help="Process at most N pending PDFs (default: all).")
     ap.add_argument("--concurrency", type=int, default=MAX_CONCURRENT_PAGES,
@@ -388,17 +621,32 @@ def main() -> None:
 
     enable_json_mode(args.json)
     kb = KbPaths(resolve_kb_root(args.kb_root))
-    api_key = resolve_api_key(args.api_key, kb)
-    if not api_key:
+    cfg = resolve_ocr_config(
+        cli_preset=args.preset,
+        cli_base_url=args.base_url,
+        cli_model=args.model,
+        cli_prompt=args.prompt,
+        cli_api_key=args.api_key,
+        kb=kb,
+    )
+    gaps = cfg.missing()
+    if gaps:
+        preset_label = OCR_PRESETS[cfg.preset]["label"]
+        preset_key_env = OCR_PRESETS[cfg.preset]["key_env"]
         emit_fatal(
             "ocr",
-            "no SiliconFlow API key found. "
-            "Pass --api-key, set SILICONFLOW_API_KEY, "
-            "or write source/API_config.json with siliconflow.API_KEY",
+            f"OCR config is incomplete (missing: {', '.join(gaps)}). "
+            f"Selected preset: {cfg.preset} ({preset_label}). "
+            f"For each missing field try one of: "
+            f"CLI flag (--{gaps[0].replace('_', '-')}, …), "
+            f"env var ({preset_key_env} / OCR_API_KEY / OCR_BASE_URL / OCR_MODEL), "
+            f"or source/API_config.json (ocr.{gaps[0].upper()}).",
         )
+    emit_event("ocr", "info", f"OCR provider: {cfg.describe()}",
+               preset=cfg.preset, base_url=cfg.base_url, model=cfg.model)
 
     try:
-        run_pipeline(kb, api_key, args.concurrency, args.limit)
+        run_pipeline(kb, cfg, args.concurrency, args.limit)
     except KeyboardInterrupt:
         emit_event("ocr", "error", "interrupted by user")
         sys.exit(130)

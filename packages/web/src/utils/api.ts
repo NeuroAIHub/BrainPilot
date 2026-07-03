@@ -831,6 +831,16 @@ export const api = {
   // here for it.
   kb: {
     async build(opts: {
+      /** OCR provider preset id — one of siliconflow | openai | anthropic
+       *  | mistral | zhipu | qwen | custom. Omit to reuse whatever the
+       *  backend has persisted (from a prior save via /kb/api-config). */
+      ocrPreset?: string;
+      /** OpenAI-compatible base URL, overrides the preset default. */
+      ocrBaseUrl?: string;
+      /** Vision model id (e.g. gpt-4o, deepseek-ai/DeepSeek-OCR). */
+      ocrModel?: string;
+      /** Custom instruction sent with each page image. */
+      ocrPrompt?: string;
       ocrApiKey?: string;
       metaApiKey?: string;
       metaBaseUrl?: string;
@@ -961,16 +971,36 @@ export const api = {
       return handleJson(res);
     },
 
-    // Persisted KB API config (SiliconFlow OCR key today). Backend never
-    // returns the plaintext — only a masked preview + boolean — so the
-    // browser can indicate "already saved" without ever holding the secret.
-    async getApiConfig(): Promise<{ hasOcrApiKey: boolean; ocrApiKeyPreview: string }> {
+    // Persisted KB OCR provider config. Backend never returns the
+    // plaintext API key — only a masked preview + boolean — so the browser
+    // can indicate "already saved" without ever holding the secret. The
+    // other provider fields (preset / base URL / model / prompt) are not
+    // secret and come back verbatim so the UI can pre-fill the form.
+    async getApiConfig(): Promise<{
+      hasOcrApiKey: boolean;
+      ocrApiKeyPreview: string;
+      ocrPreset: string;
+      ocrBaseUrl: string;
+      ocrModel: string;
+      ocrPrompt: string;
+    }> {
       const res = await apiFetch(`${API_BASE}/kb/api-config`);
-      if (!res.ok) return { hasOcrApiKey: false, ocrApiKeyPreview: "" };
+      if (!res.ok) {
+        return {
+          hasOcrApiKey: false, ocrApiKeyPreview: "",
+          ocrPreset: "", ocrBaseUrl: "", ocrModel: "", ocrPrompt: "",
+        };
+      }
       return handleJson(res);
     },
 
-    async saveApiConfig(patch: { ocrApiKey?: string }): Promise<{ ok: boolean; error?: string }> {
+    async saveApiConfig(patch: {
+      ocrPreset?: string;
+      ocrBaseUrl?: string;
+      ocrModel?: string;
+      ocrPrompt?: string;
+      ocrApiKey?: string;
+    }): Promise<{ ok: boolean; error?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/api-config`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
