@@ -46,13 +46,18 @@ REPOS = [
 ]
 
 
-def download_one(repo_id: str, local_dir: Path) -> None:
+def download_one(repo_id: str, local_dir: Path, token: str | None = None) -> None:
     from huggingface_hub import snapshot_download
 
     local_dir.mkdir(parents=True, exist_ok=True)
     snapshot_download(
         repo_id=repo_id,
         local_dir=str(local_dir),
+        # An authenticated HF token typically gets ~5× the anonymous
+        # download rate (their per-IP throttling is quite aggressive for
+        # multi-GB files). Passing None keeps the anonymous path so users
+        # without an account still work.
+        token=token,
         # Skip the optional onnx / openvino / pytorch-msgpack / tflite weights;
         # FlagEmbedding only needs the safetensors / pytorch_model + tokenizer.
         # If FlagEmbedding ever asks for one of these we can drop the filter.
@@ -71,6 +76,12 @@ def main() -> None:
     add_json_arg(ap)
     ap.add_argument("--hf-mirror", default=None,
                     help="Override HF endpoint (e.g. https://hf-mirror.com).")
+    ap.add_argument("--hf-token", default=None,
+                    help="HuggingFace access token. When omitted, falls back "
+                         "to the HF_TOKEN / HUGGING_FACE_HUB_TOKEN env vars, "
+                         "then to anonymous downloads. Authenticated pulls "
+                         "typically get much higher throughput on the ~2.5 GB "
+                         "bge weights.")
     args = ap.parse_args()
 
     enable_json_mode(args.json)
@@ -84,6 +95,19 @@ def main() -> None:
     if args.hf_mirror:
         os.environ["HF_ENDPOINT"] = args.hf_mirror
         emit_event("setup-models", "info", f"using HF mirror: {args.hf_mirror}")
+
+    # Resolve the token BEFORE the first HTTP call. huggingface_hub also picks
+    # up HF_TOKEN transparently, but doing it here lets us log "using token
+    # (…abcd)" so an operator watching the panel knows they hit the auth path
+    # and not the anonymous one — plus this way `--hf-token` beats the env
+    # (explicit > implicit), which matches how every other CLI flag in the
+    # pipeline resolves credentials.
+    hf_token = args.hf_token or os.environ.get("HF_TOKEN") or os.environ.get("HUGGING_FACE_HUB_TOKEN")
+    if hf_token:
+        # Never emit the token itself into the event stream — the panel logs
+        # are shown to the operator and echoed to disk in `~/brainpilot/logs/`.
+        tail = hf_token[-4:] if len(hf_token) >= 4 else "****"
+        emit_event("setup-models", "info", f"using HF token (…{tail})")
 
     try:
         n = len(REPOS)
@@ -117,7 +141,7 @@ def main() -> None:
                 f"downloading {repo_id} ({i + 1}/{n}) → {target.name}",
                 done=i, total=n, percent=int(i * 100 / n),
             )
-            download_one(repo_id, target)
+            download_one(repo_id, target, token=hf_token)
             emit_event("setup-models", "progress",
                        f"{sub}: download complete",
                        done=i + 1, total=n, percent=int((i + 1) * 100 / n))

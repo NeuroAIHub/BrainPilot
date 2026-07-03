@@ -5612,6 +5612,229 @@ button {
   color: var(--color-text-subtle);
 }
 
+/* -----------------------------------------------------------------------
+ * Inventory card — on-disk pipeline health. Structurally similar to
+ * .kb-env (chip head, headline, metrics) but with a heavier accent so
+ * users can distinguish "your KB" from "your Python env" at a glance.
+ * ----------------------------------------------------------------------- */
+.kb-inv {
+  display: grid;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.kb-inv--healthy {
+  border-color: var(--color-success-soft, var(--color-border));
+}
+
+.kb-inv--pending {
+  border-color: var(--color-warning-soft, var(--color-border));
+}
+
+.kb-inv__head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.kb-inv__head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-inv__sampled-at {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+.kb-inv__headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 8px 10px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.kb-inv__headline--ok {
+  border-color: var(--color-success-soft, var(--color-border));
+  background: color-mix(in srgb, var(--color-success, #12b981) 8%, transparent);
+}
+
+.kb-inv__headline--ok svg {
+  color: var(--color-success, #12b981);
+}
+
+.kb-inv__headline--pending {
+  border-color: var(--color-warning-soft, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning, #d97706) 8%, transparent);
+}
+
+.kb-inv__headline--pending svg {
+  color: var(--color-warning, #d97706);
+}
+
+/* Four-cell stage strip — a compact per-stage rollup. Each cell is its
+ * own mini-progress row: label + tiny bar + optional gap-count. */
+.kb-inv__stages {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.kb-inv__stage {
+  display: grid;
+  gap: 4px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 8px 9px;
+  background: var(--color-surface);
+}
+
+.kb-inv__stage--ok {
+  border-color: color-mix(in srgb, var(--color-success, #12b981) 40%, var(--color-border));
+}
+
+.kb-inv__stage--pending {
+  border-color: color-mix(in srgb, var(--color-warning, #d97706) 40%, var(--color-border));
+}
+
+.kb-inv__stage-head {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.kb-inv__stage-icon {
+  display: inline-flex;
+  align-items: center;
+}
+
+.kb-inv__stage--ok .kb-inv__stage-icon {
+  color: var(--color-success, #12b981);
+}
+
+.kb-inv__stage--pending .kb-inv__stage-icon {
+  color: var(--color-warning, #d97706);
+}
+
+.kb-inv__stage-label {
+  color: var(--color-text);
+  font-size: 12.5px;
+  font-weight: 600;
+}
+
+.kb-inv__stage-bar {
+  height: 4px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+}
+
+.kb-inv__stage-fill {
+  display: block;
+  height: 100%;
+  border-radius: 999px;
+  transition: width var(--ease-standard);
+}
+
+.kb-inv__stage-fill--ok {
+  background: var(--color-success, #12b981);
+}
+
+.kb-inv__stage-fill--pending {
+  background: var(--color-warning, #d97706);
+}
+
+.kb-inv__stage-count {
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Metrics grid — dense two-column list of aggregate stats. */
+.kb-inv__metrics {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(220px, 1fr));
+  gap: 6px 14px;
+  margin: 0;
+}
+
+.kb-inv__metrics > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 8px;
+  min-width: 0;
+  padding: 2px 0;
+  border-bottom: 1px dashed var(--color-border);
+}
+
+.kb-inv__metrics dt {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.kb-inv__metrics dd {
+  margin: 0;
+  overflow: hidden;
+  color: var(--color-text);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Issues drill-down — mirrors the "warning list" style used in the
+ * per-stage progress rows so the two panels feel consistent. */
+.kb-inv__issues {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+  padding: 8px 10px;
+  list-style: none;
+  border-left: 3px solid var(--color-warning, #d97706);
+  background: color-mix(in srgb, var(--color-warning, #d97706) 6%, transparent);
+  border-radius: 3px;
+}
+
+.kb-inv__issue {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.kb-inv__issue svg {
+  color: var(--color-warning, #d97706);
+  flex-shrink: 0;
+}
+
+.kb-inv__issue-stage {
+  color: var(--color-text);
+  font-weight: 600;
+  min-width: 60px;
+}
+
+.kb-inv__hint {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
 /* Environment status card. */
 .kb-env {
   display: grid;
@@ -5626,8 +5849,130 @@ button {
   border-color: var(--color-warning-soft);
 }
 
+.kb-env--partial {
+  border-color: var(--color-warning-soft);
+}
+
+.kb-env--ready {
+  border-color: var(--color-success-soft, var(--color-border));
+}
+
 .kb-env__head {
   display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.kb-env__head-right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.kb-env__probed-at {
+  color: var(--color-text-muted);
+  font-size: 11px;
+}
+
+/* Compact button variant used inside the env-status chip. */
+.settings-button--sm {
+  padding: 3px 8px;
+  font-size: 12px;
+  gap: 4px;
+}
+
+/* Completeness summary — pulls out the four prerequisites and answers
+ * "what do I still need to do?" as its own visual unit. */
+.kb-env__summary {
+  display: grid;
+  gap: 8px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  padding: 10px 12px;
+}
+
+.kb-env__summary--ok {
+  border-color: var(--color-success-soft, var(--color-border));
+  background: color-mix(in srgb, var(--color-success, #12b981) 8%, transparent);
+}
+
+.kb-env__summary--pending {
+  border-color: var(--color-warning-soft, var(--color-border));
+  background: color-mix(in srgb, var(--color-warning, #d97706) 6%, transparent);
+}
+
+.kb-env__summary-headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--color-text);
+  font-size: 13px;
+}
+
+.kb-env__summary--ok .kb-env__summary-headline svg {
+  color: var(--color-success, #12b981);
+}
+
+.kb-env__checklist {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.kb-env__check {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  color: var(--color-text);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.kb-env__check-icon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 18px;
+  height: 18px;
+  flex-shrink: 0;
+  border-radius: 50%;
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.kb-env__check--ok .kb-env__check-icon {
+  background: color-mix(in srgb, var(--color-success, #12b981) 20%, transparent);
+  color: var(--color-success, #12b981);
+}
+
+.kb-env__check--pending .kb-env__check-icon {
+  background: color-mix(in srgb, var(--color-danger, #dc2626) 18%, transparent);
+  color: var(--color-danger, #dc2626);
+}
+
+.kb-env__check--unknown .kb-env__check-icon {
+  background: color-mix(in srgb, var(--color-text-subtle) 15%, transparent);
+  color: var(--color-text-muted);
+}
+
+.kb-env__check-body {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.kb-env__check-label {
+  color: var(--color-text);
+}
+
+.kb-env__check-hint {
+  color: var(--color-text-muted);
+  font-size: 12px;
+  word-break: break-all;
 }
 
 .kb-env__facts {
@@ -5823,6 +6168,10 @@ button {
   background: var(--color-success);
 }
 
+.kb-progress__fill--warning {
+  background: var(--color-warning, #d97706);
+}
+
 .kb-progress__fill--error {
   background: var(--color-danger);
 }
@@ -5834,10 +6183,54 @@ button {
   text-align: right;
 }
 
+.kb-progress__pct--done {
+  color: var(--color-success, #12b981);
+  font-weight: 600;
+}
+
+.kb-progress__pct--warning {
+  color: var(--color-warning, #d97706);
+  font-weight: 600;
+  cursor: help;
+}
+
+.kb-progress__pct--error {
+  color: var(--color-danger);
+  font-weight: 600;
+}
+
 .kb-progress__msg {
   grid-column: 2 / -1;
   color: var(--color-text-subtle);
   font-size: 12px;
+}
+
+/* Issue breakdown shown inline under a warning row. Each <li> is one
+ * derived warning sentence (see deriveDoneIssues). Kept dense so a stage
+ * with 3-5 issues doesn't dominate the panel. */
+.kb-progress__issues {
+  grid-column: 2 / -1;
+  display: grid;
+  gap: 2px;
+  margin: 4px 0 0;
+  padding: 6px 10px;
+  list-style: none;
+  border-left: 3px solid var(--color-warning, #d97706);
+  background: color-mix(in srgb, var(--color-warning, #d97706) 8%, transparent);
+  border-radius: 3px;
+}
+
+.kb-progress__issue {
+  color: var(--color-text);
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.kb-progress__issue::before {
+  display: inline-block;
+  margin-right: 5px;
+  color: var(--color-warning, #d97706);
+  content: "⚠";
 }
 
 /* Live log — mono terminal block using code-surface tokens. */
@@ -5970,6 +6363,31 @@ button {
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.45;
+}
+
+/* HuggingFace source group — bundles the mirror checkbox and the token
+ * input so they read as one coherent control. Styled as a bordered
+ * fieldset with a subtle legend, matching the .kb-stages fieldset that
+ * lives just below it in the same panel. */
+.kb-hf-group {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  padding: 10px 12px 6px;
+  background: var(--color-surface);
+}
+
+.kb-hf-group > legend {
+  padding: 0 6px;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.kb-hf-group__token {
+  margin-top: 4px;
 }
 
 @media (max-width: 860px) {
