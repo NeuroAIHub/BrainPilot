@@ -16,15 +16,25 @@
  * doesn't parse is forwarded as a `{event: "log", msg: <line>}` so stray
  * prints from a dependency don't drop on the floor.
  */
-import { spawn, type ChildProcess } from "node:child_process";
-import { existsSync } from "node:fs";
+import { spawn, spawnSync, type ChildProcess } from "node:child_process";
+import { existsSync, readdirSync, statSync } from "node:fs";
 import { resolve, join, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 
 export interface KbBuildOptions {
   /** Per-run override of the KnowledgeBase root. Falls through to env / default. */
   kbRoot?: string;
-  /** SiliconFlow API key for OCR; forwarded as --ocr-api-key. */
+  /** OCR provider preset (siliconflow | openai | anthropic | mistral | zhipu
+   *  | qwen | custom). Sets defaults for base_url / model / prompt; the
+   *  three individual fields below override that field-by-field. */
+  ocrPreset?: string;
+  /** OpenAI-compatible base URL for the OCR vision endpoint. */
+  ocrBaseUrl?: string;
+  /** Vision model id (e.g. "gpt-4o", "deepseek-ai/DeepSeek-OCR"). */
+  ocrModel?: string;
+  /** Custom instruction sent alongside each rendered page image. */
+  ocrPrompt?: string;
+  /** Bearer token for the OCR endpoint. */
   ocrApiKey?: string;
   /** Per-PDF concurrency; forwarded as --ocr-concurrency. */
   ocrConcurrency?: number;
@@ -132,10 +142,27 @@ function defaultBuildScript(): string {
 function buildArgv(opts: KbBuildOptions, script: string): string[] {
   const argv = [script, "--json"];
   if (opts.kbRoot) argv.push("--kb-root", opts.kbRoot);
-  if (opts.ocrApiKey) argv.push("--ocr-api-key", opts.ocrApiKey);
+  // OCR provider config — every field is optional; ocr_pdfs.py merges
+  // CLI / env / API_config.json / preset defaults itself.
+  //
+  // NOTE: the API-key flags (--ocr-api-key, --meta-api-key) are
+  // deliberately NOT pushed onto argv here — they get injected as env
+  // vars in buildChildEnv() instead. Two reasons:
+  //   1. argv lands in the OS process list (`ps` on Unix, Task Manager
+  //      on Windows), so any local user could otherwise scrape the key
+  //      while the build is running.
+  //   2. spawnLog() below broadcasts `spawned <argv...>` as an SSE
+  //      event, which is buffered for hundreds of events and rendered
+  //      into the log panel DOM. A key on argv there = key in every
+  //      SSE subscriber's browser and in every log screenshot.
+  // Passing via env avoids both leaks; ocr_pdfs.py / extract_meta.py
+  // already resolve those env vars as their 2nd-tier fallback.
+  if (opts.ocrPreset) argv.push("--ocr-preset", opts.ocrPreset);
+  if (opts.ocrBaseUrl) argv.push("--ocr-base-url", opts.ocrBaseUrl);
+  if (opts.ocrModel) argv.push("--ocr-model", opts.ocrModel);
+  if (opts.ocrPrompt) argv.push("--ocr-prompt", opts.ocrPrompt);
   if (opts.ocrConcurrency != null) argv.push("--ocr-concurrency", String(opts.ocrConcurrency));
   if (opts.ocrLimit != null) argv.push("--ocr-limit", String(opts.ocrLimit));
-  if (opts.metaApiKey) argv.push("--meta-api-key", opts.metaApiKey);
   if (opts.metaBaseUrl) argv.push("--meta-base-url", opts.metaBaseUrl);
   if (opts.metaModel) argv.push("--meta-model", opts.metaModel);
   if (opts.hfMirror) argv.push("--hf-mirror", opts.hfMirror);
@@ -145,6 +172,66 @@ function buildArgv(opts: KbBuildOptions, script: string): string[] {
     for (const s of opts.skip) argv.push(`--skip-${s}`);
   }
   return argv;
+}
+
+/**
+ * Compose the child process environment for a KB build, injecting API keys
+ * as env vars instead of argv flags. See buildArgv() for the rationale.
+ *
+ * We use the generic ``OCR_API_KEY`` (rather than the preset-specific env
+ * name like SILICONFLOW_API_KEY) so a mid-build preset change doesn't
+ * require the caller to know which env var maps to which provider —
+ * ocr_pdfs.py's resolver checks OCR_API_KEY after the preset-specific one,
+ * so this always wins for the key coming from the UI.
+ */
+function buildChildEnv(opts: KbBuildOptions, root: string): NodeJS.ProcessEnv {
+  const env: NodeJS.ProcessEnv = {
+    ...process.env,
+    BP_KB_ROOT: root,
+    // BP_KB_PYTHON is set by the caller so both this env-injection path
+    // and any other spawn share the same interpreter.
+  };
+  if (opts.ocrApiKey) env.OCR_API_KEY = opts.ocrApiKey;
+  if (opts.metaApiKey) env.META_LLM_API_KEY = opts.metaApiKey;
+  return env;
+}
+
+/**
+ * Redact secret values in a copy of argv so it's safe to broadcast into an
+ * SSE event / dump to a log file. Kept as a belt-and-braces defence: the
+ * key flags are supposed to be routed through env vars (buildChildEnv) and
+ * never end up on argv, but if a future contributor adds a new secret flag
+ * and forgets, this catches it before the value hits every log listener.
+ *
+ * Matching strategy: any flag whose name contains "key", "token", "secret",
+ * or "password" (case-insensitive) is treated as sensitive. Both
+ * ``--api-key VALUE`` and ``--api-key=VALUE`` forms are handled.
+ */
+function redactArgvForLog(argv: readonly string[]): string[] {
+  const secretPat = /(key|token|secret|password)/i;
+  const out: string[] = [];
+  for (let i = 0; i < argv.length; i++) {
+    const a = argv[i]!;
+    // "--foo-key=sk-..." → mask the RHS.
+    const eq = a.indexOf("=");
+    if (a.startsWith("--") && eq > 0) {
+      const name = a.slice(0, eq);
+      const val = a.slice(eq + 1);
+      if (secretPat.test(name) && val) {
+        out.push(`${name}=***${val.slice(-4)}`);
+        continue;
+      }
+    }
+    // "--foo-key sk-..." → mask the NEXT argv item.
+    if (a.startsWith("--") && secretPat.test(a) && i + 1 < argv.length) {
+      const val = argv[i + 1]!;
+      out.push(a, `***${val.slice(-4)}`);
+      i++;
+      continue;
+    }
+    out.push(a);
+  }
+  return out;
 }
 
 function broadcast(ev: KbBuildEvent): void {
@@ -222,7 +309,14 @@ export interface StartResult {
  *   2. ``BP_KB_PYTHON``    — env var (probably wrong here, but honour it)
  *   3. ``python3`` / ``python`` on PATH
  */
-export function startKbEnvSetup(opts: { python?: string; reinstall?: boolean; kbRoot?: string } = {}): StartResult {
+export function startKbEnvSetup(opts: {
+  python?: string;
+  reinstall?: boolean;
+  kbRoot?: string;
+  /** pip index URL to override the default (pypi.org). Passed via env so it
+   *  doesn't show up in `ps` for corporate mirrors that carry tokens. */
+  pipIndexUrl?: string;
+} = {}): StartResult {
   if (SLOTS.envSetup && SLOTS.envSetup.doneAt == null) {
     return { ok: false, message: "Python environment setup is already running" };
   }
@@ -243,11 +337,19 @@ export function startKbEnvSetup(opts: { python?: string; reinstall?: boolean; kb
   if (opts.reinstall) argv.push("--reinstall");
   if (opts.python) argv.push("--python", opts.python);
 
+  // Prefer env-based delivery over --pip-index-url flag for the same reason
+  // hf_token uses env: `ps` doesn't show env, and tokenised corp mirrors
+  // (`https://<token>@repo.corp/...`) would otherwise leak into the process
+  // list. setup_env.py reads PIP_INDEX_URL when --pip-index-url is absent, so
+  // this transparently wires up.
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, BP_KB_ROOT: root };
+  if (opts.pipIndexUrl) childEnv.PIP_INDEX_URL = opts.pipIndexUrl;
+
   let proc: ChildProcess;
   try {
     proc = spawn(bootstrapPython, argv, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, BP_KB_ROOT: root },
+      env: childEnv,
     });
   } catch (err) {
     return {
@@ -263,7 +365,7 @@ export function startKbEnvSetup(opts: { python?: string; reinstall?: boolean; kb
     ts: new Date().toISOString(),
     stage: "setup-env",
     event: "info",
-    msg: `spawned ${bootstrapPython} ${argv.join(" ")}`,
+    msg: `spawned ${bootstrapPython} ${redactArgvForLog(argv).join(" ")}`,
   });
 
   pipeOutput(proc.stdout!);
@@ -294,6 +396,10 @@ export function startKbEnvSetup(opts: { python?: string; reinstall?: boolean; kb
     });
     slot.doneAt = Date.now();
     slot.exitCode = code;
+    // A fresh venv means the deps probe cache is now stale — drop it so
+    // the next /kb/status returns a fresh reading instead of the pre-install
+    // "missing" result.
+    PROBE_CACHE.clear();
   });
 
   return { ok: true, startedAt: slot.startedAt };
@@ -307,7 +413,7 @@ export function startKbEnvSetup(opts: { python?: string; reinstall?: boolean; kb
  * falls back to system Python otherwise (which will fail loudly if the
  * package isn't there, letting the operator know to run env setup first).
  */
-export function startKbModelSetup(opts: { hfMirror?: string; kbRoot?: string } = {}): StartResult {
+export function startKbModelSetup(opts: { hfMirror?: string; hfToken?: string; kbRoot?: string } = {}): StartResult {
   if (SLOTS.modelSetup && SLOTS.modelSetup.doneAt == null) {
     return { ok: false, message: "model download is already running" };
   }
@@ -322,12 +428,19 @@ export function startKbModelSetup(opts: { hfMirror?: string; kbRoot?: string } =
   const py = pythonBin(root);
   const argv = [script, "--kb-root", root, "--json"];
   if (opts.hfMirror) argv.push("--hf-mirror", opts.hfMirror);
+  // Deliberately do NOT push --hf-token to argv: it lands in the process list
+  // (visible to any local user via `ps` and to any process-listing dashboard).
+  // Passing via env keeps it in the child's environment block, which is
+  // per-process and not surfaced by `ps` by default. setup_models.py resolves
+  // HF_TOKEN when --hf-token is absent, so this transparently wires up.
+  const childEnv: NodeJS.ProcessEnv = { ...process.env, BP_KB_ROOT: root, BP_KB_PYTHON: py };
+  if (opts.hfToken) childEnv.HF_TOKEN = opts.hfToken;
 
   let proc: ChildProcess;
   try {
     proc = spawn(py, argv, {
       stdio: ["ignore", "pipe", "pipe"],
-      env: { ...process.env, BP_KB_ROOT: root, BP_KB_PYTHON: py },
+      env: childEnv,
     });
   } catch (err) {
     return {
@@ -343,7 +456,7 @@ export function startKbModelSetup(opts: { hfMirror?: string; kbRoot?: string } =
     ts: new Date().toISOString(),
     stage: "setup-models",
     event: "info",
-    msg: `spawned ${py} ${argv.join(" ")}`,
+    msg: `spawned ${py} ${redactArgvForLog(argv).join(" ")}`,
   });
 
   pipeOutput(proc.stdout!);
@@ -374,6 +487,9 @@ export function startKbModelSetup(opts: { hfMirror?: string; kbRoot?: string } =
     });
     slot.doneAt = Date.now();
     slot.exitCode = code;
+    // Model files changed on disk — the probe stores a cached snapshot; drop
+    // it so the panel's next status poll reflects the new completeness.
+    PROBE_CACHE.clear();
   });
 
   return { ok: true, startedAt: slot.startedAt };
@@ -389,7 +505,14 @@ export function startKbModelSetup(opts: { hfMirror?: string; kbRoot?: string } =
  * single "combined setup" banner and know when the whole thing is done.
  */
 export function startKbFullSetup(
-  opts: { python?: string; reinstall?: boolean; hfMirror?: string; kbRoot?: string } = {},
+  opts: {
+    python?: string;
+    reinstall?: boolean;
+    hfMirror?: string;
+    hfToken?: string;
+    pipIndexUrl?: string;
+    kbRoot?: string;
+  } = {},
 ): StartResult {
   if (SLOTS.envSetup && SLOTS.envSetup.doneAt == null) {
     return { ok: false, message: "Python environment setup is already running" };
@@ -407,6 +530,7 @@ export function startKbFullSetup(
     python: opts.python,
     reinstall: opts.reinstall,
     kbRoot: opts.kbRoot,
+    pipIndexUrl: opts.pipIndexUrl,
   });
   if (!envResult.ok) return envResult;
 
@@ -430,6 +554,7 @@ export function startKbFullSetup(
     }
     const modelResult = startKbModelSetup({
       hfMirror: opts.hfMirror,
+      hfToken: opts.hfToken,
       kbRoot: opts.kbRoot,
     });
     if (!modelResult.ok) {
@@ -489,28 +614,32 @@ export function startKbBuild(opts: KbBuildOptions = {}): StartResult {
   }
   const argv = buildArgv(opts, script);
   const py = pythonBin(opts.kbRoot);
+  const kbRootAbs = opts.kbRoot ? resolve(opts.kbRoot) : env.kbRoot;
+  const childEnv = {
+    ...buildChildEnv(opts, kbRootAbs),
+    // Make sure the build_kb.py orchestrator AND every stage it spawns
+    // share the same interpreter — without this, each `subprocess.run`
+    // call in build_kb.py would re-resolve via PATH and could land on a
+    // different python (e.g. system python3 without our deps installed).
+    BP_KB_PYTHON: py,
+  };
   const proc = spawn(py, argv, {
     stdio: ["ignore", "pipe", "pipe"],
-    env: {
-      ...process.env,
-      ...(opts.kbRoot ? { BP_KB_ROOT: resolve(opts.kbRoot) } : {}),
-      // Make sure the build_kb.py orchestrator AND every stage it spawns
-      // share the same interpreter — without this, each `subprocess.run`
-      // call in build_kb.py would re-resolve via PATH and could land on a
-      // different python (e.g. system python3 without our deps installed).
-      BP_KB_PYTHON: py,
-    },
+    env: childEnv,
   });
 
   const slot: JobSlot = { startedAt: Date.now(), proc };
   SLOTS.build = slot;
 
-  // Banner so the SSE consumer sees something immediately.
+  // Banner so the SSE consumer sees something immediately. Argv is
+  // redacted for the log (see redactArgvForLog) — the OCR / meta keys
+  // are already routed via env vars in buildChildEnv, but this guards
+  // against a future contributor adding a new secret flag on argv.
   broadcast({
     ts: new Date().toISOString(),
     stage: "build",
     event: "info",
-    msg: `spawned ${py} ${argv.join(" ")}`,
+    msg: `spawned ${py} ${redactArgvForLog(argv).join(" ")}`,
   });
 
   pipeOutput(proc.stdout!);
@@ -569,9 +698,195 @@ export interface KbEnvironment {
   scriptsPresent: boolean;
   /** Resolved KnowledgeBase root the backend will use by default. */
   kbRoot: string;
+  /** venv-python `import` probe result. `null` = unknown / not yet checked. */
+  depsInstalled: boolean | null;
+  /** Names of REQUIRED_IMPORTS that failed to import. Empty when all ok. */
+  depsMissing: string[];
+  /** Free-form probe error (python crashed, ENOENT, timeout, ...) if any. */
+  depsError?: string;
+  /** Model weight completeness — same criterion setup_models.py uses. */
+  models: {
+    /** models/bge-m3 has config.json + a real weight file. */
+    bgeM3: boolean;
+    /** models/bge-reranker-v2-m3 has config.json + a real weight file. */
+    bgeReranker: boolean;
+  };
+  /** Number of PDFs found under source/pdf/ — used by the "put PDFs first" hint. */
+  pdfsPresent: number;
+  /** Fully green: venv + deps + models all present. */
+  readyToBuild: boolean;
+  /** Epoch-ms when the deps/models probe was last run (for the UI's `X seconds ago` label). */
+  probedAt: number | null;
 }
 
-function describeKbEnvironment(kbRoot?: string): KbEnvironment {
+/**
+ * These have to stay in lock-step with ``scripts/setup_env.py::REQUIRED_IMPORTS``.
+ * We import here again (rather than parse the python file at runtime) because
+ * the check is intentionally cheap — a tiny stringified script sent to
+ * ``python -c`` — and duplicating one string list is more robust than shelling
+ * out to parse a source file whose format may change.
+ */
+const REQUIRED_PIPELINE_IMPORTS = [
+  "fitz",              // OCR (PyMuPDF)
+  "openai",            // OCR + extract_meta
+  "numpy",
+  "requests",
+  "fastapi",
+  "uvicorn",
+  "pydantic",
+  "huggingface_hub",   // setup_models.py
+  "FlagEmbedding",     // vectorize + sidecar
+];
+
+/** Weight-file names that count as "download completed". Mirrors the check in
+ *  scripts/setup_models.py — either safetensors or the legacy pytorch bin. */
+const MODEL_WEIGHT_FILES = ["model.safetensors", "pytorch_model.bin"];
+
+/** Result of a deps+models probe, cached in memory. */
+interface ProbeResult {
+  depsInstalled: boolean | null;
+  depsMissing: string[];
+  depsError?: string;
+  models: { bgeM3: boolean; bgeReranker: boolean };
+  probedAt: number;
+  /** Interpreter path we probed with — invalidates when the venv is rebuilt. */
+  python: string;
+  /** mtime of the venv python binary — a rebuild bumps it, invalidating. */
+  pythonMtime: number;
+}
+
+const PROBE_TTL_MS = 60_000; // 60 s — cheap enough to re-probe on demand, expensive enough to skip on every poll
+const PROBE_CACHE = new Map<string, ProbeResult>();
+
+/** Count the PDFs under ``<kbRoot>/source/pdf/``. Missing dir = 0.
+ *  Used by the UI to hint "no PDFs yet — copy them into source/pdf/" before
+ *  the user tries a build with nothing to ingest. */
+function countPdfs(kbRoot: string): number {
+  const pdfDir = join(kbRoot, "source", "pdf");
+  try {
+    return readdirSync(pdfDir).filter((name) => name.toLowerCase().endsWith(".pdf")).length;
+  } catch {
+    return 0;
+  }
+}
+
+/** True iff ``<modelsDir>/<sub>`` looks like a completed HF download — same
+ *  gate as setup_models.py so a partial download shows up as "not ready"
+ *  everywhere consistently. */
+function modelDirComplete(modelsDir: string, sub: string): boolean {
+  const target = join(modelsDir, sub);
+  if (!existsSync(join(target, "config.json"))) return false;
+  return MODEL_WEIGHT_FILES.some((name) => existsSync(join(target, name)));
+}
+
+/**
+ * Probe the venv python with a tiny `python -c 'import ...'` snippet, mirroring
+ * setup_env.py's post-install verification. Returns an all-`null`s result when
+ * we can't or shouldn't probe (no venv yet), so the UI can distinguish
+ * "not-installed" from "not-yet-checked".
+ *
+ * Cached for PROBE_TTL_MS keyed by the python binary path. A `--reinstall`
+ * that recreates the venv bumps the binary's mtime, so we detect that and
+ * invalidate; the caller can also pass ``force=true`` to bypass the cache.
+ */
+function probeDepsAndModels(kbRoot: string, force: boolean): ProbeResult {
+  const python = pythonBin(kbRoot);
+  const modelsDir = join(kbRoot, "models");
+  const models = {
+    bgeM3: modelDirComplete(modelsDir, "bge-m3"),
+    bgeReranker: modelDirComplete(modelsDir, "bge-reranker-v2-m3"),
+  };
+
+  // Detect the interpreter's mtime up-front so we can invalidate on rebuild.
+  let pythonMtime = 0;
+  try {
+    pythonMtime = statSync(python).mtimeMs;
+  } catch {
+    // ENOENT — python doesn't exist. That's an unambiguous "not installed"
+    // signal; we don't spawn, and cache a `depsInstalled = null` so the UI
+    // says "no venv" and not "checking …".
+    const result: ProbeResult = {
+      depsInstalled: null,
+      depsMissing: [],
+      depsError: undefined,
+      models,
+      probedAt: Date.now(),
+      python,
+      pythonMtime: 0,
+    };
+    PROBE_CACHE.set(python, result);
+    return result;
+  }
+
+  if (!force) {
+    const cached = PROBE_CACHE.get(python);
+    if (
+      cached &&
+      cached.python === python &&
+      cached.pythonMtime === pythonMtime &&
+      Date.now() - cached.probedAt < PROBE_TTL_MS
+    ) {
+      // Models can change between probes without touching the python binary,
+      // so always re-scan the (cheap) filesystem for the two model dirs.
+      return { ...cached, models };
+    }
+  }
+
+  let depsInstalled: boolean | null;
+  let depsMissing: string[] = [];
+  let depsError: string | undefined;
+
+  // The snippet: probe every import, report failures as JSON. Kept intentionally
+  // minimal — same shape as setup_env.py::_verify_imports so a user reading
+  // both files sees they agree.
+  const snippet =
+    "import importlib, json\n" +
+    `required = ${JSON.stringify(REQUIRED_PIPELINE_IMPORTS)}\n` +
+    "missing = []\n" +
+    "for m in required:\n" +
+    "    try: importlib.import_module(m)\n" +
+    "    except Exception as e: missing.append([m, repr(e)[:200]])\n" +
+    "print(json.dumps(missing))\n";
+  try {
+    const res = spawnSync(python, ["-c", snippet], {
+      encoding: "utf8",
+      timeout: 20_000, // 20 s is plenty; FlagEmbedding is the slowest import (~2-5 s cold).
+    });
+    if (res.error) {
+      depsInstalled = null;
+      depsError = res.error.message;
+    } else if (res.status !== 0) {
+      depsInstalled = null;
+      depsError = `python exited ${res.status}: ${(res.stderr || "").trim().slice(0, 500)}`;
+    } else {
+      try {
+        const parsed = JSON.parse((res.stdout || "").trim()) as Array<[string, string]>;
+        depsMissing = parsed.map(([name]) => name);
+        depsInstalled = depsMissing.length === 0;
+      } catch (err) {
+        depsInstalled = null;
+        depsError = `parse failed: ${(err as Error).message}; stdout=${(res.stdout || "").slice(0, 200)}`;
+      }
+    }
+  } catch (err) {
+    depsInstalled = null;
+    depsError = (err as Error).message;
+  }
+
+  const result: ProbeResult = {
+    depsInstalled,
+    depsMissing,
+    depsError,
+    models,
+    probedAt: Date.now(),
+    python,
+    pythonMtime,
+  };
+  PROBE_CACHE.set(python, result);
+  return result;
+}
+
+function describeKbEnvironment(kbRoot?: string, force = false): KbEnvironment {
   // Mirror defaultBuildScript()'s walk-up to find KnowledgeBase/.
   const root = kbRoot ?? findKbRoot();
   const expectedVenv =
@@ -580,14 +895,61 @@ function describeKbEnvironment(kbRoot?: string): KbEnvironment {
       : join(root, ".venv", "bin", "python");
   const venvExists = existsSync(expectedVenv);
   const python = pythonBin(root);
+  const pythonIsVenv = python === expectedVenv;
+
+  // Only probe imports when we have SOMETHING to probe. If the venv doesn't
+  // exist AND the user hasn't pointed BP_KB_PYTHON at an existing interpreter,
+  // pythonBin() returns "python3"/"python" — spawning that would either fail
+  // (deps not installed globally) or succeed by accident (they happen to have
+  // FlagEmbedding system-wide), neither of which is useful information.
+  const probeCandidate = venvExists || pythonIsVenv || Boolean(process.env.BP_KB_PYTHON);
+  const probe = probeCandidate
+    ? probeDepsAndModels(root, force)
+    : {
+        depsInstalled: null,
+        depsMissing: [],
+        depsError: undefined,
+        models: {
+          bgeM3: modelDirComplete(join(root, "models"), "bge-m3"),
+          bgeReranker: modelDirComplete(join(root, "models"), "bge-reranker-v2-m3"),
+        },
+        probedAt: null as number | null,
+      } as Pick<
+        ProbeResult,
+        "depsInstalled" | "depsMissing" | "depsError" | "models"
+      > & { probedAt: number | null };
+
+  const readyToBuild =
+    venvExists &&
+    probe.depsInstalled === true &&
+    probe.models.bgeM3 &&
+    probe.models.bgeReranker;
+
   return {
     python,
-    pythonIsVenv: python === expectedVenv,
+    pythonIsVenv,
     venvExists,
     expectedVenvPath: expectedVenv,
     scriptsPresent: existsSync(join(root, "scripts", "build_kb.py")),
     kbRoot: root,
+    depsInstalled: probe.depsInstalled,
+    depsMissing: probe.depsMissing,
+    depsError: probe.depsError,
+    models: probe.models,
+    pdfsPresent: countPdfs(root),
+    readyToBuild,
+    probedAt: probe.probedAt,
   };
+}
+
+/**
+ * Force a fresh probe of the deps + models. Used by the "Re-check" button
+ * in the KB panel — bypasses the 60 s memoization so the user sees the
+ * effect of a manual pip install or model download without waiting for the
+ * TTL to elapse.
+ */
+export function probeKbEnvironment(kbRoot?: string): KbEnvironment {
+  return describeKbEnvironment(kbRoot, true);
 }
 
 export function findKbRoot(): string {

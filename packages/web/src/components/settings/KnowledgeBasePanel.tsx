@@ -13,9 +13,9 @@
  *     stderr / stage / msg.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Database, Loader2, Play, RefreshCw, Square, Wrench } from "lucide-react";
+import { AlertTriangle, Check, Database, Loader2, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
+import { api, type KbEnvironment, type KbInventory, type KbInventoryIssue } from "../../utils/api";
 
 type Stage = "ocr" | "extract" | "chunk" | "vectorize";
 
@@ -38,16 +38,40 @@ const STAGE_LABELS: Record<Stage, string> = {
 };
 
 interface StageState {
-  status: "pending" | "running" | "done" | "error";
+  /**
+   * Stage lifecycle:
+   *   pending  — hasn't started yet
+   *   running  — first info/progress event received
+   *   done     — final ``done`` event received AND no quality issues detected
+   *   warning  — final ``done`` event received BUT the stage reported fail /
+   *              fallback / empty counts, OR the stage emitted `warn` events
+   *              along the way. The stage technically completed; the KB is
+   *              usable, but the operator should know something needs
+   *              attention (e.g. some PDFs never OCR'd, some rows still in
+   *              fallback state, some batches failed to embed).
+   *   error    — fatal — the stage crashed or the backend killed it. The
+   *              pipeline stops here.
+   *
+   * Distinction between warning and done is the whole point of this state
+   * — a green bar after a run that dropped 200 rows to fallback is a lie.
+   */
+  status: "pending" | "running" | "done" | "warning" | "error";
   percent: number;
   msg: string;
+  /** Human-readable list of issues (one per warning). Rendered as a tooltip
+   *  on the warning badge and expanded inline under the row. */
+  issues: string[];
+  /** Cumulative warn-event count during the run — chunk doesn't have a
+   *  quality field on its done event (unlike extract's `fallback`), so we
+   *  approximate its "warning" state by counting warn events. */
+  warnEvents: number;
 }
 
 const INITIAL_STAGE_STATE: Record<Stage, StageState> = {
-  ocr: { status: "pending", percent: 0, msg: "" },
-  extract: { status: "pending", percent: 0, msg: "" },
-  chunk: { status: "pending", percent: 0, msg: "" },
-  vectorize: { status: "pending", percent: 0, msg: "" },
+  ocr: { status: "pending", percent: 0, msg: "", issues: [], warnEvents: 0 },
+  extract: { status: "pending", percent: 0, msg: "", issues: [], warnEvents: 0 },
+  chunk: { status: "pending", percent: 0, msg: "", issues: [], warnEvents: 0 },
+  vectorize: { status: "pending", percent: 0, msg: "", issues: [], warnEvents: 0 },
 };
 
 function isKnownStage(stage: string): stage is Stage {
@@ -58,6 +82,340 @@ interface SetupState {
   percent: number;
   msg: string;
   status: "pending" | "running" | "done" | "error";
+}
+
+/**
+ * HuggingFace download source group — bundles two controls that logically
+ * belong together but affect the same download step: the mirror checkbox
+ * (route through hf-mirror.com) and the auth token input.
+ *
+ * They're mutually somewhat exclusive: hf-mirror.com is an anonymous
+ * public reverse-proxy for HuggingFace's CDN; it does NOT forward
+ * authenticated requests to huggingface.co, so any Authorization header
+ * we send along is silently dropped by the mirror. That means when the
+ * mirror is checked, the token input is disabled and the hint explains
+ * why — a subtle detail that would otherwise waste a user's key.
+ *
+ * The token is intentionally NOT persisted anywhere — kept only in the
+ * caller's useState for the lifetime of the panel. If the user reloads,
+ * they re-enter it. Unlike the SiliconFlow OCR key (which the pipeline
+ * needs on every subsequent build), the HF token is only useful during
+ * the one-shot ~2.5 GB weight download, so persisting it would be all
+ * downside.
+ */
+function HfSourceGroup({
+  useMirror,
+  onUseMirrorChange,
+  token,
+  onTokenChange,
+  disabled,
+  t,
+}: {
+  useMirror: boolean;
+  onUseMirrorChange: (next: boolean) => void;
+  token: string;
+  onTokenChange: (next: string) => void;
+  disabled?: boolean;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  return (
+    <fieldset className="kb-hf-group">
+      <legend>{t("settings.kb.env.hfSourceGroup")}</legend>
+
+      <label className="settings-check">
+        <input
+          type="checkbox"
+          checked={useMirror}
+          onChange={(e) => onUseMirrorChange(e.target.checked)}
+          disabled={disabled}
+        />
+        <span>{t("settings.kb.useHfMirror")}</span>
+      </label>
+      <p className="kb-field-hint">{t("settings.kb.useHfMirrorHint")}</p>
+
+      <label className="settings-field kb-hf-group__token">
+        <span>{t("settings.kb.env.hfToken")}</span>
+        <input
+          type="password"
+          value={useMirror ? "" : token}
+          onChange={(e) => onTokenChange(e.target.value)}
+          placeholder={useMirror ? t("settings.kb.env.hfTokenDisabledPlaceholder") : "hf_..."}
+          autoComplete="off"
+          disabled={disabled || useMirror}
+        />
+        <p className="kb-field-hint">
+          {useMirror
+            ? t("settings.kb.env.hfTokenIgnoredByMirror")
+            : t("settings.kb.env.hfTokenHint")}
+        </p>
+      </label>
+    </fieldset>
+  );
+}
+
+/**
+ * Toggle for the Tsinghua tuna pip mirror. Rendered as a plain checkbox
+ * (not password-masked) because the URL is fixed and public. Extracted so
+ * both env-setup branches (venv-missing and venv-present) render identical
+ * UI without duplication. Same reason we pass `t` in as a prop rather than
+ * re-hooking useT() inside — the parent already holds the language.
+ */
+function PipMirrorField({
+  checked,
+  onChange,
+  disabled,
+  t,
+}: {
+  checked: boolean;
+  onChange: (next: boolean) => void;
+  disabled?: boolean;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  return (
+    <div className="settings-field">
+      <label className="settings-check">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(e) => onChange(e.target.checked)}
+          disabled={disabled}
+        />
+        <span>{t("settings.kb.env.usePipMirror")}</span>
+      </label>
+      <p className="kb-field-hint">{t("settings.kb.env.usePipMirrorHint")}</p>
+    </div>
+  );
+}
+
+/**
+ * The KB status card — surfaces the four-stage pipeline health independent
+ * of any in-flight build. Green when the four ledgers agree; amber when
+ * the consistency check spots gaps (new PDFs waiting, fallback rows,
+ * chunks not yet vectorised, etc.).
+ *
+ * `t` and `nowMs` are passed in rather than hooked internally so the parent
+ * can share a single "seconds ago" clock tick with all its subcomponents.
+ */
+function InventoryCard({
+  inventory,
+  busy,
+  onRefresh,
+  t,
+  nowMs,
+}: {
+  inventory: KbInventory | null;
+  busy: boolean;
+  onRefresh: () => void;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+  nowMs: number;
+}) {
+  if (!inventory) return null;
+
+  const inv = inventory;
+  const healthy = inv.consistency.healthy;
+  const secondsAgo = Math.max(0, Math.floor((nowMs - inv.sampledAt) / 1000));
+
+  // Per-stage rollup — the four "stage cell" columns at the top. Each cell
+  // gets its own ok/pending flag by scanning the issue list. Order of the
+  // stages is fixed (pipeline order) so the UI matches the mental model.
+  const stageStatus: Record<KbInventoryIssue["stage"], { ok: boolean; count: number }> = {
+    ocr: { ok: true, count: 0 },
+    extract: { ok: true, count: 0 },
+    chunk: { ok: true, count: 0 },
+    vectorize: { ok: true, count: 0 },
+  };
+  for (const iss of inv.consistency.issues) {
+    stageStatus[iss.stage].ok = false;
+    stageStatus[iss.stage].count += iss.count;
+  }
+
+  // Left-column value formatter: numbers get their locale-formatted
+  // thousands separators for readability. null → em-dash so an absent
+  // ledger doesn't look like "0".
+  const fmt = (n: number | null | undefined) =>
+    n == null ? t("settings.kb.inv.metric.unavailable") : n.toLocaleString();
+
+  return (
+    <div className={`kb-inv kb-inv--${healthy ? "healthy" : "pending"}`}>
+      <div className="kb-inv__head">
+        <span className={`sandbox-chip sandbox-chip--${healthy ? "ok" : "off"}`}>
+          <Database size={13} />
+          {t("settings.kb.inv.title")}
+          <i className="sandbox-chip__dot" aria-hidden="true" />
+        </span>
+        <div className="kb-inv__head-right">
+          <span className="kb-inv__sampled-at">
+            {t("settings.kb.inv.sampledAt", { seconds: secondsAgo })}
+          </span>
+          <button
+            type="button"
+            className="settings-button settings-button--ghost settings-button--sm"
+            onClick={onRefresh}
+            disabled={busy}
+            title={t("settings.kb.inv.refresh")}
+          >
+            <RefreshCw size={12} aria-hidden className={busy ? "spin" : undefined} />
+            {busy ? t("settings.kb.inv.refreshing") : t("settings.kb.inv.refresh")}
+          </button>
+        </div>
+      </div>
+
+      {/* Headline — one-liner summarising green/amber state. */}
+      <div className={`kb-inv__headline kb-inv__headline--${healthy ? "ok" : "pending"}`}>
+        {healthy ? <Check size={16} aria-hidden /> : <AlertTriangle size={16} aria-hidden />}
+        <strong>
+          {healthy
+            ? t("settings.kb.inv.headline.healthy")
+            : t("settings.kb.inv.headline.pending")}
+        </strong>
+      </div>
+
+      {/* Four-cell stage strip: each cell = one pipeline stage with its own
+          ok/pending badge. When ok the cell shows a filled progress bar. */}
+      <div className="kb-inv__stages">
+        {(["ocr", "extract", "chunk", "vectorize"] as const).map((s) => {
+          const st = stageStatus[s];
+          const label = t(`settings.kb.inv.stage${s[0]!.toUpperCase() + s.slice(1)}`);
+          return (
+            <div key={s} className={`kb-inv__stage kb-inv__stage--${st.ok ? "ok" : "pending"}`}>
+              <div className="kb-inv__stage-head">
+                <span className="kb-inv__stage-icon" aria-hidden>
+                  {st.ok ? <Check size={12} /> : <AlertTriangle size={12} />}
+                </span>
+                <span className="kb-inv__stage-label">{label}</span>
+              </div>
+              <div className="kb-inv__stage-bar" aria-hidden>
+                <span
+                  className={`kb-inv__stage-fill kb-inv__stage-fill--${st.ok ? "ok" : "pending"}`}
+                  style={{ width: st.ok ? "100%" : "40%" }}
+                />
+              </div>
+              {!st.ok ? (
+                <span className="kb-inv__stage-count">
+                  {t("settings.kb.inv.issue.missing", { n: st.count })}
+                </span>
+              ) : null}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Numeric summary — dense two-column grid of the aggregate stats
+          the four ledgers give us. Rendered even on amber runs; a user
+          looking at "wait what's the actual number of chunks" doesn't
+          want to hunt through the log. */}
+      <dl className="kb-inv__metrics">
+        <MetricRow label={t("settings.kb.inv.metric.pdfs")} value={fmt(inv.pdfsOnDisk)} />
+        <MetricRow label={t("settings.kb.inv.metric.ocred")} value={fmt(inv.ocred)} />
+        {inv.extracted ? (
+          <>
+            <MetricRow
+              label={t("settings.kb.inv.metric.extracted")}
+              value={`${fmt(inv.extracted.total)} (ok: ${fmt(inv.extracted.ok)}${
+                inv.extracted.fallback ? `, fallback: ${fmt(inv.extracted.fallback)}` : ""
+              }${inv.extracted.empty ? `, empty: ${fmt(inv.extracted.empty)}` : ""})`}
+            />
+          </>
+        ) : null}
+        {inv.chunks ? (
+          <>
+            <MetricRow label={t("settings.kb.inv.metric.chunks")} value={fmt(inv.chunks.total)} />
+            {inv.chunks.totalChars != null ? (
+              <MetricRow
+                label={t("settings.kb.inv.metric.totalChars")}
+                value={fmt(inv.chunks.totalChars)}
+              />
+            ) : null}
+            {inv.chunks.meanChars != null ? (
+              <MetricRow
+                label={t("settings.kb.inv.metric.meanChars")}
+                value={fmt(inv.chunks.meanChars)}
+              />
+            ) : null}
+          </>
+        ) : null}
+        {inv.vectors ? (
+          <>
+            <MetricRow label={t("settings.kb.inv.metric.vectors")} value={fmt(inv.vectors.count)} />
+            <MetricRow
+              label={t("settings.kb.inv.metric.embedModel")}
+              value={`${inv.vectors.model} (dim=${inv.vectors.dim})`}
+            />
+            {inv.vectors.updatedAt ? (
+              <MetricRow
+                label={t("settings.kb.inv.metric.updatedAt")}
+                value={new Date(inv.vectors.updatedAt).toLocaleString()}
+              />
+            ) : null}
+          </>
+        ) : null}
+      </dl>
+
+      {/* Issue drill-down — only rendered on amber runs. Each entry is
+          one machine-derived inconsistency; the raw msg is kept as a
+          fallback for API consumers, but we translate via the kind here. */}
+      {!healthy && inv.consistency.issues.length ? (
+        <ul className="kb-inv__issues">
+          {inv.consistency.issues.map((iss, i) => (
+            <li key={i} className="kb-inv__issue">
+              <AlertTriangle size={13} aria-hidden />
+              <span className="kb-inv__issue-stage">
+                {t(`settings.kb.inv.stage${iss.stage[0]!.toUpperCase() + iss.stage.slice(1)}`)}
+              </span>
+              <span>{t(`settings.kb.inv.issue.${iss.kind}`, { n: iss.count })}</span>
+            </li>
+          ))}
+        </ul>
+      ) : null}
+
+      {inv.pdfsOnDisk === 0 ? (
+        <p className="kb-inv__hint">
+          {t("settings.kb.inv.noPdfs", { path: `${inv.kbRoot}/source/pdf/` })}
+        </p>
+      ) : null}
+    </div>
+  );
+}
+
+function MetricRow({ label, value }: { label: string; value: string }) {
+  return (
+    <div>
+      <dt>{label}</dt>
+      <dd>{value}</dd>
+    </div>
+  );
+}
+
+/**
+ * One row in the env-completeness checklist. Three states:
+ *  - ok = true          → green ✓, label only
+ *  - unknown = true     → grey ?, label + neutral hint (probe not yet run;
+ *                         happens briefly while status is loading)
+ *  - otherwise          → red ×, label + `pendingText` explaining what to do
+ */
+function ChecklistItem({
+  ok,
+  unknown,
+  label,
+  pendingText,
+}: {
+  ok: boolean;
+  unknown?: boolean;
+  label: string;
+  pendingText: string;
+}) {
+  const state = ok ? "ok" : unknown ? "unknown" : "pending";
+  return (
+    <li className={`kb-env__check kb-env__check--${state}`}>
+      <span className="kb-env__check-icon" aria-hidden>
+        {ok ? <Check size={14} /> : unknown ? "…" : <X size={14} />}
+      </span>
+      <span className="kb-env__check-body">
+        <span className="kb-env__check-label">{label}</span>
+        {!ok ? <span className="kb-env__check-hint">{pendingText}</span> : null}
+      </span>
+    </li>
+  );
 }
 
 // Small progress bar used for the venv + model download rows in the env
@@ -89,9 +447,53 @@ function SetupProgressRow({
   );
 }
 
+/**
+ * OCR provider presets exposed in the UI dropdown. Kept in sync with the
+ * Python-side ``OCR_PRESETS`` in ``KnowledgeBase/scripts/ocr_pdfs.py`` —
+ * the frontend only advertises presets; the pipeline resolves them by name.
+ *
+ * The empty-string entry is rendered as "-- select a provider --" and is
+ * used to force new users through an explicit provider choice (no silent
+ * default to SiliconFlow — that surprises international users who don't
+ * have a SiliconFlow account).
+ */
+const OCR_PRESET_OPTIONS = [
+  { id: "", labelKey: "settings.kb.ocrPreset.chooseHint" },
+  { id: "siliconflow", labelKey: "settings.kb.ocrPreset.siliconflow" },
+  { id: "openai", labelKey: "settings.kb.ocrPreset.openai" },
+  { id: "anthropic", labelKey: "settings.kb.ocrPreset.anthropic" },
+  { id: "mistral", labelKey: "settings.kb.ocrPreset.mistral" },
+  { id: "zhipu", labelKey: "settings.kb.ocrPreset.zhipu" },
+  { id: "qwen", labelKey: "settings.kb.ocrPreset.qwen" },
+  { id: "custom", labelKey: "settings.kb.ocrPreset.custom" },
+] as const;
+
+/** Default base_url + model + placeholder for each preset. Purely a UX
+ *  helper — when the user picks a preset and hasn't overridden the URL /
+ *  model fields yet, we pre-fill them. The authoritative defaults live in
+ *  ``OCR_PRESETS`` inside ocr_pdfs.py; these are just the visible echo. */
+const OCR_PRESET_DEFAULTS: Record<string, { baseUrl: string; model: string }> = {
+  siliconflow: { baseUrl: "https://api.siliconflow.cn/v1", model: "deepseek-ai/DeepSeek-OCR" },
+  openai:      { baseUrl: "https://api.openai.com/v1", model: "gpt-4o" },
+  anthropic:   { baseUrl: "https://api.anthropic.com/v1", model: "claude-sonnet-5" },
+  mistral:     { baseUrl: "https://api.mistral.ai/v1", model: "pixtral-large-latest" },
+  zhipu:       { baseUrl: "https://open.bigmodel.cn/api/paas/v4", model: "glm-4v-plus" },
+  qwen:        { baseUrl: "https://dashscope.aliyuncs.com/compatible-mode/v1", model: "qwen-vl-max" },
+  custom:      { baseUrl: "", model: "" },
+};
+
 export function KnowledgeBasePanel() {
   const t = useT();
   const [ocrApiKey, setOcrApiKey] = useState("");
+  // OCR provider selection. All four fields are independent — the user
+  // can e.g. pick the openai preset but override just the base URL to point
+  // at a proxy. Blank strings mean "let the backend use the preset default"
+  // for base_url / model / prompt, and "no key configured yet" for the key.
+  const [ocrPreset, setOcrPreset] = useState<string>("");
+  const [ocrBaseUrl, setOcrBaseUrl] = useState("");
+  const [ocrModel, setOcrModel] = useState("");
+  const [ocrPrompt, setOcrPrompt] = useState("");
+  const [ocrPromptOpen, setOcrPromptOpen] = useState(false);
   const [metaApiKey, setMetaApiKey] = useState("");
   const [metaBaseUrl, setMetaBaseUrl] = useState("");
   const [metaModel, setMetaModel] = useState("");
@@ -112,18 +514,31 @@ export function KnowledgeBasePanel() {
    *  download back-to-back. */
   const [activeJob, setActiveJob] = useState<"build" | "setup-env" | "setup-full" | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [env, setEnv] = useState<{
-    python: string;
-    pythonIsVenv: boolean;
-    venvExists: boolean;
-    expectedVenvPath: string;
-    scriptsPresent: boolean;
-    kbRoot: string;
-  } | null>(null);
+  const [env, setEnv] = useState<KbEnvironment | null>(null);
+  /** Live-updating "N seconds ago" clock — needs its own tick to advance
+   *  without waiting on a re-render triggered by something else. Kept on
+   *  a 5s cadence: precise enough for the label, quiet enough not to churn.
+   *  probeTick also flips true when the user hits "Re-check" so the button
+   *  can show a spinner while the request is in flight. */
+  const [probeTick, setProbeTick] = useState(0);
+  const [probeBusy, setProbeBusy] = useState(false);
+  // Inventory panel (four-stage disk state + consistency check). Independent
+  // of the env probe — the two answer different questions ("is the pipeline
+  // installable" vs "is what's on disk internally consistent").
+  const [inventory, setInventory] = useState<KbInventory | null>(null);
+  const [inventoryBusy, setInventoryBusy] = useState(false);
   const [envBusy, setEnvBusy] = useState(false);
   // Model download runs in parallel with env setup; it needs its own
   // progress row and busy flag so the UI can show both in flight at once.
   const [modelBusy, setModelBusy] = useState(false);
+  // Optional HuggingFace token — session-only so a shared machine can't leak
+  // credentials by accident. Empty string ≡ anonymous download.
+  const [hfToken, setHfToken] = useState("");
+  // Toggle for the China pip mirror. Only affects the venv install path;
+  // the KB pipeline's HTTP calls (SiliconFlow OCR, metadata LLM) are
+  // orthogonal and unchanged.
+  const [usePipMirror, setUsePipMirror] = useState(false);
+  const PIP_MIRROR_URL = "https://pypi.tuna.tsinghua.edu.cn/simple";
   const [envProgress, setEnvProgress] = useState<SetupState>(
     { percent: 0, msg: "", status: "pending" },
   );
@@ -138,6 +553,18 @@ export function KnowledgeBasePanel() {
   const [ocrKeyEditing, setOcrKeyEditing] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const sseRef = useRef<EventSource | null>(null);
+  /**
+   * Cursor for SSE de-dup. When we open the panel mid-build we call
+   * ``replayStages`` on ``/kb/status.recentEvents`` FIRST, then
+   * ``openSse`` — but the server's SSE stream **also** replays its
+   * buffered history immediately after subscribing, so the same events
+   * would flow through ``applyEventToStages`` twice. That's mostly
+   * idempotent (progress → done overwrites), but the ``warn`` accumulator
+   * would double-count. This ref stores the ISO ts of the newest event
+   * we've already applied; any SSE event with an equal-or-earlier ts is
+   * a replayed dup and gets dropped.
+   */
+  const lastAppliedTsRef = useRef<string>("");
 
   // Hydrate from server: if a build is already running (e.g. user reopened
   // the dialog mid-build), show its current status + replay recent events.
@@ -150,8 +577,28 @@ export function KnowledgeBasePanel() {
         if (cancelled) return;
         setOcrKeySaved(cfg.hasOcrApiKey);
         setOcrKeyPreview(cfg.ocrApiKeyPreview);
+        // Only hydrate a saved preset; leave the field blank if the
+        // backend has never persisted one so the user is forced to make
+        // an explicit choice on first setup (no silent SiliconFlow default
+        // for a US user who's confused why their OCR is going to
+        // api.siliconflow.cn).
+        if (cfg.ocrPreset) setOcrPreset(cfg.ocrPreset);
+        if (cfg.ocrBaseUrl) setOcrBaseUrl(cfg.ocrBaseUrl);
+        if (cfg.ocrModel) setOcrModel(cfg.ocrModel);
+        if (cfg.ocrPrompt) setOcrPrompt(cfg.ocrPrompt);
       } catch {
         /* api-config fetch is best-effort */
+      }
+    })();
+    // Fetch the on-disk inventory in parallel — it's the top card of the
+    // panel and users expect it to be filled in immediately on open.
+    void (async () => {
+      try {
+        const r = await api.kb.inventory();
+        if (cancelled) return;
+        setInventory(r.inventory);
+      } catch {
+        /* best-effort — leave inventory null and the card just doesn't render. */
       }
     })();
     void (async () => {
@@ -180,11 +627,17 @@ export function KnowledgeBasePanel() {
             setActive(true);
             setActiveJob("build");
           }
-          openSse();
         }
       } catch {
         /* status fetch is best-effort */
       }
+      // Always open the SSE stream as soon as the panel mounts, regardless
+      // of whether a build is currently running. The backend keeps the
+      // connection warm across build starts/stops now, so a build the
+      // user kicks off later will stream progress into THIS connection
+      // without any reconnect ceremony. Fixes the "have to refresh the
+      // page after clicking Build to see progress" bug.
+      if (!cancelled) openSse();
     })();
     return () => {
       cancelled = true;
@@ -201,11 +654,25 @@ export function KnowledgeBasePanel() {
   }, [events.length]);
 
   function replayStages(history: BuildEvent[]) {
-    const next: Record<Stage, StageState> = { ...INITIAL_STAGE_STATE };
+    // Reset each stage to a fresh copy — the initial constant is shared,
+    // and applyEventToStages mutates by index.
+    const next: Record<Stage, StageState> = {
+      ocr: { ...INITIAL_STAGE_STATE.ocr },
+      extract: { ...INITIAL_STAGE_STATE.extract },
+      chunk: { ...INITIAL_STAGE_STATE.chunk },
+      vectorize: { ...INITIAL_STAGE_STATE.vectorize },
+    };
     for (const ev of history) {
       applyEventToStages(next, ev);
     }
     setStages(next);
+    // Remember the newest ts we applied so the SSE handler can skip the
+    // replayed duplicates it's about to receive.
+    let maxTs = "";
+    for (const ev of history) {
+      if (ev.ts && ev.ts > maxTs) maxTs = ev.ts;
+    }
+    if (maxTs) lastAppliedTsRef.current = maxTs;
   }
 
   function applyEventToStages(
@@ -216,16 +683,87 @@ export function KnowledgeBasePanel() {
     const cur = target[ev.stage];
     if (ev.event === "progress") {
       const pct = typeof ev.percent === "number" ? ev.percent : cur.percent;
-      target[ev.stage] = { status: "running", percent: pct, msg: ev.msg };
+      target[ev.stage] = { ...cur, status: "running", percent: pct, msg: ev.msg };
     } else if (ev.event === "info") {
       target[ev.stage] = { ...cur, status: "running", msg: ev.msg };
     } else if (ev.event === "done") {
-      target[ev.stage] = { status: "done", percent: 100, msg: ev.msg };
+      // Inspect the stage-specific quality counters carried on the done
+      // event. Each stage advertises different fields — see the tables in
+      // KnowledgeBase/scripts/*.py's emit_event("<stage>", "done", ...).
+      const issues = deriveDoneIssues(ev.stage, ev, cur.warnEvents);
+      const isWarning = issues.length > 0;
+      target[ev.stage] = {
+        status: isWarning ? "warning" : "done",
+        percent: 100,
+        msg: ev.msg,
+        issues,
+        warnEvents: cur.warnEvents,
+      };
     } else if (ev.event === "error") {
-      target[ev.stage] = { ...cur, status: "error", msg: ev.msg };
+      target[ev.stage] = {
+        ...cur,
+        status: "error",
+        msg: ev.msg,
+        // Preserve issues so a warning that later escalates to error still
+        // shows both in the drill-down list.
+        issues: cur.issues,
+      };
     } else if (ev.event === "warn") {
-      target[ev.stage] = { ...cur, msg: ev.msg };
+      // Accumulate: warn events during a run are the raw signal for the
+      // "chunk stage got a warning" case where the done event doesn't
+      // report failure counts. They also add colour to the tooltip for the
+      // other stages, so we keep them even when a numeric quality field
+      // will also fire on done.
+      target[ev.stage] = {
+        ...cur,
+        msg: ev.msg,
+        issues: [...cur.issues, ev.msg],
+        warnEvents: cur.warnEvents + 1,
+      };
     }
+  }
+
+  /**
+   * Read the numeric quality counters a Python stage emits alongside its
+   * ``done`` event, and translate any non-zero counter into a plain-string
+   * issue the UI can render. Keeps the stage-specific field names as the
+   * single source of truth here (backend already emits them; no wire
+   * change needed).
+   *
+   * `priorWarnCount` covers `chunk`, which has no numeric quality field on
+   * done — we approximate by "was there at least one warn event during the
+   * run?". OCR/extract/vectorize get precise counts.
+   */
+  function deriveDoneIssues(
+    stage: Stage,
+    ev: BuildEvent,
+    priorWarnCount: number,
+  ): string[] {
+    const out: string[] = [];
+    const num = (key: string): number => {
+      const v = ev[key];
+      return typeof v === "number" ? v : 0;
+    };
+    if (stage === "ocr") {
+      const fail = num("fail");
+      if (fail > 0) out.push(t("settings.kb.stage.warn.ocrFail", { n: fail }));
+    } else if (stage === "extract") {
+      const fallback = num("fallback");
+      const empty = num("empty");
+      if (fallback > 0) out.push(t("settings.kb.stage.warn.extractFallback", { n: fallback }));
+      if (empty > 0) out.push(t("settings.kb.stage.warn.extractEmpty", { n: empty }));
+    } else if (stage === "vectorize") {
+      const fail = num("fail");
+      if (fail > 0) out.push(t("settings.kb.stage.warn.vectorizeFail", { n: fail }));
+    } else if (stage === "chunk") {
+      // chunk's done event doesn't carry a numeric error count — surface an
+      // aggregate "N warnings during chunking" line so the user knows to
+      // check the log.
+      if (priorWarnCount > 0) {
+        out.push(t("settings.kb.stage.warn.chunkGeneric", { n: priorWarnCount }));
+      }
+    }
+    return out;
   }
 
   // Replay setup-env / setup-models progress from a fresh snapshot (used on
@@ -262,6 +800,19 @@ export function KnowledgeBasePanel() {
     return prev;
   }
 
+  async function refreshInventory() {
+    setInventoryBusy(true);
+    try {
+      const r = await api.kb.inventory();
+      setInventory(r.inventory);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.warn("kb.inventory failed:", err);
+    } finally {
+      setInventoryBusy(false);
+    }
+  }
+
   async function refreshEnv() {
     try {
       const s = await api.kb.status();
@@ -271,7 +822,45 @@ export function KnowledgeBasePanel() {
     }
   }
 
+  /** Force-refresh the deps+models probe on the backend, bypassing the 60s
+   *  cache. Used by the "Re-check" button — always safe to click, and the
+   *  only way to see the effect of e.g. a manual `pip install` without
+   *  waiting for the TTL. */
+  async function startProbe() {
+    setProbeBusy(true);
+    try {
+      const r = await api.kb.probe();
+      if (r.environment) setEnv(r.environment);
+    } catch (err) {
+      // Don't set the top-level error banner — the probe is diagnostic; a
+      // failure is uninteresting to the build flow and would just noise up
+      // the panel. Log to console so it's still discoverable in devtools.
+      // eslint-disable-next-line no-console
+      console.warn("kb.probe failed:", err);
+    } finally {
+      setProbeBusy(false);
+    }
+  }
+
+  // Tick the "N seconds ago" label every 5 s while the panel is mounted.
+  // Cheap: one setState with a number, guaranteed to trigger only that label.
+  useEffect(() => {
+    const id = window.setInterval(() => setProbeTick((t) => t + 1), 5_000);
+    return () => window.clearInterval(id);
+  }, []);
+  // Reference probeTick so React treats the render as depending on it — the
+  // computation reads env.probedAt but the DISPLAY needs to re-render every
+  // tick. Assigning to a discarded local is cheap and lint-clean.
+  void probeTick;
+
   function pushEvent(ev: BuildEvent) {
+    // Drop events we've already replayed from /kb/status. The server's SSE
+    // stream re-emits its buffer to every new subscriber, so opening the
+    // panel mid-build causes each buffered event to arrive twice — once
+    // via /kb/status.recentEvents (via replayStages), once via the SSE
+    // stream. Comparing ts against the cursor drops the second copy.
+    if (ev.ts && ev.ts <= lastAppliedTsRef.current) return;
+    if (ev.ts) lastAppliedTsRef.current = ev.ts;
     setEvents((prev) => {
       const next = prev.concat(ev);
       // Cap log at ~2k lines so a long OCR run doesn't drag the DOM.
@@ -286,6 +875,10 @@ export function KnowledgeBasePanel() {
     if (ev.stage === "build" && (ev.event === "done" || ev.event === "error")) {
       setActive(false);
       setActiveJob(null);
+      // A finished build changed the on-disk ledgers — refresh the inventory
+      // panel so the operator sees updated counts + a fresh consistency check
+      // without having to click "Refresh" themselves.
+      void refreshInventory();
     }
     if (ev.stage === "setup-env") {
       setEnvProgress((prev) => deriveSetupState(prev, ev));
@@ -318,18 +911,24 @@ export function KnowledgeBasePanel() {
     es.onmessage = (e) => {
       try {
         const ev = JSON.parse(e.data) as BuildEvent;
-        if (ev.event === "stream-end" || ev.event === "idle") {
-          es.close();
-          sseRef.current = null;
-          return;
-        }
+        // `idle` is a keepalive/marker from the server saying "connected,
+        // no active build" — we do NOT close on it (that would defeat the
+        // whole point of the long-lived stream: future builds should flow
+        // into this same connection without a manual reconnect).
+        // `stream-end` is legacy — the backend no longer emits it, but we
+        // still tolerate it in case a mixed-version peer sends one.
+        if (ev.event === "idle" || ev.event === "stream-end") return;
         pushEvent(ev);
       } catch {
         /* swallow malformed event */
       }
     };
     es.onerror = () => {
-      // Browser auto-retries; nothing to do.
+      // Browser auto-retries on transient network hiccups. If the server
+      // actively closed (e.g. process restart), EventSource enters CLOSED
+      // and won't reconnect on its own; the panel will show stale state
+      // until the user reopens it, which is acceptable — a live restart
+      // of the backend is a rare, high-touch operation.
     };
   }
 
@@ -341,8 +940,22 @@ export function KnowledgeBasePanel() {
   }
 
   const formInvalid = useMemo(() => {
-    if (skip.ocr === false && !ocrApiKey.trim() && !ocrKeySaved) {
-      return t("settings.kb.error.missingOcrKey");
+    if (skip.ocr === false) {
+      // Preset is required even when a key is already saved — a v3-era
+      // saved key still applies to the SiliconFlow preset, but for a
+      // fresh install with no preset picked yet we can't guess.
+      if (!ocrPreset) return t("settings.kb.error.missingOcrPreset");
+      if (!ocrApiKey.trim() && !ocrKeySaved) {
+        return t("settings.kb.error.missingOcrKey");
+      }
+      // Custom preset needs an explicit base_url + model (no defaults to
+      // fall back on). Other presets can leave them blank.
+      if (ocrPreset === "custom") {
+        const effBase = ocrBaseUrl.trim() || OCR_PRESET_DEFAULTS[ocrPreset]?.baseUrl || "";
+        const effModel = ocrModel.trim() || OCR_PRESET_DEFAULTS[ocrPreset]?.model || "";
+        if (!effBase) return t("settings.kb.error.missingOcrBaseUrl");
+        if (!effModel) return t("settings.kb.error.missingOcrModel");
+      }
     }
     if (skip.extract === false) {
       if (!metaApiKey.trim() && !reuseAgentKey) {
@@ -350,7 +963,8 @@ export function KnowledgeBasePanel() {
       }
     }
     return null;
-  }, [ocrApiKey, ocrKeySaved, metaApiKey, reuseAgentKey, skip.ocr, skip.extract, t]);
+  }, [ocrApiKey, ocrKeySaved, ocrPreset, ocrBaseUrl, ocrModel,
+      metaApiKey, reuseAgentKey, skip.ocr, skip.extract, t]);
 
   async function startBuild() {
     setError(null);
@@ -360,7 +974,16 @@ export function KnowledgeBasePanel() {
     }
     // Reset for a fresh run.
     setEvents([]);
-    setStages(INITIAL_STAGE_STATE);
+    setStages({
+      ocr: { ...INITIAL_STAGE_STATE.ocr },
+      extract: { ...INITIAL_STAGE_STATE.extract },
+      chunk: { ...INITIAL_STAGE_STATE.chunk },
+      vectorize: { ...INITIAL_STAGE_STATE.vectorize },
+    });
+    // Fresh run — throw away the "last seen ts" cursor so the first event
+    // of this build gets applied even though its ts might be earlier than
+    // some ancient event from an old buffer.
+    lastAppliedTsRef.current = "";
     // When "reuse agent key" is on we omit metaKey from the request and let
     // the build_kb.py side resolve it from META_LLM_API_KEY / API_config.json.
     // Browser code can't read the masked provider key over the API, so we
@@ -369,6 +992,13 @@ export function KnowledgeBasePanel() {
     const skipList = STAGES.filter((s) => skip[s]);
     try {
       const r = await api.kb.build({
+        // OCR provider config — send the preset always so a saved key
+        // gets paired with the correct base_url on the backend, even
+        // when the user didn't touch the other fields.
+        ocrPreset: ocrPreset || undefined,
+        ocrBaseUrl: ocrBaseUrl.trim() || undefined,
+        ocrModel: ocrModel.trim() || undefined,
+        ocrPrompt: ocrPrompt.trim() || undefined,
         ocrApiKey: ocrApiKey.trim() || undefined,
         metaApiKey: metaKey || undefined,
         metaBaseUrl: metaBaseUrl.trim() || undefined,
@@ -405,7 +1035,10 @@ export function KnowledgeBasePanel() {
     setActiveJob("setup-env");
     setEnvProgress({ percent: 0, msg: "", status: "running" });
     try {
-      const r = await api.kb.setupEnv({ reinstall });
+      const r = await api.kb.setupEnv({
+        reinstall,
+        pipIndexUrl: usePipMirror ? PIP_MIRROR_URL : undefined,
+      });
       if (!r.ok) {
         setEnvBusy(false);
         setActiveJob(null);
@@ -422,6 +1055,36 @@ export function KnowledgeBasePanel() {
     }
   }
 
+  /** Kick off ONLY the model download (venv is assumed to exist). Idempotent
+   *  on the Python side — bge-m3 completing then bge-reranker crashing
+   *  half-way is exactly the case this button exists for: rerun, skip the
+   *  ~1 GB already on disk, resume the missing one. Token is opt-in. */
+  async function startModelSetup() {
+    setError(null);
+    setModelBusy(true);
+    setActiveJob((cur) => cur ?? "setup-env");
+    setModelProgress({ percent: 0, msg: "", status: "running" });
+    try {
+      const r = await api.kb.setupModels({
+        hfMirror: useHfMirror ? "https://hf-mirror.com" : undefined,
+        hfToken: hfToken.trim() || undefined,
+      });
+      if (!r.ok) {
+        setModelBusy(false);
+        setActiveJob(null);
+        setModelProgress({ percent: 0, msg: r.error || "start failed", status: "error" });
+        setError(r.error || "setup-models start failed");
+        return;
+      }
+      openSse();
+    } catch (err) {
+      setModelBusy(false);
+      setActiveJob(null);
+      setModelProgress({ percent: 0, msg: String(err), status: "error" });
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  }
+
   /** One-click: create venv, then download bge models. The backend chains
    *  the two jobs — venv completes first, models kick off automatically. */
   async function startFullSetup() {
@@ -434,6 +1097,8 @@ export function KnowledgeBasePanel() {
     try {
       const r = await api.kb.setupFull({
         hfMirror: useHfMirror ? "https://hf-mirror.com" : undefined,
+        hfToken: hfToken.trim() || undefined,
+        pipIndexUrl: usePipMirror ? PIP_MIRROR_URL : undefined,
       });
       if (!r.ok) {
         setEnvBusy(false);
@@ -458,7 +1123,19 @@ export function KnowledgeBasePanel() {
   async function saveOcrKey(value: string) {
     if (!value.trim()) return;
     try {
-      const r = await api.kb.saveApiConfig({ ocrApiKey: value.trim() });
+      // Persist the whole provider tuple together — the preset alone
+      // decides which base_url a saved key gets paired with, and skipping
+      // any subset here would leave stale prior-preset defaults on disk.
+      const r = await api.kb.saveApiConfig({
+        ocrApiKey: value.trim(),
+        // Persist the preset when the user has explicitly picked one;
+        // leave the field alone otherwise so we don't clobber a value
+        // the user set through a different code path.
+        ocrPreset: ocrPreset || undefined,
+        ocrBaseUrl: ocrBaseUrl.trim() || undefined,
+        ocrModel: ocrModel.trim() || undefined,
+        ocrPrompt: ocrPrompt.trim() || undefined,
+      });
       if (!r.ok) {
         setError(r.error || "failed to save OCR key");
         return;
@@ -477,6 +1154,28 @@ export function KnowledgeBasePanel() {
     }
   }
 
+  /** Called when the user picks a different provider from the dropdown.
+   *  Pre-fills base_url / model with the preset's defaults *only if* the
+   *  current values are still blank or match a different preset's default
+   *  — that way an operator who typed in a custom base URL to reach a
+   *  proxy doesn't have it silently overwritten just because they clicked
+   *  a preset. */
+  function selectOcrPreset(next: string) {
+    setOcrPreset(next);
+    if (!next) return;
+    const defaults = OCR_PRESET_DEFAULTS[next];
+    if (!defaults) return;
+    // If the field currently matches ANY preset's default (or is empty),
+    // treat it as auto-filled and safe to replace. If it matches nothing
+    // known, leave it alone — the user typed a custom value.
+    const isAutoBase = !ocrBaseUrl || Object.values(OCR_PRESET_DEFAULTS)
+      .some((p) => p.baseUrl && p.baseUrl === ocrBaseUrl.trim());
+    const isAutoModel = !ocrModel || Object.values(OCR_PRESET_DEFAULTS)
+      .some((p) => p.model && p.model === ocrModel.trim());
+    if (isAutoBase) setOcrBaseUrl(defaults.baseUrl);
+    if (isAutoModel) setOcrModel(defaults.model);
+  }
+
   return (
     <section className="settings-section">
       <div className="settings-section__header">
@@ -491,15 +1190,99 @@ export function KnowledgeBasePanel() {
         </div>
       </div>
 
+      {/* Inventory card — surfaces the current KB pipeline health from
+          disk. Rendered before the env card because a user opening this
+          panel most often wants to know "is my KB fresh?" first, and only
+          then "what do I need to install to build more?". */}
+      <InventoryCard
+        inventory={inventory}
+        busy={inventoryBusy}
+        onRefresh={() => void refreshInventory()}
+        t={t}
+        nowMs={Date.now()}
+      />
+
       {env ? (
-        <div className={`kb-env kb-env--${env.venvExists ? "ready" : "missing"}`}>
+        <div className={`kb-env kb-env--${env.readyToBuild ? "ready" : env.venvExists ? "partial" : "missing"}`}>
           <div className="kb-env__head">
-            <span className={`sandbox-chip sandbox-chip--${env.venvExists ? "ok" : "off"}`}>
+            <span className={`sandbox-chip sandbox-chip--${env.readyToBuild ? "ok" : "off"}`}>
               <Wrench size={13} />
               {t("settings.kb.env.title")}
               <i className="sandbox-chip__dot" aria-hidden="true" />
             </span>
+            <div className="kb-env__head-right">
+              {env.probedAt ? (
+                <span className="kb-env__probed-at">
+                  {t("settings.kb.env.probedAt", {
+                    seconds: Math.max(0, Math.floor((Date.now() - env.probedAt) / 1000)),
+                  })}
+                </span>
+              ) : null}
+              <button
+                type="button"
+                className="settings-button settings-button--ghost settings-button--sm"
+                onClick={() => void startProbe()}
+                disabled={probeBusy || envBusy || modelBusy}
+                title={t("settings.kb.env.recheck")}
+              >
+                <RefreshCw size={12} aria-hidden className={probeBusy ? "spin" : undefined} />
+                {probeBusy ? t("settings.kb.env.checking") : t("settings.kb.env.recheck")}
+              </button>
+            </div>
           </div>
+
+          {/* Completeness summary — one line per prerequisite, green ✓ if
+              satisfied, red × with an actionable hint otherwise. This is the
+              first thing the user sees when they open the panel. */}
+          <div className={`kb-env__summary kb-env__summary--${env.readyToBuild ? "ok" : "pending"}`}>
+            {env.readyToBuild ? (
+              <div className="kb-env__summary-headline">
+                <Check size={16} aria-hidden />
+                <strong>{t("settings.kb.env.ready")}</strong>
+              </div>
+            ) : (
+              <div className="kb-env__summary-headline">
+                <strong>{t("settings.kb.env.notReady")}</strong>
+              </div>
+            )}
+            <ul className="kb-env__checklist">
+              <ChecklistItem
+                ok={env.venvExists}
+                label={t("settings.kb.env.itemVenv")}
+                pendingText={t("settings.kb.env.checkVenv")}
+              />
+              <ChecklistItem
+                ok={env.depsInstalled === true}
+                unknown={env.depsInstalled === null && env.venvExists}
+                label={t("settings.kb.env.itemDeps")}
+                pendingText={
+                  env.depsError
+                    ? t("settings.kb.env.checkDepsError", { error: env.depsError })
+                    : env.depsMissing.length > 0
+                      ? t("settings.kb.env.checkDepsWithMissing", { names: env.depsMissing.join(", ") })
+                      : t("settings.kb.env.checkDeps")
+                }
+              />
+              <ChecklistItem
+                ok={env.models.bgeM3 && env.models.bgeReranker}
+                label={t("settings.kb.env.itemModels")}
+                pendingText={t("settings.kb.env.checkModelsWithMissing", {
+                  names: [
+                    env.models.bgeM3 ? null : "bge-m3",
+                    env.models.bgeReranker ? null : "bge-reranker-v2-m3",
+                  ]
+                    .filter(Boolean)
+                    .join(", "),
+                })}
+              />
+              <ChecklistItem
+                ok={env.pdfsPresent > 0}
+                label={t("settings.kb.env.itemPdfs", { count: env.pdfsPresent })}
+                pendingText={t("settings.kb.env.checkPdfs", { path: `${env.kbRoot}/source/pdf/` })}
+              />
+            </ul>
+          </div>
+
           <dl className="kb-env__facts">
             <div>
               <dt>KB_ROOT</dt>
@@ -513,6 +1296,27 @@ export function KnowledgeBasePanel() {
           {!env.venvExists ? (
             <div className="kb-env__action">
               <p className="kb-env__note">{t("settings.kb.env.venvMissing")}</p>
+
+              {/* Grouped HF source controls — first-time setup benefits the
+                  most from choosing the right mirror + optional token. */}
+              <HfSourceGroup
+                useMirror={useHfMirror}
+                onUseMirrorChange={setUseHfMirror}
+                token={hfToken}
+                onTokenChange={setHfToken}
+                disabled={envBusy || modelBusy}
+                t={t}
+              />
+
+              {/* China pip mirror — same rationale: first-time setup is the
+                  slowest and benefits the most from a nearby index. */}
+              <PipMirrorField
+                checked={usePipMirror}
+                onChange={setUsePipMirror}
+                disabled={envBusy || modelBusy}
+                t={t}
+              />
+
               <div className="kb-env__buttons">
                 <button
                   type="button"
@@ -536,18 +1340,50 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
               </details>
             </div>
           ) : (
-            <div className="kb-env__buttons">
-              <button
-                type="button"
-                className="settings-button settings-button--ghost"
-                onClick={() => void startEnvSetup(true)}
-                disabled={envBusy || modelBusy || activeJob !== null}
-                title={t("settings.kb.env.reinstallHint")}
-              >
-                <RefreshCw size={14} aria-hidden />
-                {t("settings.kb.env.reinstallButton")}
-              </button>
-              {envBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
+            <div className="kb-env__action">
+              {/* HF source group — mirror + token. Session-only credentials. */}
+              <HfSourceGroup
+                useMirror={useHfMirror}
+                onUseMirrorChange={setUseHfMirror}
+                token={hfToken}
+                onTokenChange={setHfToken}
+                disabled={envBusy || modelBusy}
+                t={t}
+              />
+              {/* pip mirror is only meaningful when re-installing the venv;
+                  we still surface it here (rather than gate on `--reinstall`
+                  clicks alone) because the same button set covers both
+                  "reinstall venv" and "download models" — the flag is
+                  ignored by the models path. */}
+              <PipMirrorField
+                checked={usePipMirror}
+                onChange={setUsePipMirror}
+                disabled={envBusy || modelBusy}
+                t={t}
+              />
+              <div className="kb-env__buttons">
+                <button
+                  type="button"
+                  className="settings-button settings-button--ghost"
+                  onClick={() => void startEnvSetup(true)}
+                  disabled={envBusy || modelBusy || activeJob !== null}
+                  title={t("settings.kb.env.reinstallHint")}
+                >
+                  <RefreshCw size={14} aria-hidden />
+                  {t("settings.kb.env.reinstallButton")}
+                </button>
+                <button
+                  type="button"
+                  className="settings-button settings-button--ghost"
+                  onClick={() => void startModelSetup()}
+                  disabled={envBusy || modelBusy || activeJob !== null}
+                  title={t("settings.kb.env.downloadModelsHint")}
+                >
+                  <Wrench size={14} aria-hidden />
+                  {t("settings.kb.env.downloadModelsButton")}
+                </button>
+                {envBusy || modelBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
+              </div>
             </div>
           )}
 
@@ -568,6 +1404,81 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
       ) : null}
 
       <div className="kb-fields">
+        {/* OCR provider selector. Extracted from the raw "paste your
+            SiliconFlow key" input the v3 UI shipped so the pipeline can
+            drive OpenAI / Anthropic / Mistral / self-hosted endpoints too.
+            Picking a preset pre-fills base_url + model but the user can
+            still override any field individually. */}
+        <label className="settings-field">
+          <span>{t("settings.kb.ocrPreset.label")}</span>
+          <select
+            value={ocrPreset}
+            onChange={(e) => selectOcrPreset(e.target.value)}
+            disabled={active || skip.ocr}
+          >
+            {OCR_PRESET_OPTIONS.map((opt) => (
+              <option key={opt.id} value={opt.id}>{t(opt.labelKey)}</option>
+            ))}
+          </select>
+          <p className="kb-field-hint">{t("settings.kb.ocrPreset.hint")}</p>
+        </label>
+
+        {/* Base URL + model — visible once a preset is picked. Both are
+            editable so users can point at proxies or newer model IDs
+            without waiting for a preset bump. */}
+        {ocrPreset ? (
+          <>
+            <label className="settings-field">
+              <span>{t("settings.kb.ocrBaseUrl")}</span>
+              <input
+                type="url"
+                value={ocrBaseUrl}
+                onChange={(e) => setOcrBaseUrl(e.target.value)}
+                placeholder={
+                  OCR_PRESET_DEFAULTS[ocrPreset]?.baseUrl || "https://api.example.com/v1"
+                }
+                disabled={active || skip.ocr}
+                autoComplete="off"
+              />
+            </label>
+            <label className="settings-field">
+              <span>{t("settings.kb.ocrModel")}</span>
+              <input
+                type="text"
+                value={ocrModel}
+                onChange={(e) => setOcrModel(e.target.value)}
+                placeholder={
+                  OCR_PRESET_DEFAULTS[ocrPreset]?.model || "model-id"
+                }
+                disabled={active || skip.ocr}
+                autoComplete="off"
+              />
+            </label>
+            {/* Custom prompt — hidden behind a collapsible so the average
+                user isn't scared by DeepSeek-OCR's grounding tokens. The
+                Python resolver falls back to a sane per-preset default
+                when this is blank. */}
+            <details
+              className="kb-advanced"
+              open={ocrPromptOpen}
+              onToggle={(e) => setOcrPromptOpen((e.target as HTMLDetailsElement).open)}
+            >
+              <summary>{t("settings.kb.ocrPrompt.advanced")}</summary>
+              <label className="settings-field">
+                <span>{t("settings.kb.ocrPrompt.label")}</span>
+                <textarea
+                  value={ocrPrompt}
+                  onChange={(e) => setOcrPrompt(e.target.value)}
+                  placeholder={t("settings.kb.ocrPrompt.placeholder")}
+                  rows={3}
+                  disabled={active || skip.ocr}
+                />
+                <p className="kb-field-hint">{t("settings.kb.ocrPrompt.hint")}</p>
+              </label>
+            </details>
+          </>
+        ) : null}
+
         <label className="settings-field">
           <span>{t("settings.kb.ocrKey")}</span>
           {ocrKeySaved && !ocrKeyEditing ? (
@@ -649,18 +1560,10 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
           </>
         ) : null}
 
-        <label className="settings-check">
-          <input
-            type="checkbox"
-            checked={useHfMirror}
-            onChange={(e) => setUseHfMirror(e.target.checked)}
-            disabled={active}
-          />
-          <span>{t("settings.kb.useHfMirror")}</span>
-        </label>
-        <p className="kb-field-hint">
-          {t("settings.kb.useHfMirrorHint")}
-        </p>
+        {/* The HF mirror + token controls previously lived here in the
+            build-config section. They moved to the environment card
+            (grouped as HfSourceGroup) because they affect the model
+            download step — same place users configure venv/models. */}
 
         <fieldset className="kb-stages">
           <legend>{t("settings.kb.stages")}</legend>
@@ -688,14 +1591,26 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
             className="settings-button"
             type="button"
             onClick={() => void startBuild()}
-            disabled={!!formInvalid || envBusy || (env != null && !env.venvExists)}
+            disabled={
+              !!formInvalid ||
+              envBusy ||
+              modelBusy ||
+              // env == null means we haven't heard from the backend yet; allow
+              // the click so the user isn't blocked forever if /kb/status is
+              // slow, and the backend will reject with a helpful message.
+              (env != null && (!env.venvExists || env.depsInstalled === false || !env.models.bgeM3 || !env.models.bgeReranker))
+            }
             title={
               formInvalid
                 ?? (env != null && !env.venvExists
                   ? t("settings.kb.env.needSetupFirst")
-                  : envBusy
-                    ? t("settings.kb.env.busy")
-                    : undefined)
+                  : env != null && env.depsInstalled === false
+                    ? t("settings.kb.env.checkDeps")
+                    : env != null && (!env.models.bgeM3 || !env.models.bgeReranker)
+                      ? t("settings.kb.env.checkModels")
+                      : envBusy || modelBusy
+                        ? t("settings.kb.env.busy")
+                        : undefined)
             }
           >
             <Play size={14} aria-hidden />
@@ -722,8 +1637,17 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
           {STAGES.map((s) => {
             const st = stages[s];
             const pct = Math.min(100, Math.max(0, st.percent));
+            // Symbol shown in the percent column — takes precedence over the
+            // raw number when the stage is in a terminal state, so users see
+            // an unambiguous ✓/⚠/✗ instead of a bare "100%" that hides a
+            // problem. Warning tooltip lists the exact counts.
+            const badge =
+              st.status === "done" ? "✓"
+                : st.status === "warning" ? "⚠"
+                  : st.status === "error" ? "✗"
+                    : `${Math.round(st.percent)}%`;
             return (
-              <div key={s} className="kb-progress__row">
+              <div key={s} className={`kb-progress__row kb-progress__row--${st.status}`}>
                 <strong className="kb-progress__label">{STAGE_LABELS[s]}</strong>
                 <div className="kb-progress__track" aria-hidden="true">
                   <span
@@ -731,10 +1655,24 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
                     style={{ width: `${pct}%` }}
                   />
                 </div>
-                <span className="kb-progress__pct">
-                  {st.status === "done" ? "✓" : `${Math.round(st.percent)}%`}
+                <span
+                  className={`kb-progress__pct kb-progress__pct--${st.status}`}
+                  title={st.issues.length ? st.issues.join("\n") : undefined}
+                >
+                  {badge}
                 </span>
                 {st.msg ? <div className="kb-progress__msg">{st.msg}</div> : null}
+                {/* Warning breakdown: only shown when the stage terminated
+                    with a warning — otherwise we don't nag with an issue
+                    list. Each item is one plain-string sentence produced by
+                    deriveDoneIssues / warn events. */}
+                {st.status === "warning" && st.issues.length ? (
+                  <ul className="kb-progress__issues">
+                    {st.issues.map((iss, i) => (
+                      <li key={i} className="kb-progress__issue">{iss}</li>
+                    ))}
+                  </ul>
+                ) : null}
               </div>
             );
           })}

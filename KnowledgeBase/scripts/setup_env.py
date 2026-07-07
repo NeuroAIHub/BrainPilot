@@ -86,9 +86,14 @@ def _venv_python(venv_dir: Path) -> Path:
     return venv_dir / "bin" / "python"
 
 
-def _run_streaming(cmd: list[str], label: str) -> int:
+def _run_streaming(cmd: list[str], label: str, env: dict | None = None) -> int:
     """Run a subprocess, forwarding each stdout/stderr line as a setup-env
     event so the user can watch pip download progress in real time.
+
+    ``env`` overrides the child's environment when non-None. Callers use this
+    to inject PIP_INDEX_URL for a China mirror without leaking the URL into
+    the argv or into a printed shell echo (some corporate mirrors carry
+    tokens in the URL).
 
     Returns the process's exit code. We don't raise — the caller decides
     how to surface the failure.
@@ -101,6 +106,7 @@ def _run_streaming(cmd: list[str], label: str) -> int:
             stderr=subprocess.STDOUT,
             bufsize=1,
             text=True,
+            env=env,
         )
     except FileNotFoundError as exc:
         _emit("error", f"failed to spawn {cmd[0]}: {exc}")
@@ -164,6 +170,12 @@ def main() -> int:
                          "the venv. Defaults to the newest python3.x on PATH.")
     ap.add_argument("--reinstall", action="store_true",
                     help="Remove and recreate the venv from scratch.")
+    ap.add_argument("--pip-index-url", default=None,
+                    help="pip package index URL to use for BOTH pip installs "
+                         "(pip/wheel upgrade and requirements.txt). Common "
+                         "China mirrors: https://pypi.tuna.tsinghua.edu.cn/simple, "
+                         "https://mirrors.aliyun.com/pypi/simple. When omitted "
+                         "falls back to PIP_INDEX_URL env, then pypi.org.")
     ap.add_argument("--json", action="store_true",
                     help="Emit progress as NDJSON events (one per line).")
     args = ap.parse_args()
@@ -220,10 +232,27 @@ def main() -> int:
         return 1
     _emit("info", f"venv python: {venv_py}", venv_python=str(venv_py))
 
+    # Resolve pip index URL BEFORE the first pip call so it applies to both
+    # the pip/wheel self-upgrade and the requirements install. Priority:
+    # --pip-index-url flag → PIP_INDEX_URL env → pip's own default (pypi.org).
+    # We only override when we actually have a URL to hand pip — leaving env
+    # untouched lets the caller's PIP_INDEX_URL sail through unmodified.
+    pip_env: dict | None = None
+    pip_index_url = args.pip_index_url or os.environ.get("PIP_INDEX_URL")
+    if pip_index_url:
+        pip_env = os.environ.copy()
+        pip_env["PIP_INDEX_URL"] = pip_index_url
+        # tuna / aliyun / ustc all serve via HTTPS so no --trusted-host, but
+        # log the mirror so the operator can confirm which one they hit —
+        # some corporate mirrors mask themselves as pypi.org URLs and this is
+        # how you tell.
+        _emit("info", f"using pip index: {pip_index_url}")
+
     _emit("progress", "upgrading pip + wheel ...", percent=20)
     rc = _run_streaming(
         [str(venv_py), "-m", "pip", "install", "--upgrade", "pip", "wheel"],
         label="upgrade-pip",
+        env=pip_env,
     )
     if rc != 0:
         _emit("error", f"pip self-upgrade exited with code {rc}")
@@ -234,6 +263,7 @@ def main() -> int:
     rc = _run_streaming(
         [str(venv_py), "-m", "pip", "install", "-r", str(req_file)],
         label="install-requirements",
+        env=pip_env,
     )
     if rc != 0:
         _emit("error",

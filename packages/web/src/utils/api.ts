@@ -146,6 +146,56 @@ export function getTerminalWsUrl(sandboxId: string, cols = 80, rows = 24): strin
   return `${protocol}//${window.location.host}${API_BASE}/sandbox/${sandboxId}/terminal?${params}`;
 }
 
+/**
+ * On-disk KB inventory — see backend-core/src/kb-inventory.ts::KbInventory
+ * for the full contract. Fields kept null-vs-number split so the UI can
+ * tell "ledger missing" from "ledger present, value = 0".
+ */
+export interface KbInventoryIssue {
+  stage: "ocr" | "extract" | "chunk" | "vectorize";
+  kind: "missing" | "fallback" | "empty" | "unindexed" | "stale";
+  count: number;
+  msg: string;
+}
+export interface KbInventory {
+  kbRoot: string;
+  pdfsOnDisk: number;
+  ocred: number | null;
+  extracted: { total: number; ok: number; fallback: number; empty: number } | null;
+  chunks: {
+    total: number;
+    distinctPapers: number | null;
+    totalChars: number | null;
+    meanChars: number | null;
+  } | null;
+  vectors: { count: number; dim: number; model: string; updatedAt: string | null } | null;
+  consistency: { healthy: boolean; issues: KbInventoryIssue[] };
+  sampledAt: number;
+}
+
+/**
+ * The KB pipeline's environment-readiness snapshot. Stays in lock-step with
+ * ``packages/backend-core/src/kb-builder.ts::KbEnvironment``. The KB panel
+ * narrows on these booleans to decide whether to render "ready", "needs
+ * setup", or a specific "missing X" hint.
+ */
+export interface KbEnvironment {
+  python: string;
+  pythonIsVenv: boolean;
+  venvExists: boolean;
+  expectedVenvPath: string;
+  scriptsPresent: boolean;
+  kbRoot: string;
+  /** null = not-yet-probed (e.g. venv absent); false/true = probe result. */
+  depsInstalled: boolean | null;
+  depsMissing: string[];
+  depsError?: string;
+  models: { bgeM3: boolean; bgeReranker: boolean };
+  pdfsPresent: number;
+  readyToBuild: boolean;
+  probedAt: number | null;
+}
+
 export const api = {
   async getVersion(): Promise<{ version: string }> {
     if (runtimeConfig.useMockBackend) {
@@ -781,6 +831,16 @@ export const api = {
   // here for it.
   kb: {
     async build(opts: {
+      /** OCR provider preset id — one of siliconflow | openai | anthropic
+       *  | mistral | zhipu | qwen | custom. Omit to reuse whatever the
+       *  backend has persisted (from a prior save via /kb/api-config). */
+      ocrPreset?: string;
+      /** OpenAI-compatible base URL, overrides the preset default. */
+      ocrBaseUrl?: string;
+      /** Vision model id (e.g. gpt-4o, deepseek-ai/DeepSeek-OCR). */
+      ocrModel?: string;
+      /** Custom instruction sent with each page image. */
+      ocrPrompt?: string;
       ocrApiKey?: string;
       metaApiKey?: string;
       metaBaseUrl?: string;
@@ -817,16 +877,29 @@ export const api = {
         msg: string;
         [k: string]: unknown;
       }>;
-      environment: {
-        python: string;
-        pythonIsVenv: boolean;
-        venvExists: boolean;
-        expectedVenvPath: string;
-        scriptsPresent: boolean;
-        kbRoot: string;
-      };
+      environment: KbEnvironment;
     }> {
       return handleJson(await apiFetch(`${API_BASE}/kb/status`));
+    },
+
+    // Force-refresh the env-completeness probe (bypasses the /kb/status 60s
+    // cache). Called from the "Re-check" button.
+    async probe(): Promise<{ environment: KbEnvironment }> {
+      return handleJson(
+        await apiFetch(`${API_BASE}/kb/probe`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: "{}",
+        }),
+      );
+    },
+
+    // Read the on-disk inventory of the four pipeline stages + a
+    // consistency check. Freshly computed on every call — no server-side
+    // cache, because it's cheap and users will hit it right after adding
+    // a PDF.
+    async inventory(): Promise<{ inventory: KbInventory }> {
+      return handleJson(await apiFetch(`${API_BASE}/kb/inventory`));
     },
 
     async cancel(): Promise<{ ok: boolean; message?: string }> {
@@ -840,6 +913,7 @@ export const api = {
     async setupEnv(opts: {
       python?: string;
       reinstall?: boolean;
+      pipIndexUrl?: string;
       kbRoot?: string;
     } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/setup-env`, {
@@ -859,6 +933,7 @@ export const api = {
     // can run concurrently, and setupFull() chains them.
     async setupModels(opts: {
       hfMirror?: string;
+      hfToken?: string;
       kbRoot?: string;
     } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/setup-models`, {
@@ -880,6 +955,8 @@ export const api = {
       python?: string;
       reinstall?: boolean;
       hfMirror?: string;
+      hfToken?: string;
+      pipIndexUrl?: string;
       kbRoot?: string;
     } = {}): Promise<{ ok: boolean; startedAt?: number; error?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/setup-full`, {
@@ -894,16 +971,36 @@ export const api = {
       return handleJson(res);
     },
 
-    // Persisted KB API config (SiliconFlow OCR key today). Backend never
-    // returns the plaintext — only a masked preview + boolean — so the
-    // browser can indicate "already saved" without ever holding the secret.
-    async getApiConfig(): Promise<{ hasOcrApiKey: boolean; ocrApiKeyPreview: string }> {
+    // Persisted KB OCR provider config. Backend never returns the
+    // plaintext API key — only a masked preview + boolean — so the browser
+    // can indicate "already saved" without ever holding the secret. The
+    // other provider fields (preset / base URL / model / prompt) are not
+    // secret and come back verbatim so the UI can pre-fill the form.
+    async getApiConfig(): Promise<{
+      hasOcrApiKey: boolean;
+      ocrApiKeyPreview: string;
+      ocrPreset: string;
+      ocrBaseUrl: string;
+      ocrModel: string;
+      ocrPrompt: string;
+    }> {
       const res = await apiFetch(`${API_BASE}/kb/api-config`);
-      if (!res.ok) return { hasOcrApiKey: false, ocrApiKeyPreview: "" };
+      if (!res.ok) {
+        return {
+          hasOcrApiKey: false, ocrApiKeyPreview: "",
+          ocrPreset: "", ocrBaseUrl: "", ocrModel: "", ocrPrompt: "",
+        };
+      }
       return handleJson(res);
     },
 
-    async saveApiConfig(patch: { ocrApiKey?: string }): Promise<{ ok: boolean; error?: string }> {
+    async saveApiConfig(patch: {
+      ocrPreset?: string;
+      ocrBaseUrl?: string;
+      ocrModel?: string;
+      ocrPrompt?: string;
+      ocrApiKey?: string;
+    }): Promise<{ ok: boolean; error?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/api-config`, {
         method: "PUT",
         headers: { "content-type": "application/json" },

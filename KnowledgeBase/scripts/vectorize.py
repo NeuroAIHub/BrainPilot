@@ -49,7 +49,15 @@ EMB_DIM = 1024
 EMB_MAX_LENGTH = 1024     # tokens; chunks are ≤1500 chars (~400 EN tokens)
 DEFAULT_BATCH = 16
 DEFAULT_WORKERS_HTTP = 4
+# Big-KB backstop: on stores with hundreds of thousands of chunks we don't
+# want to emit thousands of progress events, so we still cap at one per
+# PRINT_EVERY-embedded-chunks milestone. But we ALSO emit whenever more
+# than PROGRESS_MIN_INTERVAL_SEC has passed since the last event, so small
+# stores (a few dozen batches total, like a fresh install with 2 PDFs)
+# don't sit on a stale "workers=4 batch=16 …" line while CPU inference
+# grinds through each batch. See run_pipeline() for the emit gate.
 PRINT_EVERY = 500
+PROGRESS_MIN_INTERVAL_SEC = 0.5
 
 
 # ── store IO ──────────────────────────────────────────────────────────────
@@ -209,12 +217,25 @@ def run_pipeline(
     done = 0
     fail = 0
     next_print = PRINT_EVERY
+    last_emit_ts = t0
+
+    # Kick off a 0% progress event so the panel bar leaves "pending grey"
+    # even before the first batch lands. Without this, on a slow first
+    # batch (CPU inference of a 16-chunk batch can take 30s+) the row
+    # stays at 0% and looks stuck.
+    emit_event(
+        "vectorize", "progress",
+        f"0/{len(pending)}  starting…",
+        done=0, total=len(pending), percent=0,
+        batches_done=0, batches_total=len(batches), fail=0,
+    )
 
     # Workers don't help when the encoder runs in-process (Python's GIL
     # serialises them under the hood); keep it at 1 for InProcessEncoder.
     in_process = isinstance(encoder, InProcessEncoder)
     effective_workers = 1 if in_process else max(1, workers)
 
+    batches_done = 0
     with ThreadPoolExecutor(max_workers=effective_workers) as ex:
         futures = {
             ex.submit(encoder.encode, [c["text"] for c in batch]): bi
@@ -227,25 +248,38 @@ def run_pipeline(
                 vecs = fut.result()
             except Exception as exc:  # noqa: BLE001
                 fail += len(batch)
+                batches_done += 1
                 emit_event("vectorize", "warn",
                            f"batch {bi} failed: {type(exc).__name__}: {exc}")
                 continue
             results[bi] = (vecs, batch)
             done += len(batch)
-            if done >= next_print or done >= len(pending) - fail:
-                elapsed = time.time() - t0
+            batches_done += 1
+            # Emit a progress event on ANY of:
+            #   - crossed the next PRINT_EVERY milestone (big-KB throttle);
+            #   - been quiet longer than PROGRESS_MIN_INTERVAL_SEC (keeps
+            #     small-KB bars moving);
+            #   - the final batch just landed (always fire terminal 100%).
+            now = time.time()
+            terminal = (batches_done == len(batches))
+            if (done >= next_print
+                    or now - last_emit_ts >= PROGRESS_MIN_INTERVAL_SEC
+                    or terminal):
+                elapsed = now - t0
                 rate = done / elapsed if elapsed else 0
                 remaining = max(0, len(pending) - done - fail)
                 eta = (remaining / rate / 60) if rate else float("inf")
                 emit_event(
                     "vectorize", "progress",
-                    f"{done}/{len(pending)} "
+                    f"{done}/{len(pending)}  batch {batches_done}/{len(batches)}  "
                     f"rate={rate:.1f}/s ETA={eta:.1f}m fail={fail}",
                     done=done, total=len(pending),
                     percent=round(done * 100 / len(pending), 1),
+                    batches_done=batches_done, batches_total=len(batches),
                     rate=round(rate, 1), eta_min=round(eta, 1), fail=fail,
                 )
                 next_print = done + PRINT_EVERY
+                last_emit_ts = now
 
     emit_event("vectorize", "info",
                f"embed phase done in {time.time() - t0:.1f}s; stitching ...")

@@ -25,7 +25,9 @@ API keys
 This script does NOT itself read API keys. The OCR and extract sub-scripts
 each read their own keys from CLI flag → env var → API_config.json,
 in that order. See ocr_pdfs.py and extract_meta.py for the full rules.
-The build script forwards ``--ocr-api-key`` to ocr_pdfs.py and
+The build script forwards these OCR knobs to ocr_pdfs.py:
+``--ocr-preset``, ``--ocr-base-url``, ``--ocr-model``, ``--ocr-prompt``,
+``--ocr-api-key``, ``--ocr-concurrency``, ``--ocr-limit``. And
 ``--meta-api-key`` / ``--meta-base-url`` / ``--meta-model`` to
 extract_meta.py.
 """
@@ -128,6 +130,16 @@ def stage_command(stage: str, args: argparse.Namespace, kb_root: Path, py: str) 
     if args.json:
         base.append("--json")
     if stage == "ocr":
+        # Provider-config knobs (all optional; ocr_pdfs.py merges CLI /
+        # env / API_config.json / preset defaults itself).
+        if args.ocr_preset:
+            base += ["--preset", args.ocr_preset]
+        if args.ocr_base_url:
+            base += ["--base-url", args.ocr_base_url]
+        if args.ocr_model:
+            base += ["--model", args.ocr_model]
+        if args.ocr_prompt:
+            base += ["--prompt", args.ocr_prompt]
         if args.ocr_api_key:
             base += ["--api-key", args.ocr_api_key]
         if args.ocr_concurrency is not None:
@@ -166,7 +178,14 @@ def main() -> None:
     ap.add_argument("--skip-vectorize", action="store_true")
     ap.add_argument("--only", nargs="+", choices=STAGES,
                     help="Run only these stages (overrides --skip-*).")
-    # forwarded knobs
+    # forwarded knobs — see ocr_pdfs.py --help for the full semantics; all
+    # are optional and merge with env / API_config.json inside that stage.
+    ap.add_argument("--ocr-preset", default=None,
+                    help="OCR provider preset (siliconflow, openai, anthropic, "
+                         "mistral, zhipu, qwen, custom).")
+    ap.add_argument("--ocr-base-url", default=None)
+    ap.add_argument("--ocr-model", default=None)
+    ap.add_argument("--ocr-prompt", default=None)
     ap.add_argument("--ocr-api-key", default=None)
     ap.add_argument("--ocr-concurrency", type=int, default=None)
     ap.add_argument("--ocr-limit", type=int, default=None)
