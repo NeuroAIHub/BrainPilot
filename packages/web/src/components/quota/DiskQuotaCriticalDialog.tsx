@@ -1,3 +1,6 @@
+// Hosted-only disk-quota UI — a hosted trust-front hook, not dead code.
+// Inert single-user (quota fields default to 0 → the >= 100 gate never fires).
+// See ./README.md and issue #262 before touching this.
 import { AlertTriangle } from "lucide-react";
 import { QuotaFileManager } from "./QuotaFileManager";
 import { formatBytes } from "../../utils/format";
