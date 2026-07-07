@@ -179,9 +179,30 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     }
   });
 
-  // #47: upload a file into the workspace (base64 body). Path-traversal guard +
-  // 20 MiB cap live in SessionManager.writeSessionFile.
+  // #47/#256: upload a file into the workspace. Two shapes negotiated by
+  // Content-Type. Path-traversal guard + configurable size cap
+  // (BP_UPLOAD_MAX_BYTES) live in SessionManager.
   app.post("/sessions/:id/files", async (c) => {
+    const contentType = c.req.header("content-type") ?? "";
+    // #256: raw streaming upload — bytes are the request body, path is in ?path=.
+    if (contentType.includes("application/octet-stream")) {
+      const path = c.req.query("path");
+      if (!path || path.trim() === "") {
+        return c.json({ error: "path query parameter is required" }, 400);
+      }
+      try {
+        const res = await manager.writeSessionFileStream(
+          c.req.param("id"),
+          path,
+          c.req.raw.body,
+        );
+        return c.json(res, 201);
+      } catch (err) {
+        // path traversal / oversize → 400 (client error), not 500
+        return c.json({ error: (err as Error).message }, 400);
+      }
+    }
+    // #47: base64 JSON body (backward-compatible / small files).
     const parsed = WriteFileRequestSchema.safeParse(await safeBody(c));
     if (!parsed.success) {
       return c.json({ error: "path and contentBase64 are required" }, 400);

@@ -173,8 +173,25 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
   api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
   api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
-  // #47: file upload — POST the base64 body through to the runtime writeFile route.
-  api.post("/sandbox/:id/files", forward("writeFile", { idParam: "id", withBody: true }));
+  // #47/#256: file upload. A base64 JSON body goes through the buffered
+  // `forward` helper; a raw `application/octet-stream` body is streamed to the
+  // runtime untouched (forward() reads the body via `text()`, which would
+  // UTF-8-decode and corrupt binary bytes — so we must NOT route it there).
+  api.post("/sandbox/:id/files", async (c) => {
+    const contentType = c.req.header("content-type") ?? "";
+    if (contentType.includes("application/octet-stream")) {
+      const rc = await getClient();
+      const query = new URL(c.req.url).search.replace(/^\?/, "");
+      const upstream = await rc.forward("writeFile", {
+        params: { id: c.req.param("id") ?? "" },
+        body: c.req.raw.body, // byte ReadableStream — streamed, not buffered
+        headers: { "content-type": "application/octet-stream" },
+        query: query.length > 0 ? query : undefined,
+      });
+      return relay(c, upstream);
+    }
+    return forward("writeFile", { idParam: "id", withBody: true })(c);
+  });
 
   // ---- SSE byte passthrough (修正4) ------------------------------------
   // Canonical protocol path `/sse/:id` (RUNTIME_ROUTES.sessionEvents) plus the

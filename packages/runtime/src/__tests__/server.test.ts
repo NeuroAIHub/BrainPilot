@@ -273,6 +273,86 @@ describe("workspace file routes", () => {
     expect(res.status).toBe(400);
   });
 
+  // #256: raw streaming upload — bytes in the body, path in ?path=.
+  it("uploads a file via raw octet-stream and makes it readable", async () => {
+    const { app: a } = await appWithWorkspace();
+    const bytes = new Uint8Array([0, 1, 2, 3, 255, 254, 128]);
+    const res = await a.request("/sessions/s1/files?path=/workspace/raw/blob.bin", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: bytes,
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { path: string; size: number };
+    expect(body.path).toBe("raw/blob.bin");
+    expect(body.size).toBe(bytes.byteLength);
+    // exact bytes round-trip through the raw read route (binary-safe)
+    const raw = await a.request("/sessions/s1/files/raw?path=/workspace/raw/blob.bin");
+    expect(new Uint8Array(await raw.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("rejects a raw upload with no ?path= (400)", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a raw upload that escapes the workspace with 400", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files?path=../../../etc/evil", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // #256: the configurable cap (BP_UPLOAD_MAX_BYTES) bounds both paths, and an
+  // oversize raw upload leaves no partial file behind.
+  it("rejects an oversize raw upload with 400 and cleans up the partial file", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-cap-"));
+    await mkdir(join(dataRoot, "workspaces", "s1"), { recursive: true });
+    const manager = new SessionManager({
+      persist: false,
+      dataRoot,
+      agentFactory: mockAgentFactory,
+      uploadMaxBytes: 8,
+    });
+    const a = createServer({ manager }).app;
+    const res = await a.request("/sessions/s1/files?path=/workspace/big.bin", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array(64), // 64 bytes > 8-byte cap
+    });
+    expect(res.status).toBe(400);
+    // no partial file left on disk
+    const listed = await readdir(join(dataRoot, "workspaces", "s1"));
+    expect(listed).not.toContain("big.bin");
+  });
+
+  it("rejects an oversize base64 upload with 400", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-cap64-"));
+    await mkdir(join(dataRoot, "workspaces", "s1"), { recursive: true });
+    const manager = new SessionManager({
+      persist: false,
+      dataRoot,
+      agentFactory: mockAgentFactory,
+      uploadMaxBytes: 8,
+    });
+    const a = createServer({ manager }).app;
+    const contentBase64 = Buffer.from("x".repeat(64)).toString("base64");
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/workspace/big.txt", contentBase64 }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   // #60: a composer upload staged under workspaces/local/ (the draft sandbox id)
   // must be drained into the real session workspace before the agent runs, so
   // the agent's cwd (workspaces/<sid>/) contains the file the user attached.

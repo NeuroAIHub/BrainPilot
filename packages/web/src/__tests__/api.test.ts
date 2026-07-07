@@ -266,6 +266,42 @@ describe("api.sandbox.uploadFile — #47 base64 upload to the workspace", () => 
   });
 });
 
+describe("api.sandbox.uploadFile — #256 raw octet-stream for large files", () => {
+  // A Blob reporting a size at/above the 4 MiB threshold: uploadFile must switch
+  // to the raw streaming path (bytes as the body, path in ?path=) and never
+  // touch base64 (no FileReader stub here, so a base64 attempt would throw).
+  function bigBlob(): Blob {
+    const b = new Blob(["x"]);
+    Object.defineProperty(b, "size", { value: 4 * 1024 * 1024 });
+    return b;
+  }
+
+  it("streams raw bytes with ?path= and an octet-stream content-type", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 201, contentType: "application/json", json: { path: "data/big.bin", size: 4194304 } }),
+    );
+    const file = bigBlob();
+    const out = await api.sandbox.uploadFile("s1", "data/big.bin", file);
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    // path is carried in the query, URL-encoded
+    expect(String(url)).toMatch(/\/sandbox\/s1\/files\?path=data%2Fbig\.bin$/);
+    const ri = init as RequestInit;
+    expect(ri.method).toBe("POST");
+    expect((ri.headers as Record<string, string>)["content-type"]).toBe("application/octet-stream");
+    // the Blob itself is the body — not a JSON string
+    expect(ri.body).toBe(file);
+    expect(out).toEqual({ path: "data/big.bin", size: 4194304 });
+  });
+
+  it("throws the backend error message on a non-ok raw response", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { error: "file too large" } }),
+    );
+    await expect(api.sandbox.uploadFile("s1", "data/big.bin", bigBlob())).rejects.toThrow("file too large");
+  });
+});
+
 // #206: parseError previously read only `detail`, so the backend's Zod shape
 // `{ error, details }` and bare `{ error }` (e.g. 409) degraded to the generic
 // "Request failed (...)". Driven through api.providers.create (handleJson path).
