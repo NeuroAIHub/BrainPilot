@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
   McpBridge,
+  MCP_TOOL_CALL_TIMEOUT_MS,
   loadMcpServersConfig,
   openTransport,
   resolveStdioCommand,
@@ -40,7 +41,7 @@ describe("loadMcpServersConfig", () => {
 });
 
 describe("McpBridge", () => {
-  it("namespaces tools and forwards calls", async () => {
+  it("namespaces tools and forwards calls with a per-request timeout override", async () => {
     const callTool = vi.fn(async () => ({ content: [{ type: "text", text: "hit" }], isError: false }));
     const bridge = new McpBridge(async () => fakeClient({ callTool }));
     const tools = await bridge.connectAll({ mcpServers: { web: { command: "x" } } });
@@ -48,7 +49,18 @@ describe("McpBridge", () => {
     expect(tools).toHaveLength(1);
     expect(tools[0]!.name).toBe("mcp__web__search");
     const res = await tools[0]!.execute({ q: "hi" });
-    expect(callTool).toHaveBeenCalledWith({ name: "search", arguments: { q: "hi" } });
+    // The 3rd arg is the SDK's `RequestOptions`: we override the default
+    // 60 s ceiling (too short for real MCP tools) and enable progress-based
+    // timeout reset for well-behaved streaming servers.
+    expect(callTool).toHaveBeenCalledWith(
+      { name: "search", arguments: { q: "hi" } },
+      undefined,
+      { timeout: MCP_TOOL_CALL_TIMEOUT_MS, resetTimeoutOnProgress: true },
+    );
+    // Guard-rail against an accidental silent shrink of the ceiling — 5 min
+    // matches the KB retrieve HTTP timeout so the whole slow-tool budget is
+    // consistent across bridges.
+    expect(MCP_TOOL_CALL_TIMEOUT_MS).toBe(5 * 60_000);
     expect(res.content[0]!.text).toBe("hit");
     expect(res.isError).toBe(false);
   });
