@@ -189,9 +189,20 @@ export type InterruptResponse = z.infer<typeof InterruptResponseSchema>;
 
 /* ------------------------------------------------------------------ *
  * POST /sessions/:id/files  (#47 — upload a file into the workspace)
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------ *
+ * Two accepted request shapes, negotiated by `Content-Type` (#256):
+ *   1. base64 JSON — `application/json` body `{ path, contentBase64 }`
+ *      (this schema). Whole payload is buffered in memory; +33% wire
+ *      inflation. Kept for backward compatibility / small files.
+ *   2. raw stream — `application/octet-stream` body is the file bytes
+ *      verbatim, with the workspace-relative path in the `?path=` query
+ *      (e.g. `POST /sessions/:id/files?path=docs/foo.pdf`). Streamed to
+ *      disk, symmetric with the `readRawFile` download. Preferred for
+ *      large uploads.
+ * Both return `WriteFileResponseSchema` and enforce the same traversal
+ * guard + size cap (`BP_UPLOAD_MAX_BYTES`, default 20 MiB). */
 
-/** #47: upload body. Content is base64 (binary-safe over the JSON byte chain). */
+/** #47: base64 JSON upload body. Content is base64 (binary-safe over the JSON byte chain). */
 export const WriteFileRequestSchema = z.object({
   /** Workspace-relative path (a leading `/workspace` prefix is tolerated). */
   path: z.string().trim().min(1),
@@ -263,7 +274,11 @@ export const RUNTIME_ROUTES = {
   readFile: { method: "GET", path: "/sessions/:id/files/content" },
   readRawFile: { method: "GET", path: "/sessions/:id/files/raw" },
   deleteFile: { method: "DELETE", path: "/sessions/:id/files" },
-  /** #47: upload a file into the workspace. Body: { path, contentBase64 }. */
+  /**
+   * #47/#256: upload a file into the workspace. Two shapes negotiated by
+   * Content-Type: `application/json` body `{ path, contentBase64 }`, or
+   * `application/octet-stream` raw bytes with `?path=` (streamed to disk).
+   */
   writeFile: { method: "POST", path: "/sessions/:id/files" },
 } as const satisfies Record<string, RouteDef>;
 

@@ -36,8 +36,12 @@ export function buildPath(
 
 export interface ForwardOptions {
   params?: Record<string, string>;
-  /** Raw, already-serialized request body to forward. */
-  body?: string | null;
+  /**
+   * Raw request body to forward. A string for buffered bodies (JSON), or a
+   * byte `ReadableStream` to stream large uploads through without buffering
+   * (#256 — raw octet-stream passthrough).
+   */
+  body?: string | ReadableStream<Uint8Array> | null;
   headers?: Record<string, string>;
   /** Query string to append (without leading `?`). */
   query?: string;
@@ -67,12 +71,18 @@ export class RuntimeClient {
   async forward(route: RuntimeRouteName, opts: ForwardOptions = {}): Promise<Response> {
     const def = RUNTIME_ROUTES[route];
     const url = this.urlFor(route, opts.params, opts.query);
-    return this.fetchFn(url, {
+    const init: RequestInit = {
       method: def.method,
       headers: opts.headers,
       body: opts.body ?? undefined,
       signal: opts.signal,
-    });
+    };
+    // #256: a streamed body requires `duplex: 'half'` under the Node/undici
+    // fetch (sending a ReadableStream without it throws). Harmless elsewhere.
+    if (opts.body != null && typeof opts.body !== "string") {
+      (init as RequestInit & { duplex: "half" }).duplex = "half";
+    }
+    return this.fetchFn(url, init);
   }
 
   /**

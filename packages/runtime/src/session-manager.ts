@@ -10,6 +10,9 @@
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
 import { mkdir, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
+import { createWriteStream } from "node:fs";
+import { pipeline } from "node:stream/promises";
+import { Readable, Transform } from "node:stream";
 import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
@@ -57,6 +60,28 @@ function makeDeferred<T>(): Deferred<T> {
 
 /** #167 default concurrent-provider-calls cap when nothing is configured. */
 const DEFAULT_MAX_CONCURRENT_AGENTS = 4;
+
+/** #256 default upload size cap (20 MiB) when `BP_UPLOAD_MAX_BYTES` is unset. */
+const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+
+/**
+ * #256: resolve the max upload size in bytes. Precedence: explicit option →
+ * `BP_UPLOAD_MAX_BYTES` env → 20 MiB default. A non-positive or unparseable
+ * value falls back to the default (a 0 cap would reject everything). `0` is NOT
+ * treated as "unlimited": hosted deployments raise the cap explicitly; there is
+ * intentionally no infinite setting.
+ */
+export function resolveUploadMaxBytes(opt?: number, env = process.env): number {
+  if (typeof opt === "number" && Number.isFinite(opt) && opt > 0) {
+    return Math.floor(opt);
+  }
+  const raw = env.BP_UPLOAD_MAX_BYTES?.trim();
+  if (raw !== undefined && raw !== "") {
+    const n = Number(raw);
+    if (Number.isFinite(n) && n > 0) return Math.floor(n);
+  }
+  return DEFAULT_UPLOAD_MAX_BYTES;
+}
 
 /**
  * Resolve the per-session provider concurrency cap: explicit option wins, else
@@ -209,6 +234,12 @@ export interface SessionManagerOptions {
    * throttling. Tests inject this directly.
    */
   maxConcurrentAgents?: number;
+  /**
+   * #256: max upload size in bytes for workspace file writes (both the base64
+   * and raw-stream paths). Default 20 MiB; env override `BP_UPLOAD_MAX_BYTES`.
+   * Hosts raise this to accept large datasets/models. Tests inject directly.
+   */
+  uploadMaxBytes?: number;
 }
 
 /** Roles inferred from agent name. */
@@ -304,6 +335,10 @@ export class SessionManager {
   private readonly maxConcurrentAgents: number;
   private readonly providerSlots = new Map<string, ProviderSemaphore>();
 
+  // #256: max upload size in bytes (base64 + raw-stream paths). Configurable
+  // so hosted deployments can accept large files; default 20 MiB.
+  private readonly uploadMaxBytes: number;
+
   constructor(opts: SessionManagerOptions = {}) {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
@@ -328,6 +363,7 @@ export class SessionManager {
       opts.routerSkillsDir ?? join(this.dataRoot, "bp_template", "skills-router");
 
     this.maxConcurrentAgents = resolveMaxConcurrentAgents(opts.maxConcurrentAgents);
+    this.uploadMaxBytes = resolveUploadMaxBytes(opts.uploadMaxBytes);
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -529,13 +565,14 @@ export class SessionManager {
    * `resolveWorkspacePath` guard prevents path traversal; parent dirs are
    * created so an upload like `docs/foo.pdf` works. The file lands in the
    * agent's cwd, so it can `read` it by its workspace-relative path.
-   * `maxBytes` (default 20 MiB) bounds the decoded size.
+   * `maxBytes` bounds the decoded size (default: the configured upload cap,
+   * `BP_UPLOAD_MAX_BYTES` / 20 MiB — see #256).
    */
   async writeSessionFile(
     sid: string,
     rel: string,
     contentBase64: string,
-    maxBytes = 20 * 1024 * 1024,
+    maxBytes = this.uploadMaxBytes,
   ): Promise<{ path: string; size: number }> {
     const buf = Buffer.from(contentBase64, "base64");
     if (buf.byteLength > maxBytes) {
@@ -544,14 +581,74 @@ export class SessionManager {
     const abs = this.resolveWorkspacePath(sid, rel);
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, buf);
-    // Return the workspace-relative path (strip the absolute root prefix).
-    // Cross-platform (#5): always emit POSIX `/` so the API contract is
-    // identical across hosts; the frontend embeds this in URL query strings
-    // (`?path=foo/bar.txt`) and the model echoes it back via `read_file`.
+    return { path: this.relWorkspacePath(sid, abs), size: buf.byteLength };
+  }
+
+  /**
+   * #256: stream an uploaded file into the session workspace without buffering
+   * the whole payload. The raw request body (`application/octet-stream`) is
+   * piped to disk; bytes are counted as they flow and the write is aborted
+   * (and the partial file removed) the moment the configured cap is exceeded,
+   * so a hostile/oversize upload can't fill the disk. Same traversal guard and
+   * parent-dir creation as `writeSessionFile`; symmetric with `readSessionFileRaw`.
+   *
+   * `body` accepts a web `ReadableStream` (Hono's `c.req.raw.body`) or a Node
+   * `Readable`; `null`/absent is treated as an empty file.
+   */
+  async writeSessionFileStream(
+    sid: string,
+    rel: string,
+    body: ReadableStream<Uint8Array> | Readable | null,
+    maxBytes = this.uploadMaxBytes,
+  ): Promise<{ path: string; size: number }> {
+    const abs = this.resolveWorkspacePath(sid, rel);
+    await mkdir(dirname(abs), { recursive: true });
+
+    // Normalize either stream flavor to a Node Readable.
+    const source: Readable =
+      body == null
+        ? Readable.from([])
+        : body instanceof Readable
+          ? body
+          : Readable.fromWeb(body as import("node:stream/web").ReadableStream<Uint8Array>);
+
+    let size = 0;
+    let tooLarge = false;
+    const counter = new Transform({
+      transform(chunk: Buffer, _enc, cb) {
+        size += chunk.byteLength;
+        if (size > maxBytes) {
+          tooLarge = true;
+          // Abort the pipeline; the catch below cleans up the partial file.
+          cb(new Error(`file too large: exceeds limit of ${maxBytes}`));
+          return;
+        }
+        cb(null, chunk);
+      },
+    });
+
+    try {
+      await pipeline(source, counter, createWriteStream(abs));
+    } catch (err) {
+      // Remove the partial file so a failed/oversize upload leaves no trace.
+      await rm(abs, { force: true }).catch(() => {});
+      if (tooLarge) {
+        throw new Error(`file too large: ${size} bytes exceeds limit of ${maxBytes}`);
+      }
+      throw err;
+    }
+    return { path: this.relWorkspacePath(sid, abs), size };
+  }
+
+  /**
+   * Workspace-relative form of an absolute path under the session root.
+   * Cross-platform (#5): always emit POSIX `/` so the API contract is identical
+   * across hosts; the frontend embeds this in URL query strings
+   * (`?path=foo/bar.txt`) and the model echoes it back via `read_file`.
+   */
+  private relWorkspacePath(sid: string, abs: string): string {
     const root = this.workspaceDir(sid);
-    const relOut =
-      abs === root ? "" : abs.slice(root.length + 1).split(sep).join("/");
-    return { path: relOut, size: buf.byteLength };
+    return abs === root ? "" : abs.slice(root.length + 1).split(sep).join("/");
   }
 
   /**

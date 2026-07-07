@@ -119,6 +119,14 @@ async function handleJson<T>(res: Response): Promise<T> {
   return (await res.json()) as T;
 }
 
+/**
+ * #256: files at/above this size upload as a raw `application/octet-stream`
+ * stream instead of base64 JSON. Small files stay on the base64 path (one
+ * request shape, no streaming overhead); large files avoid the +33% base64
+ * inflation and whole-file memory buffering. 4 MiB is a conservative cutoff.
+ */
+const RAW_UPLOAD_THRESHOLD_BYTES = 4 * 1024 * 1024;
+
 /** #47: encode a Blob/File as base64 (without the data: prefix) for upload. */
 function blobToBase64(blob: Blob): Promise<string> {
   return new Promise((resolve, reject) => {
@@ -376,8 +384,25 @@ export const api = {
       }
     },
 
-    // #47: upload a file into the workspace (base64 over the JSON byte chain).
+    // #47/#256: upload a file into the workspace. Files at/above the raw
+    // threshold stream as `application/octet-stream` (no +33% base64 inflation,
+    // no whole-file buffering on the proxy/runtime); smaller files keep the
+    // base64 JSON path. The runtime accepts both (negotiated by Content-Type).
     async uploadFile(sandboxId: string, path: string, file: Blob): Promise<{ path: string; size: number }> {
+      if (file.size >= RAW_UPLOAD_THRESHOLD_BYTES) {
+        const res = await apiFetch(
+          `${API_BASE}/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,
+          {
+            method: "POST",
+            headers: { ...authHeaders(), "content-type": "application/octet-stream" },
+            body: file,
+          },
+        );
+        if (!res.ok) {
+          throw new Error(await parseError(res));
+        }
+        return handleJson(res);
+      }
       const contentBase64 = await blobToBase64(file);
       const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files`, {
         method: "POST",

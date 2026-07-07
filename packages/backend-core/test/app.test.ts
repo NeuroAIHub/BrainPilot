@@ -58,6 +58,57 @@ describe("Hono app — REST forwarding", () => {
     expect(res.status).toBe(202);
   });
 
+  // #47: base64 JSON upload still forwards through the buffered path.
+  it("POST /api/sandbox/:id/files (base64 JSON) forwards to writeFile", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("http://runtime.test/sessions/s1/files");
+      expect(init.method).toBe("POST");
+      expect(init.body).toBe('{"path":"a.txt","contentBase64":"aGk="}');
+      return new Response('{"path":"a.txt","size":2}', { status: 201 });
+    });
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/sandbox/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: '{"path":"a.txt","contentBase64":"aGk="}',
+    });
+    expect(res.status).toBe(201);
+  });
+
+  // #256: a raw octet-stream upload must be streamed to the runtime BYTE-FOR-BYTE
+  // (query carried, octet content-type preserved). Routing it through the
+  // buffered `text()` forward would UTF-8-decode and corrupt binary payloads.
+  it("POST /api/sandbox/:id/files (octet-stream) streams raw bytes + ?path=", async () => {
+    const bytes = new Uint8Array([0, 1, 2, 255, 254, 128]);
+    let receivedCt: string | undefined;
+    let receivedBytes: Uint8Array | undefined;
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("http://runtime.test/sessions/s1/files?path=data%2Fbig.bin");
+      expect(init.method).toBe("POST");
+      receivedCt = (init.headers as Record<string, string>)["content-type"];
+      // body is streamed; drain it back to bytes to prove no corruption
+      receivedBytes = new Uint8Array(await new Response(init.body as BodyInit).arrayBuffer());
+      return new Response('{"path":"data/big.bin","size":6}', { status: 201 });
+    });
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/sandbox/s1/files?path=data%2Fbig.bin", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: bytes,
+    });
+    expect(res.status).toBe(201);
+    expect(receivedCt).toBe("application/octet-stream");
+    expect(receivedBytes).toEqual(bytes);
+  });
+
   // Regression (BPCASE-0004): /metrics is a RUNTIME_ROUTES entry implemented by
   // the runtime (server.ts) but was missing from the backend's /api table, so
   // /api/metrics fell through to the SPA static fallback and returned index.html
