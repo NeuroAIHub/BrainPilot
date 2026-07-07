@@ -3,15 +3,18 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Regression guard for the patch-package fix in
-// patches/@earendil-works+pi-coding-agent++@earendil-works+pi-ai+0.79.8.patch
+// Regression guard for the Azure store:false reasoning-replay fix that
+// scripts/patch-pi-ai.cjs applies (postinstall) to @earendil-works/pi-ai's
+// Responses converter.
 //
-// Azure's Responses transport runs stateless (store:false) yet the shared converter
-// replayed server-generated item ids (rs_ reasoning / fc_ tool-call). With nothing
-// stored server-side, those ids reference non-existent items and Azure's strict
-// validation rejects the request. The patch strips them for api "azure-openai-responses"
-// while leaving encrypted_content (which carries the state) intact, and leaves the
-// lenient OpenAI path untouched. This test fails if the patch is not applied.
+// Azure OpenAI Responses (api "azure-openai-responses") runs store:false, so the
+// server persists nothing between turns. The shared converter replays a captured
+// reasoning item verbatim; a bare rs_ id with no encrypted_content triggers a
+// server lookup that 400s ("Item with id 'rs_...' not found. Items are not
+// persisted when store is set to false."). The fix, for azure only: drop reasoning
+// items lacking encrypted_content, and strip the rs_/fc_ server ids from items it
+// does replay (encrypted_content carries the state). Non-azure Responses providers
+// are untouched. This test fails if the postinstall patch did not apply.
 
 interface TestModel {
 	id: string;
@@ -66,13 +69,16 @@ type ConvertResponsesMessages = (
 
 /** Locate the nested (or hoisted) pi-ai converter by walking up from this test file. */
 function resolveSharedConverterPath(): string {
-	const tail = join("@earendil-works", "pi-ai", "dist", "providers", "openai-responses-shared.js");
+	const subs = ["api", "providers"]; // 0.80.x moved dist/providers/ -> dist/api/
 	let dir = dirname(fileURLToPath(import.meta.url));
 	while (dirname(dir) !== dir) {
-		const nested = join(dir, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", tail);
-		const hoisted = join(dir, "node_modules", tail);
-		if (existsSync(nested)) return nested;
-		if (existsSync(hoisted)) return hoisted;
+		for (const sub of subs) {
+			const tail = join("@earendil-works", "pi-ai", "dist", sub, "openai-responses-shared.js");
+			const nested = join(dir, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", tail);
+			const hoisted = join(dir, "node_modules", tail);
+			if (existsSync(nested)) return nested;
+			if (existsSync(hoisted)) return hoisted;
+		}
 		dir = dirname(dir);
 	}
 	throw new Error("Could not locate @earendil-works/pi-ai openai-responses-shared.js");
@@ -96,7 +102,7 @@ if (!hasConverter(loaded)) {
 }
 const { convertResponsesMessages } = loaded;
 
-// Faithful to azure-openai-responses.js:11 (the set the Azure transport passes).
+// Faithful to azure-openai-responses.js (the set the Azure transport passes).
 const AZURE_TOOL_CALL_PROVIDERS: ReadonlySet<string> = new Set([
 	"openai",
 	"openai-codex",
@@ -108,11 +114,17 @@ function model(api: string, provider: string, id = "gpt-5"): TestModel {
 	return { id, provider, api, reasoning: true, input: ["text"], compat: {} };
 }
 
-function reasoningSignature(id: string): string {
-	return JSON.stringify({ type: "reasoning", id, summary: [], encrypted_content: "ENCRYPTED_BLOB" });
+function reasoningSignature(id: string, encryptedContent?: string): string {
+	const item: Record<string, unknown> = { type: "reasoning", id, summary: [] };
+	if (encryptedContent !== undefined) item.encrypted_content = encryptedContent;
+	return JSON.stringify(item);
 }
 
-function thinkingContext(api: string, provider: string): TestContext {
+function thinkingContext(
+	api: string,
+	provider: string,
+	encryptedContent?: string,
+): TestContext {
 	return {
 		messages: [
 			{
@@ -125,7 +137,7 @@ function thinkingContext(api: string, provider: string): TestContext {
 					{
 						type: "thinking",
 						thinking: "reasoning text",
-						thinkingSignature: reasoningSignature("rs_test_123"),
+						thinkingSignature: reasoningSignature("rs_test_123", encryptedContent),
 					},
 				],
 			},
@@ -133,11 +145,11 @@ function thinkingContext(api: string, provider: string): TestContext {
 	};
 }
 
-describe("pi-ai azure responses server-item id stripping (patch-package)", () => {
-	it("omits the rs_ reasoning id for azure but preserves encrypted_content", () => {
+describe("pi-ai azure responses store:false reasoning replay (postinstall patch)", () => {
+	it("strips the rs_ id for azure but keeps the encrypted_content payload", () => {
 		const items = convertResponsesMessages(
 			model("azure-openai-responses", "azure"),
-			thinkingContext("azure-openai-responses", "azure"),
+			thinkingContext("azure-openai-responses", "azure", "ENCRYPTED_BLOB"),
 			AZURE_TOOL_CALL_PROVIDERS,
 		);
 		const reasoning = items.find((item) => item.type === "reasoning");
@@ -146,10 +158,20 @@ describe("pi-ai azure responses server-item id stripping (patch-package)", () =>
 		expect(reasoning?.id).toBeUndefined();
 	});
 
+	it("drops the reasoning item entirely for azure when it has no encrypted_content", () => {
+		const items = convertResponsesMessages(
+			model("azure-openai-responses", "azure"),
+			thinkingContext("azure-openai-responses", "azure"),
+			AZURE_TOOL_CALL_PROVIDERS,
+		);
+		// A bare rs_ id under store:false would 400; the patch must not replay it.
+		expect(items.find((item) => item.type === "reasoning")).toBeUndefined();
+	});
+
 	it("keeps the rs_ reasoning id for non-azure openai responses (fix is provider-scoped)", () => {
 		const items = convertResponsesMessages(
 			model("openai-responses", "openai"),
-			thinkingContext("openai-responses", "openai"),
+			thinkingContext("openai-responses", "openai", "ENCRYPTED_BLOB"),
 			new Set(["openai"]),
 		);
 		const reasoning = items.find((item) => item.type === "reasoning");
@@ -170,11 +192,7 @@ describe("pi-ai azure responses server-item id stripping (patch-package)", () =>
 				},
 			],
 		};
-		const items = convertResponsesMessages(
-			model("azure-openai-responses", "azure"),
-			context,
-			AZURE_TOOL_CALL_PROVIDERS,
-		);
+		const items = convertResponsesMessages(model("azure-openai-responses", "azure"), context, AZURE_TOOL_CALL_PROVIDERS);
 		const fnCall = items.find((item) => item.type === "function_call");
 		expect(fnCall).toBeDefined();
 		expect(fnCall?.call_id).toBe("call_abc");

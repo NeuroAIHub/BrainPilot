@@ -14,7 +14,7 @@ ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY}
 
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
-COPY patches ./patches
+COPY scripts ./scripts
 COPY packages ./packages
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
     && npm ci
