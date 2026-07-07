@@ -1,4 +1,5 @@
 import {
+  Home,
   MessagesSquare,
   MonitorPlay,
   PanelLeft,
@@ -6,6 +7,7 @@ import {
   Settings,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import { runtimeConfig } from "../../config";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
 import { IconButton } from "../primitives/IconButton";
@@ -173,6 +175,12 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
       </section>
 
       <div className="sidebar__footer">
+        {runtimeConfig.localMode ? null : (
+          <a className="nav-item" href={runtimeConfig.homeUrl} title={t("sidebar.home")}>
+            <Home size={16} />
+            <span>{t("sidebar.home")}</span>
+          </a>
+        )}
         <button className="nav-item" onClick={onOpenSettings} type="button" title={t("sidebar.settings")}>
           <Settings size={16} />
           <span>{t("sidebar.settings")}</span>

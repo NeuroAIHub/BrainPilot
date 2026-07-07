@@ -206,9 +206,22 @@ export function TraceGraphView({
         }}
         onMouseUp={() => {
           dragRef.current.isDragging = false;
+          // hasPanned guards the same mouseup's onClick (fires synchronously
+          // right after this handler) from selecting a node when the user was
+          // actually panning. Clear it on the next tick so the guard still
+          // fires for this interaction, but doesn't linger and swallow node
+          // clicks in the NEXT interaction — the node's own onMouseDown
+          // stopPropagation() means viewport.onMouseDown never runs to reset
+          // it, so without this the flag stays true forever after one pan.
+          window.setTimeout(() => {
+            dragRef.current.hasPanned = false;
+          }, 0);
         }}
         onMouseLeave={() => {
           dragRef.current.isDragging = false;
+          window.setTimeout(() => {
+            dragRef.current.hasPanned = false;
+          }, 0);
         }}
         onWheel={(event) => {
           event.preventDefault();
