@@ -117,10 +117,13 @@ neuroscience methodology, paradigm designs, statistical guides, tool manuals,
 visualization patterns, writing templates — is NOT in that block. It is
 reachable through the \`skill_search\` tool:
 
-- \`skill_search(mode="query", keywords=[...])\` — keyword search of the router
-  catalog. Returns the top-ranked skills with name, description, paths, and
-  hit count. Use this whenever you need a domain method, technique, or pattern
-  and \`<available_skills>\` has nothing matching.
+- \`skill_search(mode="query", keywords="eeg, fmri, signal preprocessing")\`
+  — keyword search of the router catalog. \`keywords\` is a **single
+  comma-separated string** (NOT an array — do not wrap in \`[...]\`); the
+  server splits on \`,\` and matches each token against every skill's
+  frontmatter description. Returns the top-ranked skills with name,
+  description, paths, and hit count. Use this whenever you need a domain
+  method, technique, or pattern and \`<available_skills>\` has nothing matching.
 - \`skill_search(mode="query", skill_name="<name>")\` — load a skill's full
   \`SKILL.md\` body once you've decided which one to apply.
 - \`skill_search(mode="browse", relative_path="...")\` — list a category, walk
@@ -291,9 +294,10 @@ writing, etc.) split across two libraries:
    \`location\` path to each \`SKILL.md\`.
 2. **Router** — the much larger DOMAIN library is NOT in \`<available_skills>\`.
    Reach it through the \`skill_search\` tool (see "Router skill library"
-   below). Use \`skill_search(mode="query", keywords=[...])\` to discover
-   matches, then \`skill_search(mode="query", skill_name="<name>")\` to load
-   the full body.
+   below). Use \`skill_search(mode="query", keywords="<comma-separated>")\`
+   (e.g. \`keywords="eeg, fmri, signal preprocessing"\` — a plain string, not
+   an array) to discover matches, then \`skill_search(mode="query",
+   skill_name="<name>")\` to load the full body.
 
 - **Skills-first preflight:** for any non-trivial user request, scan
   \`<available_skills>\` AND query the router for relevant skills while scoping
@@ -475,7 +479,8 @@ methodology-sensitive synthesis, scan BOTH skill libraries for a skill matching
 the domain, method, and evidence type:
 
 1. \`<available_skills>\` (always-on) — open a match with \`read\`.
-2. The router library — call \`skill_search(mode="query", keywords=[...])\` and
+2. The router library — call \`skill_search(mode="query", keywords="<comma-separated>")\`
+   (a plain string like \`"survey, meta-analysis, prisma"\`, not an array) and
    \`skill_search(mode="query", skill_name="<name>")\` to discover and load.
 
 If a relevant skill exists in either library, use it to frame what evidence to
@@ -546,7 +551,9 @@ your first methodology check:
 
 1. **Find relevant skills first:** before proposing a protocol, sample plan,
    statistical test, timing parameter, paradigm, or validation procedure, scan
-   \`<available_skills>\` AND call \`skill_search(mode="query", keywords=[...])\`
+   \`<available_skills>\` AND call \`skill_search(mode="query",
+   keywords="<comma-separated>")\` — e.g.
+   \`keywords="eeg, paradigm, oddball"\` (a plain string, NOT an array) —
    for a skill matching the domain or paradigm (e.g. an EEG paradigm designer,
    a power/sample-size guide, an fMRI task-design guide).
 2. **Read the best match before designing:** load its \`SKILL.md\` (\`read\` for
@@ -621,8 +628,9 @@ builders) almost all live in the router. Before writing code or choosing an
 implementation pipeline, ground your approach in validated methodology:
 
 1. **Find relevant skills first:** scan \`<available_skills>\` AND call
-   \`skill_search(mode="query", keywords=[...])\` for a skill matching the
-   tools or methods you need.
+   \`skill_search(mode="query", keywords="<comma-separated>")\` — e.g.
+   \`keywords="mne, ica, artifact removal"\` (a plain string, NOT an array) —
+   for a skill matching the tools or methods you need.
 2. **Read a skill's guide:** load its \`SKILL.md\` (\`read\` for always-on;
    \`skill_search(mode="query", skill_name="<name>")\` for router) — follow
    its prescriptions for parameter choices, pipeline order, and API usage
@@ -710,10 +718,12 @@ router.
 ### 1. Skills-first writing preflight
 
 When you receive a writing task, your first substantive step is to scan
-\`<available_skills>\` AND call \`skill_search(mode="query", keywords=[...])\`
-for a skill matching the document type, audience, domain, and format (e.g. a
-markdown-report-writing skill, a manuscript/IMRaD guide, a grant-proposal
-guide), including the router's \`14_Writing\` and cross-category skills.
+\`<available_skills>\` AND call \`skill_search(mode="query",
+keywords="<comma-separated>")\` — e.g. \`keywords="manuscript, imrad, paper"\`
+(a plain string, NOT an array) — for a skill matching the document type,
+audience, domain, and format (e.g. a markdown-report-writing skill, a
+manuscript/IMRaD guide, a grant-proposal guide), including the router's
+\`14_Writing\` and cross-category skills.
 
 ### 2. Select and apply a writing skill
 
