@@ -114,12 +114,19 @@ describe("normalizeKeywords", () => {
     expect(normalizeKeywords("fMRI")).toEqual(["fMRI"]);
   });
 
-  it("passes through a string array unchanged (trimming + dedup empties)", () => {
-    expect(normalizeKeywords(["EEG", " ICA ", ""])).toEqual(["EEG", "ICA"]);
-  });
-
-  it("handles an already-clean string array", () => {
-    expect(normalizeKeywords(["a", "b", "c"])).toEqual(["a", "b", "c"]);
+  // Defensive fallback: the JSON schema now advertises `keywords` as a plain
+  // comma-separated string, but some models still emit arrays. The old code
+  // took `["EEG, ICA"]` (single element wrapping the whole comma string) as
+  // one 8-char keyword that matched nothing → total_matched=0. String(arr)
+  // flattens to "EEG, ICA" and re-splits correctly, so we degrade gracefully.
+  it("flattens an array via toString and re-splits on commas", () => {
+    expect(normalizeKeywords(["EEG", "ICA"])).toEqual(["EEG", "ICA"]);
+    expect(normalizeKeywords(["EEG, ICA"])).toEqual(["EEG", "ICA"]);
+    expect(normalizeKeywords(["EEG, preprocessing", "ICA"])).toEqual([
+      "EEG",
+      "preprocessing",
+      "ICA",
+    ]);
   });
 });
 
@@ -150,7 +157,7 @@ describe("searchSkills — query mode", () => {
 
   it("ranks by keyword hits and returns the requested topk", async () => {
     const out = JSON.parse(
-      await searchSkills(base, { mode: "query", keywords: ["EEG"], topk: 5 }),
+      await searchSkills(base, { mode: "query", keywords: "EEG", topk: 5 }),
     );
     expect(out.keywords).toEqual(["EEG"]);
     expect(out.results[0].name).toBe("eeg-paradigm-designer");
@@ -162,7 +169,7 @@ describe("searchSkills — query mode", () => {
 
   it("topk truncates the result list", async () => {
     const out = JSON.parse(
-      await searchSkills(base, { mode: "query", keywords: ["x"], topk: 1 }),
+      await searchSkills(base, { mode: "query", keywords: "x", topk: 1 }),
     );
     expect(out.returned).toBe(1);
     expect(out.results).toHaveLength(1);
@@ -187,7 +194,7 @@ describe("searchSkills — query mode", () => {
     await expect(searchSkills(base, { mode: "query" })).rejects.toThrow(/keywords/);
   });
 
-  it("accepts keywords as a comma-separated string", async () => {
+  it("accepts keywords as a comma-separated string (the canonical form)", async () => {
     const out = JSON.parse(
       await searchSkills(base, { mode: "query", keywords: "EEG, paradigm" }),
     );
@@ -216,6 +223,22 @@ describe("searchSkills — query mode", () => {
     await expect(
       searchSkills(base, { mode: "query", keywords: " , , " }),
     ).rejects.toThrow(/keywords/);
+  });
+
+  // Regression: models sometimes ignore the string-only schema and send an
+  // array (`["eeg, fmri"]` in particular — the whole comma string wrapped as
+  // one element). The old array branch took that as a single 8-char keyword
+  // and returned total_matched=0. We flatten via String(arr) and re-split.
+  it("array input is flattened and comma-split so no silent zero-match", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, {
+        mode: "query",
+        keywords: ["EEG, paradigm"],
+      }),
+    );
+    expect(out.keywords).toEqual(["EEG", "paradigm"]);
+    expect(out.total_matched).toBe(1);
+    expect(out.results[0].name).toBe("eeg-paradigm-designer");
   });
 });
 
@@ -318,7 +341,7 @@ describe("searchSkills — browse mode", () => {
     expect(out.path).not.toMatch(/\\/);
 
     const query = JSON.parse(
-      await searchSkills(base, { mode: "query", keywords: ["EEG"] }),
+      await searchSkills(base, { mode: "query", keywords: "EEG" }),
     );
     for (const r of query.results) {
       for (const p of r.relative_paths) {
@@ -346,16 +369,23 @@ describe("createSkillSearchTool", () => {
 
     expect(tool.name).toBe("skill_search");
     expect(tool.parameters).toMatchObject({ type: "object" });
-    const params = tool.parameters as { properties: Record<string, unknown>; required: string[] };
+    const params = tool.parameters as {
+      properties: Record<string, { type?: string }>;
+      required: string[];
+    };
     expect(params.properties).toHaveProperty("mode");
     expect(params.properties).toHaveProperty("keywords");
     expect(params.properties).toHaveProperty("skill_name");
     expect(params.properties).toHaveProperty("relative_path");
     expect(params.required).toContain("mode");
+    // The schema now advertises `keywords` as a plain string (a
+    // comma-separated list), not a union — the previous `oneOf` shape let
+    // models pass `["eeg, fmri"]` which silently matched nothing.
+    expect(params.properties.keywords!.type).toBe("string");
 
-    // Round-trip: invoking execute with {mode:'query', keywords:['EEG']} returns
+    // Round-trip: invoking execute with the canonical string shape returns
     // the JSON payload the model sees.
-    const out = await tool.execute({ mode: "query", keywords: ["EEG"] });
+    const out = await tool.execute({ mode: "query", keywords: "EEG" });
     const payload = JSON.parse(out.content[0]!.text);
     expect(payload.results[0].name).toBe("eeg-paradigm-designer");
   });

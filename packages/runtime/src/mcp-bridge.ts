@@ -21,6 +21,29 @@ import { join } from "node:path";
 import { isWindows } from "./platform.js";
 import type { SystemTool, SystemToolResult } from "./types.js";
 
+/**
+ * Per-tool-call request timeout for MCP servers, in milliseconds.
+ *
+ * The MCP SDK's default is 60_000 ms (`DEFAULT_REQUEST_TIMEOUT_MSEC` in
+ * `@modelcontextprotocol/sdk/dist/esm/shared/protocol.js`). That's too short
+ * for BrainPilot's real workloads — remote paper search, deep KB retrieval,
+ * or provider-hosted MCP tools that batch multi-second LLM calls all blow
+ * past 60 s intermittently, surfacing to the model as `RequestTimeout`.
+ * Raise it to 5 minutes; combined with `resetTimeoutOnProgress` below, a
+ * well-behaved server that streams progress notifications will not time out
+ * mid-work, while a hung server still fails within a bounded wall-clock.
+ */
+export const MCP_TOOL_CALL_TIMEOUT_MS = 5 * 60_000;
+
+/**
+ * Reset the per-call timer whenever the MCP server sends a `progress`
+ * notification. This has NO effect on servers that never send progress
+ * (which is most of them) — they still fail after `MCP_TOOL_CALL_TIMEOUT_MS`.
+ * For servers that DO stream progress on long tasks, it lets the tool run as
+ * long as it keeps making visible headway.
+ */
+const MCP_RESET_TIMEOUT_ON_PROGRESS = true;
+
 /** Wire transport for an MCP server. Absent ⇒ "stdio" (back-compat). */
 export type McpTransportType = "stdio" | "http" | "sse";
 
@@ -43,10 +66,25 @@ export interface McpServersConfig {
   mcpServers: Record<string, McpServerSpec>;
 }
 
+/**
+ * Options forwarded to the SDK's `callTool(params, resultSchema?, options?)`
+ * third parameter. We keep only the fields the bridge actually sets — a
+ * per-request `timeout` and `resetTimeoutOnProgress` — so tests can mock
+ * `callTool` with a small type surface.
+ */
+export interface McpCallToolOptions {
+  timeout?: number;
+  resetTimeoutOnProgress?: boolean;
+}
+
 /** Minimal subset of `@modelcontextprotocol/sdk` Client we depend on. */
 export interface McpClientLike {
   listTools(): Promise<{ tools: McpToolDescriptor[] }>;
-  callTool(args: { name: string; arguments: Record<string, unknown> }): Promise<McpCallResult>;
+  callTool(
+    args: { name: string; arguments: Record<string, unknown> },
+    resultSchema?: undefined,
+    options?: McpCallToolOptions,
+  ): Promise<McpCallResult>;
   close(): Promise<void>;
 }
 
@@ -90,7 +128,12 @@ export const defaultMcpConnect: McpConnectFn = async (name, spec) => {
   await client.connect(await openTransport(name, spec));
   return {
     listTools: () => client.listTools() as Promise<{ tools: McpToolDescriptor[] }>,
-    callTool: (a) => client.callTool(a) as Promise<McpCallResult>,
+    // Forward the per-request options (timeout / resetTimeoutOnProgress)
+    // through to the SDK. `resultSchema` stays undefined — we accept the
+    // SDK's default `CompatibilityCallToolResultSchema` and let `normalizeContent`
+    // downstream deal with the payload shape.
+    callTool: (a, _schema, options) =>
+      client.callTool(a, undefined, options) as Promise<McpCallResult>,
     close: () => client.close(),
   };
 };
@@ -191,7 +234,18 @@ export class McpBridge {
       description: t.description ?? `MCP tool '${t.name}' from server '${server}'`,
       parameters: t.inputSchema ?? { type: "object", properties: {} },
       execute: async (params: Record<string, unknown>): Promise<SystemToolResult> => {
-        const res = await client.callTool({ name: t.name, arguments: params });
+        // Explicit per-call `RequestOptions`: without this the SDK falls
+        // back to `DEFAULT_REQUEST_TIMEOUT_MSEC` (60 s), which is too short
+        // for the long-running tools BrainPilot users routinely wire up
+        // (paper search, deep KB queries, provider-hosted analyzers).
+        const res = await client.callTool(
+          { name: t.name, arguments: params },
+          undefined,
+          {
+            timeout: MCP_TOOL_CALL_TIMEOUT_MS,
+            resetTimeoutOnProgress: MCP_RESET_TIMEOUT_ON_PROGRESS,
+          },
+        );
         return { content: normalizeContent(res.content), isError: res.isError === true };
       },
     };
