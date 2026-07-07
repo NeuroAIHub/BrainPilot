@@ -22,6 +22,12 @@
  *
  * Modes (preserved verbatim from the legacy `skills_tool_local` MCP server):
  *   - mode="query" + keywords      → top-K {name, description, paths, hits}
+ *     `keywords` is a SINGLE comma-separated string, e.g. `"eeg, fmri,
+ *     signal preprocessing"`. The single-string shape is enforced by the JSON
+ *     schema; older array-shaped inputs are still tolerated at runtime by
+ *     `normalizeKeywords` (via `String(array)` which serialises as `"a,b,c"`)
+ *     so a schema-non-compliant model call degrades to correct behaviour
+ *     instead of returning `total_matched: 0`.
  *   - mode="query" + skill_name    → full SKILL.md body
  *   - mode="browse" + relative_path → list a directory or read a file
  *
@@ -161,25 +167,37 @@ export function countKeywordHits(text: string, keywords: string[]): number {
 
 export interface SkillSearchArgs {
   mode: "query" | "browse";
-  /** Accepts a string[] or a single comma-separated string (e.g. "EEG, ICA"). */
-  keywords?: string[] | string;
+  /**
+   * Comma-separated keyword string, e.g. `"eeg, fmri, signal preprocessing"`.
+   * The JSON schema advertises this as a plain string; the runtime tolerates
+   * an incoming `string[]` (which some models emit despite the schema) by
+   * flattening it to `"a,b,c"` via `String(array)` before splitting, so the
+   * search never silently returns zero matches.
+   */
+  keywords?: string | string[];
   topk?: number;
   skill_name?: string;
   relative_path?: string;
 }
 
 /**
- * Normalise the `keywords` parameter: accept either `string[]` or a single
- * comma-separated string (e.g. `"EEG, preprocessing, ICA"`), trim each entry,
- * and drop empties — matching `skills_tool.py` behaviour.
+ * Normalise the `keywords` parameter to `string[]`.
+ *
+ * Contract with the model is a SINGLE comma-separated string (e.g.
+ * `"EEG, preprocessing, ICA"`). We split on `,`, trim each entry, drop empties.
+ *
+ * Defensive fallback: if a model ignores the schema and passes an array
+ * (`["EEG", "ICA"]` or worse `["EEG, ICA"]`), we don't want the previous
+ * silent-zero-match failure mode. We route arrays through `String(arr)` —
+ * `Array.prototype.toString` joins with commas — so every historical calling
+ * convention lands in the same comma-split path. Result: identical to the
+ * user typing the same tokens as a string, regardless of whether the model
+ * shipped a string or an array.
  */
-export function normalizeKeywords(raw: string[] | string | undefined): string[] {
-  if (!raw) return [];
-  if (typeof raw === "string") {
-    return raw.split(",").map((s) => s.trim()).filter(Boolean);
-  }
-  // Already an array — still trim and drop empties for robustness.
-  return raw.map((s) => String(s).trim()).filter(Boolean);
+export function normalizeKeywords(raw: string | string[] | undefined): string[] {
+  if (raw === undefined || raw === null) return [];
+  const asString = typeof raw === "string" ? raw : String(raw);
+  return asString.split(",").map((s) => s.trim()).filter(Boolean);
 }
 
 /** JSON-stringify with 2-space indent; the model parses these as text. */
@@ -222,7 +240,7 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
     const kws = normalizeKeywords(args.keywords);
     if (kws.length === 0) {
       throw new Error(
-        "in query mode you must pass either 'keywords' (string list or comma-separated string) or 'skill_name' (exact name)",
+        "in query mode you must pass either 'keywords' (comma-separated string, e.g. \"eeg, fmri, signal preprocessing\") or 'skill_name' (exact name)",
       );
     }
     const skills = await collectAllSkills(baseAbs);
@@ -336,13 +354,12 @@ export function createSkillSearchTool(deps: ToolDeps): SystemTool {
           description: "'query' to search/load skills; 'browse' to list/read paths",
         },
         keywords: {
-          oneOf: [
-            { type: "array", items: { type: "string" } },
-            { type: "string" },
-          ],
+          type: "string",
           description:
-            "(query mode) keywords matched against each skill's frontmatter description; " +
-            "pass an array of strings or a single comma-separated string",
+            "(query mode) comma-separated keyword string matched against each " +
+            "skill's frontmatter description — e.g. \"eeg, fmri, signal " +
+            "preprocessing\". Do NOT wrap in an array or JSON-encode it; pass " +
+            "the raw string. Splitting on ',' happens server-side.",
         },
         topk: {
           type: "integer",
