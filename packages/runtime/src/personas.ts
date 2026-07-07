@@ -67,6 +67,44 @@ export function withLanguageDirective(persona: string): string {
   return `${persona}\n\n${LANGUAGE_DIRECTIVE}`;
 }
 
+/**
+ * Persistent cross-session storage directive (#257). Your working directory is
+ * the per-session workspace — anything there is scoped to THIS session. A
+ * separate persistent root, given here as an absolute path, is SHARED across all
+ * of the user's sessions: files there (uploaded datasets, reference documents,
+ * reusable models) remain available in future sessions. `${absPath}` is
+ * interpolated at load time with the deployment's real path so the agent can
+ * `read`/`write`/`bash` it directly.
+ */
+export function persistentRootDirective(absPath: string): string {
+  return `## Persistent cross-session storage
+
+Your working directory is this session's workspace — files you create there are
+scoped to THIS session only. There is ALSO a persistent, cross-session storage
+root at this absolute path:
+
+    ${absPath}
+
+Files under that path are SHARED across all of the user's sessions and persist
+beyond this one. The user's uploaded datasets, reference documents, and reusable
+artifacts may live there, and anything you place there stays available in future
+sessions. Use your normal file tools (\`read\`, \`write\`, \`edit\`, \`bash\`) with
+that absolute path to access it.
+
+Prefer it for data the user will reuse later or across sessions; keep
+session-specific scratch work in your workspace. Treat existing files there as
+the user's library — the high-impact-action rules apply before you overwrite,
+move, or delete anything you did not create.`;
+}
+
+/**
+ * Append the persistent-root directive to a resolved persona (#257). Applied at
+ * persona load time (non-trace roles), after the language directive.
+ */
+export function withPersistentRootDirective(persona: string, absPath: string): string {
+  return `${persona}\n\n${persistentRootDirective(absPath)}`;
+}
+
 /** A2A messaging contract — identical mechanics for every non-trace agent. */
 const A2A_EXPERT = `## Communicating back to the Principal
 

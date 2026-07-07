@@ -29,6 +29,11 @@ services:
       - BP_MODEL_PROVIDER=${BP_MODEL_PROVIDER:-}
       - BP_MOCK=${BP_MOCK:-}
     volumes:
+      # The whole data root is persisted here. Besides per-session
+      # `workspaces/<sid>/`, this holds the #257 cross-session persistent root
+      # `data/<BP_USER_ID>/` (default user `local`) — uploads/datasets placed
+      # there stay reusable across sessions. No extra mount needed; set
+      # BP_USER_ID per-user in multi-tenant hosting.
       - ${BP_DATA_DIR:-./brainpilot}:/root/.bp-root:rw
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${BP_SANDBOX_PORT:-8081}/health"]
