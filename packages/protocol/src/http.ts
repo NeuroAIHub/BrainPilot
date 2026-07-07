@@ -269,7 +269,13 @@ export const RUNTIME_ROUTES = {
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },
-  /** Workspace files (`workspaces/:id/`). `?path=` is relative to the workspace root. */
+  /**
+   * Workspace files. `?path=` addresses one of two roots (#257):
+   *  - `/workspace[/...]` (or a bare relative path) → per-session workspace
+   *    `workspaces/:id/` (the agent's cwd);
+   *  - `/data[/...]` → the shared per-user persistent root `data/<userId>/`,
+   *    reusable across sessions. Each root is traversal-guarded independently.
+   */
   listFiles: { method: "GET", path: "/sessions/:id/files" },
   readFile: { method: "GET", path: "/sessions/:id/files/content" },
   readRawFile: { method: "GET", path: "/sessions/:id/files/raw" },

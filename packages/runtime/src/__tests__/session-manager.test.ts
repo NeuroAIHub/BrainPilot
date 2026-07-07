@@ -1,9 +1,9 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
-import { SessionManager } from "../session-manager.js";
+import { SessionManager, resolvePersistentUserId } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
 
@@ -236,6 +236,90 @@ describe("SessionManager workspace path normalization (#5)", () => {
     const out = await m.writeSessionFile(s.id, "top.txt", b64);
     expect(out.path).toBe("top.txt");
     await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("SessionManager persistent cross-session root (#257)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-data-"));
+  });
+
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+  it("a /data write is visible from a DIFFERENT session (cross-session reuse)", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const a = await m.createSession({ title: "A" });
+    const b = await m.createSession({ title: "B" });
+
+    // Upload into the persistent root from session A...
+    const wrote = await m.writeSessionFile(a.id, "/data/dataset.csv", b64("shared,data"));
+    // ...the returned path carries the /data prefix so it round-trips.
+    expect(wrote.path).toBe("/data/dataset.csv");
+
+    // ...and session B reads the SAME bytes via /data (would be impossible with
+    // the per-session workspace, which is scoped to one sid).
+    const read = await m.readSessionFile(b.id, "/data/dataset.csv");
+    expect(read.content).toBe("shared,data");
+
+    // On disk it lives under data/<userId>/, NOT workspaces/<sid>/.
+    const onDisk = await readFile(join(root, "data", "local", "dataset.csv"), "utf8");
+    expect(onDisk).toBe("shared,data");
+  });
+
+  it("a workspace write stays per-session (NOT visible via another session)", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const a = await m.createSession({ title: "A" });
+    const b = await m.createSession({ title: "B" });
+    await m.writeSessionFile(a.id, "notes.txt", b64("only in A"));
+    // B's workspace does not have it → read throws (ENOENT).
+    await expect(m.readSessionFile(b.id, "notes.txt")).rejects.toThrow();
+  });
+
+  it("guards each root independently: /data cannot escape into the workspace or beyond", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    // `..` from /data must not reach the sibling workspaces/ tree or outside dataRoot.
+    await expect(m.writeSessionFile(s.id, "/data/../workspaces/evil.txt", b64("x"))).rejects.toThrow(
+      /escapes/,
+    );
+    await expect(m.readSessionFile(s.id, "/data/../../etc/passwd")).rejects.toThrow(/escapes/);
+  });
+
+  it("honors a custom persistentUserId in the on-disk layout", async () => {
+    const m = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: mockAgentFactory,
+      persistentUserId: "alice",
+    });
+    const s = await m.createSession({ title: "S" });
+    await m.writeSessionFile(s.id, "/data/lib.txt", b64("hi"));
+    const onDisk = await readFile(join(root, "data", "alice", "lib.txt"), "utf8");
+    expect(onDisk).toBe("hi");
+  });
+});
+
+describe("resolvePersistentUserId (#257)", () => {
+  it("defaults to `local` when unset", () => {
+    expect(resolvePersistentUserId(undefined, {})).toBe("local");
+    expect(resolvePersistentUserId("   ", {})).toBe("local");
+  });
+  it("reads BP_USER_ID from env when no explicit option", () => {
+    expect(resolvePersistentUserId(undefined, { BP_USER_ID: "bob" })).toBe("bob");
+  });
+  it("explicit option wins over env", () => {
+    expect(resolvePersistentUserId("carol", { BP_USER_ID: "bob" })).toBe("carol");
+  });
+  it("sanitizes separators and traversal to a single safe segment", () => {
+    // Whatever the input, the result is a single segment with no separators or
+    // `..` (so the "persistent root" can never escape `data/`).
+    for (const bad of ["../../etc", "a/b", "..", "x/../y", "..\\..\\z"]) {
+      const out = resolvePersistentUserId(bad, {});
+      expect(out).not.toContain("..");
+      expect(out).not.toMatch(/[\\/]/);
+    }
+    expect(resolvePersistentUserId("a/b", {})).toBe("a_b");
   });
 });
 

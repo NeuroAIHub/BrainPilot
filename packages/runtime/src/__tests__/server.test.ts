@@ -353,6 +353,41 @@ describe("workspace file routes", () => {
     expect(res.status).toBe(400);
   });
 
+  // #257: uploading to /data writes the shared persistent root, readable from a
+  // DIFFERENT session id via the same /data path (cross-session reuse).
+  it("uploads to /data and reads it back from another session (#257)", async () => {
+    const { app: a, dataRoot } = await appWithWorkspace();
+    const contentBase64 = Buffer.from("reusable dataset").toString("base64");
+    const up = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/data/lib/set.csv", contentBase64 }),
+    });
+    expect(up.status).toBe(201);
+    const body = (await up.json()) as { path: string };
+    // path round-trips WITH the /data prefix
+    expect(body.path).toBe("/data/lib/set.csv");
+
+    // A different session id resolves the same /data root.
+    const read = await a.request("/sessions/other-session/files/content?path=/data/lib/set.csv");
+    expect(read.status).toBe(200);
+    expect((await read.json()) as { content: string }).toMatchObject({ content: "reusable dataset" });
+
+    // On disk it lives under data/local/, not workspaces/.
+    const onDisk = await readFile(join(dataRoot, "data", "local", "lib", "set.csv"), "utf8");
+    expect(onDisk).toBe("reusable dataset");
+  });
+
+  it("rejects a /data upload that escapes the data root with 400 (#257)", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/data/../workspaces/evil", contentBase64: "eA==" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   // #60: a composer upload staged under workspaces/local/ (the draft sandbox id)
   // must be drained into the real session workspace before the agent runs, so
   // the agent's cwd (workspaces/<sid>/) contains the file the user attached.
