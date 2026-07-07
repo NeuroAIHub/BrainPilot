@@ -476,6 +476,18 @@ export class SessionManager {
     return join(this.dataRoot, "data", this.persistentUserId);
   }
   /**
+   * Conversation-attachments subdir of a session's workspace —
+   * `workspaces/<sid>/.attachments/`. Files the user attaches to a message live
+   * here: scoped to the session (like the workspace) but kept physically apart
+   * from agent-produced files, and hidden from the workspace file tree. The
+   * agent reads them from its cwd as `.attachments/<name>`. Addressed by file
+   * routes via the `/attachments` prefix (see `resolveManagedPath`).
+   */
+  private static readonly ATTACHMENTS_DIRNAME = ".attachments";
+  private attachmentsDir(sid: string): string {
+    return join(this.workspaceDir(sid), SessionManager.ATTACHMENTS_DIRNAME);
+  }
+  /**
    * #60: composer uploads in single-user mode are POSTed against the literal
    * sandbox id `"local"` (the web `LOCAL_SANDBOX.id`), because a file can be
    * attached in the draft composer *before* the real session exists. They land
@@ -507,13 +519,18 @@ export class SessionManager {
    * escapes its declared root (path-traversal guard). This is the single
    * enforcement point for all file routes.
    *
-   * TWO roots are addressable (#257):
+   * THREE roots are addressable, by path prefix:
    *  - `/workspace[/...]` → the per-session workspace `workspaces/<sid>/`
    *    (the agent's cwd; default when no prefix is given, for backward compat).
    *  - `/data[/...]`      → the shared per-user persistent root
-   *    `data/<userId>/`, reusable across sessions.
-   * Each is guarded WITHIN ITS OWN boundary: a `/data` path can never reach the
-   * session workspace and vice-versa, and neither can escape via `..`.
+   *    `data/<userId>/`, reusable across sessions (#257).
+   *  - `/attachments[/...]` → conversation attachments the user attached to a
+   *    message, kept in the hidden `workspaces/<sid>/.attachments/` subdir so
+   *    they are scoped to the session but visually separate from agent-produced
+   *    workspace files. The agent reads them from its cwd as `.attachments/<f>`.
+   * Each is guarded WITHIN ITS OWN boundary: paths can never cross between roots
+   * and none can escape via `..`. (Attachments sit under the workspace on disk,
+   * but the `/attachments` boundary is the `.attachments/` subdir itself.)
    *
    * Returns the absolute path plus which root it resolved against, so callers
    * that echo a path back (writeSessionFile) can re-emit the correct prefix.
@@ -521,21 +538,26 @@ export class SessionManager {
   private resolveManagedPath(
     sid: string,
     rawPath: string,
-  ): { abs: string; root: string; prefix: "/workspace" | "/data" } {
+  ): { abs: string; root: string; prefix: "/workspace" | "/data" | "/attachments" } {
     let rel = rawPath ?? "";
     // Cross-platform (#5): accept `\` on the way in (an LLM/pre-#5 client may
     // round-trip a `\` path we handed out). `\` is not a legal filename char.
     rel = rel.replace(/\\/g, "/");
 
-    // Pick the root by prefix. `/data` selects the persistent library; anything
-    // else defaults to the session workspace (bare relative paths included, so
-    // existing callers keep working unchanged).
+    // Pick the root by prefix. `/data` → persistent library; `/attachments` →
+    // the session's hidden attachments subdir; anything else defaults to the
+    // session workspace (bare relative paths included, so existing callers keep
+    // working unchanged).
     let root: string;
-    let prefix: "/workspace" | "/data";
+    let prefix: "/workspace" | "/data" | "/attachments";
     if (rel === "/data" || rel.startsWith("/data/")) {
       root = this.persistentDir();
       prefix = "/data";
       rel = rel === "/data" ? "" : rel.slice("/data/".length);
+    } else if (rel === "/attachments" || rel.startsWith("/attachments/")) {
+      root = this.attachmentsDir(sid);
+      prefix = "/attachments";
+      rel = rel === "/attachments" ? "" : rel.slice("/attachments/".length);
     } else {
       root = this.workspaceDir(sid);
       prefix = "/workspace";
@@ -546,7 +568,9 @@ export class SessionManager {
     rel = rel.replace(/^\/+/, ""); // never let a leading slash make it absolute
     const abs = resolve(root, rel);
     if (abs !== root && !abs.startsWith(root + sep)) {
-      throw new Error(`path escapes ${prefix === "/data" ? "data root" : "workspace"}: ${rawPath}`);
+      const label =
+        prefix === "/data" ? "data root" : prefix === "/attachments" ? "attachments" : "workspace";
+      throw new Error(`path escapes ${label}: ${rawPath}`);
     }
     return { abs, root, prefix };
   }
@@ -558,7 +582,7 @@ export class SessionManager {
 
   /** List one directory level under the session workspace (default: root). */
   async listSessionFiles(sid: string, rel = ""): Promise<FileEntry[]> {
-    const dir = this.resolveWorkspacePath(sid, rel);
+    const { abs: dir, root, prefix } = this.resolveManagedPath(sid, rel);
     let dirents;
     try {
       dirents = await readdir(dir, { withFileTypes: true });
@@ -577,8 +601,15 @@ export class SessionManager {
         `failed to list workspace for session ${sid} at ${dir}: ${code ?? (err as Error)?.message ?? String(err)}`,
       );
     }
+    // Hide the conversation-attachments subdir from the WORKSPACE root listing:
+    // attachments are surfaced separately in the chat UI, not the file tree.
+    // (Only at the workspace root, and only when listing the workspace itself.)
+    const atWorkspaceRoot = prefix === "/workspace" && dir === root;
+    const visible = atWorkspaceRoot
+      ? dirents.filter((d) => d.name !== SessionManager.ATTACHMENTS_DIRNAME)
+      : dirents;
     const entries = await Promise.all(
-      dirents.map(async (d) => {
+      visible.map(async (d) => {
         const type: FileEntry["type"] = d.isDirectory()
           ? "folder"
           : d.isSymbolicLink()
@@ -718,15 +749,21 @@ export class SessionManager {
   }
 
   /**
-   * Root-relative form of an absolute managed path, carrying the `/data` prefix
-   * back for persistent-root writes so the path round-trips (#257). Cross-platform
-   * (#5): always emit POSIX `/` so the API contract is identical across hosts;
-   * the frontend embeds this in URL query strings (`?path=foo/bar.txt`) and the
-   * model echoes it back via `read_file`.
+   * Root-relative form of an absolute managed path, carrying the `/data` or
+   * `/attachments` prefix back for non-workspace writes so the path round-trips.
+   * Cross-platform (#5): always emit POSIX `/` so the API contract is identical
+   * across hosts; the frontend embeds this in URL query strings
+   * (`?path=foo/bar.txt`) and the model echoes it back via `read_file`. A bare
+   * workspace path is emitted prefix-less for backward compatibility.
    */
-  private relManagedPath(abs: string, root: string, prefix: "/workspace" | "/data"): string {
+  private relManagedPath(
+    abs: string,
+    root: string,
+    prefix: "/workspace" | "/data" | "/attachments",
+  ): string {
     const relPart = abs === root ? "" : abs.slice(root.length + 1).split(sep).join("/");
-    return prefix === "/data" ? (relPart ? `/data/${relPart}` : "/data") : relPart;
+    if (prefix === "/workspace") return relPart;
+    return relPart ? `${prefix}/${relPart}` : prefix;
   }
 
   /**
@@ -742,6 +779,11 @@ export class SessionManager {
    * leak into the next session. No-op when the target IS the staging sid, or
    * when the staging dir is missing/empty. Best-effort: never throws — a copy
    * failure must not block the user's prompt.
+   *
+   * This is directory-recursive, so a draft's conversation attachments staged
+   * under `workspaces/local/.attachments/` move as a unit into the fresh
+   * session's `.attachments/` subdir (a draft's session is always new, so the
+   * target `.attachments/` does not pre-exist).
    */
   private async drainLocalUploads(sessionId: string): Promise<void> {
     if (sessionId === SessionManager.UPLOAD_STAGING_SID) return;

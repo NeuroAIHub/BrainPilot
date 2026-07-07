@@ -300,6 +300,50 @@ describe("SessionManager persistent cross-session root (#257)", () => {
   });
 });
 
+describe("SessionManager conversation attachments (.attachments/)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-att-"));
+  });
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+  it("an /attachments write lands in the session's hidden .attachments/ subdir", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    const wrote = await m.writeSessionFile(s.id, "/attachments/report.pdf", b64("PDF"));
+    // path round-trips WITH the /attachments prefix
+    expect(wrote.path).toBe("/attachments/report.pdf");
+    // physically under workspaces/<sid>/.attachments/, scoped to the session
+    const onDisk = await readFile(join(root, "workspaces", s.id, ".attachments", "report.pdf"), "utf8");
+    expect(onDisk).toBe("PDF");
+  });
+
+  it("hides .attachments/ from the workspace root listing but lists it via /attachments", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    await m.writeSessionFile(s.id, "notes.txt", b64("agent output"));
+    await m.writeSessionFile(s.id, "/attachments/input.csv", b64("a,b"));
+
+    // Workspace root listing shows the agent file but NOT the .attachments dir.
+    const wsRoot = await m.listSessionFiles(s.id, "/workspace");
+    const names = wsRoot.map((e) => e.name);
+    expect(names).toContain("notes.txt");
+    expect(names).not.toContain(".attachments");
+
+    // The attachments tier is listed via its own prefix.
+    const att = await m.listSessionFiles(s.id, "/attachments");
+    expect(att.map((e) => e.name)).toEqual(["input.csv"]);
+  });
+
+  it("guards the attachments boundary against traversal", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    await expect(
+      m.writeSessionFile(s.id, "/attachments/../escape.txt", b64("x")),
+    ).rejects.toThrow(/escapes/);
+  });
+});
+
 describe("resolvePersistentUserId (#257)", () => {
   it("defaults to `local` when unset", () => {
     expect(resolvePersistentUserId(undefined, {})).toBe("local");

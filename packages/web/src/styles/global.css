@@ -1768,8 +1768,20 @@ button {
 .composer__attachments {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 0 8px 4px;
+}
+/* #257: label the attachment tier so it reads distinctly from workspace/data. */
+.composer__attachments-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.6;
 }
 .composer__chip {
   display: inline-flex;
@@ -1785,6 +1797,11 @@ button {
 }
 .composer__chip--pending {
   opacity: 0.7;
+}
+/* #257: attachment chips get an accent tint to distinguish the tier. */
+.composer__chip--attachment {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+  color: var(--accent-strong, inherit);
 }
 .composer__chip-name {
   overflow: hidden;
@@ -4151,6 +4168,52 @@ button {
   min-height: 0;
   overflow: auto;
   padding: 8px;
+}
+
+/* #257: the two file tiers (session workspace vs persistent library). */
+.file-tier {
+  margin-bottom: 10px;
+}
+.file-tier + .file-tier {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft, rgba(127, 127, 127, 0.18));
+}
+.file-tier__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.file-tier__toggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+}
+.file-tier__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tier--data .file-tier__name {
+  color: var(--accent-strong, inherit);
+}
+.file-tier__hint {
+  margin: 0 0 4px 22px;
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.6;
+}
+.file-tier__empty {
+  margin: 2px 0 4px 22px;
+  font-size: 12px;
+  opacity: 0.5;
 }
 
 .file-node {
