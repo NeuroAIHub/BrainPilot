@@ -16,6 +16,7 @@
     "packages/docs"
   ],
   "scripts": {
+    "postinstall": "patch-package",
     "build": "npm run build --workspaces --if-present",
     "docs:build": "npm run build -w @brainpilot/docs",
     "docs:check": "npm run check:secrets -w @brainpilot/docs && npm run typecheck -w @brainpilot/docs",
@@ -32,6 +33,7 @@
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
+    "patch-package": "^8.0.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
     "vitest": "^3.0.0"

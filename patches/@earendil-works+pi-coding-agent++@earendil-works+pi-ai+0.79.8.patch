@@ -1,0 +1,31 @@
+diff --git a/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/openai-responses-shared.js b/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/openai-responses-shared.js
+index 3d970f3..48c807f 100644
+--- a/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/openai-responses-shared.js
++++ b/node_modules/@earendil-works/pi-coding-agent/node_modules/@earendil-works/pi-ai/dist/providers/openai-responses-shared.js
+@@ -107,11 +107,17 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
+             const isDifferentModel = assistantMsg.model !== model.id &&
+                 assistantMsg.provider === model.provider &&
+                 assistantMsg.api === model.api;
++            // Azure Responses runs stateless (store:false): server-side items are never
++            // persisted, so replaying a server item id (rs_/fc_) references nothing and
++            // fails Azure's strict validation. Omit those ids; encrypted_content carries state.
++            const omitServerItemIds = model.api === "azure-openai-responses";
+             let textBlockIndex = 0;
+             for (const block of msg.content) {
+                 if (block.type === "thinking") {
+                     if (block.thinkingSignature) {
+                         const reasoningItem = JSON.parse(block.thinkingSignature);
++                        if (omitServerItemIds)
++                            delete reasoningItem.id;
+                         output.push(reasoningItem);
+                     }
+                 }
+@@ -144,7 +150,7 @@ export function convertResponsesMessages(model, context, allowedToolCallProvider
+                     // For different-model messages, set id to undefined to avoid pairing validation.
+                     // OpenAI tracks which fc_xxx IDs were paired with rs_xxx reasoning items.
+                     // By omitting the id, we avoid triggering that validation (like cross-provider does).
+-                    if (isDifferentModel && itemId?.startsWith("fc_")) {
++                    if ((isDifferentModel || omitServerItemIds) && itemId?.startsWith("fc_")) {
+                         itemId = undefined;
+                     }
+                     output.push({
