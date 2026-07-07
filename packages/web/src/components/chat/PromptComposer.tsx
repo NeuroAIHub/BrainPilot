@@ -263,11 +263,14 @@ export function PromptComposer() {
     }
   };
 
-  // #47: upload the chosen files into the session workspace, then track their
-  // names as chips. In single-user mode the sandbox id and session id are the
-  // same; a draft has no real session yet, so uploads land in the `"local"`
-  // staging area and the runtime drains them into the real workspace on send
-  // (#60 drainLocalUploads). Files are uploaded to the workspace root by name.
+  // #47: upload the chosen files as CONVERSATION ATTACHMENTS, then track their
+  // names as chips. Attachments go to the session's `.attachments/` subdir (via
+  // the `/attachments` path prefix) — scoped to the session but kept apart from
+  // agent-produced workspace files, and hidden from the file panel. In
+  // single-user mode the sandbox id and session id are the same; a draft has no
+  // real session yet, so uploads land in the `"local"` staging area and the
+  // runtime drains them (incl. `.attachments/`) into the real session on send
+  // (#60 drainLocalUploads).
   const handleFilesChosen = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const uploadId = currentSession?.id ?? currentSandbox?.id;
@@ -276,7 +279,7 @@ export function PromptComposer() {
     setComposerError(null);
     try {
       for (const file of Array.from(files)) {
-        await api.sandbox.uploadFile(uploadId, file.name, file);
+        await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file);
         setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
       }
     } catch (e) {
@@ -352,8 +355,12 @@ export function PromptComposer() {
 
           {attachments.length > 0 || uploading ? (
             <div className="composer__attachments" aria-label={t("chat.aria.attachFile")}>
+              <span className="composer__attachments-label">
+                <Paperclip size={11} />
+                {t("chat.attachments.label")}
+              </span>
               {attachments.map((name) => (
-                <span className="composer__chip" key={name}>
+                <span className="composer__chip composer__chip--attachment" key={name}>
                   <Paperclip size={12} />
                   <span className="composer__chip-name">{name}</span>
                   <button
