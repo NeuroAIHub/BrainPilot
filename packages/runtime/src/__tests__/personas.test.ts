@@ -98,6 +98,13 @@ describe("personas", () => {
     expect(p.toLowerCase()).toContain("exemption");
   });
 
+  it("principal audit gate covers analysis/modelling validity risks", () => {
+    const p = PERSONAS.principal!;
+    expect(p.toLowerCase()).toContain("leakage");
+    expect(p.toLowerCase()).toContain("cross-validation");
+    expect(p).toContain("data-split");
+  });
+
   it("principal and writer personas keep internal status out of user-facing prose", () => {
     const pi = PERSONAS.principal!;
     const writer = PERSONAS.writer!;
@@ -144,6 +151,22 @@ describe("personas", () => {
     // get_trace_graph (so the model doesn't try). Assert the explicit
     // "cannot call" disclaimer rather than that the name is absent.
     expect(a).toMatch(/cannot call\s+`?get_trace_graph`?/);
+  });
+
+  it("auditor persona audits scientific-reliability defects, open-ended", () => {
+    const a = PERSONAS.auditor!;
+    // Still an evidence/fabrication auditor …
+    expect(a.toLowerCase()).toContain("fabrication");
+    // … now also a bounded-but-open reliability reviewer.
+    expect(a.toLowerCase()).toContain("reliability");
+    expect(a.toLowerCase()).toContain("leakage");
+    expect(a.toLowerCase()).toContain("baseline");
+    expect(a.toLowerCase()).toContain("metric");
+    // Reliability verdict vocabulary.
+    expect(a).toContain("concern");
+    expect(a).toContain("flaw");
+    // Scope is explicitly non-exhaustive.
+    expect(a.toLowerCase()).toMatch(/not exhaustive|including but not limited/);
   });
 
   it("authoring experts mention their write/run capability", () => {
