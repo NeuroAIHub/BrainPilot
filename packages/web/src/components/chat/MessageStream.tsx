@@ -35,8 +35,6 @@ interface MessageStreamProps {
   turnTiming?: { running: boolean; elapsedMs: number | null; lastDurationMs: number | null };
   className?: string;
   ariaLabel?: string;
-  /** 修正6 — submit an ask_user answer. Omitted in read-only contexts (demo). */
-  onAskUserSubmit?: (requestId: string, answer: string) => void;
   /** 修正6 — cancel a pending auto-retry. Omitted in read-only contexts. */
   onRetryCancel?: () => void;
   /**
@@ -83,7 +81,6 @@ function MessageStreamImpl({
   turnTiming,
   className,
   ariaLabel,
-  onAskUserSubmit,
   onRetryCancel,
   runningAgents,
   groupExpertActivity = false,
@@ -320,13 +317,9 @@ function MessageStreamImpl({
       return <SystemMessageBubble key={message.id} view={message.systemMessage} />;
     }
     if (message.kind === "ask_user" && message.askUser) {
-      return (
-        <AskUserCard
-          key={message.id}
-          view={message.askUser}
-          onSubmit={(requestId, answer) => onAskUserSubmit?.(requestId, answer)}
-        />
-      );
+      // #272: the stream card is a record only; answering happens in the
+      // composer takeover (AskUserComposer). See AskUserCard.
+      return <AskUserCard key={message.id} view={message.askUser} />;
     }
     if (message.kind === "auto_retry" && message.autoRetry) {
       return (
