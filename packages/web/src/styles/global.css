@@ -2718,6 +2718,130 @@ button {
   font-size: 13px;
   color: var(--color-success);
 }
+/* #272 — the stream card is now a record only. Pending options render as a
+   static list (interaction moved to the composer takeover below). */
+.ask-user__options--record {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ask-user__option-record {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+.ask-user__pending {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* ── #272 — ask_user composer takeover (Codex-style picker) ─────────── */
+.ask-user-composer {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  background: var(--color-accent-soft);
+  outline: none;
+}
+.ask-user-composer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ask-user-composer__icon { flex: none; color: var(--color-accent); }
+.ask-user-composer__question {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* #272: a long/verbose question must not push the options off-screen. Cap the
+     visible height and scroll the overflow inside the header. */
+  max-height: 7.5em;
+  overflow-y: auto;
+}
+.ask-user-composer__options {
+  display: grid;
+  gap: 6px;
+}
+.ask-user-composer__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--ease-standard), border-color var(--ease-standard);
+}
+.ask-user-composer__option.is-active {
+  background: var(--color-surface);
+  border-color: var(--color-accent);
+}
+.ask-user-composer__option--free { cursor: text; }
+.ask-user-composer__num {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-accent) 20%, var(--color-surface));
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.ask-user-composer__label { flex: 1; min-width: 0; }
+.ask-user-composer__input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  outline: none;
+}
+.ask-user-composer__foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ask-user-composer__hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.ask-user-composer__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-size: 13px;
+  font-weight: 520;
+  cursor: pointer;
+}
+.ask-user-composer__submit:disabled { opacity: 0.5; cursor: default; }
 
 /* ── 修正6 — auto-retry countdown + cancel ────────────────────────── */
 .auto-retry {

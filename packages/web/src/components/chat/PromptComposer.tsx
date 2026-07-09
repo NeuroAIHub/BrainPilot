@@ -11,6 +11,7 @@ import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { AskUserComposer } from "./AskUserComposer";
 import { ComposerInput } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
@@ -69,6 +70,21 @@ export function PromptComposer() {
   }, [messages, agentFilters, messageFilters]);
 
   const hasMessages = visibleMessages.length > 0;
+
+  // #272: the latest unanswered ask_user request, if any. While one is pending
+  // the composer is replaced by AskUserComposer (a takeover picker) so a user
+  // can't type an ordinary message and hang the session. There is no escape
+  // hatch — the user must pick an option or type a free-text answer.
+  const askTakeover = useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      const m = visibleMessages[i];
+      if (m.kind === "ask_user" && m.askUser && m.askUser.answer === undefined) {
+        return m.askUser;
+      }
+    }
+    return null;
+  }, [visibleMessages]);
+
   const isAgentRunning = agents.some((a) => a.status === "running");
   const lastAssistantStreaming = visibleMessages[visibleMessages.length - 1]?.role === "assistant" && visibleMessages[visibleMessages.length - 1]?.streaming;
   // A bash tool is in flight iff selectActiveScripts finds anything; when it
@@ -312,7 +328,6 @@ export function PromptComposer() {
             turnTiming={turnTiming}
             runningAgents={runningAgents}
             groupExpertActivity
-            onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
             onRetryCancel={() => void interruptCurrent()}
           />
         ) : null}
@@ -346,6 +361,12 @@ export function PromptComposer() {
           onStop={() => void interruptCurrent()}
         />
 
+        {askTakeover ? (
+          <AskUserComposer
+            view={askTakeover}
+            onSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
+          />
+        ) : (
         <form className="composer" aria-label={t("chat.aria.newPrompt")} onSubmit={handleSubmit}>
           <ComposerInput
             sessionId={sessionId}
@@ -503,6 +524,7 @@ export function PromptComposer() {
           </div>
 
         </form>
+        )}
 
         {error ? <p className="composer-status composer-status--error">{error}</p> : null}
         {composerError ? <p className="composer-status composer-status--error">{composerError}</p> : null}

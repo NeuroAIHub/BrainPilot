@@ -1116,6 +1116,27 @@ export class SessionManager {
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
 
+    // #272: a run blocked on an ask_user (user_input_request) is streaming but
+    // will never settle until the request is answered. If the user types an
+    // ordinary message instead of picking an option, route it as the answer to
+    // the oldest outstanding request rather than returning "already processing"
+    // (which silently drops the message and hangs the session forever). The
+    // frontend now takes over the composer to steer users to the picker, but
+    // this is the defense-in-depth fallback for any path that still sends plain
+    // content (old client, ESC-then-type, direct API caller).
+    const [pendingRequestId] = entry.pendingInputs.keys();
+    if (pendingRequestId !== undefined) {
+      const runId = entry.activeRunId ?? undefined;
+      // Broadcast the user's text as a bubble correlated to the current run, so
+      // SSE replay stays complete (resolveInput emits the user_input_response
+      // echo separately, which resolves the ask_user card).
+      entry.bus.emit(
+        ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
+      );
+      this.resolveInput(sessionId, pendingRequestId, content);
+      return { accepted: true, runId, queued: true };
+    }
+
     // Concurrent send: the target agent is still streaming its previous run.
     // A plain prompt() would hit the SDK's "already processing" guard. Queue
     // the message as a follow-up onto the current run instead — no new runId,

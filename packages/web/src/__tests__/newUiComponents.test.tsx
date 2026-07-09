@@ -13,6 +13,7 @@ vi.mock("../i18n/useT", () => ({
 import { renderToStaticMarkup } from "react-dom/server";
 import { SystemMessageBubble } from "../components/chat/SystemMessageBubble";
 import { AskUserCard } from "../components/chat/AskUserCard";
+import { AskUserComposer } from "../components/chat/AskUserComposer";
 import { AutoRetryIndicator } from "../components/chat/AutoRetryIndicator";
 
 describe("SystemMessageBubble — 4 levels", () => {
@@ -49,29 +50,65 @@ describe("SystemMessageBubble — 4 levels", () => {
 });
 
 describe("AskUserCard — structure", () => {
-  it("renders option buttons + free-text input when open", () => {
+  it("renders a record (options listed, no live inputs) when open", () => {
+    // #272: the card is a record only; interaction moved to the composer
+    // takeover. Options are listed for context but there are no buttons/inputs.
     const html = renderToStaticMarkup(
       <AskUserCard
         view={{ requestId: "r1", agent: "principal", question: "Pick", options: ["A", "B"], allowFreeText: true }}
-        onSubmit={() => {}}
       />,
     );
     expect(html).toContain("ask-user");
     expect(html).toContain('data-request-id="r1"');
     expect(html).toContain(">A<");
     expect(html).toContain(">B<");
-    expect(html).toContain("ask-user__input");
+    // no interactive controls in the stream card anymore
+    expect(html).not.toContain("ask-user__input");
+    expect(html).not.toContain("<button");
+    expect(html).toContain("ask-user__pending");
   });
 
   it("renders the answered state once resolved", () => {
     const html = renderToStaticMarkup(
-      <AskUserCard
-        view={{ requestId: "r1", agent: "principal", question: "Pick", answer: "A" }}
+      <AskUserCard view={{ requestId: "r1", agent: "principal", question: "Pick", answer: "A" }} />,
+    );
+    expect(html).toContain("ask-user--answered");
+    expect(html).not.toContain("ask-user__option-record");
+  });
+});
+
+describe("AskUserComposer — takeover picker (#272)", () => {
+  it("renders numbered options + submit when options are present", () => {
+    const html = renderToStaticMarkup(
+      <AskUserComposer
+        view={{ requestId: "r1", agent: "principal", question: "Pick", options: ["Walk", "Coffee"] }}
         onSubmit={() => {}}
       />,
     );
-    expect(html).toContain("ask-user--answered");
-    expect(html).not.toContain("ask-user__option");
+    expect(html).toContain("ask-user-composer");
+    expect(html).toContain('data-request-id="r1"');
+    expect(html).toContain(">Walk<");
+    expect(html).toContain(">Coffee<");
+    // numbered (1-indexed) + submit control
+    expect(html).toContain(">1<");
+    expect(html).toContain(">2<");
+    expect(html).toContain("ask-user-composer__submit");
+    // #272: no escape hatch — there is no "ignore/dismiss" control.
+    expect(html).not.toContain("ask-user-composer__ignore");
+    // #272: the free-text row is ALWAYS present (Codex-style), even when only
+    // options are given, so the user never has to leave the picker.
+    expect(html).toContain("ask-user-composer__input");
+    expect(html).toContain("ask-user-composer__option--free");
+  });
+
+  it("renders a free-text row when there are no options", () => {
+    const html = renderToStaticMarkup(
+      <AskUserComposer
+        view={{ requestId: "r3", agent: "principal", question: "Free?" }}
+        onSubmit={() => {}}
+      />,
+    );
+    expect(html).toContain("ask-user-composer__input");
   });
 });
 
