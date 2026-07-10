@@ -5,7 +5,6 @@ import type { ChatMessage, TraceNode, WebSocketEvent } from "../../contracts/bac
 import { normalizeWebSocketEvent } from "../../contracts/backend";
 import { DemoBundle, DemoFile } from "../../contracts/demoBundle";
 import { applyMessageFilters, defaultFilterRules } from "../../contexts/messageFilters";
-import { reduceMessagesForEvent } from "../../contexts/messageReducer";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
@@ -19,6 +18,7 @@ import { getNodeKindLabelKey } from "../session/traceLayout";
 import { buildDemoBundle, parseDemoBundle } from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
 import { shouldResetDemo } from "./demoReset";
+import { foldUpTo, type FoldCache } from "./foldCache";
 import { DemoFileTree } from "./DemoFileTree";
 import { TraceNodeModal } from "./TraceNodeModal";
 
@@ -143,12 +143,15 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   };
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const decodedRef = useRef<Map<string, DecodedFile>>(new Map());
+  // Incremental fold cache for timestamped replay (see foldCache.ts).
+  const foldCacheRef = useRef<FoldCache | null>(null);
 
   // Decode embedded files into preview sources (lazy blob URLs for binaries).
+  // Pure builder: it must NOT revoke prior URLs here — a useMemo factory can run
+  // for a render React later discards (concurrent rendering), which would revoke
+  // URLs the currently-committed render still points at, breaking image/PDF
+  // previews. Revocation happens in the effect below, keyed on the map identity.
   const decoded = useMemo(() => {
-    // Revoke URLs from the previous bundle.
-    decodedRef.current.forEach((d) => d.objectUrl && URL.revokeObjectURL(d.objectUrl));
     const map = new Map<string, DecodedFile>();
     for (const file of bundle?.files ?? []) {
       if (file.truncated || file.data === undefined) {
@@ -169,13 +172,15 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
         map.set(file.path, { source: { kind: "download" } });
       }
     }
-    decodedRef.current = map;
     return map;
   }, [bundle]);
 
+  // Revoke the *previous* map's blob URLs only after a new decoded map has been
+  // committed (and on unmount). Keying the cleanup on `decoded` guarantees we
+  // never revoke URLs the live render still references.
   useEffect(() => () => {
-    decodedRef.current.forEach((d) => d.objectUrl && URL.revokeObjectURL(d.objectUrl));
-  }, []);
+    decoded.forEach((d) => d.objectUrl && URL.revokeObjectURL(d.objectUrl));
+  }, [decoded]);
 
   const nodes = bundle?.trace.nodes ?? [];
 
@@ -202,9 +207,13 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
           return { ev: normalized, ms };
         })
         .sort((a, b) => a.ms - b.ms);
-      const all = sorted.map((s) => s.ms).filter(Number.isFinite);
-      const t0 = all.length ? Math.min(...all) : 0;
-      const t1 = all.length ? Math.max(...all) : 1;
+      // `ms` is always finite (falls back to the previous value above) and the
+      // list is sorted ascending, so the endpoints are the min/max. Read them
+      // directly instead of spreading into Math.min/Math.max, which throws
+      // RangeError once the event count exceeds the engine's argument limit
+      // (large sessions packed with `limit: 0`).
+      const t0 = sorted.length ? sorted[0].ms : 0;
+      const t1 = sorted.length ? sorted[sorted.length - 1].ms : 1;
       const span = t1 > t0 ? t1 - t0 : 1;
       // Reveal trace nodes evenly across the timeline in creation (array) order.
       // Bundle node timestamps are unreliable — often missing, equal, or
@@ -276,14 +285,14 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
       return [];
     }
     if (bundle.timeline === "timestamped") {
-      let acc: ChatMessage[] = [];
-      for (const { ev, ms } of timeline.sorted) {
-        if (ms > cursor) {
-          break;
-        }
-        acc = reduceMessagesForEvent(acc, ev);
-      }
-      return acc;
+      // Incremental prefix fold (see foldCache.ts): only the newly-crossed events
+      // are folded as the cursor advances, so the play loop stays O(1) per tick
+      // instead of re-folding the whole event log every TICK_MS. Correct even if
+      // React double-invokes this memo under concurrent rendering — the cache
+      // always holds a real event prefix, so a repeat call just resumes from it.
+      const { messages, cache } = foldUpTo(timeline.sorted, cursor, foldCacheRef.current);
+      foldCacheRef.current = cache;
+      return messages;
     }
     const count = Math.max(0, Math.min(timeline.ordered.length, Math.floor(cursor) + 1));
     return timeline.ordered.slice(0, count);
@@ -423,19 +432,21 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   };
 
   const handlePackSession = async (sessionId: string, title: string, updatedAt?: string) => {
-    // Page-lifetime cache: re-opening the same (unchanged) session is instant
-    // and issues no requests.
-    const cached = getCachedBundle(sessionId, updatedAt);
-    if (cached) {
-      setError(null);
-      setBundle(cached);
-      return;
-    }
     // A running sandbox lets us embed produced files; without one we still pack
     // the conversation, trace and events (all host-persisted) and mark the
     // files unreadable. So the export is never hard-blocked on the sandbox.
     const runningSandbox =
       currentSandbox && currentSandbox.status === "running" ? currentSandbox : null;
+    // Page-lifetime cache: re-opening the same (unchanged) session is instant
+    // and issues no requests. But a bundle packed without a sandbox recorded all
+    // produced files as unreadable; if a sandbox is now running we must re-pack
+    // to embed the real bytes instead of serving that stale file-less bundle.
+    const cached = getCachedBundle(sessionId, updatedAt);
+    if (cached && !(runningSandbox && cached.packedWithSandbox === false)) {
+      setError(null);
+      setBundle(cached);
+      return;
+    }
     setBusy(true);
     setError(null);
     setProgress(t("demo.packing"));

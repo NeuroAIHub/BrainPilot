@@ -199,6 +199,7 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
     exportedAt: new Date().toISOString(),
     appVersion,
     timeline,
+    packedWithSandbox: !!sandboxId,
     session: {
       id: session.id,
       title: session.title,

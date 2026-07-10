@@ -47,6 +47,14 @@ export interface DemoBundle {
   appVersion?: string;
   /** "timestamped" = real `events`; "ordered" = pre-folded `messages` fallback. */
   timeline: "timestamped" | "ordered";
+  /**
+   * Whether a running sandbox was available at pack time to read produced files.
+   * When false, every produced file is recorded as `unreadable` — re-packing
+   * later with a sandbox running yields the real bytes, so the cache must not
+   * serve such a bundle once a sandbox becomes available (see DemoView cache
+   * lookup). Optional for backward compatibility with older bundles.
+   */
+  packedWithSandbox?: boolean;
 
   session: {
     id: string;
