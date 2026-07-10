@@ -25,6 +25,50 @@ export interface BuildDemoOptions {
   filesUnavailableDetail?: string;
   /** Progress notices for the UI (e.g. "packing 3 files…"). */
   onProgress?: (message: string) => void;
+  /** Aborts the in-flight pack (e.g. the user navigated away). */
+  signal?: AbortSignal;
+}
+
+/** Thrown when a pack is cancelled via its AbortSignal. */
+export class PackAbortedError extends Error {
+  constructor() {
+    super("Demo pack aborted.");
+    this.name = "PackAbortedError";
+  }
+}
+
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) {
+    throw new PackAbortedError();
+  }
+}
+
+/** Max concurrent sandbox file reads while packing. */
+const FILE_FETCH_CONCURRENCY = 6;
+
+/**
+ * Map `items` through `worker` with at most `limit` in flight at once. Results
+ * preserve input order. Stops launching new work once `signal` is aborted.
+ */
+async function mapWithConcurrency<T, R>(
+  items: T[],
+  limit: number,
+  worker: (item: T, index: number) => Promise<R>,
+  signal?: AbortSignal,
+): Promise<R[]> {
+  const results = new Array<R>(items.length);
+  let next = 0;
+  const run = async (): Promise<void> => {
+    while (next < items.length) {
+      const current = next;
+      next += 1;
+      throwIfAborted(signal);
+      results[current] = await worker(items[current], current);
+    }
+  };
+  const workers = Array.from({ length: Math.min(limit, items.length) }, () => run());
+  await Promise.all(workers);
+  return results;
 }
 
 /** Normalize a trace artifact path to a sandbox `/workspace/...` path. */
@@ -45,7 +89,14 @@ async function blobToBase64(blob: Blob): Promise<string> {
   let binary = "";
   const chunk = 0x8000;
   for (let i = 0; i < bytes.length; i += chunk) {
-    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+    const end = Math.min(i + chunk, bytes.length);
+    // Build the chunk with an explicit loop rather than
+    // String.fromCharCode(...subarray): the spread pushes every byte as a
+    // separate argument, and a 32 KB chunk sits close to some engines' argument
+    // limit — a per-byte loop has no such ceiling and is allocation-free.
+    for (let j = i; j < end; j += 1) {
+      binary += String.fromCharCode(bytes[j]);
+    }
   }
   return btoa(binary);
 }
@@ -55,89 +106,118 @@ function utf8ByteLength(text: string): number {
 }
 
 /**
+ * Outcome of fetching + encoding a single file, before the total-size budget is
+ * applied. An "ok" candidate carries the embeddable `data` (utf8 text or base64)
+ * and its `encodedLen`; the caller decides whether it fits the total budget.
+ */
+type FileCandidate =
+  | { path: string; mime: string; encoding: "utf8" | "base64"; status: "ok"; size: number; encodedLen: number; data: string }
+  | { path: string; mime: string; encoding: "utf8" | "base64"; status: "tooLarge"; size: number }
+  | { path: string; mime: string; encoding: "utf8" | "base64"; status: "unreadable"; detail?: string };
+
+/** Fetch + encode one file, applying only the per-file cap (not the total). */
+async function fetchCandidate(sandboxId: string, rawPath: string): Promise<FileCandidate> {
+  const path = toWorkspacePath(rawPath);
+  const name = path.split("/").pop() ?? path;
+  const mime = mimeFromName(name);
+  const isText = getPreviewKind(name) === "text";
+  const encoding: "utf8" | "base64" = isText ? "utf8" : "base64";
+  try {
+    if (isText) {
+      const content = await api.sandbox.readFile(sandboxId, path);
+      const size = content.size ?? utf8ByteLength(content.content);
+      const encodedLen = utf8ByteLength(content.content);
+      if (size > MAX_FILE_BYTES) {
+        return { path: rawPath, mime, encoding, status: "tooLarge", size };
+      }
+      return { path: rawPath, mime, encoding, status: "ok", size, encodedLen, data: content.content };
+    }
+    const blob = await api.sandbox.readRawFile(sandboxId, path);
+    const size = blob.size;
+    if (size > MAX_FILE_BYTES) {
+      return { path: rawPath, mime, encoding, status: "tooLarge", size };
+    }
+    const data = await blobToBase64(blob);
+    return { path: rawPath, mime, encoding, status: "ok", size, encodedLen: data.length, data };
+  } catch (err) {
+    // Read failed (missing, path rejected, outside workspace, wrong sandbox).
+    // Record it as unreadable — NOT as "too large" — so the player can show an
+    // honest reason instead of a misleading size notice.
+    return { path: rawPath, mime, encoding, status: "unreadable", detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Collect the produced-file set referenced by the trace, fetch each, and embed
  * it (utf8 for text, base64 for binary) honoring per-file and total size caps.
+ *
+ * Files are fetched + encoded concurrently (bounded by FILE_FETCH_CONCURRENCY)
+ * for speed, but the total-size budget is then applied in deterministic path
+ * order so the same session always packs to the same bundle regardless of which
+ * read finished first.
  */
 async function collectFiles(
   sandboxId: string | undefined,
   paths: string[],
   onProgress?: (message: string) => void,
   unavailableDetail?: string,
+  signal?: AbortSignal,
 ): Promise<DemoFile[]> {
-  const files: DemoFile[] = [];
-  let totalEncoded = 0;
-  let index = 0;
-  for (const rawPath of paths) {
-    index += 1;
-    onProgress?.(`packing ${index}/${paths.length}: ${rawPath.split("/").pop() ?? rawPath}`);
-    const path = toWorkspacePath(rawPath);
-    const name = path.split("/").pop() ?? path;
-    const mime = mimeFromName(name);
-    const isText = getPreviewKind(name) === "text";
-    // No running sandbox to read from: the file bytes live in a sandbox
-    // workspace we can't reach right now. Record each as unreadable (with an
-    // honest reason) instead of failing the whole export — the conversation,
-    // trace and events still pack fine from host-persisted storage.
-    if (!sandboxId) {
-      files.push({
+  // No running sandbox to read from: the file bytes live in a sandbox workspace
+  // we can't reach right now. Record each as unreadable (with an honest reason)
+  // instead of failing the whole export — the conversation, trace and events
+  // still pack fine from host-persisted storage.
+  if (!sandboxId) {
+    return paths.map((rawPath) => {
+      const name = toWorkspacePath(rawPath).split("/").pop() ?? rawPath;
+      return {
         path: rawPath,
-        mime,
-        encoding: isText ? "utf8" : "base64",
+        mime: mimeFromName(name),
+        encoding: getPreviewKind(name) === "text" ? "utf8" : "base64",
         size: 0,
         truncated: true,
-        reason: "unreadable",
+        reason: "unreadable" as const,
         detail: unavailableDetail,
-      });
-      continue;
-    }
-    try {
-      if (isText) {
-        const content = await api.sandbox.readFile(sandboxId, path);
-        const size = content.size ?? utf8ByteLength(content.content);
-        const encodedLen = utf8ByteLength(content.content);
-        if (size > MAX_FILE_BYTES || totalEncoded + encodedLen > MAX_TOTAL_BYTES) {
-          files.push({ path: rawPath, mime, encoding: "utf8", size, truncated: true, reason: "tooLarge" });
-          continue;
-        }
-        totalEncoded += encodedLen;
-        files.push({ path: rawPath, mime, encoding: "utf8", size, truncated: false, data: content.content });
-      } else {
-        const blob = await api.sandbox.readRawFile(sandboxId, path);
-        const size = blob.size;
-        if (size > MAX_FILE_BYTES) {
-          files.push({ path: rawPath, mime, encoding: "base64", size, truncated: true, reason: "tooLarge" });
-          continue;
-        }
-        const data = await blobToBase64(blob);
-        if (totalEncoded + data.length > MAX_TOTAL_BYTES) {
-          files.push({ path: rawPath, mime, encoding: "base64", size, truncated: true, reason: "tooLarge" });
-          continue;
-        }
-        totalEncoded += data.length;
-        files.push({ path: rawPath, mime, encoding: "base64", size, truncated: false, data });
-      }
-    } catch (err) {
-      // Read failed (missing, path rejected, outside workspace, wrong sandbox).
-      // Record it as unreadable — NOT as "too large" — so the player can show
-      // an honest reason instead of a misleading size notice.
-      files.push({
-        path: rawPath,
-        mime,
-        encoding: isText ? "utf8" : "base64",
-        size: 0,
-        truncated: true,
-        reason: "unreadable",
-        detail: err instanceof Error ? err.message : String(err),
-      });
-    }
+      };
+    });
   }
-  return files;
+
+  let done = 0;
+  const candidates = await mapWithConcurrency(
+    paths,
+    FILE_FETCH_CONCURRENCY,
+    async (rawPath) => {
+      const candidate = await fetchCandidate(sandboxId, rawPath);
+      done += 1;
+      onProgress?.(`packing ${done}/${paths.length}: ${rawPath.split("/").pop() ?? rawPath}`);
+      return candidate;
+    },
+    signal,
+  );
+
+  // Apply the total embed budget in path order (deterministic, fetch-order
+  // independent). A file that would push past the budget is recorded tooLarge.
+  let totalEncoded = 0;
+  return candidates.map((c): DemoFile => {
+    if (c.status === "unreadable") {
+      return { path: c.path, mime: c.mime, encoding: c.encoding, size: 0, truncated: true, reason: "unreadable", detail: c.detail };
+    }
+    if (c.status === "tooLarge") {
+      return { path: c.path, mime: c.mime, encoding: c.encoding, size: c.size, truncated: true, reason: "tooLarge" };
+    }
+    if (totalEncoded + c.encodedLen > MAX_TOTAL_BYTES) {
+      return { path: c.path, mime: c.mime, encoding: c.encoding, size: c.size, truncated: true, reason: "tooLarge" };
+    }
+    totalEncoded += c.encodedLen;
+    return { path: c.path, mime: c.mime, encoding: c.encoding, size: c.size, truncated: false, data: c.data };
+  });
 }
 
 /** Build a portable demo bundle for an arbitrary session. */
 export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundle> {
-  const { session, sandboxId, fallbackMessages, filesUnavailableDetail, onProgress } = opts;
+  const { session, sandboxId, fallbackMessages, filesUnavailableDetail, onProgress, signal } = opts;
 
+  throwIfAborted(signal);
   onProgress?.("reading reasoning trace…");
   const trace = await api.sessions.getTrace(session.id);
 
@@ -155,6 +235,7 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
     agents = [];
   }
 
+  throwIfAborted(signal);
   onProgress?.("reading conversation timeline…");
   let timeline: DemoBundle["timeline"] = "timestamped";
   // Pull the persisted event timeline from the new history endpoint (the
@@ -190,8 +271,9 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
     }
   }
 
-  const files = await collectFiles(sandboxId, paths, onProgress, filesUnavailableDetail);
+  const files = await collectFiles(sandboxId, paths, onProgress, filesUnavailableDetail, signal);
 
+  throwIfAborted(signal);
   onProgress?.("assembling bundle…");
   return {
     format: DEMO_BUNDLE_FORMAT,
@@ -199,6 +281,7 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
     exportedAt: new Date().toISOString(),
     appVersion,
     timeline,
+    packedWithSandbox: !!sandboxId,
     session: {
       id: session.id,
       title: session.title,
