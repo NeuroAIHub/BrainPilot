@@ -15,10 +15,11 @@ import { getPreviewKind, isMarkdown } from "../files/filePreview";
 import { IconButton } from "../primitives/IconButton";
 import { TraceGraphView } from "../session/TraceGraphView";
 import { getNodeKindLabelKey } from "../session/traceLayout";
-import { buildDemoBundle, parseDemoBundle } from "./demoBundle";
+import { buildDemoBundle, PackAbortedError, parseDemoBundle } from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
 import { shouldResetDemo } from "./demoReset";
 import { foldUpTo, type FoldCache } from "./foldCache";
+import { computeNodeMs } from "./nodeTimeline";
 import { DemoFileTree } from "./DemoFileTree";
 import { TraceNodeModal } from "./TraceNodeModal";
 
@@ -145,6 +146,10 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   // Incremental fold cache for timestamped replay (see foldCache.ts).
   const foldCacheRef = useRef<FoldCache | null>(null);
+  // Aborts an in-flight pack when the user navigates away / re-selects / the
+  // component unmounts, so a slow buildDemoBundle can't resolve into a stale or
+  // unmounted view.
+  const packAbortRef = useRef<AbortController | null>(null);
 
   // Decode embedded files into preview sources (lazy blob URLs for binaries).
   // Pure builder: it must NOT revoke prior URLs here — a useMemo factory can run
@@ -214,16 +219,12 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
       // (large sessions packed with `limit: 0`).
       const t0 = sorted.length ? sorted[0].ms : 0;
       const t1 = sorted.length ? sorted[sorted.length - 1].ms : 1;
-      const span = t1 > t0 ? t1 - t0 : 1;
-      // Reveal trace nodes evenly across the timeline in creation (array) order.
-      // Bundle node timestamps are unreliable — often missing, equal, or
-      // clustered — which previously made the graph pop in all at once or out of
-      // order (filter-≤-cursor count diverged from the array slice). Even
-      // spacing keeps nodeMs monotonic in array order, so nodes stream in one by
-      // one, in order, paced across the replay.
-      const nodeMs = nodes.map((_, j) =>
-        nodes.length <= 1 ? t1 : t0 + (j / (nodes.length - 1)) * span,
-      );
+      // Reveal nodes at their real times when those are trustworthy (finite,
+      // non-decreasing in array order, spanning a real range) so the graph tracks
+      // the conversation panel; otherwise fall back to even spacing. computeNodeMs
+      // always returns a non-decreasing series, which the filter-≤-cursor / slice
+      // reveal relies on. (see nodeTimeline.ts)
+      const nodeMs = computeNodeMs(nodes, t0, t1);
       return { t0, t1: t1 > t0 ? t1 : t0 + 1, sorted, nodeMs, ordered: [] as ChatMessage[] };
     }
     const ordered = bundle.messages ?? [];
@@ -242,10 +243,16 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   useEffect(() => {
     if (shouldResetDemo(prevResetSignal.current, resetSignal)) {
       prevResetSignal.current = resetSignal;
+      // Cancel any pack in flight so it can't resolve into the landing we just
+      // returned to.
+      packAbortRef.current?.abort();
       setBundle(null);
       setError(null);
     }
   }, [resetSignal]);
+
+  // Abort an in-flight pack if the component unmounts mid-build.
+  useEffect(() => () => packAbortRef.current?.abort(), []);
 
   // Reset transport on new bundle (start fully revealed, paused, default file).
   useEffect(() => {
@@ -355,8 +362,12 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   }, [revealedNodes, pinnedFile, bundle]);
 
   const previewFile = bundle?.files.find((f) => f.path === currentArtifactPath) ?? null;
+  // A produced artifact may be referenced by the trace but never collected into
+  // `bundle.files` (e.g. a directory, or a path the packer skipped). In that case
+  // there is no decoded entry — report it as "missing", not "tooLarge", which
+  // would be a misleading size claim about a file we simply don't have.
   const previewSource: PreviewSource | null = currentArtifactPath
-    ? decoded.get(currentArtifactPath)?.source ?? { kind: "tooLarge" }
+    ? decoded.get(currentArtifactPath)?.source ?? { kind: "missing" }
     : null;
 
   const modalNode = useMemo<TraceNode | null>(
@@ -447,6 +458,10 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
       setBundle(cached);
       return;
     }
+    // Cancel any earlier in-flight pack and start a fresh one.
+    packAbortRef.current?.abort();
+    const controller = new AbortController();
+    packAbortRef.current = controller;
     setBusy(true);
     setError(null);
     setProgress(t("demo.packing"));
@@ -462,18 +477,31 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
         filesUnavailableDetail: runningSandbox ? undefined : t("demo.files.noSandbox"),
         fallbackMessages: currentSession?.id === sessionId ? messages : undefined,
         onProgress: setProgress,
+        signal: controller.signal,
       });
+      if (controller.signal.aborted) {
+        return;
+      }
       setCachedBundle(sessionId, updatedAt, built);
       setBundle(built);
     } catch (err) {
+      // A cancelled pack is expected (navigated away / re-selected) — not an error.
+      if (err instanceof PackAbortedError || controller.signal.aborted) {
+        return;
+      }
       setError(err instanceof Error ? err.message : t("demo.error.build"));
     } finally {
-      setBusy(false);
-      setProgress("");
+      if (packAbortRef.current === controller) {
+        packAbortRef.current = null;
+        setBusy(false);
+        setProgress("");
+      }
     }
   };
 
   const handleImportFile = async (file: File) => {
+    // Importing supersedes any pack still in flight.
+    packAbortRef.current?.abort();
     setBusy(true);
     setError(null);
     try {
