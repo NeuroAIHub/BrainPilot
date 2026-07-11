@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import type { DragEvent } from "react";
+import type { CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from "react";
 import { FileUp, MessageSquare, Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
 import type { ChatMessage, TraceNode, WebSocketEvent } from "../../contracts/backend";
 import { normalizeWebSocketEvent } from "../../contracts/backend";
@@ -19,6 +19,13 @@ import { buildDemoBundle, PackAbortedError, parseDemoBundle } from "./demoBundle
 import { getCachedBundle, setCachedBundle } from "./demoCache";
 import { shouldResetDemo } from "./demoReset";
 import { foldUpTo, type FoldCache } from "./foldCache";
+import {
+  DEMO_DEFAULT_CHAT,
+  DEMO_DEFAULT_RIGHT,
+  proposedWidthForEdge,
+  resolveDemoResize,
+  type DemoEdge,
+} from "./demoLayout";
 import { computeNodeMs } from "./nodeTimeline";
 import { DemoFileTree } from "./DemoFileTree";
 import { TraceNodeModal } from "./TraceNodeModal";
@@ -138,12 +145,21 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [pinnedFile, setPinnedFile] = useState<string | null>(null);
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
+  // Draggable column widths (px). The middle preview absorbs the remaining
+  // space, so only the dragged boundary moves. See demoLayout.ts for geometry.
+  const [chatWidth, setChatWidth] = useState(DEMO_DEFAULT_CHAT);
+  const [rightWidth, setRightWidth] = useState(DEMO_DEFAULT_RIGHT);
+  const [isResizing, setIsResizing] = useState(false);
   const formatNodeKind = (kind: string) => {
     const key = getNodeKindLabelKey(kind);
     return key ? t(key) : kind;
   };
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const layoutRef = useRef<HTMLDivElement | null>(null);
+  // Active column drag: which edge, the pointer's start X, and the panel widths
+  // at drag start. Null when no drag is in progress.
+  const resizeRef = useRef<{ edge: DemoEdge; pointerX: number; chat: number; right: number } | null>(null);
   // Incremental fold cache for timestamped replay (see foldCache.ts).
   const foldCacheRef = useRef<FoldCache | null>(null);
   // Aborts an in-flight pack when the user navigates away / re-selects / the
@@ -253,6 +269,46 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
 
   // Abort an in-flight pack if the component unmounts mid-build.
   useEffect(() => () => packAbortRef.current?.abort(), []);
+
+  // Column-resize drag. Listeners live on window so the pointer can leave the
+  // thin handle mid-drag; resolveDemoResize owns the clamping (pure + unit-tested
+  // in demoLayout.test.ts). Registered once — reads live state via resizeRef.
+  useEffect(() => {
+    const handlePointerMove = (event: PointerEvent) => {
+      const drag = resizeRef.current;
+      if (!drag) {
+        return;
+      }
+      const container = layoutRef.current?.getBoundingClientRect().width ?? 0;
+      const delta = event.clientX - drag.pointerX;
+      if (drag.edge === "chat") {
+        const proposed = proposedWidthForEdge("chat", drag.chat, delta);
+        setChatWidth(resolveDemoResize(proposed, drag.right, container));
+      } else {
+        const proposed = proposedWidthForEdge("right", drag.right, delta);
+        setRightWidth(resolveDemoResize(proposed, drag.chat, container));
+      }
+    };
+    const handlePointerUp = () => {
+      if (!resizeRef.current) {
+        return;
+      }
+      resizeRef.current = null;
+      setIsResizing(false);
+    };
+    window.addEventListener("pointermove", handlePointerMove);
+    window.addEventListener("pointerup", handlePointerUp);
+    return () => {
+      window.removeEventListener("pointermove", handlePointerMove);
+      window.removeEventListener("pointerup", handlePointerUp);
+    };
+  }, []);
+
+  const startResize = (edge: DemoEdge, event: ReactPointerEvent) => {
+    event.preventDefault();
+    resizeRef.current = { edge, pointerX: event.clientX, chat: chatWidth, right: rightWidth };
+    setIsResizing(true);
+  };
 
   // Reset transport on new bundle (start fully revealed, paused, default file).
   useEffect(() => {
@@ -645,7 +701,11 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
         </div>
       </header>
 
-      <div className="demo-layout">
+      <div
+        ref={layoutRef}
+        className={`demo-layout ${isResizing ? "demo-layout--resizing" : ""}`}
+        style={{ "--demo-chat-width": `${chatWidth}px`, "--demo-right-width": `${rightWidth}px` } as CSSProperties}
+      >
         <section className="demo-panel demo-panel--chat">
           <header className="demo-panel__head">
             <h2>{t("demo.conversation.title")}</h2>
@@ -656,6 +716,14 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
             <MessageStream messages={condensedMessages} showToolbarCount={false} groupExpertActivity className="demo-message-stream" />
           )}
         </section>
+
+        <div
+          className="demo-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("demo.resize.chat")}
+          onPointerDown={(e) => startResize("chat", e)}
+        />
 
         <section className="demo-panel demo-panel--preview">
           <header className="demo-panel__head demo-preview-head">
@@ -680,6 +748,14 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
             )}
           </div>
         </section>
+
+        <div
+          className="demo-resizer"
+          role="separator"
+          aria-orientation="vertical"
+          aria-label={t("demo.resize.right")}
+          onPointerDown={(e) => startResize("right", e)}
+        />
 
         <div className="demo-right">
           <section className="demo-panel demo-panel--trace">
