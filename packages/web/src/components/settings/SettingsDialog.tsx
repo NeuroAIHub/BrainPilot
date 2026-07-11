@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
@@ -11,6 +11,7 @@ import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
+import { BuiltinToolsSection } from "./BuiltinToolsSection";
 
 type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
 
@@ -22,7 +23,11 @@ type SettingsDialogProps = {
 const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
   { id: "account", labelKey: "settings.tab.account", icon: UserRound },
   { id: "providers", labelKey: "settings.tab.providers", icon: SlidersHorizontal },
-  { id: "mcp", labelKey: "settings.tab.mcp", icon: Plug },
+  // "工具" tab: hosts both the built-in tool toggles (BuiltinToolsSection at
+  // the top) and the MCP servers CRUD (below). Kept as tab id "mcp" for URL
+  // stability; the label + icon shift to a generic tool motif since the tab
+  // now covers more than MCP.
+  { id: "mcp", labelKey: "settings.tab.mcp", icon: Wrench },
   { id: "knowledgeBase", labelKey: "settings.tab.knowledgeBase", icon: Database },
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
@@ -487,7 +492,9 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             ) : null}
 
             {activeTab === "mcp" ? (
-              <section className="settings-section">
+              <>
+                <BuiltinToolsSection />
+                <section className="settings-section">
                 <div className="settings-section__header">
                   <div>
                     <h3>{t("settings.mcp.title")}</h3>
@@ -525,7 +532,8 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     ))}
                   </div>
                 )}
-              </section>
+                </section>
+              </>
             ) : null}
 
             {activeTab === "knowledgeBase" ? <KnowledgeBasePanel /> : null}

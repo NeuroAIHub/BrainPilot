@@ -146,3 +146,94 @@ describe("tool access control (§9)", () => {
     expect(a).not.toContain("edit");
   });
 });
+
+describe("tool toggles", () => {
+  // Sanity: with toggles absent (default-on) the returned SystemTool list
+  // matches the role config exactly. Regression: an off-by-default bug
+  // would surface here.
+  it("without toggles, principal sees skill_search + both local KB tools", () => {
+    const tools = systemToolsForRole("principal", "principal", deps("principal"));
+    const names = tools.map((t) => t.name).sort();
+    expect(names).toEqual(expect.arrayContaining([
+      "skill_search",
+      "get_domain_knowledge_local",
+      "search_papers_local",
+    ]));
+  });
+
+  it("disabling skill_search removes it from principal & experts (KB tools stay)", () => {
+    const off = { skill_search: false };
+    const principal = systemToolsForRole("principal", "principal", deps("principal"), off).map((t) => t.name);
+    const librarian = systemToolsForRole("expert", "librarian", deps("librarian"), off).map((t) => t.name);
+    expect(principal).not.toContain("skill_search");
+    expect(librarian).not.toContain("skill_search");
+    // The other two toggleable tools stay wired.
+    expect(principal).toContain("get_domain_knowledge_local");
+    expect(principal).toContain("search_papers_local");
+    // Always-on tools stay wired (regression: filter must not affect them).
+    expect(principal).toEqual(expect.arrayContaining([
+      "send_message", "ask_user", "create_agent", "record_trace",
+    ]));
+  });
+
+  it("disabling get_domain_knowledge_local hides it without touching search_papers_local", () => {
+    const off = { get_domain_knowledge_local: false };
+    const names = systemToolsForRole("principal", "principal", deps("principal"), off).map((t) => t.name);
+    expect(names).not.toContain("get_domain_knowledge_local");
+    expect(names).toContain("search_papers_local");
+    expect(names).toContain("skill_search");
+  });
+
+  it("disabling all three leaves only always-on tools", () => {
+    const off = {
+      skill_search: false,
+      get_domain_knowledge_local: false,
+      search_papers_local: false,
+    };
+    const names = systemToolsForRole("principal", "principal", deps("principal"), off).map((t) => t.name).sort();
+    expect(names).toEqual([
+      "ask_user",
+      "create_agent",
+      "destroy_agent",
+      "record_trace",
+      "send_message",
+    ].sort());
+  });
+
+  it("trace agent tool set is unaffected by toggles (graph tools are always-on)", () => {
+    const off = {
+      skill_search: false,
+      get_domain_knowledge_local: false,
+      search_papers_local: false,
+    };
+    const names = systemToolsForRole("trace", "trace", deps("trace"), off).map((t) => t.name).sort();
+    expect(names).toEqual([
+      "add_trace_relation",
+      "create_trace_node",
+      "get_trace_graph",
+      "update_trace_node",
+    ].sort());
+  });
+
+  it("undefined field falls back to enabled (partial patch semantics)", () => {
+    // A user could persist `{ "skill_search": false }` and leave the other
+    // two keys absent. Missing keys must default-on, else a first-time write
+    // that touches only one tool would surprise-disable the rest.
+    const names = systemToolsForRole(
+      "principal",
+      "principal",
+      deps("principal"),
+      { skill_search: false },
+    ).map((t) => t.name);
+    expect(names).toContain("get_domain_knowledge_local");
+    expect(names).toContain("search_papers_local");
+    expect(names).not.toContain("skill_search");
+  });
+
+  it("null toggles behaves the same as no toggles (all enabled)", () => {
+    const names = systemToolsForRole("principal", "principal", deps("principal"), null).map((t) => t.name);
+    expect(names).toContain("skill_search");
+    expect(names).toContain("get_domain_knowledge_local");
+    expect(names).toContain("search_papers_local");
+  });
+});

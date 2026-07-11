@@ -56,6 +56,29 @@ export type {
   TraceGraph,
 };
 
+/**
+ * Per-tool on/off overrides for the three user-controllable Pi-native
+ * SystemTools. Mirrors `packages/backend-core/src/config.ts:ToolToggles` and
+ * `packages/runtime/src/tool-toggles.ts:ToolToggles` — kept in triplicate
+ * because the frontend must not import from either non-published package.
+ *
+ * All fields optional; missing / non-boolean → runtime treats as enabled.
+ */
+export interface ToolToggles {
+  skill_search?: boolean;
+  get_domain_knowledge_local?: boolean;
+  search_papers_local?: boolean;
+}
+
+/** The exhaustive list of toggleable tool names, in display order. */
+export const TOGGLEABLE_TOOL_NAMES = [
+  "skill_search",
+  "get_domain_knowledge_local",
+  "search_papers_local",
+] as const;
+
+export type ToggleableToolName = (typeof TOGGLEABLE_TOOL_NAMES)[number];
+
 export type SandboxStatus =
   | "creating"
   | "running"
