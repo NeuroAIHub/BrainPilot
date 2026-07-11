@@ -111,6 +111,25 @@ export function createApp(options: CreateAppOptions): Hono {
   const app = new Hono();
   const api = new Hono();
 
+  // Catch-all error handler: any uncaught throw returns JSON, never Hono's
+  // default text/plain "Internal Server Error" (which the frontend's handleJson
+  // chokes on — the same non-JSON hazard #30 fixed at the 404 layer, here at the
+  // 500 layer). The message carries the orchestrator's own diagnostic (runtime
+  // failed to start / provider misconfigured / missing docker dep), and `hint`
+  // names the user-actionable next step so the guidance actually reaches the UI
+  // instead of being flattened into an opaque 500.
+  app.onError((err, c) => {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json(
+      {
+        error: message,
+        code: "runtime_unavailable",
+        hint: "The agent runtime failed to start or is unreachable. Check the provider config in Settings → Providers, ensure no port conflict, and see the backend/runtime logs.",
+      },
+      500,
+    );
+  });
+
   // ---- Health (backend-local; does not require runtime) ----------------
   api.get("/health", (c) => c.json({ status: "ok" }));
 
