@@ -22,8 +22,10 @@ import { foldUpTo, type FoldCache } from "./foldCache";
 import {
   DEMO_DEFAULT_CHAT,
   DEMO_DEFAULT_RIGHT,
+  loadDemoWidths,
   proposedWidthForEdge,
   resolveDemoResize,
+  saveDemoWidths,
   type DemoEdge,
 } from "./demoLayout";
 import { computeNodeMs } from "./nodeTimeline";
@@ -145,10 +147,11 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
   const [pinnedFile, setPinnedFile] = useState<string | null>(null);
   const [modalNodeId, setModalNodeId] = useState<string | null>(null);
-  // Draggable column widths (px). The middle preview absorbs the remaining
-  // space, so only the dragged boundary moves. See demoLayout.ts for geometry.
-  const [chatWidth, setChatWidth] = useState(DEMO_DEFAULT_CHAT);
-  const [rightWidth, setRightWidth] = useState(DEMO_DEFAULT_RIGHT);
+  // Draggable column widths (px), restored from localStorage. The middle preview
+  // absorbs the remaining space, so only the dragged boundary moves. See
+  // demoLayout.ts for geometry + persistence.
+  const [chatWidth, setChatWidth] = useState(() => loadDemoWidths().chat);
+  const [rightWidth, setRightWidth] = useState(() => loadDemoWidths().right);
   const [isResizing, setIsResizing] = useState(false);
   const formatNodeKind = (kind: string) => {
     const key = getNodeKindLabelKey(kind);
@@ -309,6 +312,25 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
     resizeRef.current = { edge, pointerX: event.clientX, chat: chatWidth, right: rightWidth };
     setIsResizing(true);
   };
+
+  // Double-click a divider to restore that panel's default width.
+  const resetEdge = (edge: DemoEdge) => {
+    if (edge === "chat") {
+      setChatWidth(DEMO_DEFAULT_CHAT);
+    } else {
+      setRightWidth(DEMO_DEFAULT_RIGHT);
+    }
+  };
+
+  // Persist widths across sessions. Debounced by the transition into idle: we
+  // only write when a drag isn't in progress, so a drag stores once on release
+  // (and a double-click reset stores immediately) rather than on every frame.
+  useEffect(() => {
+    if (isResizing) {
+      return;
+    }
+    saveDemoWidths({ chat: chatWidth, right: rightWidth });
+  }, [chatWidth, rightWidth, isResizing]);
 
   // Reset transport on new bundle (start fully revealed, paused, default file).
   useEffect(() => {
@@ -722,7 +744,9 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
           role="separator"
           aria-orientation="vertical"
           aria-label={t("demo.resize.chat")}
+          title={t("demo.resize.reset")}
           onPointerDown={(e) => startResize("chat", e)}
+          onDoubleClick={() => resetEdge("chat")}
         />
 
         <section className="demo-panel demo-panel--preview">
@@ -754,7 +778,9 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
           role="separator"
           aria-orientation="vertical"
           aria-label={t("demo.resize.right")}
+          title={t("demo.resize.reset")}
           onPointerDown={(e) => startResize("right", e)}
+          onDoubleClick={() => resetEdge("right")}
         />
 
         <div className="demo-right">

@@ -54,3 +54,52 @@ export function resolveDemoResize(
 export function proposedWidthForEdge(edge: DemoEdge, startWidth: number, deltaX: number): number {
   return edge === "chat" ? startWidth + deltaX : startWidth - deltaX;
 }
+
+/** Persisted column widths (px). */
+export interface DemoWidths {
+  chat: number;
+  right: number;
+}
+
+export const DEMO_WIDTHS_STORAGE_KEY = "demo-panel-widths";
+
+/**
+ * Parse a persisted widths payload, keeping only finite values within the sane
+ * bounds and falling back to the defaults otherwise. Pure so it can be unit
+ * tested; localStorage access (which can throw) is isolated in loadDemoWidths.
+ */
+export function parseDemoWidths(raw: string | null): DemoWidths {
+  const fallback: DemoWidths = { chat: DEMO_DEFAULT_CHAT, right: DEMO_DEFAULT_RIGHT };
+  if (!raw) {
+    return fallback;
+  }
+  try {
+    const parsed = JSON.parse(raw) as Partial<DemoWidths>;
+    const sane = (v: unknown): v is number =>
+      typeof v === "number" && Number.isFinite(v) && v >= DEMO_PANEL_MIN;
+    return {
+      chat: sane(parsed.chat) ? Math.round(parsed.chat) : fallback.chat,
+      right: sane(parsed.right) ? Math.round(parsed.right) : fallback.right,
+    };
+  } catch {
+    return fallback;
+  }
+}
+
+/** Load persisted widths, tolerating unavailable / malformed storage. */
+export function loadDemoWidths(): DemoWidths {
+  try {
+    return parseDemoWidths(localStorage.getItem(DEMO_WIDTHS_STORAGE_KEY));
+  } catch {
+    return { chat: DEMO_DEFAULT_CHAT, right: DEMO_DEFAULT_RIGHT };
+  }
+}
+
+/** Persist widths, silently ignoring storage failures (quota / disabled). */
+export function saveDemoWidths(widths: DemoWidths): void {
+  try {
+    localStorage.setItem(DEMO_WIDTHS_STORAGE_KEY, JSON.stringify(widths));
+  } catch {
+    /* ignore */
+  }
+}
