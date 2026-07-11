@@ -17,11 +17,22 @@ import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
+import { shouldShowNoProviderBanner } from "./noProviderBanner";
 
-export function PromptComposer() {
+type PromptComposerProps = {
+  /** Open Settings deep-linked to the Providers tab — wired to the
+   *  no-provider banner's CTA. Optional so the composer still renders standalone
+   *  (e.g. in tests). */
+  onOpenProviderSettings?: () => void;
+};
+
+export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps = {}) {
   const t = useT();
   const [suggestedTasks, setSuggestedTasks] = useState<string[]>([]);
   const [activeProvider, setActiveProvider] = useState<ProviderProfile | null>(null);
+  // Distinguishes "provider load hasn't resolved yet" from "loaded, none
+  // active" so the no-provider banner doesn't flash during initial load.
+  const [providersLoaded, setProvidersLoaded] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
   // 可用命令（已通过真实 API 测试 /context ✅ /cost ✅；/compact 由 SDK 内置 ✅）
   // 不可用命令（已移除）：/usage ❌ /clear ❌ /init ❌
@@ -50,6 +61,16 @@ export function PromptComposer() {
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
+
+  // No provider configured: after the first load resolves, there's no active
+  // provider. Surface a persistent banner + CTA so a first-run user isn't left
+  // to discover it only by sending a message and hitting an opaque error. The CTA
+  // deep-links to Settings → Providers (wired by the parent shell).
+  const showNoProviderBanner = shouldShowNoProviderBanner({
+    providersLoaded,
+    hasActiveProvider: Boolean(activeProvider),
+    hasCta: Boolean(onOpenProviderSettings),
+  });
 
   const visibleMessages = useMemo(() => {
     const agentFiltered = messages.filter((msg) => {
@@ -170,6 +191,7 @@ export function PromptComposer() {
           }
         }
         setActiveProvider(provider);
+        setProvidersLoaded(true);
         setSelectedModel((current) => {
           if (current && provider?.models.includes(current)) {
             return current;
@@ -182,6 +204,7 @@ export function PromptComposer() {
       } catch {
         if (!cancelled) {
           setActiveProvider(null);
+          setProvidersLoaded(true);
           setSelectedModel("");
         }
       }
@@ -298,6 +321,19 @@ export function PromptComposer() {
   return (
     <section className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`} aria-labelledby="prompt-heading">
       <div className="prompt-home__inner">
+        {showNoProviderBanner ? (
+          <div className="composer-notice" role="alert" data-testid="no-provider-banner">
+            <span className="composer-notice__text">{t("chat.noProvider.banner")}</span>
+            <button
+              type="button"
+              className="composer-notice__cta"
+              onClick={() => onOpenProviderSettings?.()}
+            >
+              {t("chat.noProvider.cta")}
+            </button>
+          </div>
+        ) : null}
+
         {hasMessages ? null : <h1 id="prompt-heading">{currentSession?.title ?? t("chat.heading")}</h1>}
 
         {hasMessages ? (

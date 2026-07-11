@@ -12,11 +12,14 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 
-type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
+export type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
 
 type SettingsDialogProps = {
   isOpen: boolean;
   onClose: () => void;
+  /** Deep-link target: when opening, jump straight to this tab (e.g. the
+   *  no-provider banner opens directly to "providers"). */
+  initialTab?: SettingsTab;
 };
 
 const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
@@ -62,7 +65,7 @@ function splitList(value: string) {
     .filter(Boolean);
 }
 
-export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogProps) {
   const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
@@ -149,6 +152,10 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
   useEffect(() => {
     if (isOpen) {
+      // Honour a deep-link target (e.g. the composer's no-provider banner jumps
+      // straight to Providers). Only on the open transition, so a user can still
+      // navigate to other tabs while the dialog stays open.
+      if (initialTab) setActiveTab(initialTab);
       void loadSettings();
       void api.getVersion().then((v) => setVersion(v.version)).catch(() => setVersion(null));
     }

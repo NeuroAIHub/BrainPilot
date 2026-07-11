@@ -10,7 +10,7 @@ import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
 import { IconButton } from "../primitives/IconButton";
 import { SearchDialog } from "../search/SearchDialog";
-import { SettingsDialog } from "../settings/SettingsDialog";
+import { SettingsDialog, type SettingsTab } from "../settings/SettingsDialog";
 import { AgentsPanel, TracePanel } from "../session/AgentTraceViews";
 import { SandboxBuildingOverlay } from "./SandboxBuildingOverlay";
 import { SandboxStatus } from "./SandboxStatus";
@@ -39,6 +39,13 @@ export function DesktopShell() {
   const [isSidebarResizing, setIsSidebarResizing] = useState(false);
   const [isSearchOpen, setIsSearchOpen] = useState(false);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
+  // Deep-link target for the next Settings open (e.g. the composer's
+  // no-provider banner jumps straight to Providers). Undefined = default tab.
+  const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
+  const openSettings = (tab?: SettingsTab) => {
+    setSettingsInitialTab(tab);
+    setIsSettingsOpen(true);
+  };
   const [isFilesOpen, setIsFilesOpen] = useState(false);
   const [fileSidebarWidth, setFileSidebarWidth] = useState(420);
   const [isFileSidebarResizing, setIsFileSidebarResizing] = useState(false);
@@ -146,7 +153,7 @@ export function DesktopShell() {
           setDemoResetSignal((n) => n + 1);
         }}
         onGoWorkspace={() => setActivePage("workspace")}
-        onOpenSettings={() => setIsSettingsOpen(true)}
+        onOpenSettings={() => openSettings()}
         onOpenSearch={() => setIsSearchOpen(true)}
         onResizeStart={(pointerX) => {
           if (isSidebarCollapsed) {
@@ -262,7 +269,9 @@ export function DesktopShell() {
           </div>
         </header>
 
-        {currentView === "chat" ? <PromptComposer /> : null}
+        {currentView === "chat" ? (
+          <PromptComposer onOpenProviderSettings={() => openSettings("providers")} />
+        ) : null}
         {currentView === "agents" ? <AgentsPanel /> : null}
         {currentView === "trace" ? <TracePanel /> : null}
         <FileSidebar
@@ -277,7 +286,11 @@ export function DesktopShell() {
       )}
 
       <SearchDialog isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
-      <SettingsDialog isOpen={isSettingsOpen} onClose={() => setIsSettingsOpen(false)} />
+      <SettingsDialog
+        isOpen={isSettingsOpen}
+        onClose={() => setIsSettingsOpen(false)}
+        initialTab={settingsInitialTab}
+      />
       {!sandboxOverlayDismissed && (operation === "creating" || operation === "rebuilding") ? (
         <SandboxBuildingOverlay operation={operation} error={error} onDismiss={() => setSandboxOverlayDismissed(true)} />
       ) : null}
