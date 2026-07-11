@@ -76,6 +76,16 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
     await expect(api.sessions.list()).resolves.toEqual([]);
   });
+
+  // handleJson guard: a 200 that isn't JSON (SPA index.html fallback for an
+  // endpoint missing on this deployment) must throw a readable message, NOT the
+  // raw "Unexpected token '<'" SyntaxError that res.json() would raise.
+  it("throws a readable error (not a JSON SyntaxError) when a 200 returns non-JSON", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "text/html", jsonThrows: true, json: "<!doctype html>" }),
+    );
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected \(non-JSON\) response/i);
+  });
 });
 
 describe("api.sessions.create — unwraps the { id, session } envelope (#96)", () => {
