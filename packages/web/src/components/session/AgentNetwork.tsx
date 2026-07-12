@@ -14,7 +14,7 @@ import {
   Wrench,
   X,
 } from "lucide-react";
-import { AgentStatus, ChatMessage } from "../../contracts/backend";
+import { AgentStatus, ChatMessage, MessageFilterRule } from "../../contracts/backend";
 import {
   AgentEdge,
   AgentEdgeMessage,
@@ -38,6 +38,7 @@ import { GlobalOverview } from "./GlobalOverview";
 import { AnalyticsTab } from "./AnalyticsTab";
 import { TimelineTab } from "./TimelineTab";
 import { useT } from "../../i18n/useT";
+import { HIDE_NON_FATAL_AGENT_ERRORS } from "../../contexts/messageFilters";
 
 type AgentTab = "detail" | "analytics" | "timeline";
 const TAB_STORAGE_KEY = "agent-network-active-tab";
@@ -211,9 +212,27 @@ interface AgentNetworkProps {
     hideTools: boolean,
     hideHooks?: boolean,
   ) => void;
+  /**
+   * Issue #278 — global message-filter rules (drives the "fold agent errors"
+   * checkbox in agent detail). Toggling propagates through onSetMessageFilterEnabled.
+   */
+  messageFilters: MessageFilterRule[];
+  onSetMessageFilterEnabled: (ruleId: string, enabled: boolean) => void;
+  /** Count of non-fatal errors currently folded out of the chat stream for
+   *  the active session — displayed alongside the toggle so the user can
+   *  gauge whether disabling is worth it. */
+  hiddenErrorsCount: number;
 }
 
-export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter }: AgentNetworkProps) {
+export function AgentNetwork({
+  agents,
+  messages,
+  agentFilters,
+  onSetAgentFilter,
+  messageFilters,
+  onSetMessageFilterEnabled,
+  hiddenErrorsCount,
+}: AgentNetworkProps) {
   const t = useT();
   const [selection, setSelection] = useState<Selection>(null);
   const [hoverEdgeKey, setHoverEdgeKey] = useState<string | null>(null);
@@ -805,6 +824,9 @@ export function AgentNetwork({ agents, messages, agentFilters, onSetAgentFilter 
                 received={messagesForAgent.received}
                 sent={messagesForAgent.sent}
                 activity={selectedAgentActivity}
+                messageFilters={messageFilters}
+                onSetMessageFilterEnabled={onSetMessageFilterEnabled}
+                hiddenErrorsCount={hiddenErrorsCount}
               />
             ) : (
               <GlobalOverview
@@ -845,6 +867,9 @@ function AgentDetail({
   sent,
   received,
   activity,
+  messageFilters,
+  onSetMessageFilterEnabled,
+  hiddenErrorsCount,
 }: {
   agent: AgentStatus;
   isLive: boolean;
@@ -859,6 +884,9 @@ function AgentDetail({
   sent: AgentEdgeMessage[];
   received: AgentEdgeMessage[];
   activity: AgentActivity | null;
+  messageFilters: MessageFilterRule[];
+  onSetMessageFilterEnabled: (ruleId: string, enabled: boolean) => void;
+  hiddenErrorsCount: number;
 }) {
   const Icon = getAgentIcon(agent.name);
   const status = statusKind(agent.status);
@@ -977,6 +1005,20 @@ function AgentDetail({
         <p className="agent-network__detail-text" style={{ fontSize: 11 }}>
           {t("network.detail.filtersNote")}
         </p>
+      </section>
+
+      {/* ---- Global filters (issue #278) ----
+           Sits below the per-agent chip bar because it's a workspace-wide
+           setting, not agent-scoped. Renders the "hide non-fatal agent errors"
+           checkbox with a count of currently-hidden errors on the active
+           session so the user can decide whether to disable and see them. */}
+      <section className="agent-network__detail-section">
+        <h4><Filter size={13} /> {t("network.detail.globalFilters")}</h4>
+        <GlobalFilterList
+          rules={messageFilters}
+          onToggle={onSetMessageFilterEnabled}
+          hiddenErrorsCount={hiddenErrorsCount}
+        />
       </section>
 
       {/* ---- Sent ---- */}
@@ -1232,3 +1274,68 @@ function FilterChipBar({
     </div>
   );
 }
+
+/* --------------------------------------------------------------------------
+ * Global filter list (issue #278) — workspace-wide message-filter toggles,
+ * rendered inside every agent's detail pane because that's the panel the
+ * Agents-tab red dot points the user to. Each row is a checkbox + label +
+ * short description, plus a badge count for the "fold agent errors" rule
+ * showing how many errors are currently folded on the active session.
+ * ------------------------------------------------------------------------ */
+function GlobalFilterList({
+  rules,
+  onToggle,
+  hiddenErrorsCount,
+}: {
+  rules: MessageFilterRule[];
+  onToggle: (ruleId: string, enabled: boolean) => void;
+  hiddenErrorsCount: number;
+}) {
+  const t = useT();
+  // i18n label/description overrides per rule id (falls back to the rule's
+  // own English name/description if the key is missing — future rules
+  // added without a matching translation still render).
+  const localized = (rule: MessageFilterRule): { label: string; description: string } => {
+    const labelKey = `network.globalFilter.${rule.id}.label`;
+    const descKey = `network.globalFilter.${rule.id}.description`;
+    const label = t(labelKey);
+    const description = t(descKey);
+    return {
+      label: label === labelKey ? rule.name : label,
+      description: description === descKey ? rule.description : description,
+    };
+  };
+
+  return (
+    <ul className="global-filter-list" role="group" aria-label={t("network.detail.globalFilters")}>
+      {rules.map((rule) => {
+        const { label, description } = localized(rule);
+        const showCount = rule.id === HIDE_NON_FATAL_AGENT_ERRORS && rule.enabled && hiddenErrorsCount > 0;
+        return (
+          <li className="global-filter-list__item" key={rule.id}>
+            <label className="global-filter-list__row">
+              <input
+                type="checkbox"
+                checked={rule.enabled}
+                onChange={(e) => onToggle(rule.id, e.target.checked)}
+              />
+              <span className="global-filter-list__label">
+                {label}
+                {showCount ? (
+                  <span
+                    className="global-filter-list__count"
+                    aria-label={t("network.globalFilter.hiddenErrors.count", { count: hiddenErrorsCount })}
+                  >
+                    {hiddenErrorsCount}
+                  </span>
+                ) : null}
+              </span>
+            </label>
+            <p className="global-filter-list__description">{description}</p>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+

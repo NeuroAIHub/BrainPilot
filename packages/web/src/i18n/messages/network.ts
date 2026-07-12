@@ -69,6 +69,15 @@ export default defineMessages(
     "network.detail.noMcpTools": "无 MCP 工具",
     "network.detail.displayFilters": "显示筛选",
     "network.detail.filtersNote": "仅影响该 Agent 在聊天视图中的显示，网络图不受影响。",
+    // Issue #278 — global (workspace-wide) message-filter section in agent detail.
+    "network.detail.globalFilters": "全局消息过滤",
+    "network.globalFilter.hide-non-fatal-agent-errors.label": "折叠 Agent 报错（非致命）",
+    "network.globalFilter.hide-non-fatal-agent-errors.description":
+      "隐藏 error / warning 级别的系统消息。多数是 Agent 自愈型报错（可重试并已恢复）。fatal 级别不受此规则影响，仍会在聊天中显示。",
+    "network.globalFilter.hiddenErrors.count": "当前会话已隐藏 {count} 条报错",
+    "network.globalFilter.spurious-dot.label": "隐藏空占位消息",
+    "network.globalFilter.spurious-dot.description":
+      "隐藏只包含单个 “.” 的助手回复。模型进入防御性思考时偶尔会先发送这种占位符再调用工具。",
     "network.detail.sent": "已发送（{count}）",
     "network.detail.received": "已接收（{count}）",
     "network.detail.noOutgoing": "暂无发出的消息。",
@@ -160,6 +169,15 @@ export default defineMessages(
     "network.detail.noMcpTools": "no MCP tools",
     "network.detail.displayFilters": "Display filters",
     "network.detail.filtersNote": "Affects this agent in the Chat view only. Network graph is unchanged.",
+    // Issue #278 — global (workspace-wide) message-filter section in agent detail.
+    "network.detail.globalFilters": "Global message filters",
+    "network.globalFilter.hide-non-fatal-agent-errors.label": "Fold non-fatal agent errors",
+    "network.globalFilter.hide-non-fatal-agent-errors.description":
+      "Hides error / warning system messages. Most are self-healing agent failures (already recovered by retry). Fatal-level messages are always shown.",
+    "network.globalFilter.hiddenErrors.count": "{count} hidden in this session",
+    "network.globalFilter.spurious-dot.label": "Hide placeholder-dot messages",
+    "network.globalFilter.spurious-dot.description":
+      "Hides assistant replies that contain only a single '.' character — occasional defensive-thinking placeholders emitted before a tool call.",
     "network.detail.sent": "Sent ({count})",
     "network.detail.received": "Received ({count})",
     "network.detail.noOutgoing": "No outgoing messages.",
