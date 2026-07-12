@@ -117,6 +117,18 @@ async function handleJson<T>(res: Response): Promise<T> {
   if (res.status === 204) {
     return undefined as T;
   }
+  // Guard the success path against a 2xx that isn't JSON. The classic case is
+  // the SPA index.html fallback (an endpoint not implemented on this
+  // deployment): res.json() would throw a raw "Unexpected token '<'" that means
+  // nothing to the user. Fail with a readable message instead. (getInfo /
+  // getEvents / getHistory each defended this inline; this centralizes it for
+  // every other caller.)
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      "The server returned an unexpected (non-JSON) response — this endpoint may not be available on this deployment.",
+    );
+  }
   return (await res.json()) as T;
 }
 

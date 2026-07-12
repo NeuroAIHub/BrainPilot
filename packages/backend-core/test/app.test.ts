@@ -265,6 +265,33 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  // A throw from ensureRuntime (runtime failed to start / provider misconfig)
+  // must surface as a JSON 500 carrying the diagnostic message + an actionable
+  // hint — never Hono's default text/plain "Internal Server Error", which the
+  // frontend's handleJson can't parse (the 500-layer twin of the #30 404 fix).
+  it("a runtime start failure returns a JSON 500 with the diagnostic + hint (not text/plain)", async () => {
+    const brokenOrchestrator: Orchestrator = {
+      async ensureRuntime(): Promise<RuntimeHandle> {
+        throw new Error("runtime did not become healthy at http://runtime.test within 30000ms");
+      },
+      async health() {
+        return false;
+      },
+      async stopRuntime() {},
+    };
+    const app = createApp({
+      orchestrator: brokenOrchestrator,
+      serveWeb: false,
+    });
+    const res = await app.request("/api/sessions");
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("application/json");
+    const body = (await res.json()) as { error: string; code: string; hint: string };
+    expect(body.error).toContain("did not become healthy");
+    expect(body.code).toBe("runtime_unavailable");
+    expect(body.hint).toContain("Settings → Providers");
+  });
+
   // #46: /version must report the real package version, not a hardcoded
   // literal. Assert it matches this package's own package.json so the value
   // can never drift from the published version again.

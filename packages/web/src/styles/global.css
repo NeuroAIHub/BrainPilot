@@ -1940,6 +1940,53 @@ button {
   color: var(--color-danger);
 }
 
+/* No-provider banner: a persistent attention band above the composer with a
+   deep-link CTA to Settings → Providers. Soft-warning styling so it reads as
+   "action needed" without the alarm of an error. */
+.composer-notice {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+  width: min(var(--composer-width), 100%);
+  margin: 0 0 12px;
+  padding: 10px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-warning) 40%, var(--color-border));
+  background: var(--color-warning-soft);
+  border-radius: var(--radius-md);
+  font-size: 13px;
+}
+
+.prompt-home--active .composer-notice {
+  width: min(1040px, 100%);
+}
+
+.composer-notice__text {
+  flex: 1 1 auto;
+  color: var(--color-text);
+}
+
+.composer-notice__cta {
+  flex: none;
+  padding: 6px 12px;
+  border: none;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent);
+  color: #fff;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.composer-notice__cta:hover {
+  background: color-mix(in srgb, var(--color-accent) 88%, #000);
+}
+
+.composer-notice__cta:focus-visible {
+  outline: 2px solid var(--color-accent);
+  outline-offset: 2px;
+}
+
 .agent-running-toast {
   display: inline-flex;
   align-items: center;
