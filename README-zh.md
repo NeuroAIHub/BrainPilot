@@ -179,7 +179,7 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 | `03_Cognitive_Psychology` | 范式、评分、DDM、SDT |
 | `04_Psycholinguistics` | 阅读时、SPR、刺激常模 |
 | `05_EEG_ERP` | EEG 预处理、ERP 分析、MNE-Python |
-| `06_fMRI_Neuroimaging` | fMRI 预处理、GLM、pycortex、解码 |
+| `06_fMRI_Neuroimaging` | fMRI 预处理（含 fMRIPrep BIDS-App）、GLM、pycortex、解码 |
 | `07_Computational_Modeling` | ACT-R、贝叶斯建模、参数恢复 |
 | `08_Computational_Neuroscience` | 神经群体分析、脉冲网络 |
 | `09_Cellular_Molecular_Neuroscience` | 钙成像、光遗传学 |
