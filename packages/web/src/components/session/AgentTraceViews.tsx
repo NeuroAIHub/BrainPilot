@@ -17,7 +17,16 @@ import {
 } from "./traceLayout";
 
 export function AgentsPanel() {
-  const { agents, currentSession, agentFilters, setAgentFilter, messages } = useSessions();
+  const {
+    agents,
+    currentSession,
+    agentFilters,
+    setAgentFilter,
+    messages,
+    messageFilters,
+    setMessageFilterEnabled,
+    hiddenErrorsCount,
+  } = useSessions();
   const t = useT();
 
   return (
@@ -38,6 +47,9 @@ export function AgentsPanel() {
             agentFilters={agentFilters}
             messages={messages}
             onSetAgentFilter={setAgentFilter}
+            messageFilters={messageFilters}
+            onSetMessageFilterEnabled={setMessageFilterEnabled}
+            hiddenErrorsCount={hiddenErrorsCount}
           />
         )}
 

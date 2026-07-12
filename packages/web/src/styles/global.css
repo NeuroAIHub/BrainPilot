@@ -9178,3 +9178,66 @@ button {
   .demo-right { border-bottom: 1px solid var(--color-border); }
   .demo-landing__cards { grid-template-columns: 1fr; }
 }
+
+/* Issue #278 — global message-filter list in the agent detail pane. Each row
+   is a checkbox + label (with an optional count pill) and a small description
+   line. Matches the existing detail-section typography. */
+.global-filter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.global-filter-list__item {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--color-surface);
+}
+
+.global-filter-list__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--color-text);
+}
+
+.global-filter-list__row input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.global-filter-list__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.global-filter-list__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-danger, #e5484d);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.global-filter-list__description {
+  margin: 4px 0 0 24px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
+}
