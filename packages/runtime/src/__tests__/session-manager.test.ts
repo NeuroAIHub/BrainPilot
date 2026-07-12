@@ -3,7 +3,7 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
-import { SessionManager, resolvePersistentUserId } from "../session-manager.js";
+import { SessionManager, resolvePersistentUserId, resolveSharedDir } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
 
@@ -364,6 +364,107 @@ describe("resolvePersistentUserId (#257)", () => {
       expect(out).not.toMatch(/[\\/]/);
     }
     expect(resolvePersistentUserId("a/b", {})).toBe("a_b");
+  });
+});
+
+describe("resolveSharedDir (#261)", () => {
+  it("is undefined (feature off) when unset or blank", () => {
+    expect(resolveSharedDir(undefined, {})).toBeUndefined();
+    expect(resolveSharedDir("   ", {})).toBeUndefined();
+    expect(resolveSharedDir(undefined, { BP_SHARED_DIR: "" })).toBeUndefined();
+  });
+  it("reads BP_SHARED_DIR from env when no explicit option", () => {
+    expect(resolveSharedDir(undefined, { BP_SHARED_DIR: "/srv/shared" })).toBe("/srv/shared");
+  });
+  it("explicit option wins over env", () => {
+    expect(resolveSharedDir("/opt/lib", { BP_SHARED_DIR: "/srv/shared" })).toBe("/opt/lib");
+  });
+});
+
+describe("SessionManager cross-user shared root (#261)", () => {
+  let root: string; // dataRoot (per-user)
+  let shared: string; // cross-user shared dir, OUTSIDE dataRoot
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-shroot-"));
+    shared = await mkdtemp(join(tmpdir(), "bp-shared-"));
+  });
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  const mkMgr = () =>
+    new SessionManager({
+      dataRoot: root,
+      sharedDir: shared,
+      persist: false,
+      agentFactory: mockAgentFactory,
+    });
+
+  it("reads a file from the shared root via the /shared prefix", async () => {
+    await writeFile(join(shared, "atlas.csv"), "x,y,z");
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    const read = await m.readSessionFile(s.id, "/shared/atlas.csv");
+    expect(read.content).toBe("x,y,z");
+  });
+
+  it("is shared across sessions AND users (same bytes for any session)", async () => {
+    await writeFile(join(shared, "ref.txt"), "public");
+    const m = mkMgr();
+    const a = await m.createSession({ title: "A" });
+    const b = await m.createSession({ title: "B" });
+    expect((await m.readSessionFile(a.id, "/shared/ref.txt")).content).toBe("public");
+    expect((await m.readSessionFile(b.id, "/shared/ref.txt")).content).toBe("public");
+  });
+
+  it("lists the shared root via /shared", async () => {
+    await writeFile(join(shared, "one.txt"), "1");
+    await writeFile(join(shared, "two.txt"), "2");
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    const names = (await m.listSessionFiles(s.id, "/shared")).map((e) => e.name).sort();
+    expect(names).toEqual(["one.txt", "two.txt"]);
+  });
+
+  it("rejects writes to the shared root (read-only)", async () => {
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    await expect(m.writeSessionFile(s.id, "/shared/nope.txt", b64("x"))).rejects.toThrow(
+      /read-only/,
+    );
+  });
+
+  it("rejects streamed writes to the shared root (read-only)", async () => {
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    const { Readable } = await import("node:stream");
+    await expect(
+      m.writeSessionFileStream(s.id, "/shared/nope.txt", Readable.from([Buffer.from("x")])),
+    ).rejects.toThrow(/read-only/);
+  });
+
+  it("rejects deletes in the shared root (read-only)", async () => {
+    await writeFile(join(shared, "keep.txt"), "safe");
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    await expect(m.deleteSessionFile(s.id, "/shared/keep.txt")).rejects.toThrow(/read-only/);
+    // The file is untouched.
+    expect(await readFile(join(shared, "keep.txt"), "utf8")).toBe("safe");
+  });
+
+  it("guards the shared boundary against traversal", async () => {
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    await expect(m.readSessionFile(s.id, "/shared/../../etc/passwd")).rejects.toThrow(/escapes/);
+  });
+
+  it("does NOT recognize /shared when unconfigured (backward-compatible)", async () => {
+    // No sharedDir → `/shared/...` falls through to the session workspace, so a
+    // write is allowed and lands under workspaces/<sid>/shared/.
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    const wrote = await m.writeSessionFile(s.id, "/shared/plain.txt", b64("ok"));
+    // Emitted prefix-less (workspace path), NOT as /shared/...
+    expect(wrote.path).toBe("shared/plain.txt");
+    const onDisk = await readFile(join(root, "workspaces", s.id, "shared", "plain.txt"), "utf8");
+    expect(onDisk).toBe("ok");
   });
 });
 
