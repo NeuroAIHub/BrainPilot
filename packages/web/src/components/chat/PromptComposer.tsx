@@ -11,6 +11,7 @@ import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { AskUserComposer } from "./AskUserComposer";
 import { ComposerInput } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
@@ -69,6 +70,21 @@ export function PromptComposer() {
   }, [messages, agentFilters, messageFilters]);
 
   const hasMessages = visibleMessages.length > 0;
+
+  // #272: the latest unanswered ask_user request, if any. While one is pending
+  // the composer is replaced by AskUserComposer (a takeover picker) so a user
+  // can't type an ordinary message and hang the session. There is no escape
+  // hatch — the user must pick an option or type a free-text answer.
+  const askTakeover = useMemo(() => {
+    for (let i = visibleMessages.length - 1; i >= 0; i--) {
+      const m = visibleMessages[i];
+      if (m.kind === "ask_user" && m.askUser && m.askUser.answer === undefined) {
+        return m.askUser;
+      }
+    }
+    return null;
+  }, [visibleMessages]);
+
   const isAgentRunning = agents.some((a) => a.status === "running");
   const lastAssistantStreaming = visibleMessages[visibleMessages.length - 1]?.role === "assistant" && visibleMessages[visibleMessages.length - 1]?.streaming;
   // A bash tool is in flight iff selectActiveScripts finds anything; when it
@@ -263,11 +279,14 @@ export function PromptComposer() {
     }
   };
 
-  // #47: upload the chosen files into the session workspace, then track their
-  // names as chips. In single-user mode the sandbox id and session id are the
-  // same; a draft has no real session yet, so uploads land in the `"local"`
-  // staging area and the runtime drains them into the real workspace on send
-  // (#60 drainLocalUploads). Files are uploaded to the workspace root by name.
+  // #47: upload the chosen files as CONVERSATION ATTACHMENTS, then track their
+  // names as chips. Attachments go to the session's `.attachments/` subdir (via
+  // the `/attachments` path prefix) — scoped to the session but kept apart from
+  // agent-produced workspace files, and hidden from the file panel. In
+  // single-user mode the sandbox id and session id are the same; a draft has no
+  // real session yet, so uploads land in the `"local"` staging area and the
+  // runtime drains them (incl. `.attachments/`) into the real session on send
+  // (#60 drainLocalUploads).
   const handleFilesChosen = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const uploadId = currentSession?.id ?? currentSandbox?.id;
@@ -276,7 +295,7 @@ export function PromptComposer() {
     setComposerError(null);
     try {
       for (const file of Array.from(files)) {
-        await api.sandbox.uploadFile(uploadId, file.name, file);
+        await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file);
         setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
       }
     } catch (e) {
@@ -309,7 +328,6 @@ export function PromptComposer() {
             turnTiming={turnTiming}
             runningAgents={runningAgents}
             groupExpertActivity
-            onAskUserSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
             onRetryCancel={() => void interruptCurrent()}
           />
         ) : null}
@@ -343,6 +361,12 @@ export function PromptComposer() {
           onStop={() => void interruptCurrent()}
         />
 
+        {askTakeover ? (
+          <AskUserComposer
+            view={askTakeover}
+            onSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
+          />
+        ) : (
         <form className="composer" aria-label={t("chat.aria.newPrompt")} onSubmit={handleSubmit}>
           <ComposerInput
             sessionId={sessionId}
@@ -352,8 +376,12 @@ export function PromptComposer() {
 
           {attachments.length > 0 || uploading ? (
             <div className="composer__attachments" aria-label={t("chat.aria.attachFile")}>
+              <span className="composer__attachments-label">
+                <Paperclip size={11} />
+                {t("chat.attachments.label")}
+              </span>
               {attachments.map((name) => (
-                <span className="composer__chip" key={name}>
+                <span className="composer__chip composer__chip--attachment" key={name}>
                   <Paperclip size={12} />
                   <span className="composer__chip-name">{name}</span>
                   <button
@@ -496,6 +524,7 @@ export function PromptComposer() {
           </div>
 
         </form>
+        )}
 
         {error ? <p className="composer-status composer-status--error">{error}</p> : null}
         {composerError ? <p className="composer-status composer-status--error">{composerError}</p> : null}

@@ -1,3 +1,6 @@
+// Hosted-only disk-quota UI — a hosted trust-front hook, not dead code.
+// Inert single-user (quota fields default to 0 → the >= 90 gate never fires).
+// See ./README.md and issue #262 before touching this.
 import { useEffect } from "react";
 import { AlertTriangle, X } from "lucide-react";
 import { useT } from "../../i18n/useT";

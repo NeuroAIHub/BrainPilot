@@ -1,15 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
+  Database,
   Download,
   File,
   FileImage,
   FileText,
   Folder,
+  FolderOpen,
   Package,
   Maximize2,
   Minimize2,
   RefreshCw,
+  Upload,
   X,
 } from "lucide-react";
 import { FileContent, FileEntry } from "../../contracts/backend";
@@ -45,14 +48,28 @@ const MIN_PREVIEW_WIDTH = 360;
 const MAX_PREVIEW_WIDTH = 900;
 const DEFAULT_PREVIEW_WIDTH = 560;
 
-const rootNode: FileNode = {
-  name: "workspace",
-  path: "/workspace",
-  type: "folder",
-  size: 0,
-  modified: 0,
-  permissions: "",
-};
+// #257: the panel shows TWO addressable roots as distinct top-level nodes —
+// the per-session workspace (`/workspace`) and the shared cross-session
+// persistent library (`/data`). They hang off a synthetic, never-rendered
+// container so the existing recursive tree helpers work unchanged.
+const WORKSPACE_ROOT_PATH = "/workspace";
+const DATA_ROOT_PATH = "/data";
+
+function makeRootTree(): FileNode {
+  return {
+    name: "",
+    path: "", // synthetic container — its children are the rendered roots
+    type: "folder",
+    size: 0,
+    modified: 0,
+    permissions: "",
+    loaded: true,
+    children: [
+      { name: "workspace", path: WORKSPACE_ROOT_PATH, type: "folder", size: 0, modified: 0, permissions: "" },
+      { name: "data", path: DATA_ROOT_PATH, type: "folder", size: 0, modified: 0, permissions: "" },
+    ],
+  };
+}
 
 function joinPath(parent: string, name: string) {
   return `${parent.replace(/\/$/, "")}/${name}`;
@@ -137,8 +154,11 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   // mode. A full rename rides with the planned session-management cleanup.
   const sandboxId = currentSession?.id ?? null;
   const t = useT();
-  const [tree, setTree] = useState<FileNode>(rootNode);
-  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(() => new Set(["/workspace"]));
+  const [tree, setTree] = useState<FileNode>(makeRootTree);
+  // Both roots start expanded so the two tiers are visible at a glance.
+  const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
+    () => new Set([WORKSPACE_ROOT_PATH, DATA_ROOT_PATH]),
+  );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedContent, setSelectedContent] = useState<FileContent | null>(null);
   const [selectedDownloadPaths, setSelectedDownloadPaths] = useState<Set<string>>(() => new Set());
@@ -146,7 +166,9 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
+  const [isUploadingToData, setIsUploadingToData] = useState(false);
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
+  const dataUploadInputRef = useRef<HTMLInputElement | null>(null);
 
   // #156: in local mode, surface the real on-disk workspace dir so users know
   // which directory the agent writes into. `workspacesRoot` comes from the
@@ -228,7 +250,9 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 
   useEffect(() => {
     if (isOpen && currentSandbox?.status === "running") {
-      void loadDirectory("/workspace");
+      // Load both tiers so each root shows its contents on open.
+      void loadDirectory(WORKSPACE_ROOT_PATH);
+      void loadDirectory(DATA_ROOT_PATH);
     }
     if (!isOpen || currentSandbox?.status !== "running") {
       setSelectedDownloadPaths(new Set());
@@ -376,13 +400,34 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
     setIsRefreshing(true);
     try {
       const paths = Array.from(expandedPaths);
-      for (const path of paths.length ? paths : ["/workspace"]) {
+      for (const path of paths.length ? paths : [WORKSPACE_ROOT_PATH, DATA_ROOT_PATH]) {
         await loadDirectory(path);
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : t("files.error.refreshFailed"));
     } finally {
       setIsRefreshing(false);
+    }
+  };
+
+  // #257: upload file(s) into the persistent library (/data), then refresh that
+  // subtree so they appear. Distinct from the composer's attachment upload —
+  // this targets the cross-session root, not the session.
+  const handleDataUpload = async (files: FileList | null) => {
+    if (!files || files.length === 0 || !sandboxId) return;
+    setIsUploadingToData(true);
+    setError(null);
+    try {
+      for (const file of Array.from(files)) {
+        await api.sandbox.uploadFile(sandboxId, `${DATA_ROOT_PATH}/${file.name}`, file);
+      }
+      setExpandedPaths((current) => new Set(current).add(DATA_ROOT_PATH));
+      await loadDirectory(DATA_ROOT_PATH);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : t("files.error.uploadFailed"));
+    } finally {
+      setIsUploadingToData(false);
+      if (dataUploadInputRef.current) dataUploadInputRef.current.value = "";
     }
   };
 
@@ -422,6 +467,59 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         size: node.size,
       });
     }
+  };
+
+  // #257: the two top-level tiers render as labeled section headers (distinct
+  // icon + name + description), not as ordinary file rows — so the difference
+  // between the session workspace and the persistent library is obvious.
+  const renderRootNode = (node: FileNode) => {
+    const isWorkspace = node.path === WORKSPACE_ROOT_PATH;
+    const isExpanded = expandedPaths.has(node.path);
+    const children = node.children ?? [];
+    return (
+      <div className={`file-tier ${isWorkspace ? "file-tier--workspace" : "file-tier--data"}`} key={node.path}>
+        <div className="file-tier__header">
+          <button className="file-tier__toggle" type="button" onClick={() => void toggleFolder(node)}>
+            <span className={`file-row__chevron ${isExpanded ? "is-expanded" : ""}`}>
+              <ChevronRight size={14} />
+            </span>
+            {isWorkspace ? <FolderOpen size={16} /> : <Database size={16} />}
+            <span className="file-tier__name">
+              {isWorkspace ? t("files.tier.workspace") : t("files.tier.data")}
+            </span>
+          </button>
+          {isWorkspace ? null : (
+            <>
+              <input
+                ref={dataUploadInputRef}
+                type="file"
+                multiple
+                style={{ display: "none" }}
+                onChange={(e) => void handleDataUpload(e.target.files)}
+              />
+              <IconButton
+                label={t("files.aria.uploadToData")}
+                onClick={() => dataUploadInputRef.current?.click()}
+                disabled={!sandboxId || isUploadingToData}
+                className={isUploadingToData ? "is-active" : ""}
+              >
+                <Upload size={14} />
+              </IconButton>
+            </>
+          )}
+        </div>
+        <p className="file-tier__hint">
+          {isWorkspace ? t("files.tier.workspaceHint") : t("files.tier.dataHint")}
+        </p>
+        {isExpanded ? (
+          children.length > 0 ? (
+            children.map((child) => renderNode(child, 1))
+          ) : node.loaded ? (
+            <p className="file-tier__empty">{t("files.tier.empty")}</p>
+          ) : null
+        ) : null}
+      </div>
+    );
   };
 
   const renderNode = (node: FileNode, depth = 0) => {
@@ -517,7 +615,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 
         {error ? <p className="file-sidebar__empty">{error}</p> : null}
         <div className="file-sidebar__tree" aria-label={t("files.aria.tree")}>
-          {renderNode(tree)}
+          {(tree.children ?? []).map((root) => renderRootNode(root))}
         </div>
       </aside>
 

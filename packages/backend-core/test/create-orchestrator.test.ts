@@ -71,6 +71,28 @@ describe("createOrchestrator factory", () => {
     });
     expect(orch).toBeInstanceOf(StaticRuntimeOrchestrator);
   });
+  it("forwards BP_SHARED_DIR from env into the Docker orchestrator's read-only mount (#261)", async () => {
+    const container = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const docker = { createContainer: vi.fn(async () => container) } as never;
+    const orch = createOrchestrator({
+      mode: "docker",
+      env: { BP_SHARED_DIR: "/host/shared" },
+      docker: { docker, dataDir: "/host/bp", healthProbe: async () => true, sleep: async () => {} },
+    });
+    await orch.ensureRuntime();
+    const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
+      .createContainer.mock.calls[0]![0] as { HostConfig?: Record<string, unknown> };
+    expect(createArg.HostConfig!.Mounts).toContainEqual({
+      Type: "bind",
+      Source: "/host/shared",
+      Target: "/shared",
+      ReadOnly: true,
+    });
+  });
 });
 
 describe("DockerOrchestrator (stubbed dockerode)", () => {
@@ -165,6 +187,69 @@ describe("DockerOrchestrator (stubbed dockerode)", () => {
     const hostConfig = createArg.HostConfig!;
     expect(hostConfig.Binds).toBeUndefined();
     expect(hostConfig.Mounts).toBeUndefined();
+  });
+
+  // #261: the cross-user shared root is bind-mounted READ-ONLY alongside the
+  // dataDir mount, and its container path is injected as BP_SHARED_DIR so the
+  // runtime exposes the `/shared` prefix.
+  it("adds a read-only /shared bind + BP_SHARED_DIR env when sharedDir is set (#261)", async () => {
+    const container = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const docker = {
+      createContainer: vi.fn(async () => container),
+    } as never;
+    const orch = new DockerOrchestrator({
+      docker,
+      image: "brainpilot-sandbox:test",
+      containerPort: 8081,
+      hostPort: 18081,
+      dataDir: "/host/bp",
+      containerDataDir: "/root/.bp-root",
+      sharedDir: "/host/shared",
+      healthProbe: async () => true,
+      sleep: async () => {},
+    });
+    await orch.ensureRuntime();
+    const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
+      .createContainer.mock.calls[0]![0] as {
+      Env?: string[];
+      HostConfig?: Record<string, unknown>;
+    };
+    const hostConfig = createArg.HostConfig!;
+    expect(hostConfig.Mounts).toEqual([
+      { Type: "bind", Source: "/host/bp", Target: "/root/.bp-root", ReadOnly: false },
+      { Type: "bind", Source: "/host/shared", Target: "/shared", ReadOnly: true },
+    ]);
+    expect(createArg.Env).toContain("BP_SHARED_DIR=/shared");
+  });
+
+  it("emits no /shared mount and no BP_SHARED_DIR when sharedDir is unset (#261)", async () => {
+    const container = {
+      start: vi.fn(async () => {}),
+      stop: vi.fn(async () => {}),
+      remove: vi.fn(async () => {}),
+    };
+    const docker = {
+      createContainer: vi.fn(async () => container),
+    } as never;
+    const orch = new DockerOrchestrator({
+      docker,
+      image: "brainpilot-sandbox:test",
+      dataDir: "/host/bp",
+      healthProbe: async () => true,
+      sleep: async () => {},
+    });
+    await orch.ensureRuntime();
+    const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
+      .createContainer.mock.calls[0]![0] as {
+      Env?: string[];
+      HostConfig?: Record<string, unknown>;
+    };
+    expect(createArg.HostConfig!.Mounts as unknown[]).toHaveLength(1);
+    expect((createArg.Env ?? []).some((e) => e.startsWith("BP_SHARED_DIR="))).toBe(false);
   });
 
   it("auto-pulls the image when createContainer reports it is missing", async () => {

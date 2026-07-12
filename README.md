@@ -190,7 +190,7 @@ Existing categories under `packages/skills/skills/`:
 | `03_Cognitive_Psychology` | Paradigms, scoring, DDM, SDT |
 | `04_Psycholinguistics` | Reading time, SPR, stimulus norming |
 | `05_EEG_ERP` | EEG preprocessing, ERP analysis, MNE-Python |
-| `06_fMRI_Neuroimaging` | fMRI preprocessing, GLM, pycortex, decoding |
+| `06_fMRI_Neuroimaging` | fMRI preprocessing (incl. fMRIPrep BIDS-App), GLM, pycortex, decoding |
 | `07_Computational_Modeling` | ACT-R, Bayesian modelling, parameter recovery |
 | `08_Computational_Neuroscience` | Neural population analysis, spiking networks |
 | `09_Cellular_Molecular_Neuroscience` | Calcium imaging, optogenetics |

@@ -1664,15 +1664,19 @@ button {
   display: inline-flex;
   min-width: 0;
   max-width: 100%;
-  height: 24px;
+  min-height: 24px;
   align-items: center;
   border: 1px solid var(--color-border);
-  border-radius: 999px;
+  border-radius: 12px;
   background: var(--color-surface-soft);
   color: var(--color-text-muted);
-  padding: 0 8px;
+  padding: 3px 10px;
   font: inherit;
   font-size: 11px;
+  line-height: 1.4;
+  text-align: left;
+  white-space: normal;
+  overflow-wrap: anywhere;
 }
 
 .trace-detail__children button:hover,
@@ -1768,8 +1772,20 @@ button {
 .composer__attachments {
   display: flex;
   flex-wrap: wrap;
+  align-items: center;
   gap: 6px;
   padding: 0 8px 4px;
+}
+/* #257: label the attachment tier so it reads distinctly from workspace/data. */
+.composer__attachments-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  opacity: 0.6;
 }
 .composer__chip {
   display: inline-flex;
@@ -1785,6 +1801,11 @@ button {
 }
 .composer__chip--pending {
   opacity: 0.7;
+}
+/* #257: attachment chips get an accent tint to distinguish the tier. */
+.composer__chip--attachment {
+  background: var(--accent-soft, rgba(99, 102, 241, 0.12));
+  color: var(--accent-strong, inherit);
 }
 .composer__chip-name {
   overflow: hidden;
@@ -2697,6 +2718,130 @@ button {
   font-size: 13px;
   color: var(--color-success);
 }
+/* #272 — the stream card is now a record only. Pending options render as a
+   static list (interaction moved to the composer takeover below). */
+.ask-user__options--record {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.ask-user__option-record {
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 13px;
+}
+.ask-user__pending {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text-muted);
+}
+
+/* ── #272 — ask_user composer takeover (Codex-style picker) ─────────── */
+.ask-user-composer {
+  display: grid;
+  gap: 10px;
+  padding: 12px 14px;
+  border-radius: var(--radius-lg, 12px);
+  border: 1px solid color-mix(in srgb, var(--color-accent) 45%, var(--color-border));
+  background: var(--color-accent-soft);
+  outline: none;
+}
+.ask-user-composer__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.ask-user-composer__icon { flex: none; color: var(--color-accent); }
+.ask-user-composer__question {
+  font-size: 14px;
+  font-weight: 600;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  /* #272: a long/verbose question must not push the options off-screen. Cap the
+     visible height and scroll the overflow inside the header. */
+  max-height: 7.5em;
+  overflow-y: auto;
+}
+.ask-user-composer__options {
+  display: grid;
+  gap: 6px;
+}
+.ask-user-composer__option {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  text-align: left;
+  cursor: pointer;
+  transition: background var(--ease-standard), border-color var(--ease-standard);
+}
+.ask-user-composer__option.is-active {
+  background: var(--color-surface);
+  border-color: var(--color-accent);
+}
+.ask-user-composer__option--free { cursor: text; }
+.ask-user-composer__num {
+  flex: none;
+  width: 20px;
+  height: 20px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: var(--radius-sm);
+  background: color-mix(in srgb, var(--color-accent) 20%, var(--color-surface));
+  color: var(--color-text-muted);
+  font-size: 11px;
+  font-family: var(--font-mono);
+}
+.ask-user-composer__label { flex: 1; min-width: 0; }
+.ask-user-composer__input {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: none;
+  background: transparent;
+  color: var(--color-text);
+  font-size: 13px;
+  outline: none;
+}
+.ask-user-composer__foot {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.ask-user-composer__hint {
+  flex: 1;
+  min-width: 0;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+.ask-user-composer__submit {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border-radius: var(--radius-sm);
+  border: none;
+  background: var(--color-accent);
+  color: var(--color-accent-contrast);
+  font-size: 13px;
+  font-weight: 520;
+  cursor: pointer;
+}
+.ask-user-composer__submit:disabled { opacity: 0.5; cursor: default; }
 
 /* ── 修正6 — auto-retry countdown + cancel ────────────────────────── */
 .auto-retry {
@@ -4151,6 +4296,52 @@ button {
   min-height: 0;
   overflow: auto;
   padding: 8px;
+}
+
+/* #257: the two file tiers (session workspace vs persistent library). */
+.file-tier {
+  margin-bottom: 10px;
+}
+.file-tier + .file-tier {
+  padding-top: 10px;
+  border-top: 1px solid var(--border-soft, rgba(127, 127, 127, 0.18));
+}
+.file-tier__header {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.file-tier__toggle {
+  display: flex;
+  flex: 1;
+  min-width: 0;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+  font-weight: 600;
+}
+.file-tier__name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-tier--data .file-tier__name {
+  color: var(--accent-strong, inherit);
+}
+.file-tier__hint {
+  margin: 0 0 4px 22px;
+  font-size: 11px;
+  line-height: 1.35;
+  opacity: 0.6;
+}
+.file-tier__empty {
+  margin: 2px 0 4px 22px;
+  font-size: 12px;
+  opacity: 0.5;
 }
 
 .file-node {
@@ -8603,7 +8794,38 @@ button {
   flex: 1;
   min-height: 0;
   display: grid;
-  grid-template-columns: minmax(0, 0.95fr) minmax(0, 1.5fr) minmax(0, 1.05fr);
+  /* chat | divider | preview (fills) | divider | right. The outer panels are
+     px-sized via CSS vars set by DemoView; a drag moves only one boundary. */
+  grid-template-columns:
+    var(--demo-chat-width, 340px)
+    6px
+    minmax(0, 1fr)
+    6px
+    var(--demo-right-width, 360px);
+}
+
+/* While dragging a divider, suppress text selection and force the resize
+   cursor across the whole layout so a fast drag doesn't select content. */
+.demo-layout--resizing {
+  cursor: col-resize;
+  user-select: none;
+}
+
+.demo-resizer {
+  position: relative;
+  cursor: col-resize;
+  background: var(--color-border);
+  /* Widen the hit area beyond the 6px track without shifting the grid. */
+  border-left: 3px solid transparent;
+  border-right: 3px solid transparent;
+  background-clip: padding-box;
+  transition: background-color 0.12s ease;
+  touch-action: none;
+}
+
+.demo-resizer:hover,
+.demo-layout--resizing .demo-resizer {
+  background-color: var(--color-accent);
 }
 
 .demo-panel {
@@ -8949,8 +9171,73 @@ button {
 }
 
 @media (max-width: 1100px) {
+  /* Single column: the panels stack, so the vertical dividers are meaningless. */
   .demo-layout { grid-template-columns: 1fr; grid-auto-rows: minmax(220px, auto); overflow-y: auto; }
+  .demo-resizer { display: none; }
   .demo-panel { border-right: none; border-bottom: 1px solid var(--color-border); }
   .demo-right { border-bottom: 1px solid var(--color-border); }
   .demo-landing__cards { grid-template-columns: 1fr; }
+}
+
+/* Issue #278 — global message-filter list in the agent detail pane. Each row
+   is a checkbox + label (with an optional count pill) and a small description
+   line. Matches the existing detail-section typography. */
+.global-filter-list {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.global-filter-list__item {
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 8px 10px;
+  background: var(--color-surface);
+}
+
+.global-filter-list__row {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 12px;
+  font-weight: 560;
+  color: var(--color-text);
+}
+
+.global-filter-list__row input[type="checkbox"] {
+  margin: 0;
+  accent-color: var(--color-accent);
+  cursor: pointer;
+}
+
+.global-filter-list__label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.global-filter-list__count {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 18px;
+  height: 18px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--color-danger, #e5484d);
+  color: #fff;
+  font-size: 10px;
+  font-weight: 600;
+  line-height: 1;
+}
+
+.global-filter-list__description {
+  margin: 4px 0 0 24px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.4;
 }

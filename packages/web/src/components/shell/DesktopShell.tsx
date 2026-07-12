@@ -22,7 +22,7 @@ import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
-  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView, traceUnread } = useSessions();
+  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView, traceUnread, hiddenErrorsUnread } = useSessions();
   const t = useT();
   // #131 — the sidebar collapses to an icon rail either manually (user toggle)
   // or automatically at narrow widths. Both feed the same `isCollapsed` state so
@@ -192,50 +192,13 @@ export function DesktopShell() {
             {/* #104: icon-only nav. The label stays in the DOM (visually
                 hidden) so it remains the button's accessible name, and `title`
                 gives a hover/focus tooltip — no separate aria-label needed. */}
-            <div className="workspace-view-tabs workspace-view-tabs--icon-only" role="tablist" aria-label={t("shell.aria.viewTabs")}>
-              <button
-                aria-selected={currentView === "chat"}
-                className={currentView === "chat" ? "is-active" : ""}
-                onClick={() => setCurrentView("chat")}
-                role="tab"
-                title={t("shell.view.chat")}
-                type="button"
-              >
-                <MessageSquare size={14} />
-                <span className="sr-only">{t("shell.view.chat")}</span>
-              </button>
-              <button
-                aria-selected={currentView === "agents"}
-                className={currentView === "agents" ? "is-active" : ""}
-                onClick={() => setCurrentView("agents")}
-                role="tab"
-                title={t("shell.view.agents")}
-                type="button"
-              >
-                <Bot size={14} />
-                <span className="sr-only">{t("shell.view.agents")}</span>
-              </button>
-              <button
-                aria-selected={currentView === "trace"}
-                className={`workspace-view-tab--badged ${currentView === "trace" ? "is-active" : ""}`}
-                onClick={() => setCurrentView("trace")}
-                role="tab"
-                title={t("shell.view.trace")}
-                type="button"
-              >
-                <GitBranch size={14} />
-                <span className="sr-only">{t("shell.view.trace")}</span>
-                {/* #134 — quiet unread dot: trace changed for this session and
-                    the user hasn't opened the Trace view since. Cleared on open. */}
-                {traceUnread && currentView !== "trace" ? (
-                  <span
-                    className="workspace-view-tab__badge"
-                    aria-label={t("shell.view.traceUpdated")}
-                    role="status"
-                  />
-                ) : null}
-              </button>
-            </div>
+            <WorkspaceViewTabs
+              currentView={currentView}
+              onSelect={setCurrentView}
+              hiddenErrorsUnread={hiddenErrorsUnread}
+              traceUnread={traceUnread}
+              t={t}
+            />
             {currentView === "chat" ? (
               <IconButton
                 className={isRefreshingMessages ? "is-active" : ""}
@@ -293,6 +256,82 @@ export function DesktopShell() {
         quotaBytes={stats?.disk.quotaBytes ?? 0}
         percentOfQuota={stats?.disk.percentOfQuota ?? 0}
       />
+    </div>
+  );
+}
+
+/**
+ * Extracted so its badge behavior (#134 trace-updated dot, #278 hidden-errors
+ * dot) is unit-testable without pulling the full DesktopShell surface + its
+ * SSE/Auth/Sandbox context tree. Pure props in, JSX out.
+ */
+export function WorkspaceViewTabs({
+  currentView,
+  onSelect,
+  hiddenErrorsUnread,
+  traceUnread,
+  t,
+}: {
+  currentView: "chat" | "agents" | "trace";
+  onSelect: (view: "chat" | "agents" | "trace") => void;
+  hiddenErrorsUnread: boolean;
+  traceUnread: boolean;
+  t: (key: string) => string;
+}) {
+  return (
+    <div className="workspace-view-tabs workspace-view-tabs--icon-only" role="tablist" aria-label={t("shell.aria.viewTabs")}>
+      <button
+        aria-selected={currentView === "chat"}
+        className={currentView === "chat" ? "is-active" : ""}
+        onClick={() => onSelect("chat")}
+        role="tab"
+        title={t("shell.view.chat")}
+        type="button"
+      >
+        <MessageSquare size={14} />
+        <span className="sr-only">{t("shell.view.chat")}</span>
+      </button>
+      <button
+        aria-selected={currentView === "agents"}
+        className={`workspace-view-tab--badged ${currentView === "agents" ? "is-active" : ""}`}
+        onClick={() => onSelect("agents")}
+        role="tab"
+        title={t("shell.view.agents")}
+        type="button"
+      >
+        <Bot size={14} />
+        <span className="sr-only">{t("shell.view.agents")}</span>
+        {/* Issue #278 — quiet red dot: non-fatal errors were folded out
+            of the chat stream for this session and the user hasn't
+            opened the Agents view since. Cleared on open. */}
+        {hiddenErrorsUnread && currentView !== "agents" ? (
+          <span
+            className="workspace-view-tab__badge"
+            aria-label={t("shell.view.agentsHasErrors")}
+            role="status"
+          />
+        ) : null}
+      </button>
+      <button
+        aria-selected={currentView === "trace"}
+        className={`workspace-view-tab--badged ${currentView === "trace" ? "is-active" : ""}`}
+        onClick={() => onSelect("trace")}
+        role="tab"
+        title={t("shell.view.trace")}
+        type="button"
+      >
+        <GitBranch size={14} />
+        <span className="sr-only">{t("shell.view.trace")}</span>
+        {/* #134 — quiet unread dot: trace changed for this session and
+            the user hasn't opened the Trace view since. Cleared on open. */}
+        {traceUnread && currentView !== "trace" ? (
+          <span
+            className="workspace-view-tab__badge"
+            aria-label={t("shell.view.traceUpdated")}
+            role="status"
+          />
+        ) : null}
+      </button>
     </div>
   );
 }

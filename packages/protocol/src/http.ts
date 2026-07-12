@@ -270,11 +270,14 @@ export const RUNTIME_ROUTES = {
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },
   /**
-   * Workspace files. `?path=` addresses one of two roots (#257):
+   * Workspace files. `?path=` addresses one of several roots by prefix:
    *  - `/workspace[/...]` (or a bare relative path) → per-session workspace
    *    `workspaces/:id/` (the agent's cwd);
    *  - `/data[/...]` → the shared per-user persistent root `data/<userId>/`,
-   *    reusable across sessions. Each root is traversal-guarded independently.
+   *    reusable across sessions (#257);
+   *  - `/shared[/...]` → the cross-user READ-ONLY shared root (#261), when the
+   *    deployment configures one (`BP_SHARED_DIR`); writes/deletes are rejected.
+   * Each root is traversal-guarded independently.
    */
   listFiles: { method: "GET", path: "/sessions/:id/files" },
   readFile: { method: "GET", path: "/sessions/:id/files/content" },

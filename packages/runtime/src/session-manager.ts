@@ -33,9 +33,15 @@ import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
-import { personaFor, withLanguageDirective, withPersistentRootDirective } from "./personas.js";
+import {
+  personaFor,
+  withLanguageDirective,
+  withPersistentRootDirective,
+  withSharedRootDirective,
+} from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { loadToolToggles, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
@@ -114,6 +120,20 @@ export function resolvePersistentUserId(opt?: string, env = process.env): string
   // Collapse any path separators / traversal to keep this a single segment.
   const safe = candidate.replace(/[\\/]/g, "_").replace(/\.\.+/g, "_");
   return safe === "" || safe === "." ? DEFAULT_PERSISTENT_USER_ID : safe;
+}
+
+/**
+ * Cross-user shared root (#261, legacy parity: `users/shared → /shared:ro`).
+ * Unlike the per-user persistent root (`data/<userId>/`, #257), this directory
+ * lives OUTSIDE any user's dataRoot and is shared READ-ONLY across ALL users —
+ * a public library of datasets / reference material. Resolution: explicit
+ * option wins, else `BP_SHARED_DIR`, else `undefined` (feature off — the
+ * `/shared` prefix is then not recognized and the deployment behaves exactly as
+ * before). A blank value counts as unset. Exported for tests.
+ */
+export function resolveSharedDir(opt?: string, env = process.env): string | undefined {
+  const raw = (opt ?? env.BP_SHARED_DIR ?? "").trim();
+  return raw === "" ? undefined : raw;
 }
 
 /**
@@ -268,6 +288,26 @@ export interface SessionManagerOptions {
    * names the on-disk subdir). Tests inject directly.
    */
   persistentUserId?: string;
+  /**
+   * Per-tool on/off overrides for the three user-controllable Pi-native
+   * SystemTools (`skill_search`, `get_domain_knowledge_local`,
+   * `search_papers_local`). When omitted, the runtime lazy-reads
+   * `<dataRoot>/bp_template/tool_toggles.json` on the first `ensureAgent`
+   * and caches the result for the process lifetime. Tests inject this to
+   * bypass the disk read. Passing `{}` explicitly disables the disk load
+   * and treats every tool as enabled (default-on).
+   */
+  toolToggles?: ToolToggles | null;
+  /**
+   * #261: cross-user shared root — an absolute directory, OUTSIDE this runtime's
+   * dataRoot, exposed READ-ONLY at the `/shared` path prefix and shared across
+   * ALL users (public datasets / reference material). Legacy parity with the
+   * old `users/shared → /shared:ro` bind mount. Default `undefined` (feature
+   * off); env override `BP_SHARED_DIR`. In Docker mode the host dir is bind-
+   * mounted read-only and its container path is passed here via env. Tests
+   * inject directly.
+   */
+  sharedDir?: string;
 }
 
 /** Roles inferred from agent name. */
@@ -372,6 +412,20 @@ export class SessionManager {
   // `workspaces/<sid>/`. Default `local`; env `BP_USER_ID`.
   private readonly persistentUserId: string;
 
+  // Per-tool on/off overrides. Populated by `ensureToolToggles()` on the
+  // first agent creation and cached for the process lifetime; a restart is
+  // required for a change to affect already-running sessions (an explicit
+  // design choice to avoid mid-session tool-list mutation — see plan doc).
+  // Sentinel: `undefined` = not yet loaded from disk; `null` = loaded and
+  // no file found / unparseable (equivalent to "all enabled"); an object =
+  // the parsed shape.
+  private toolToggles: ToolToggles | null | undefined = undefined;
+
+  // #261: cross-user read-only shared root, addressed by the `/shared` prefix.
+  // An absolute dir OUTSIDE dataRoot, shared across ALL users. `undefined` =
+  // feature off (the `/shared` prefix is not recognized). Env `BP_SHARED_DIR`.
+  private readonly sharedDir?: string;
+
   constructor(opts: SessionManagerOptions = {}) {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
@@ -398,6 +452,16 @@ export class SessionManager {
     this.maxConcurrentAgents = resolveMaxConcurrentAgents(opts.maxConcurrentAgents);
     this.uploadMaxBytes = resolveUploadMaxBytes(opts.uploadMaxBytes);
     this.persistentUserId = resolvePersistentUserId(opts.persistentUserId);
+    this.sharedDir = resolveSharedDir(opts.sharedDir);
+
+    // Test-only injection path: if callers pass `toolToggles`, use it verbatim
+    // and skip the disk read altogether. `undefined` (the field is absent from
+    // opts) leaves the sentinel at `undefined` so `ensureToolToggles` triggers
+    // the lazy load on first use. Passing `null` explicitly seeds the cache
+    // with "no signal → all enabled" without touching disk.
+    if (opts.toolToggles !== undefined) {
+      this.toolToggles = opts.toolToggles;
+    }
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -439,6 +503,26 @@ export class SessionManager {
   }
 
   /**
+   * Load per-tool on/off overrides once per process. Called from `ensureAgent`;
+   * result cached until restart. A change to `tool_toggles.json` therefore
+   * requires a runtime restart to affect already-running sessions (see plan
+   * doc: this is deliberate — hot tool-list mutation into an active
+   * agent/provider connection is fragile). Newly-created sessions after the
+   * change pick up the new value on their first `ensureAgent`.
+   */
+  private async ensureToolToggles(): Promise<ToolToggles | null> {
+    if (this.toolToggles !== undefined) return this.toolToggles;
+    try {
+      this.toolToggles = await loadToolToggles(this.dataRoot);
+    } catch {
+      // A read failure is not fatal — fall back to "all enabled" and remember
+      // that we tried, so we don't retry on every `ensureAgent`.
+      this.toolToggles = null;
+    }
+    return this.toolToggles;
+  }
+
+  /**
    * Load external MCP tools once. No-op in mock mode (BP_MOCK=1) and when no
    * `mcp_servers.json` is present, so the default path stays zero-overhead.
    */
@@ -476,6 +560,18 @@ export class SessionManager {
     return join(this.dataRoot, "data", this.persistentUserId);
   }
   /**
+   * Conversation-attachments subdir of a session's workspace —
+   * `workspaces/<sid>/.attachments/`. Files the user attaches to a message live
+   * here: scoped to the session (like the workspace) but kept physically apart
+   * from agent-produced files, and hidden from the workspace file tree. The
+   * agent reads them from its cwd as `.attachments/<name>`. Addressed by file
+   * routes via the `/attachments` prefix (see `resolveManagedPath`).
+   */
+  private static readonly ATTACHMENTS_DIRNAME = ".attachments";
+  private attachmentsDir(sid: string): string {
+    return join(this.workspaceDir(sid), SessionManager.ATTACHMENTS_DIRNAME);
+  }
+  /**
    * #60: composer uploads in single-user mode are POSTed against the literal
    * sandbox id `"local"` (the web `LOCAL_SANDBOX.id`), because a file can be
    * attached in the draft composer *before* the real session exists. They land
@@ -507,13 +603,22 @@ export class SessionManager {
    * escapes its declared root (path-traversal guard). This is the single
    * enforcement point for all file routes.
    *
-   * TWO roots are addressable (#257):
+   * FOUR roots are addressable, by path prefix:
    *  - `/workspace[/...]` → the per-session workspace `workspaces/<sid>/`
    *    (the agent's cwd; default when no prefix is given, for backward compat).
    *  - `/data[/...]`      → the shared per-user persistent root
-   *    `data/<userId>/`, reusable across sessions.
-   * Each is guarded WITHIN ITS OWN boundary: a `/data` path can never reach the
-   * session workspace and vice-versa, and neither can escape via `..`.
+   *    `data/<userId>/`, reusable across sessions (#257).
+   *  - `/attachments[/...]` → conversation attachments the user attached to a
+   *    message, kept in the hidden `workspaces/<sid>/.attachments/` subdir so
+   *    they are scoped to the session but visually separate from agent-produced
+   *    workspace files. The agent reads them from its cwd as `.attachments/<f>`.
+   *  - `/shared[/...]`    → the cross-user READ-ONLY shared root (#261), an
+   *    absolute dir OUTSIDE dataRoot shared across ALL users. Only recognized
+   *    when `sharedDir` is configured; writes/deletes against it are rejected by
+   *    the callers (see writeSessionFile / deleteSessionFile).
+   * Each is guarded WITHIN ITS OWN boundary: paths can never cross between roots
+   * and none can escape via `..`. (Attachments sit under the workspace on disk,
+   * but the `/attachments` boundary is the `.attachments/` subdir itself.)
    *
    * Returns the absolute path plus which root it resolved against, so callers
    * that echo a path back (writeSessionFile) can re-emit the correct prefix.
@@ -521,21 +626,33 @@ export class SessionManager {
   private resolveManagedPath(
     sid: string,
     rawPath: string,
-  ): { abs: string; root: string; prefix: "/workspace" | "/data" } {
+  ): { abs: string; root: string; prefix: "/workspace" | "/data" | "/attachments" | "/shared" } {
     let rel = rawPath ?? "";
     // Cross-platform (#5): accept `\` on the way in (an LLM/pre-#5 client may
     // round-trip a `\` path we handed out). `\` is not a legal filename char.
     rel = rel.replace(/\\/g, "/");
 
-    // Pick the root by prefix. `/data` selects the persistent library; anything
-    // else defaults to the session workspace (bare relative paths included, so
-    // existing callers keep working unchanged).
+    // Pick the root by prefix. `/data` → persistent library; `/attachments` →
+    // the session's hidden attachments subdir; `/shared` → the cross-user
+    // read-only root (only when configured); anything else defaults to the
+    // session workspace (bare relative paths included, so existing callers keep
+    // working unchanged).
     let root: string;
-    let prefix: "/workspace" | "/data";
+    let prefix: "/workspace" | "/data" | "/attachments" | "/shared";
     if (rel === "/data" || rel.startsWith("/data/")) {
       root = this.persistentDir();
       prefix = "/data";
       rel = rel === "/data" ? "" : rel.slice("/data/".length);
+    } else if (rel === "/attachments" || rel.startsWith("/attachments/")) {
+      root = this.attachmentsDir(sid);
+      prefix = "/attachments";
+      rel = rel === "/attachments" ? "" : rel.slice("/attachments/".length);
+    } else if (this.sharedDir && (rel === "/shared" || rel.startsWith("/shared/"))) {
+      // #261: only recognized when configured; otherwise `/shared/...` falls
+      // through to the workspace branch below (backward-compatible no-op).
+      root = this.sharedDir;
+      prefix = "/shared";
+      rel = rel === "/shared" ? "" : rel.slice("/shared/".length);
     } else {
       root = this.workspaceDir(sid);
       prefix = "/workspace";
@@ -546,7 +663,15 @@ export class SessionManager {
     rel = rel.replace(/^\/+/, ""); // never let a leading slash make it absolute
     const abs = resolve(root, rel);
     if (abs !== root && !abs.startsWith(root + sep)) {
-      throw new Error(`path escapes ${prefix === "/data" ? "data root" : "workspace"}: ${rawPath}`);
+      const label =
+        prefix === "/data"
+          ? "data root"
+          : prefix === "/attachments"
+            ? "attachments"
+            : prefix === "/shared"
+              ? "shared root"
+              : "workspace";
+      throw new Error(`path escapes ${label}: ${rawPath}`);
     }
     return { abs, root, prefix };
   }
@@ -558,7 +683,7 @@ export class SessionManager {
 
   /** List one directory level under the session workspace (default: root). */
   async listSessionFiles(sid: string, rel = ""): Promise<FileEntry[]> {
-    const dir = this.resolveWorkspacePath(sid, rel);
+    const { abs: dir, root, prefix } = this.resolveManagedPath(sid, rel);
     let dirents;
     try {
       dirents = await readdir(dir, { withFileTypes: true });
@@ -577,8 +702,15 @@ export class SessionManager {
         `failed to list workspace for session ${sid} at ${dir}: ${code ?? (err as Error)?.message ?? String(err)}`,
       );
     }
+    // Hide the conversation-attachments subdir from the WORKSPACE root listing:
+    // attachments are surfaced separately in the chat UI, not the file tree.
+    // (Only at the workspace root, and only when listing the workspace itself.)
+    const atWorkspaceRoot = prefix === "/workspace" && dir === root;
+    const visible = atWorkspaceRoot
+      ? dirents.filter((d) => d.name !== SessionManager.ATTACHMENTS_DIRNAME)
+      : dirents;
     const entries = await Promise.all(
-      dirents.map(async (d) => {
+      visible.map(async (d) => {
         const type: FileEntry["type"] = d.isDirectory()
           ? "folder"
           : d.isSymbolicLink()
@@ -620,12 +752,28 @@ export class SessionManager {
 
   /** Delete a workspace file. Returns false if it was already gone. */
   async deleteSessionFile(sid: string, rel: string): Promise<boolean> {
-    const abs = this.resolveWorkspacePath(sid, rel);
+    const { abs, prefix } = this.resolveManagedPath(sid, rel);
+    this.assertWritable(prefix, rel); // #261: the shared root is read-only
     try {
       await rm(abs, { recursive: true });
       return true;
     } catch {
       return false;
+    }
+  }
+
+  /**
+   * #261: reject mutations targeting the cross-user shared root. The `/shared`
+   * root is exposed read-only (legacy `/shared:ro` parity); in Docker mode the
+   * bind mount is `ReadOnly:true` too, but local/static modes have no OS-level
+   * barrier, so this runtime check is the enforcement point there.
+   */
+  private assertWritable(
+    prefix: "/workspace" | "/data" | "/attachments" | "/shared",
+    rawPath: string,
+  ): void {
+    if (prefix === "/shared") {
+      throw new Error(`shared root is read-only: ${rawPath}`);
     }
   }
 
@@ -652,6 +800,7 @@ export class SessionManager {
       throw new Error(`file too large: ${buf.byteLength} bytes exceeds limit of ${maxBytes}`);
     }
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
+    this.assertWritable(prefix, rel); // #261: the shared root is read-only
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, buf);
     return { path: this.relManagedPath(abs, root, prefix), size: buf.byteLength };
@@ -679,6 +828,7 @@ export class SessionManager {
     maxBytes = this.uploadMaxBytes,
   ): Promise<{ path: string; size: number }> {
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
+    this.assertWritable(prefix, rel); // #261: the shared root is read-only
     await mkdir(dirname(abs), { recursive: true });
 
     // Normalize either stream flavor to a Node Readable.
@@ -718,15 +868,21 @@ export class SessionManager {
   }
 
   /**
-   * Root-relative form of an absolute managed path, carrying the `/data` prefix
-   * back for persistent-root writes so the path round-trips (#257). Cross-platform
-   * (#5): always emit POSIX `/` so the API contract is identical across hosts;
-   * the frontend embeds this in URL query strings (`?path=foo/bar.txt`) and the
-   * model echoes it back via `read_file`.
+   * Root-relative form of an absolute managed path, carrying the `/data`,
+   * `/attachments`, or `/shared` prefix back for non-workspace paths so the path
+   * round-trips. Cross-platform (#5): always emit POSIX `/` so the API contract
+   * is identical across hosts; the frontend embeds this in URL query strings
+   * (`?path=foo/bar.txt`) and the model echoes it back via `read_file`. A bare
+   * workspace path is emitted prefix-less for backward compatibility.
    */
-  private relManagedPath(abs: string, root: string, prefix: "/workspace" | "/data"): string {
+  private relManagedPath(
+    abs: string,
+    root: string,
+    prefix: "/workspace" | "/data" | "/attachments" | "/shared",
+  ): string {
     const relPart = abs === root ? "" : abs.slice(root.length + 1).split(sep).join("/");
-    return prefix === "/data" ? (relPart ? `/data/${relPart}` : "/data") : relPart;
+    if (prefix === "/workspace") return relPart;
+    return relPart ? `${prefix}/${relPart}` : prefix;
   }
 
   /**
@@ -742,6 +898,11 @@ export class SessionManager {
    * leak into the next session. No-op when the target IS the staging sid, or
    * when the staging dir is missing/empty. Best-effort: never throws — a copy
    * failure must not block the user's prompt.
+   *
+   * This is directory-recursive, so a draft's conversation attachments staged
+   * under `workspaces/local/.attachments/` move as a unit into the fresh
+   * session's `.attachments/` subdir (a draft's session is always new, so the
+   * target `.attachments/` does not pre-exist).
    */
   private async drainLocalUploads(sessionId: string): Promise<void> {
     if (sessionId === SessionManager.UPLOAD_STAGING_SID) return;
@@ -828,6 +989,11 @@ export class SessionManager {
     // language directive) so it reaches on-disk personas too.
     if (role !== "trace") {
       persona = withPersistentRootDirective(persona, this.persistentDir());
+      // #261: when a cross-user read-only shared root is configured, tell working
+      // agents where it lives (absolute path) so they can read/use it as input.
+      if (this.sharedDir) {
+        persona = withSharedRootDirective(persona, this.sharedDir);
+      }
     }
     return persona;
   }
@@ -1073,6 +1239,27 @@ export class SessionManager {
     // session's workspace (the agent's cwd) before it runs, so it can read the
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
+
+    // #272: a run blocked on an ask_user (user_input_request) is streaming but
+    // will never settle until the request is answered. If the user types an
+    // ordinary message instead of picking an option, route it as the answer to
+    // the oldest outstanding request rather than returning "already processing"
+    // (which silently drops the message and hangs the session forever). The
+    // frontend now takes over the composer to steer users to the picker, but
+    // this is the defense-in-depth fallback for any path that still sends plain
+    // content (old client, ESC-then-type, direct API caller).
+    const [pendingRequestId] = entry.pendingInputs.keys();
+    if (pendingRequestId !== undefined) {
+      const runId = entry.activeRunId ?? undefined;
+      // Broadcast the user's text as a bubble correlated to the current run, so
+      // SSE replay stays complete (resolveInput emits the user_input_response
+      // echo separately, which resolves the ask_user card).
+      entry.bus.emit(
+        ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
+      );
+      this.resolveInput(sessionId, pendingRequestId, content);
+      return { accepted: true, runId, queued: true };
+    }
 
     // Concurrent send: the target agent is still streaming its previous run.
     // A plain prompt() would hit the SDK's "already processing" guard. Queue
@@ -1376,7 +1563,8 @@ export class SessionManager {
       requestUserInput: (req) => this.requestUserInput(entry, name, req),
       routerSkillsDir: this.routerSkillsDir,
     };
-    const systemTools = systemToolsForRole(role, name, deps);
+    const toolToggles = await this.ensureToolToggles();
+    const systemTools = systemToolsForRole(role, name, deps, toolToggles);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
     const rawTools = [...systemTools, ...mcpTools];
