@@ -41,6 +41,7 @@ import {
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { loadToolToggles, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
@@ -288,6 +289,16 @@ export interface SessionManagerOptions {
    */
   persistentUserId?: string;
   /**
+   * Per-tool on/off overrides for the three user-controllable Pi-native
+   * SystemTools (`skill_search`, `get_domain_knowledge_local`,
+   * `search_papers_local`). When omitted, the runtime lazy-reads
+   * `<dataRoot>/bp_template/tool_toggles.json` on the first `ensureAgent`
+   * and caches the result for the process lifetime. Tests inject this to
+   * bypass the disk read. Passing `{}` explicitly disables the disk load
+   * and treats every tool as enabled (default-on).
+   */
+  toolToggles?: ToolToggles | null;
+  /**
    * #261: cross-user shared root — an absolute directory, OUTSIDE this runtime's
    * dataRoot, exposed READ-ONLY at the `/shared` path prefix and shared across
    * ALL users (public datasets / reference material). Legacy parity with the
@@ -401,6 +412,15 @@ export class SessionManager {
   // `workspaces/<sid>/`. Default `local`; env `BP_USER_ID`.
   private readonly persistentUserId: string;
 
+  // Per-tool on/off overrides. Populated by `ensureToolToggles()` on the
+  // first agent creation and cached for the process lifetime; a restart is
+  // required for a change to affect already-running sessions (an explicit
+  // design choice to avoid mid-session tool-list mutation — see plan doc).
+  // Sentinel: `undefined` = not yet loaded from disk; `null` = loaded and
+  // no file found / unparseable (equivalent to "all enabled"); an object =
+  // the parsed shape.
+  private toolToggles: ToolToggles | null | undefined = undefined;
+
   // #261: cross-user read-only shared root, addressed by the `/shared` prefix.
   // An absolute dir OUTSIDE dataRoot, shared across ALL users. `undefined` =
   // feature off (the `/shared` prefix is not recognized). Env `BP_SHARED_DIR`.
@@ -433,6 +453,15 @@ export class SessionManager {
     this.uploadMaxBytes = resolveUploadMaxBytes(opts.uploadMaxBytes);
     this.persistentUserId = resolvePersistentUserId(opts.persistentUserId);
     this.sharedDir = resolveSharedDir(opts.sharedDir);
+
+    // Test-only injection path: if callers pass `toolToggles`, use it verbatim
+    // and skip the disk read altogether. `undefined` (the field is absent from
+    // opts) leaves the sentinel at `undefined` so `ensureToolToggles` triggers
+    // the lazy load on first use. Passing `null` explicitly seeds the cache
+    // with "no signal → all enabled" without touching disk.
+    if (opts.toolToggles !== undefined) {
+      this.toolToggles = opts.toolToggles;
+    }
 
     const limitBytes = opts.memLimitBytes ?? parseMemLimitMb(process.env);
     this.memWatchdog =
@@ -471,6 +500,26 @@ export class SessionManager {
       // eslint-disable-next-line no-console
       console.error(`[skills] failed to materialize built-in skills: ${(err as Error).message}`);
     }
+  }
+
+  /**
+   * Load per-tool on/off overrides once per process. Called from `ensureAgent`;
+   * result cached until restart. A change to `tool_toggles.json` therefore
+   * requires a runtime restart to affect already-running sessions (see plan
+   * doc: this is deliberate — hot tool-list mutation into an active
+   * agent/provider connection is fragile). Newly-created sessions after the
+   * change pick up the new value on their first `ensureAgent`.
+   */
+  private async ensureToolToggles(): Promise<ToolToggles | null> {
+    if (this.toolToggles !== undefined) return this.toolToggles;
+    try {
+      this.toolToggles = await loadToolToggles(this.dataRoot);
+    } catch {
+      // A read failure is not fatal — fall back to "all enabled" and remember
+      // that we tried, so we don't retry on every `ensureAgent`.
+      this.toolToggles = null;
+    }
+    return this.toolToggles;
   }
 
   /**
@@ -1514,7 +1563,8 @@ export class SessionManager {
       requestUserInput: (req) => this.requestUserInput(entry, name, req),
       routerSkillsDir: this.routerSkillsDir,
     };
-    const systemTools = systemToolsForRole(role, name, deps);
+    const toolToggles = await this.ensureToolToggles();
+    const systemTools = systemToolsForRole(role, name, deps, toolToggles);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
     const rawTools = [...systemTools, ...mcpTools];

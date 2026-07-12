@@ -44,6 +44,10 @@ import {
   type StoredProviderProfile,
   readKbApiConfig,
   writeKbApiConfig,
+  readToolToggles,
+  writeToolToggles,
+  TOGGLEABLE_TOOL_NAMES,
+  type ToolToggles,
 } from "./config.js";
 import {
   cancelKbBuild,
@@ -346,6 +350,37 @@ export function createApp(options: CreateAppOptions): Hono {
     const ok = await deleteMcpServer(dataDir, c.req.param("name"));
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.body(null, 204);
+  });
+
+  // ---- Built-in tool toggles (disk-backed: bp_template/tool_toggles.json) ----
+  //
+  // Per-tool on/off overrides for the three user-controllable Pi-native
+  // SystemTools: skill_search, get_domain_knowledge_local, search_papers_local.
+  // Missing / non-boolean → runtime treats as enabled (default-on). PUT is a
+  // MERGE (partial patch); unknown keys and non-boolean values are ignored.
+  //
+  // ⚠️ IMPORTANT: The runtime lazy-reads this file ONCE per process. A change
+  // via this endpoint therefore only takes effect on newly-created sessions
+  // (whose first ensureAgent triggers the read). To apply the change to
+  // already-running sessions, restart the backend. This is documented in the
+  // frontend panel via a persistent notice.
+  api.get("/tool-toggles", async (c) => {
+    return c.json(await readToolToggles(dataDir));
+  });
+  api.put("/tool-toggles", async (c) => {
+    const body = (await safeJson(c)) as Record<string, unknown>;
+    // Manual coercion instead of a Zod schema — the shape is trivially small
+    // (three booleans, all optional) and rejecting the whole PUT on a stray
+    // non-boolean would be user-hostile ("your JSON is fine, we just dropped
+    // the fields we didn't recognise" is friendlier). Non-boolean values fall
+    // through to the writer, which drops them.
+    const patch: ToolToggles = {};
+    for (const name of TOGGLEABLE_TOOL_NAMES) {
+      const v = body[name];
+      if (typeof v === "boolean") patch[name] = v;
+    }
+    const merged = await writeToolToggles(dataDir, patch);
+    return c.json(merged);
   });
 
   // ---- Knowledge Base build orchestration ------------------------------
