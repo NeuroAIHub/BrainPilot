@@ -12,6 +12,7 @@ import {
   SessionMessageEntry,
   SessionStateSnapshot,
   SettingsData,
+  ToolToggles,
   TraceGraph,
   normalizeFileContent,
   normalizeFileEntry,
@@ -744,6 +745,38 @@ export const api = {
         await apiFetch(`${API_BASE}/mcp-servers/${name}`, {
           method: "DELETE",
           headers: authHeaders(),
+        }),
+      );
+    },
+  },
+
+  // Built-in tool toggles. Missing / non-boolean → runtime treats as enabled;
+  // a fresh backend returns `{}`. `update` is a PATCH — pass one field to flip
+  // just that tool. The backend merges and returns the resulting full state.
+  //
+  // See BuiltinToolsSection.tsx for the UI. Changes on this endpoint DO NOT
+  // affect already-running sessions — the runtime lazy-reads this file once
+  // per process. Restart the backend, or create a new session, to apply.
+  toolToggles: {
+    async get(): Promise<ToolToggles> {
+      if (runtimeConfig.useMockBackend) {
+        // Mock: pretend all enabled. Keeps demo mode from surfacing a real
+        // network error when the UI reads on mount.
+        return {};
+      }
+      return handleJson<ToolToggles>(
+        await apiFetch(`${API_BASE}/tool-toggles`, { headers: authHeaders() }),
+      );
+    },
+    async update(patch: ToolToggles): Promise<ToolToggles> {
+      if (runtimeConfig.useMockBackend) {
+        return patch;
+      }
+      return handleJson<ToolToggles>(
+        await apiFetch(`${API_BASE}/tool-toggles`, {
+          method: "PUT",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
         }),
       );
     },
