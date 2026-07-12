@@ -105,6 +105,36 @@ export function withPersistentRootDirective(persona: string, absPath: string): s
   return `${persona}\n\n${persistentRootDirective(absPath)}`;
 }
 
+/**
+ * Cross-user shared-root directive (#261). A separate, READ-ONLY root shared
+ * across ALL users of the deployment (public datasets, reference material),
+ * given as an absolute path. `${absPath}` is interpolated at load time. Only
+ * injected when a shared root is configured (`BP_SHARED_DIR`).
+ */
+export function sharedRootDirective(absPath: string): string {
+  return `## Shared read-only library (cross-user)
+
+Besides your session workspace and the persistent per-user storage, there is a
+READ-ONLY shared library at this absolute path:
+
+    ${absPath}
+
+Files here (public datasets, reference documents, common resources) are shared
+across ALL users of this deployment. You may \`read\` them and use them with
+\`bash\` as inputs, but this root is READ-ONLY: you CANNOT write, edit, move, or
+delete anything under it, and attempts to do so will fail. Copy a file into your
+workspace or the persistent \`/data\` root first if you need to modify it.`;
+}
+
+/**
+ * Append the shared-root directive to a resolved persona (#261). Applied at
+ * persona load time (non-trace roles), after the persistent-root directive,
+ * only when a shared root is configured.
+ */
+export function withSharedRootDirective(persona: string, absPath: string): string {
+  return `${persona}\n\n${sharedRootDirective(absPath)}`;
+}
+
 /** A2A messaging contract — identical mechanics for every non-trace agent. */
 const A2A_EXPERT = `## Communicating back to the Principal
 

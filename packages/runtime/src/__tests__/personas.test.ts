@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { PERSONAS, BUILTIN_PERSONA_NAMES, personaFor } from "../personas.js";
+import {
+  PERSONAS,
+  BUILTIN_PERSONA_NAMES,
+  personaFor,
+  sharedRootDirective,
+  withSharedRootDirective,
+} from "../personas.js";
 
 describe("personas", () => {
   const EXPECTED = [
@@ -183,5 +189,22 @@ describe("personas", () => {
 
   it("personaFor returns the curated persona when one exists", () => {
     expect(personaFor("engineer", "expert")).toBe(PERSONAS.engineer);
+  });
+});
+
+describe("sharedRootDirective (#261)", () => {
+  it("interpolates the absolute path and states the read-only constraint", () => {
+    const d = sharedRootDirective("/srv/shared");
+    expect(d).toContain("/srv/shared");
+    expect(d).toContain("READ-ONLY");
+    // It must NOT invite writes — the whole point is a read-only cross-user root.
+    expect(d.toLowerCase()).toMatch(/cannot write|read-only/);
+  });
+
+  it("withSharedRootDirective appends the directive to a persona", () => {
+    const base = personaFor("engineer", "expert");
+    const out = withSharedRootDirective(base, "/srv/shared");
+    expect(out.startsWith(base)).toBe(true);
+    expect(out).toContain("/srv/shared");
   });
 });
