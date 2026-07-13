@@ -189,6 +189,7 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 | `13_Visualization` | Nature 风格图表创作与设计 |
 | `14_Writing` | Markdown 报告写作 |
 | `15_Others` | 神经影像功效/样本量指南 |
+| `21_Electrophysiology` | 胞外电生理 spike sorting（SpikeInterface） |
 
 **新增一个技能：**
 

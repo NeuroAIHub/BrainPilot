@@ -200,6 +200,7 @@ Existing categories under `packages/skills/skills/`:
 | `13_Visualization` | Nature-figure creation & chart design |
 | `14_Writing` | Markdown report writing |
 | `15_Others` | Neuroimaging power/sample-size guides |
+| `21_Electrophysiology` | Extracellular spike sorting (SpikeInterface) |
 
 **Adding a new skill:**
 
