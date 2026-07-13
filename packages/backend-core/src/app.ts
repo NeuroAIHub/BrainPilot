@@ -378,11 +378,12 @@ export function createApp(options: CreateAppOptions): Hono {
   // Missing / non-boolean → runtime treats as enabled (default-on). PUT is a
   // MERGE (partial patch); unknown keys and non-boolean values are ignored.
   //
-  // ⚠️ IMPORTANT: The runtime lazy-reads this file ONCE per process. A change
-  // via this endpoint therefore only takes effect on newly-created sessions
-  // (whose first ensureAgent triggers the read). To apply the change to
-  // already-running sessions, restart the backend. This is documented in the
-  // frontend panel via a persistent notice.
+  // Liveness: the runtime reads this file on every `ensureAgent`, so a PUT
+  // here takes effect on the next new session (or the next expert spawn in
+  // an existing session) immediately. Already-running agents keep the tool
+  // list they were given at agent-creation time — Pi caches it inside the
+  // provider session — so applying the change to a currently-active agent
+  // still requires a backend restart. The frontend panel spells this out.
   api.get("/tool-toggles", async (c) => {
     return c.json(await readToolToggles(dataDir));
   });
