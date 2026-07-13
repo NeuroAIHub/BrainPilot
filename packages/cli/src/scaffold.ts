@@ -209,6 +209,35 @@ export interface ScaffoldOptions {
   port?: number;
   /** Default provider name baked into brainpilot.config.json. */
   provider?: string;
+  /**
+   * Skip the bundled-skill copy (`materializeSkills`). Defaults to reading
+   * `BP_SKIP_SKILL_COPY` from the environment. See {@link shouldSkipSkillCopy}.
+   * The directory skeleton and all default files are still written — only the
+   * ~600-file recursive copy is elided. The runtime server materialises skills
+   * itself on startup (`ensureSkillsMaterialized`), so a real launch is never
+   * left without them; this flag only matters for tests and dry scaffolds.
+   */
+  skipSkillCopy?: boolean;
+}
+
+/**
+ * Whether `scaffold` should skip the expensive `materializeSkills` copy.
+ *
+ * Set `BP_SKIP_SKILL_COPY=1` (or `true`) to elide it. This exists for the test
+ * suite (#284): every CLI test that calls `up`/`scaffold`/`init` otherwise
+ * triggers a full recursive copy of the bundled `@brainpilot/skills` tree
+ * (hundreds of files and growing). On a contended CI runner that disk IO — not
+ * the code under test — dominates wall-clock and flakily blows the per-test
+ * timeout. Skipping it makes CLI test time flat with respect to skill count.
+ *
+ * NOT for production: real launches leave the flag unset, and even if a user
+ * sets it, the runtime server re-materialises skills on startup, so agents
+ * still get them.
+ */
+export function shouldSkipSkillCopy(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  return env.BP_SKIP_SKILL_COPY === "1" || env.BP_SKIP_SKILL_COPY === "true";
 }
 
 export interface ScaffoldResult {
@@ -273,11 +302,16 @@ export async function scaffold(
   //    bp_template/skills/ for Pi's native skill pipeline. Skip-if-exists at the
   //    file level, so user edits and the README/example above are preserved.
   //    Best-effort: a missing skills package never fails the scaffold.
-  try {
-    const res = await materializeSkills(p.dataDir);
-    if (res.copied > 0) created.push(`${p.bpTemplateSkills} (+${res.copied} skill files)`);
-  } catch {
-    /* skills are a convenience — never block scaffolding on them */
+  //    Skippable via BP_SKIP_SKILL_COPY (#284) — the hundreds-of-files copy is
+  //    what makes the CLI test suite flaky/slow; the runtime server also
+  //    materialises skills on startup, so skipping here never strands a real run.
+  if (!(options.skipSkillCopy ?? shouldSkipSkillCopy())) {
+    try {
+      const res = await materializeSkills(p.dataDir);
+      if (res.copied > 0) created.push(`${p.bpTemplateSkills} (+${res.copied} skill files)`);
+    } catch {
+      /* skills are a convenience — never block scaffolding on them */
+    }
   }
 
   return { paths: p, created };
