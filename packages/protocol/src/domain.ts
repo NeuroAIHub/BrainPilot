@@ -24,11 +24,17 @@ export const EXAMPLE_MODEL = "claude-sonnet-4-6";
  * Session
  * ------------------------------------------------------------------ */
 
+/** Per-session domain-resource ablation mode. Defaults to full in the runtime. */
+export const DomainResourcesSchema = z.enum(["full", "base"]);
+export type DomainResources = z.infer<typeof DomainResourcesSchema>;
+
 export const SessionSchema = z.object({
   id: z.string(),
   title: z.string(),
   createdAt: z.string(),
   updatedAt: z.string(),
+  /** Optional for compatibility with older runtimes; new runtimes always emit it. */
+  domainResources: DomainResourcesSchema.optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -110,6 +116,8 @@ export const SessionStateSnapshotSchema = z.object({
   }),
   agents: z.array(AgentStatusSchema),
   lastActivityTs: z.string(),
+  /** Frozen when the session is created and persisted across restore. */
+  domainResources: DomainResourcesSchema.optional(),
   /**
    * Cumulative real token usage for this session (total + per-agent). Optional
    * for forward/backward compat: a frame from an older runtime, or before the

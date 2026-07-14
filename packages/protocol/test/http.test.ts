@@ -43,6 +43,8 @@ describe("Runtime HTTP contract", () => {
 
   it("validates create session req/res", () => {
     expect(CreateSessionRequestSchema.parse({ title: "T" }).title).toBe("T");
+    expect(CreateSessionRequestSchema.parse({ domainResources: "base" }).domainResources).toBe("base");
+    expect(CreateSessionRequestSchema.safeParse({ domainResources: "disabled" }).success).toBe(false);
     expect(CreateSessionRequestSchema.parse({}).title).toBeUndefined();
     expect(CreateSessionResponseSchema.parse({ id: "s1" }).id).toBe("s1");
   });

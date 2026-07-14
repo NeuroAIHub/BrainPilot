@@ -265,6 +265,19 @@ agent 就会立刻获得两个内置工具：
 完整流水线说明、增量构建语义、FAQ 与离线模式请见
 [`KnowledgeBase/README.md`](./KnowledgeBase/README.md)。
 
+#### 按会话切换资源模式（高级）
+
+Runtime 的 `POST /sessions` 接口支持
+`domainResources: "full" | "base"`（缺省为向后兼容的 `full`）。`base`
+会话保留正常的多智能体协作与通用文件/代码工具，但不加载 always-on 技能目录，
+不暴露 `skill_search`，也不暴露上面的两个本地知识库/论文工具。该选择写入会话
+元数据并在恢复后保持不变，同时由 Session 与 SessionState API 返回。
+
+为支持可审计评测，事件流会针对领域工具调用、技能关键词搜索和成功加载完整技能正文，
+发出不含内容的 `CUSTOM(name="domain_resource_usage")` 记录。记录不包含查询、工具结果、
+技能正文或凭证；provider 上报的累计 token 用量仍位于
+`session_state.tokenUsage`。
+
 ---
 
 ## 🔌 接入 MCP 服务

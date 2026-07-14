@@ -9,6 +9,7 @@ import {
   Sandbox,
   SandboxStats,
   Session,
+  DomainResources,
   SessionMessageEntry,
   SessionStateSnapshot,
   SettingsData,
@@ -459,7 +460,7 @@ export const api = {
 
     async create(
       title = "New research session",
-      opts: { providerId?: string; modelId?: string } = {},
+      opts: { providerId?: string; modelId?: string; domainResources?: DomainResources } = {},
     ): Promise<Session> {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.createSession(title);
@@ -473,6 +474,7 @@ export const api = {
             title,
             ...(opts.providerId ? { providerId: opts.providerId } : {}),
             ...(opts.modelId ? { modelId: opts.modelId } : {}),
+            ...(opts.domainResources ? { domainResources: opts.domainResources } : {}),
           }),
         }),
       );

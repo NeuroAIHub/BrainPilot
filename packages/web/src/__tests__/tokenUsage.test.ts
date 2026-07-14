@@ -4,7 +4,7 @@
  * its absence (older runtime / pre-first-turn).
  */
 import { describe, it, expect } from "vitest";
-import { normalizeSessionState } from "../contracts/backend";
+import { normalizeSession, normalizeSessionState } from "../contracts/backend";
 
 describe("normalizeSessionState tokenUsage", () => {
   it("parses total + per-agent breakdown", () => {
@@ -25,6 +25,17 @@ describe("normalizeSessionState tokenUsage", () => {
     expect(snap.tokenUsage!.total.cacheRead).toBe(4);
     expect(snap.tokenUsage!.byAgent.principal.input).toBe(20);
     expect(snap.tokenUsage!.byAgent.librarian.total).toBe(14);
+  });
+
+  it("normalizes the frozen domain-resource mode", () => {
+    expect(normalizeSession({ id: "base", domain_resources: "base" }).domainResources).toBe("base");
+    expect(normalizeSession({ id: "legacy" }).domainResources).toBe("full");
+    expect(normalizeSessionState({
+      run_state: { active: false, run_id: null },
+      agents: [],
+      last_activity_ts: "",
+      domain_resources: "base",
+    }).domainResources).toBe("base");
   });
 
   it("omits tokenUsage when absent and coerces missing numbers to 0", () => {
