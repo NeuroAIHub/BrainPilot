@@ -26,12 +26,23 @@ describe("init — onboarding guidance", () => {
     const root = await tmp();
     const writeSettings = vi.fn().mockResolvedValue(undefined);
     await init(
-      { dir: root, apiKey: "sk-1", baseUrl: "https://gw/api", model: "m1" },
+      {
+        dir: root,
+        apiKey: "sk-1",
+        baseUrl: "https://gw/api",
+        model: "m1",
+        api: "openai-responses",
+      },
       { env: {}, log: () => {}, writeSettings },
     );
     expect(writeSettings).toHaveBeenCalledWith(
       root,
-      expect.objectContaining({ apiKey: "sk-1", baseUrl: "https://gw/api", model: "m1" }),
+      expect.objectContaining({
+        apiKey: "sk-1",
+        baseUrl: "https://gw/api",
+        model: "m1",
+        api: "openai-responses",
+      }),
     );
   });
 

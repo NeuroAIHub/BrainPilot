@@ -8,18 +8,21 @@ import {
   describeProviderConfig,
   formatProviderGuidance,
 } from "@brainpilot/backend-core";
+import type { ProviderApi } from "@brainpilot/protocol";
 import { resolveDataDir } from "../paths.js";
 import { scaffold } from "../scaffold.js";
 
 export interface InitOptions {
   dir?: string;
   port?: number;
-  /** Optional API key to persist into bp_template/settings.json. */
+  /** Optional API key to persist into bp_template/providers.json. */
   apiKey?: string;
   /** Optional base URL (gateway) to persist. */
   baseUrl?: string;
   /** Optional model id to persist. */
   model?: string;
+  /** Optional wire protocol; omitted profiles retain the legacy Anthropic default. */
+  api?: ProviderApi;
 }
 
 export interface InitDeps {
@@ -51,12 +54,13 @@ export async function init(
   );
 
   let keyPersisted = false;
-  if (options.apiKey || options.baseUrl || options.model) {
+  if (options.apiKey || options.baseUrl || options.model || options.api) {
     const writeSettings = deps.writeSettings ?? writeLocalSettings;
     await writeSettings(dataDir, {
       ...(options.apiKey ? { apiKey: options.apiKey } : {}),
       ...(options.baseUrl ? { baseUrl: options.baseUrl } : {}),
       ...(options.model ? { model: options.model } : {}),
+      ...(options.api ? { api: options.api } : {}),
     });
     keyPersisted = Boolean(options.apiKey);
     log(pc.green("Provider settings saved to bp_template/providers.json."));

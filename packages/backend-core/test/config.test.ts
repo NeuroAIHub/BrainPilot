@@ -172,7 +172,12 @@ describe("formatProviderGuidance", () => {
 describe("writeLocalSettings", () => {
   it("creates then updates the selected profile in providers.json", async () => {
     const dir = await tmp();
-    await writeLocalSettings(dir, { model: "m1", apiKey: "sk-1", baseUrl: "u1" });
+    await writeLocalSettings(dir, {
+      model: "m1",
+      apiKey: "sk-1",
+      baseUrl: "u1",
+      api: "openai-responses",
+    });
     await writeLocalSettings(dir, { model: "m2" }); // update: keep apiKey/baseUrl
     const raw = JSON.parse(
       await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
@@ -181,6 +186,7 @@ describe("writeLocalSettings", () => {
     const p = raw.profiles[0];
     expect(p.apiKey).toBe("sk-1");
     expect(p.baseUrl).toBe("u1");
+    expect(p.api).toBe("openai-responses");
     // newest model is the default (front of the model list)
     expect(p.models[0]).toBe("m2");
     expect(p.models).toContain("m1");

@@ -65,13 +65,33 @@ describe("program — commander wiring", () => {
     expect(initFn.mock.calls[0]![0]).toMatchObject({ apiKey: "sk-1" });
   });
 
-  it("dispatches `init` with --base-url and --model", async () => {
+  it("dispatches `init` with --base-url, --model, and --api", async () => {
     const initFn = vi.fn().mockResolvedValue({ dataDir: "/d", created: [], keyPersisted: false });
-    await run(["init", "--base-url", "https://gw/api", "--model", "m1"], { initFn });
+    await run(
+      [
+        "init",
+        "--base-url",
+        "https://gw/api",
+        "--model",
+        "m1",
+        "--api",
+        "openai-responses",
+      ],
+      { initFn },
+    );
     expect(initFn.mock.calls[0]![0]).toMatchObject({
       baseUrl: "https://gw/api",
       model: "m1",
+      api: "openai-responses",
     });
+  });
+
+  it("rejects an invalid provider api", async () => {
+    const initFn = vi.fn();
+    await expect(run(["init", "--api", "openai-magic"], { initFn })).rejects.toThrow(
+      /Invalid provider API/,
+    );
+    expect(initFn).not.toHaveBeenCalled();
   });
 
   it("dispatches `logs --runtime`", async () => {

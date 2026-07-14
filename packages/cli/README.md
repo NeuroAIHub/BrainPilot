@@ -48,9 +48,14 @@ for verifying the install end-to-end without an API key.
 
 ```bash
 brainpilot init --api-key <key> \
-  --base-url https://your-gateway.example.com/api \
-  --model kimi-k2.6
+  --base-url https://api.openai.com/v1 \
+  --model <model-id> \
+  --api openai-responses
 ```
+
+`--api` accepts `anthropic-messages`, `openai-completions`, `openai-responses`, or
+`azure-openai-responses`. If omitted, the provider uses the backward-compatible
+`anthropic-messages` default.
 
 You can also omit `--api-key` and supply credentials via the `ANTHROPIC_API_KEY`
 environment variable instead.
