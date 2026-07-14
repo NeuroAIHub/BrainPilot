@@ -12,6 +12,9 @@ BrainPilot can talk to multiple model provider protocols:
 
 The safest beginner path is the web UI because it writes the configuration file for you.
 
+BrainPilot does not infer the Responses API from a model name. The new-provider form defaults
+to `Anthropic Messages`; explicitly select the protocol exposed by your provider.
+
 ## Add a Provider in the UI
 
 1. Start BrainPilot with `brainpilot up`.
@@ -47,11 +50,15 @@ For a custom endpoint:
 ```bash
 brainpilot init \
   --api-key <your-api-key> \
-  --base-url https://your-gateway.example.com \
-  --model glm-5.2
+  --base-url https://api.openai.com/v1 \
+  --model <model-id> \
+  --api openai-responses
 ```
 
-The UI remains the recommended path for multiple providers and model lists.
+`--api` accepts `anthropic-messages`, `openai-completions`, `openai-responses`, or
+`azure-openai-responses`. Omitting it retains the backward-compatible
+`anthropic-messages` default. The UI remains the recommended path for multiple providers and
+model lists.
 
 ## Where Provider Config Lives
 
@@ -67,18 +74,26 @@ If you launch with `--dir` or `BP_DATA_DIR`, look under that data directory inst
 
 Use the protocol that matches your model gateway:
 
-| Gateway behavior | Protocol to try first |
-| --- | --- |
-| Anthropic-compatible `/messages` API | `Anthropic Messages` |
-| OpenAI-compatible chat/completions API | `OpenAI Completions` |
-| OpenAI Responses API | `OpenAI Responses` |
-| Azure-hosted Responses API | `Azure OpenAI Responses` |
+| Gateway behavior | Protocol | Example base URL | Model ID |
+| --- | --- | --- | --- |
+| Anthropic-compatible `/messages` API | `Anthropic Messages` | `https://api.anthropic.com` | Provider model ID |
+| OpenAI-compatible chat/completions API | `OpenAI Completions` | `https://api.openai.com/v1` | Provider model ID |
+| OpenAI Responses API | `OpenAI Responses` | `https://api.openai.com/v1` | Responses-capable model ID |
+| Azure-hosted Responses API | `Azure OpenAI Responses` | `https://<resource>.openai.azure.com` | Azure deployment name |
+
+For Azure, prefer the resource root URL; BrainPilot normalizes Azure OpenAI resource URLs to
+`/openai/v1`. If the Azure deployment name differs from the base model name, enter the
+deployment name as the Model ID.
+
+**Test** sends one minimal real model request through the selected protocol so it can validate
+the URL, protocol, model, and key together. This may incur a small amount of model usage.
 
 If provider testing fails, confirm the base URL, protocol, model ID, and key with your provider.
 
 ## Beginner Checklist
 
 - The base URL should not include random trailing path segments unless your gateway requires them.
+- Official OpenAI endpoints normally use an API root ending in `/v1`; follow the gateway's own documentation for compatible third-party services.
 - The model ID must match exactly what the gateway expects.
 - Save first, then click **Use**.
 - Start a new session after changing the active provider if an existing session still uses the old setting.

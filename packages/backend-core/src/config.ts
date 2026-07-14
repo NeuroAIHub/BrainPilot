@@ -407,7 +407,7 @@ export async function readLocalSettings(
  */
 export async function writeLocalSettings(
   dataDir: string,
-  patch: Partial<{ model: string; apiKey: string; baseUrl: string }>,
+  patch: Partial<{ model: string; apiKey: string; baseUrl: string; api: ProviderApi }>,
 ): Promise<void> {
   const current = await selectedProfile(dataDir);
   const models = patch.model ? [patch.model] : undefined;
@@ -415,6 +415,7 @@ export async function writeLocalSettings(
     await createProfile(dataDir, {
       name: "Local",
       baseUrl: patch.baseUrl ?? "",
+      api: patch.api,
       apiKey: patch.apiKey ?? "",
       models: models ?? [],
     });
@@ -422,6 +423,7 @@ export async function writeLocalSettings(
   }
   await updateProfile(dataDir, current.id, {
     ...(patch.baseUrl !== undefined ? { baseUrl: patch.baseUrl } : {}),
+    ...(patch.api !== undefined ? { api: patch.api } : {}),
     ...(patch.apiKey !== undefined ? { apiKey: patch.apiKey } : {}),
     // merge the model into the profile's model list (front of list = default)
     ...(models ? { models: Array.from(new Set([...models, ...current.models])) } : {}),

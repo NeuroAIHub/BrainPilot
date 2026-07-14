@@ -311,7 +311,12 @@ export function createApp(options: CreateAppOptions): Hono {
     const p = profiles.find((x) => x.id === c.req.param("id"));
     if (!p) return c.json({ error: "not found" }, 404);
     const result = await probeProvider(
-      { baseUrl: p.baseUrl, apiKey: p.apiKey },
+      {
+        baseUrl: p.baseUrl,
+        apiKey: p.apiKey,
+        model: p.models[0],
+        api: p.api ?? deriveProviderApi(p.adapter) ?? "anthropic-messages",
+      },
       { fetchFn: options.fetchFn, timeoutMs: options.providerProbeTimeoutMs },
     );
     // #69: persist the probe outcome so a later GET /provider/profiles (card

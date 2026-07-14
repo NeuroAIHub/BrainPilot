@@ -6,6 +6,7 @@
 import { Command } from "commander";
 import { createRequire } from "node:module";
 import pc from "picocolors";
+import { ProviderApiSchema, type ProviderApi } from "@brainpilot/protocol";
 import { up } from "./commands/up.js";
 import { down } from "./commands/down.js";
 import { status } from "./commands/status.js";
@@ -41,6 +42,16 @@ function parseMode(value: string): "local" | "static" | "docker" {
   const v = value.toLowerCase();
   if (v === "local" || v === "static" || v === "docker") return v;
   throw new Error(`Invalid mode: ${value} (expected local | static | docker)`);
+}
+
+function parseProviderApi(value: string): ProviderApi {
+  const parsed = ProviderApiSchema.safeParse(value);
+  if (!parsed.success) {
+    throw new Error(
+      `Invalid provider API: ${value} (expected anthropic-messages | openai-completions | openai-responses | azure-openai-responses)`,
+    );
+  }
+  return parsed.data;
 }
 
 /** Read the CLI package version from its own package.json (single source of truth). */
@@ -117,6 +128,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     .option("--api-key <key>", "provider API key to persist")
     .option("--base-url <url>", "provider base URL (gateway) to persist")
     .option("--model <id>", "default model id")
+    .option("--api <protocol>", "provider wire protocol", parseProviderApi)
     .action(async (opts) => {
       await initFn({
         dir: opts.dir,
@@ -124,6 +136,7 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
         apiKey: opts.apiKey,
         baseUrl: opts.baseUrl,
         model: opts.model,
+        api: opts.api,
       });
     });
 
