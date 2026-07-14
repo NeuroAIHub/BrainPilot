@@ -11,7 +11,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 <p align="center">
   <a href="https://www.npmjs.com/package/@brainpilot/app"><img src="https://img.shields.io/npm/v/@brainpilot/app?style=flat-square&logo=npm&color=CB3837" alt="npm version"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square" alt="License: AGPL v3"/></a>
-  <a href="#"><img src="https://img.shields.io/badge/Demo-coming%20soon-lightgrey?style=flat-square" alt="Live Demo (coming soon)"/></a>
+  <a href="https://brainpilot.chat"><img src="https://img.shields.io/badge/Hosted_Demo-brainpilot.chat-0E7490?style=flat-square" alt="Hosted Demo"/></a>
   <a href="#"><img src="https://img.shields.io/badge/Paper-coming%20soon-lightgrey?style=flat-square" alt="Paper (coming soon)"/></a>
   <a href="https://github.com/NeuroAIHub/BrainPilot/stargazers"><img src="https://img.shields.io/github/stars/NeuroAIHub/BrainPilot?style=flat-square" alt="Stars"/></a>
   <br/>
@@ -29,6 +29,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
   <a href="https://brainpilot.chat/docs">Docs</a> ·
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-resources--knowledge-base">Resources</a> ·
+  <a href="#-research-case-studies">Cases</a> ·
   <a href="#-connecting-mcp-servers">MCP</a> ·
   <a href="#-docker-deployment">Docker</a> ·
   <a href="#-contributing">Contributing</a> ·
@@ -39,15 +40,15 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ## 📖 Overview
 
-BrainPilot is an open-source AI research workspace for brain science. It helps researchers turn broad scientific questions into structured, inspectable workflows, from literature review and hypothesis refinement to experiment design, data analysis, writing, and audit. At its center, a Principal Agent communicates with the user, plans the work, and coordinates specialist agents such as librarian, analyst, experimentalist, writer, and auditor agents. BrainPilot is designed for human-in-the-loop scientific work: researchers remain in control, while agents handle evidence-heavy and cross-disciplinary tasks. The system integrates domain knowledge, methodological skills, and research tools, and records the process as a trace graph so that intermediate actions, evidence, claims, and potential risks can be inspected.
+BrainPilot is an open-source AI research workspace for brain science. It helps researchers turn broad scientific questions into structured, inspectable workflows, from literature review and hypothesis refinement to experiment design, data analysis, writing, and audit. At its center, a Principal Investigator (PI) Agent communicates with the user, plans the work, and coordinates specialist agents including a librarian, experimentalist, engineer, writer, and auditor. BrainPilot is designed for human-in-the-loop scientific work: researchers remain in control, while agents handle evidence-heavy and cross-disciplinary tasks. The system integrates domain knowledge, methodological skills, and research tools, and records the process in a Graph of Trace (GoT) so that intermediate actions, evidence, claims, and potential risks can be inspected.
 
 ### Highlights
 
 - 🧠 Built for brain science research — supports workflows across literature review, hypothesis refinement, experiment design, data analysis, writing, and audit.
-- 🤝 Principal Agent + specialist agents — a coordinating Principal Agent works with domain specialists including librarian, analyst, experimentalist, writer, and auditor agents.
+- 🤝 PI Agent + specialist agents — the coordinating PI works with a librarian, experimentalist, engineer, writer, and auditor.
 - 📚 Integrated domain knowledge and skills — brings together brain-science knowledge, methodological skills, analysis procedures, writing conventions, and tool interfaces.
 - 🛡️ Auditor Agent for scientific reliability — reviews claims, evidence chains, citations, hallucination risks, omitted information, and unsupported reasoning.
-- 🔭 Traceable research process — represents each session as an inspectable trace graph, making task structure, agent actions, evidence flow, and decision points visible.
+- 🔭 Traceable research process — represents each session as an inspectable Graph of Trace, making task structure, agent actions, evidence flow, and decision points visible.
 - 🔌 Extensible research tool ecosystem — connects models, MCP tools, paper databases, code execution environments, and custom research utilities.
 - 🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
 
@@ -176,12 +177,16 @@ Skills sources:
 - [nature-skills](https://github.com/Yuan1z0825/nature-skills), skills distilled from Nature-family methods
 - [MNE-Python](https://github.com/mne-tools/mne-python) and [pycortex](https://github.com/gallantlab/pycortex), integrated with `repo-to-skill` (see below)
 - [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut), markerless animal pose estimation toolbox
-- [EthoClaw](https://github.com/penciler-star/EthoClaw), ethological behavioral analysis platform
-- [NeuroClaw](https://github.com/CUHK-AIM-Group/NeuroClaw), neuroscience AI toolbox
 
 - **Layout** — `packages/skills/skills/`, a two-level `<category>/<skill-name>/SKILL.md` tree (optional `references/` for drill-down detail).
 - **At deploy time** — **materialized into your data dir** at `<data-dir>/bp_template/skills/`, a user-editable copy; an existing skill is never overwritten.
-- **Covered domains** — EEG/ERP, fMRI, computational modeling, psycholinguistics, clinical neuropsychology, visualization, scientific writing, and more.
+- **Inventory** — 74 bundled skills in 21 fine-grained categories, grouped into 7 broader research domains.
+- **Covered domains** — cellular, molecular, genetics, and pharmacology; cognitive and behavioral research; foundation and infrastructure; human neuroimaging and electrophysiology; computational modeling and theory; literature and reporting; and clinical and applied research.
+
+<p align="center">
+  <img src="assets/readme/brainpilot-knowledge-base.png" alt="BrainPilot skill coverage, hosted knowledge-base disciplines, and vocabulary" width="100%"/>
+</p>
+<p align="center"><sub>The 74 skills are bundled with the open-source package. The 7,233-item knowledge base and vocabulary summary describe the hosted corpus, which is not distributed in this repository.</sub></p>
 
 <details>
 <summary><b>Skill categories &amp; how to add a skill</b></summary>
@@ -205,6 +210,11 @@ Existing categories under `packages/skills/skills/`:
 | `13_Visualization` | Nature-figure creation & chart design |
 | `14_Writing` | Markdown report writing |
 | `15_Others` | Neuroimaging power/sample-size guides |
+| `16_Animal_Behavior` | Animal pose estimation and behavioral analysis |
+| `17_Literature_Databases` | PubMed, arXiv, bioRxiv, Europe PMC, and OpenAlex search |
+| `18_Genetics_Genomics` | ClinVar, dbSNP, gnomAD, and variant analysis |
+| `19_Pharmacology` | Drug, target, trial, and regulatory databases |
+| `20_Infrastructure` | Research-computing infrastructure |
 | `21_Electrophysiology` | Extracellular spike sorting (SpikeInterface) |
 
 **Adding a new skill:**
@@ -257,10 +267,11 @@ For the full workflow and examples, see
 
 ### Knowledge & paper base
 
-Our hosted demo answers from **our own curated knowledge base and paper library**. We can't
-offer those as a public service yet, so BrainPilot does not ship a built-in knowledge base —
-instead it lets you **connect your own**. The built-in `librarian` agent already searches
-papers, web sources, and knowledge bases through whatever retrieval tools you give it:
+The hosted BrainPilot service uses a curated corpus of **7,233 authorized items across 11
+disciplinary groups**. That corpus is not distributed with the open-source package. For local
+deployments, BrainPilot lets you build or connect your own knowledge base. The built-in
+`librarian` agent searches papers, web sources, and knowledge bases through the retrieval
+tools you provide:
 
 - **Connect a retrieval MCP server** over your own corpus (a vector store, a paper archive, a
   filesystem of PDFs, an internal search API) — see
@@ -306,6 +317,50 @@ For auditable evaluation, the event stream emits content-free
 keyword searches, and successful full skill-body loads. The records contain no
 query, tool result, skill body, or credential; cumulative provider-reported
 token usage remains available in `session_state.tokenUsage`.
+
+---
+
+## 🧪 Research case studies
+
+These cases test BrainPilot on real neuroscience data and preserve the limits of the evidence.
+They illustrate complete research workflows rather than leaderboard claims.
+
+### Mouse visual hierarchy from Neuropixels recordings
+
+On 58 Allen Neuropixels sessions, BrainPilot selected response latency, intrinsic timescale,
+and receptive-field diameter as candidate measures of functional hierarchy. An initial smoke
+test exposed a reversed latency trend caused by weakly responsive neurons and the noise
+threshold, prompting a responsiveness filter before the full run. All three final correlations
+were positive, but none reached conventional significance (latency: $\rho=0.667$, $p=0.083$;
+timescale: $\rho=0.476$, $p=0.243$; receptive-field diameter: $\rho=0.714$, $p=0.058$).
+
+<p align="center">
+  <img src="assets/readme/case-visual-hierarchy.png" alt="BrainPilot mouse visual hierarchy case study" width="760"/>
+</p>
+
+### Functional-connectivity signature of pain
+
+BrainPilot trained a pain signature over 279 regions and 38,781 functional-connectivity edges,
+then evaluated the frozen signature on independent data. It assigned a higher response to the
+pain condition for 9 of 10 held-out subjects. In a separate chronic-back-pain classification,
+AUC was 0.793 in the Japan cohort and 0.699 in the UK cohort, indicating partial transfer with
+weaker generalization in the UK data.
+
+<p align="center">
+  <img src="assets/readme/case-fmri-pain.png" alt="BrainPilot functional-connectivity fMRI pain case study" width="760"/>
+</p>
+
+### EEG motor-imagery decoding
+
+On BCI Competition IV 2a, BrainPilot designed an executable four-class decoder and evaluated
+it across 9 subjects and 3 random seeds. The model exceeded the EEGNet baseline in 7 of 9
+subjects; mean accuracy increased from 0.580 to 0.620 and Cohen's kappa from 0.440 to 0.493.
+Paired tests did not reach conventional significance ($p=0.107$ and $p=0.129$), so the result
+supports a positive trend rather than a state-of-the-art claim.
+
+<p align="center">
+  <img src="assets/readme/case-eeg-motor-imagery.png" alt="BrainPilot EEG motor-imagery decoding case study" width="760"/>
+</p>
 
 ---
 
