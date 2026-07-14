@@ -222,8 +222,9 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
   /* ----------------------------- QUERY ----------------------------- */
   if (mode === "query") {
     // Sub-mode B: direct skill lookup by name (returns full SKILL.md).
-    if (args.skill_name !== undefined && args.skill_name !== null) {
-      const name = String(args.skill_name);
+    const name =
+      typeof args.skill_name === "string" ? args.skill_name.trim() : "";
+    if (name !== "") {
       const cats = await listDirs(baseAbs);
       for (const cat of cats) {
         const candidate = join(baseAbs, cat, name, "SKILL.md");

@@ -184,6 +184,37 @@ describe("searchSkills — query mode", () => {
     expect(text).toContain("Visualization helper.");
   });
 
+  it("query with empty skill_name falls back to keyword search", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, {
+        mode: "query",
+        keywords: "figure, plotting",
+        skill_name: "",
+      }),
+    );
+    expect(out.keywords).toEqual(["figure", "plotting"]);
+    expect(out.results[0].name).toBe("figure-builder");
+  });
+
+  it("query with whitespace-only skill_name falls back to keyword search", async () => {
+    const out = JSON.parse(
+      await searchSkills(base, {
+        mode: "query",
+        keywords: "figure",
+        skill_name: "   ",
+      }),
+    );
+    expect(out.results[0].name).toBe("figure-builder");
+  });
+
+  it("trims skill_name before direct lookup", async () => {
+    const text = await searchSkills(base, {
+      mode: "query",
+      skill_name: "  figure-builder  ",
+    });
+    expect(text).toContain("Visualization helper.");
+  });
+
   it("query with unknown skill_name throws", async () => {
     await expect(
       searchSkills(base, { mode: "query", skill_name: "does-not-exist" }),
