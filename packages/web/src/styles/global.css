@@ -8694,6 +8694,15 @@ button {
   color: var(--color-text-muted);
 }
 
+.demo-card > .demo-card__privacy {
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  color: var(--color-text-subtle);
+  font-size: 11px;
+  line-height: 1.45;
+}
+
 .demo-card__sessions {
   display: flex;
   flex-direction: column;

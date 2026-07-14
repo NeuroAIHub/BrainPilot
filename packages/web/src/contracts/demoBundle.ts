@@ -14,6 +14,10 @@ export const DEMO_BUNDLE_VERSION = 1;
 export const MAX_FILE_BYTES = 2 * 1024 * 1024;
 /** Total embed budget, counted on encoded (base64/utf8) length. */
 export const MAX_TOTAL_BYTES = 25 * 1024 * 1024;
+/** Maximum encoded raw-event timeline retained in one bundle. */
+export const MAX_TIMELINE_BYTES = 12 * 1024 * 1024;
+/** Hard limit for a complete imported or generated bundle. */
+export const MAX_DEMO_BUNDLE_BYTES = 40 * 1024 * 1024;
 
 /** A raw AG-UI event line from frontend_events.jsonl, carrying a real `_ts`. */
 export interface RawAgUiEvent {
@@ -73,19 +77,124 @@ export interface DemoBundle {
   files: DemoFile[];
 }
 
-/** Runtime validation for imported bundles. */
-export function isDemoBundle(value: unknown): value is DemoBundle {
-  if (!value || typeof value !== "object") {
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return !!value && typeof value === "object" && !Array.isArray(value);
+}
+
+function isStringArray(value: unknown): value is string[] {
+  return Array.isArray(value) && value.every((item) => typeof item === "string");
+}
+
+function isRawEvent(value: unknown): value is RawAgUiEvent {
+  return (
+    isRecord(value) &&
+    typeof value.type === "string" &&
+    (value._ts === undefined || typeof value._ts === "string" || typeof value._ts === "number")
+  );
+}
+
+function isChatMessage(value: unknown): value is ChatMessage {
+  if (!isRecord(value)) {
     return false;
   }
-  const v = value as Record<string, unknown>;
   return (
-    v.format === DEMO_BUNDLE_FORMAT &&
-    typeof v.version === "number" &&
-    typeof v.session === "object" &&
-    v.session !== null &&
-    typeof v.trace === "object" &&
-    v.trace !== null &&
-    Array.isArray(v.files)
+    typeof value.id === "string" &&
+    (value.role === "user" || value.role === "assistant" || value.role === "system") &&
+    typeof value.content === "string" &&
+    typeof value.createdAt === "string"
   );
+}
+
+function isTraceNode(value: unknown): boolean {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.id === "string" &&
+    typeof value.title === "string" &&
+    typeof value.type === "string" &&
+    typeof value.status === "string" &&
+    Array.isArray(value.parents) &&
+    value.parents.every((parent) => isRecord(parent) && typeof parent.id === "string") &&
+    Array.isArray(value.artifacts) &&
+    value.artifacts.every((artifact) => isRecord(artifact) && typeof artifact.path === "string") &&
+    isStringArray(value.parentIds) &&
+    isStringArray(value.childIds) &&
+    isStringArray(value.toolCalls)
+  );
+}
+
+function isTraceGraph(value: unknown): value is TraceGraph {
+  return (
+    isRecord(value) &&
+    isRecord(value.meta) &&
+    typeof value.meta.sessionId === "string" &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every(isTraceNode)
+  );
+}
+
+function isAgent(value: unknown): value is AgentStatus {
+  return (
+    isRecord(value) &&
+    typeof value.name === "string" &&
+    typeof value.status === "string" &&
+    typeof value.task === "string"
+  );
+}
+
+function isDemoFile(value: unknown): value is DemoFile {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const reasonValid =
+    value.reason === undefined || value.reason === "tooLarge" || value.reason === "unreadable";
+  const dataValid =
+    (value.data === undefined || typeof value.data === "string") &&
+    (value.truncated === true || typeof value.data === "string");
+  return (
+    typeof value.path === "string" &&
+    typeof value.mime === "string" &&
+    (value.encoding === "utf8" || value.encoding === "base64") &&
+    typeof value.size === "number" &&
+    Number.isFinite(value.size) &&
+    value.size >= 0 &&
+    typeof value.truncated === "boolean" &&
+    reasonValid &&
+    dataValid
+  );
+}
+
+/** Strict runtime validation for untrusted imported bundles. */
+export function isDemoBundle(value: unknown): value is DemoBundle {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (
+    value.format !== DEMO_BUNDLE_FORMAT ||
+    value.version !== DEMO_BUNDLE_VERSION ||
+    typeof value.exportedAt !== "string" ||
+    !Number.isFinite(Date.parse(value.exportedAt)) ||
+    (value.appVersion !== undefined && typeof value.appVersion !== "string") ||
+    (value.packedWithSandbox !== undefined && typeof value.packedWithSandbox !== "boolean") ||
+    !isRecord(value.session) ||
+    typeof value.session.id !== "string" ||
+    typeof value.session.title !== "string" ||
+    (value.session.createdAt !== undefined && typeof value.session.createdAt !== "string") ||
+    (value.session.updatedAt !== undefined && typeof value.session.updatedAt !== "string") ||
+    !isTraceGraph(value.trace) ||
+    !Array.isArray(value.agents) ||
+    !value.agents.every(isAgent) ||
+    !Array.isArray(value.files) ||
+    !value.files.every(isDemoFile)
+  ) {
+    return false;
+  }
+  if (value.timeline === "timestamped") {
+    return Array.isArray(value.events) && value.events.every(isRawEvent);
+  }
+  if (value.timeline === "ordered") {
+    return Array.isArray(value.messages) && value.messages.every(isChatMessage);
+  }
+  return false;
 }
