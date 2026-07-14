@@ -45,11 +45,15 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const created = await a.request("/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Demo" }),
+      body: JSON.stringify({ title: "Demo", domainResources: "base" }),
     });
     expect(created.status).toBe(201);
-    const { id } = (await created.json()) as { id: string };
+    const { id, session } = (await created.json()) as {
+      id: string;
+      session: { domainResources?: string };
+    };
     expect(id).toBeTruthy();
+    expect(session.domainResources).toBe("base");
 
     // list
     const list = (await (await a.request("/sessions")).json()) as { sessions: unknown[] };
@@ -76,6 +80,7 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     // state
     const state = await a.request(`/sessions/${id}/state`);
     expect(state.status).toBe(200);
+    expect((await state.json()) as { domainResources?: string }).toMatchObject({ domainResources: "base" });
 
     // trace (Graph of Trace) — returns { meta, nodes } for an existing session
     const trace = await a.request(`/sessions/${id}/trace`);
@@ -92,6 +97,18 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const evict = await a.request(`/sessions/${id}/evict`, { method: "POST" });
     expect(evict.status).toBe(200);
     expect((await evict.json()) as { evicted: boolean }).toMatchObject({ evicted: true });
+  });
+
+  it("rejects an invalid domain-resource mode instead of silently creating full", async () => {
+    const a = app();
+    const invalid = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ domainResources: "bsae" }),
+    });
+    expect(invalid.status).toBe(400);
+    const list = (await (await a.request("/sessions")).json()) as { sessions: unknown[] };
+    expect(list.sessions).toEqual([]);
   });
 
   it("PUT /sessions/:id renames and the new title survives a re-GET (#29)", async () => {

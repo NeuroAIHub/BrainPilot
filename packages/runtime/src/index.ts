@@ -57,6 +57,15 @@ export {
 } from "./tool-toggles.js";
 export type { ToolToggles, ToggleableToolName } from "./tool-toggles.js";
 
+export {
+  DOMAIN_TOOL_NAMES,
+  resolveDomainResources,
+  toolTogglesForDomainResources,
+  withoutDomainResourceInstructions,
+  domainResourceUsageOnStart,
+  domainResourceUsageOnSuccess,
+} from "./domain-resources.js";
+
 export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
 export type { MaterializeSkillsResult } from "./materialize-skills.js";
 

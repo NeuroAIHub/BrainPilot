@@ -19,6 +19,7 @@ import {
   CUSTOM_EVENT,
   type AgUiEvent,
   type AgentStatus,
+  type DomainResources,
   type FileContent,
   type FileEntry,
   type Session,
@@ -51,6 +52,11 @@ import {
   resolveLegacyPersistentUserId,
 } from "./persistent-layout.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
+import {
+  toolTogglesForDomainResources,
+  withoutDomainResourceInstructions,
+  resolveDomainResources,
+} from "./domain-resources.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -198,6 +204,7 @@ interface SessionMeta {
   createdAt?: string;
   updatedAt?: string;
   lastActivityAt?: number;
+  domainResources?: DomainResources;
 }
 
 interface SessionEntry {
@@ -233,6 +240,8 @@ interface SessionEntry {
   pendingInputs: Map<string, Deferred<string>>;
   /** This session's chosen provider/model (resolved against providers.json). */
   providerRef: SessionProviderRef;
+  /** Frozen per-session domain-resource mode; never read from global state. */
+  domainResources: DomainResources;
   /**
    * Cumulative real token usage for this session: whole-session `total` plus a
    * per-agent breakdown (keyed by agent name). Fed by each MasAgent's `onUsage`
@@ -1029,7 +1038,11 @@ export class SessionManager {
    * rebuild); falls back to the curated built-in persona (`personaFor`) when no
    * file is present or it's empty.
    */
-  private async loadPersona(name: string, role: AgentRole): Promise<string> {
+  private async loadPersona(
+    name: string,
+    role: AgentRole,
+    domainResources: DomainResources,
+  ): Promise<string> {
     let base: string | undefined;
     try {
       const raw = (await readFile(this.agentPromptPath(name), "utf8")).trim();
@@ -1040,7 +1053,10 @@ export class SessionManager {
     // #97: append the language-following directive here (not in the persona text
     // / on-disk prompt.md) so it also reaches users who scaffolded earlier, and
     // applies whether the persona came from disk or the built-in constant.
-    let persona = withLanguageDirective(base ?? personaFor(name, role));
+    const selected = base ?? personaFor(name, role);
+    let persona = withLanguageDirective(
+      domainResources === "base" ? withoutDomainResourceInstructions(selected) : selected,
+    );
     // #257: tell working agents (not the passive trace recorder) where the
     // shared cross-session persistent root lives, by absolute path, so they can
     // read/write reusable data directly. Injected at load time (like the
@@ -1059,7 +1075,13 @@ export class SessionManager {
   /* ---------------------------- session CRUD ---------------------------- */
 
   async createSession(
-    input: { id?: string; title?: string; providerId?: string; modelId?: string } = {},
+    input: {
+      id?: string;
+      title?: string;
+      providerId?: string;
+      modelId?: string;
+      domainResources?: DomainResources;
+    } = {},
     /**
      * Internal restore path (see `restoreFromDisk`): when provided, the entry
      * inherits the on-disk meta.json timestamps verbatim instead of stamping
@@ -1075,11 +1097,21 @@ export class SessionManager {
     // layout initialization before creating any durable session state.
     if (this.persist) await this.ensurePersistentLayout();
     const id = input.id ?? randomUUID();
-    if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
+    if (this.sessions.has(id)) {
+      const existing = this.sessions.get(id)!;
+      if (input.domainResources && input.domainResources !== existing.domainResources) {
+        throw new Error(
+          `session ${id} already uses domainResources=${existing.domainResources}; ` +
+            `cannot reopen it as ${input.domainResources}`,
+        );
+      }
+      return this.toSession(existing);
+    }
     const nowIso = _restore ? _restore.updatedAt : new Date().toISOString();
     const createdAt = _restore ? _restore.createdAt : nowIso;
     const lastActivityAt = _restore ? _restore.lastActivityAt : Date.now();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
+    const domainResources = resolveDomainResources(input.domainResources);
 
     // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
     // (restore path) so reviving a session never clobbers its chosen model.
@@ -1120,6 +1152,7 @@ export class SessionManager {
       activeRunId: null,
       pendingInputs: new Map(),
       providerRef,
+      domainResources,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
     };
     this.sessions.set(id, entry);
@@ -1212,6 +1245,7 @@ export class SessionManager {
           title: meta.title ?? "Untitled session",
           createdAt: meta.createdAt ?? "",
           updatedAt: meta.updatedAt ?? "",
+          domainResources: meta.domainResources === "base" ? "base" : "full",
         });
       }
     }
@@ -1623,7 +1657,10 @@ export class SessionManager {
       requestUserInput: (req) => this.requestUserInput(entry, name, req),
       routerSkillsDir: this.routerSkillsDir,
     };
-    const toolToggles = await this.ensureToolToggles();
+    const toolToggles = toolTogglesForDomainResources(
+      entry.domainResources,
+      await this.ensureToolToggles(),
+    );
     const systemTools = systemToolsForRole(role, name, deps, toolToggles);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
@@ -1632,7 +1669,7 @@ export class SessionManager {
     // bundled content into bp_template/skills once, then hand the dir to the
     // factory as additionalSkillPaths. Trace agent is skill-less (graph-only).
     let skillPaths: string[] | undefined;
-    if (role !== "trace") {
+    if (role !== "trace" && entry.domainResources === "full") {
       await this.ensureSkillsMaterialized();
       skillPaths = [this.skillsDir];
     }
@@ -1653,7 +1690,7 @@ export class SessionManager {
       cwd: this.workspaceDir(sessionId),
       systemTools: agentTools,
       allowedToolNames,
-      systemPrompt: await this.loadPersona(name, role),
+      systemPrompt: await this.loadPersona(name, role, entry.domainResources),
       skillPaths,
       providerConfig,
       // 意图二 fallback: the trace-reminder extension calls this when an expert
@@ -2042,6 +2079,7 @@ export class SessionManager {
         runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
         agents: this.listAgents(entry.id),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
+        domainResources: entry.domainResources,
         tokenUsage: entry.tokenUsage,
       }),
     );
@@ -2051,6 +2089,7 @@ export class SessionManager {
     runState: { active: boolean; runId: string | null };
     agents: AgentStatus[];
     lastActivityTs: string;
+    domainResources: DomainResources;
     tokenUsage: SessionTokenUsage;
   } | undefined {
     const entry = this.sessions.get(sessionId);
@@ -2059,6 +2098,7 @@ export class SessionManager {
       runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
       agents: this.listAgents(sessionId),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
+      domainResources: entry.domainResources,
       tokenUsage: entry.tokenUsage,
     };
   }
@@ -2213,7 +2253,13 @@ export class SessionManager {
   }
 
   private toSession(e: SessionEntry): Session {
-    return { id: e.id, title: e.title, createdAt: e.createdAt, updatedAt: e.updatedAt };
+    return {
+      id: e.id,
+      title: e.title,
+      createdAt: e.createdAt,
+      updatedAt: e.updatedAt,
+      domainResources: e.domainResources,
+    };
   }
 
   private async writeMeta(entry: SessionEntry): Promise<void> {
@@ -2224,6 +2270,7 @@ export class SessionManager {
       createdAt: entry.createdAt,
       updatedAt: entry.updatedAt,
       lastActivityAt: entry.lastActivityAt,
+      domainResources: entry.domainResources,
     };
     await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
     await writeFile(join(this.bpDir(entry.id), "meta.json"), JSON.stringify(meta, null, 2), "utf8").catch(() => {});
@@ -2330,7 +2377,9 @@ export class SessionManager {
   private async readMeta(id: string): Promise<SessionMeta | null> {
     try {
       const raw = await readFile(join(this.dataRoot, ".bp", id, "meta.json"), "utf8");
-      return JSON.parse(raw) as SessionMeta;
+      const meta = JSON.parse(raw) as SessionMeta;
+      resolveDomainResources(meta.domainResources);
+      return meta;
     } catch {
       return null;
     }
@@ -2353,7 +2402,11 @@ export class SessionManager {
     try {
       const now = new Date().toISOString();
       await this.createSession(
-        { id: sid, title: meta.title },
+        {
+          id: sid,
+          title: meta.title,
+          domainResources: resolveDomainResources(meta.domainResources),
+        },
         {
           createdAt: meta.createdAt ?? now,
           updatedAt: meta.updatedAt ?? now,

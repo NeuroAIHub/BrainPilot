@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 import type {
   Session,
+  DomainResources,
   AgentStatus,
   SessionStateSnapshot,
   SessionTokenUsage,
@@ -36,6 +37,7 @@ import type {
 // all `import { … } from "../contracts/backend"` sites continue to resolve.
 export type {
   Session,
+  DomainResources,
   AgentStatus,
   SessionStateSnapshot,
   SessionTokenUsage,
@@ -414,6 +416,8 @@ interface RawSession {
   createdAt?: string;
   updated_at?: string;
   updatedAt?: string;
+  domain_resources?: unknown;
+  domainResources?: unknown;
 }
 
 interface RawFileEntry {
@@ -637,6 +641,8 @@ export function normalizeSession(raw: RawSession): Session {
     title: stringValue(raw.title, id ? `Session ${id.slice(0, 8)}` : "Untitled session"),
     createdAt: isoValue(raw.createdAt ?? raw.created_at),
     updatedAt: isoValue(raw.updatedAt ?? raw.updated_at ?? raw.createdAt ?? raw.created_at),
+    domainResources:
+      (raw.domainResources ?? raw.domain_resources) === "base" ? "base" : "full",
   };
 }
 
@@ -824,6 +830,7 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     },
     agents,
     lastActivityTs: stringValue(camelized.lastActivityTs, ""),
+    domainResources: camelized.domainResources === "base" ? "base" : "full",
   };
   const tokenUsage = normalizeSessionTokenUsage(camelized.tokenUsage);
   if (tokenUsage) out.tokenUsage = tokenUsage;

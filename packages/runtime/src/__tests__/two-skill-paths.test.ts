@@ -121,4 +121,38 @@ describe("two-path skill loading", () => {
     expect(traceTools).not.toContain("skill_search");
     // Trace also gets no skillPaths (it is skill-less by design).
   });
+
+  it("keeps full and base sessions isolated without global mutation", async () => {
+    const root = await tmp();
+    type Captured = Parameters<AgentSessionFactory>[0];
+    const captured = new Map<string, Captured>();
+    const wrappedFactory: AgentSessionFactory = async (params) => {
+      captured.set(params.sessionId, params);
+      return mockAgentFactory(params);
+    };
+    const mgr = new SessionManager({
+      dataRoot: root,
+      agentFactory: wrappedFactory,
+      persist: false,
+      toolToggles: {},
+    });
+    const base = await mgr.createSession({ domainResources: "base" });
+    const full = await mgr.createSession({ domainResources: "full" });
+    await mgr.ensureAgent(base.id, "principal");
+    await mgr.ensureAgent(full.id, "principal");
+
+    const baseParams = captured.get(base.id)!;
+    const fullParams = captured.get(full.id)!;
+    for (const name of ["skill_search", "get_domain_knowledge_local", "search_papers_local"]) {
+      expect(baseParams.systemTools.map((tool) => tool.name)).not.toContain(name);
+      expect(fullParams.systemTools.map((tool) => tool.name)).toContain(name);
+    }
+    expect(baseParams.skillPaths).toBeUndefined();
+    expect(fullParams.skillPaths).toEqual([join(root, "bp_template", "skills")]);
+    expect(baseParams.systemPrompt).not.toMatch(/skill_search|<available_skills>|SKILL\.md/i);
+    expect(fullParams.systemPrompt).toContain("skill_search");
+    expect(baseParams.allowedToolNames).toEqual(expect.arrayContaining(["read", "write", "bash"]));
+    expect(mgr.getSessionState(base.id)?.domainResources).toBe("base");
+    expect(mgr.getSessionState(full.id)?.domainResources).toBe("full");
+  });
 });

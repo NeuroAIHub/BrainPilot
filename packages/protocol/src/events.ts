@@ -290,6 +290,7 @@ export type CustomEvent = z.infer<typeof CustomEventSchema>;
  *   `CompactionStartValue | CompactionEndValue`. Emitted verbatim from the
  *   Pi `compaction_start` / `compaction_end` events (mas-agent.ts) so clients
  *   can render compaction transparently instead of a mid-run context reset.
+ * - `domain_resource_usage` — content-free domain tool / skill usage edge.
  */
 export const CUSTOM_EVENT = {
   SESSION_STATE: "session_state",
@@ -297,7 +298,36 @@ export const CUSTOM_EVENT = {
   SESSION_HEARTBEAT: "session_heartbeat",
   TRACE_NODE: "trace_node",
   COMPACTION: "compaction",
+  /** Auditable, content-free domain tool / skill usage edge. */
+  DOMAIN_RESOURCE_USAGE: "domain_resource_usage",
 } as const;
+
+/**
+ * Normalized resource-use event. Queries, skill bodies, tool results, and
+ * credentials are deliberately absent; the AG-UI envelope carries session,
+ * run, agent, and timestamp identity.
+ */
+export const DomainResourceUsageValueSchema = z.discriminatedUnion("kind", [
+  z.object({
+    schemaVersion: z.literal("1.0"),
+    kind: z.literal("domain_tool_call"),
+    toolName: z.enum(["get_domain_knowledge_local", "search_papers_local"]),
+    source: z.literal("system_tool"),
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal("1.0"),
+    kind: z.literal("skill_search"),
+    toolName: z.literal("skill_search"),
+    source: z.literal("router"),
+  }).strict(),
+  z.object({
+    schemaVersion: z.literal("1.0"),
+    kind: z.literal("skill_load"),
+    skillName: z.string().min(1).max(128),
+    source: z.enum(["router", "builtin_read"]),
+  }).strict(),
+]);
+export type DomainResourceUsageValue = z.infer<typeof DomainResourceUsageValueSchema>;
 
 /**
  * `CUSTOM.value` shape for `name: "compaction"` — mirrors Pi SDK's

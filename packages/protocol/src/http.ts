@@ -78,6 +78,8 @@ export const CreateSessionRequestSchema = z.object({
   providerId: z.string().optional(),
   /** Optional model id within that provider. */
   modelId: z.string().optional(),
+  /** Per-session domain resources; omitted means full for backward compatibility. */
+  domainResources: z.enum(["full", "base"]).optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 

@@ -10,6 +10,7 @@
 import {
   RUNTIME_ROUTES,
   type AgUiEvent,
+  type CreateSessionRequest,
   type CreateSessionResponse,
   type SendMessageResponse,
 } from "@brainpilot/protocol";
@@ -66,7 +67,7 @@ export class BrainPilotClient {
   }
 
   /** POST /sessions → the new session id. */
-  async createSession(body: { id?: string; title?: string } = {}): Promise<string> {
+  async createSession(body: CreateSessionRequest = {}): Promise<string> {
     const res = await this.fetchFn(this.url(RUNTIME_ROUTES.createSession.path), {
       method: RUNTIME_ROUTES.createSession.method,
       headers: { "content-type": "application/json" },

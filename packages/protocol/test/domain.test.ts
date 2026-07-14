@@ -17,14 +17,16 @@ import {
 
 describe("domain schemas", () => {
   it("validates Session", () => {
-    expect(
-      SessionSchema.parse({
+    const session = SessionSchema.parse({
         id: "s1",
         title: "T",
         createdAt: "2026-06-12T00:00:00Z",
         updatedAt: "2026-06-12T00:00:00Z",
-      }).id,
-    ).toBe("s1");
+        domainResources: "base",
+      });
+    expect(session.id).toBe("s1");
+    expect(session.domainResources).toBe("base");
+    expect(SessionSchema.safeParse({ ...session, domainResources: "unknown" }).success).toBe(false);
   });
 
   it("validates SessionStateSnapshot with agents", () => {
@@ -32,8 +34,10 @@ describe("domain schemas", () => {
       runState: { active: true, runId: "r1" },
       agents: [{ name: "principal", status: "running", task: "thinking", alive: true }],
       lastActivityTs: "2026-06-12T00:00:00Z",
+      domainResources: "full",
     };
     expect(SessionStateSnapshotSchema.parse(snap).agents[0]?.name).toBe("principal");
+    expect(SessionStateSnapshotSchema.parse(snap).domainResources).toBe("full");
   });
 
   it("SessionStateSnapshot allows null runId", () => {

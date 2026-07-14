@@ -292,6 +292,21 @@ existing LLM key).
 See [`KnowledgeBase/README.md`](./KnowledgeBase/README.md) for the full pipeline walkthrough,
 incremental-build semantics, FAQ and offline mode.
 
+#### Per-session resource mode (advanced)
+
+The Runtime session API accepts `domainResources: "full" | "base"` on
+`POST /sessions` (`full` is the backward-compatible default). A `base` session
+keeps normal multi-agent orchestration and generic file/code tools, but does not
+load the always-on skill catalog, expose `skill_search`, or expose the two local
+knowledge/paper tools above. The choice is frozen in the session metadata,
+survives restore, and is returned by the Session and SessionState APIs.
+
+For auditable evaluation, the event stream emits content-free
+`CUSTOM(name="domain_resource_usage")` records for domain tool calls, skill
+keyword searches, and successful full skill-body loads. The records contain no
+query, tool result, skill body, or credential; cumulative provider-reported
+token usage remains available in `session_state.tokenUsage`.
+
 ---
 
 ## 🔌 Connecting MCP servers

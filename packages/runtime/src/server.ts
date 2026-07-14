@@ -36,8 +36,8 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
   app.post("/sessions", async (c) => {
     const body = await safeBody(c);
     const parsed = CreateSessionRequestSchema.safeParse(body);
-    const input = parsed.success ? parsed.data : {};
-    const session = await manager.createSession(input);
+    if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+    const session = await manager.createSession(parsed.data);
     return c.json({ id: session.id, session }, 201);
   });
 
