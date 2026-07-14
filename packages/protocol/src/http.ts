@@ -25,7 +25,12 @@
  */
 import { z } from "zod";
 import { AgUiEventSchema } from "./events.js";
-import { AgentStatusSchema, SessionSchema, SessionStateSnapshotSchema } from "./domain.js";
+import {
+  AgentStatusSchema,
+  SessionSchema,
+  SessionStateSnapshotSchema,
+  SessionStatsSchema,
+} from "./domain.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
 
@@ -111,6 +116,18 @@ export type DeleteSessionResponse = z.infer<typeof DeleteSessionResponseSchema>;
 
 export const GetSessionStateResponseSchema = SessionStateSnapshotSchema;
 export type GetSessionStateResponse = z.infer<typeof GetSessionStateResponseSchema>;
+
+/* ------------------------------------------------------------------ *
+ * GET /sessions/:id/stats  (per-run + per-session usage stats)
+ * ------------------------------------------------------------------ */
+
+/**
+ * Full stats snapshot: tokens (mirrors what `session_state` already ships)
+ * plus per-agent tool/skill/error counters and a per-run delta timeline.
+ * See `SessionStatsSchema` in domain.ts for the shape.
+ */
+export const GetSessionStatsResponseSchema = SessionStatsSchema;
+export type GetSessionStatsResponse = z.infer<typeof GetSessionStatsResponseSchema>;
 
 /* ------------------------------------------------------------------ *
  * POST /sessions/:id/messages  (inject user message)
@@ -240,6 +257,12 @@ export const RUNTIME_ROUTES = {
   updateSession: { method: "PUT", path: "/sessions/:id" },
   deleteSession: { method: "DELETE", path: "/sessions/:id" },
   getSessionState: { method: "GET", path: "/sessions/:id/state" },
+  /**
+   * Per-run + per-session usage stats (tokens + tool/skill/error counters).
+   * Payload: `SessionStatsSchema`. Persisted alongside the session at
+   * `<dataRoot>/.bp/<sid>/stats.json`.
+   */
+  getSessionStats: { method: "GET", path: "/sessions/:id/stats" },
   /** Graph of Trace (reasoning DAG) for a session. */
   getTrace: { method: "GET", path: "/sessions/:id/trace" },
   sendMessage: { method: "POST", path: "/sessions/:id/messages" },

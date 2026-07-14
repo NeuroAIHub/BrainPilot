@@ -14,10 +14,22 @@
  * (`extensions/trace-reminder.ts`), registered per AgentSession by the real
  * factory. MasAgent is back to a pure Pi→AG-UI translator.
  */
-import type { AgUiEvent, AgentState, TokenUsage } from "@brainpilot/protocol";
+import type {
+  AgUiEvent,
+  AgentState,
+  AgentStats,
+  RunStatsStatus,
+  TokenUsage,
+} from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
 import { normalizeAgentError, classifyAgentError, type AgentErrorKind } from "./agent-error.js";
+import {
+  cloneAgentStats,
+  emptyAgentStats,
+  recordSkillCall,
+  subtractAgentStats,
+} from "./usage-stats.js";
 import type {
   AgentRole,
   IAgentSession,
@@ -67,6 +79,22 @@ export interface MasAgentOpts {
    * per-session total, push a session_state frame, and persist usage.json.
    */
   onUsage?: (name: string, delta: TokenUsage, cumulative: TokenUsage) => void;
+  /**
+   * Per-run summary callback (usage-stats feature). Invoked once per completed
+   * run with the delta (tools/skills/errors/tokens added during that run) and
+   * the agent's post-run cumulative snapshot. The SessionManager uses this to
+   * append a `RunStats` entry to `stats.json` and re-aggregate the session's
+   * `byAgent[name]` / `total` fields.
+   */
+  onRunStats?: (info: {
+    name: string;
+    runId: string;
+    startedAt: number;
+    finishedAt: number;
+    status: RunStatsStatus;
+    delta: AgentStats;
+    cumulative: AgentStats;
+  }) => void;
 }
 
 export class MasAgent {
@@ -89,6 +117,27 @@ export class MasAgent {
    * fed to `onUsage` so the SessionManager can roll up the per-session total.
    */
   private cumulativeUsage: TokenUsage = emptyTokenUsage();
+  /**
+   * Full cumulative stats for THIS agent (tokens + tools + skills + errors).
+   * `cumulativeUsage` above is kept as a separate mirror because
+   * `mas-agent.ts`'s legacy `usage()` and `onUsage` callback plus the existing
+   * `usage.json` persistence path depend on that exact reference — the delta
+   * arithmetic here rolls the same numbers up but into a richer shape used
+   * only by the new `stats.json` path.
+   */
+  private cumulativeStats: AgentStats = emptyAgentStats();
+  /**
+   * Baseline snapshot captured at the start of the currently-running prompt.
+   * `runPrompt` clones `cumulativeStats` into this on entry, and the terminal
+   * event computes the run's delta as `cumulativeStats - runStartSnapshot`.
+   * Undefined between runs.
+   */
+  private runStartSnapshot: AgentStats | undefined;
+  /**
+   * Wall-clock start of the currently-running prompt (Date.now() at
+   * `RUN_STARTED` emit time). Stamped onto the resulting `RunStats.startedAt`.
+   */
+  private runStartedAt: number | undefined;
   /**
    * #97 error path: recoverability class of the most recent error, or undefined
    * when the last run did not error. The delivery loop reads this after a run to
@@ -141,6 +190,23 @@ export class MasAgent {
    */
   seedUsage(u: TokenUsage | undefined): void {
     if (u) this.cumulativeUsage = { ...u };
+  }
+
+  /**
+   * Cumulative full stats for this agent (a deep copy, safe to mutate). Used
+   * by SessionManager to rebuild the per-session breakdown and to persist
+   * `stats.json`.
+   */
+  stats(): AgentStats {
+    return cloneAgentStats(this.cumulativeStats);
+  }
+
+  /**
+   * Restore this agent's cumulative stats from persisted state (restore path,
+   * before any new turn). No-op if `s` is undefined.
+   */
+  seedStats(s: AgentStats | undefined): void {
+    if (s) this.cumulativeStats = cloneAgentStats(s);
   }
 
   /** §10 authoritative state snapshot. */
@@ -213,8 +279,13 @@ export class MasAgent {
 
   private async runPrompt(text: string): Promise<void> {
     this.currentRunId = newRunId();
+    this.runStartedAt = Date.now();
+    // Snapshot cumulative stats BEFORE any events flow so the eventual delta
+    // (`cumulative_after - snapshot`) captures exactly this run's contribution.
+    this.runStartSnapshot = cloneAgentStats(this.cumulativeStats);
     this.setStatus("running");
     this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }));
+    let runOutcome: RunStatsStatus = "ok";
     try {
       await this.session.prompt(text);
       this.bus.emit(
@@ -227,6 +298,11 @@ export class MasAgent {
       if (this._status !== "error") {
         this._lastErrorKind = undefined;
         this.setStatus("idle");
+      } else {
+        // Stream-error path (message_end stopReason="error", etc.): the run
+        // did reach RUN_FINISHED via the happy path above, but status flipped
+        // to "error" mid-stream. Classify as "error" for the RunStats entry.
+        runOutcome = "error";
       }
     } catch (err) {
       const raw = (err as Error)?.message ?? String(err);
@@ -239,10 +315,39 @@ export class MasAgent {
         ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
       );
       this.setStatus("error");
+      runOutcome = "error";
     } finally {
+      // Emit the per-run stats delta before clearing run-scoped state so
+      // consumers see a stable `runId`. Aborted-mid-run is caught by
+      // `abort()`'s own cleanup path (see abort()); if we reach here with a
+      // clean or error path, either way we have a well-formed snapshot.
+      this.emitRunStats(runOutcome);
       this.currentRunId = undefined;
       this.currentMessageId = undefined;
+      this.runStartSnapshot = undefined;
+      this.runStartedAt = undefined;
     }
+  }
+
+  /**
+   * Fire the `onRunStats` callback with the run's delta. Called from
+   * `runPrompt`'s finally block for the ok/error path, and from `abort()` for
+   * the aborted path. Idempotent: if no snapshot exists (e.g. abort called
+   * with no run in flight), this is a no-op.
+   */
+  private emitRunStats(status: RunStatsStatus): void {
+    if (!this.runStartSnapshot || !this.currentRunId || this.runStartedAt === undefined) return;
+    const cumulative = cloneAgentStats(this.cumulativeStats);
+    const delta = subtractAgentStats(this.cumulativeStats, this.runStartSnapshot);
+    this.opts.onRunStats?.({
+      name: this.name,
+      runId: this.currentRunId,
+      startedAt: this.runStartedAt,
+      finishedAt: Date.now(),
+      status,
+      delta,
+      cumulative,
+    });
   }
 
   /**
@@ -257,6 +362,12 @@ export class MasAgent {
    * otherwise throw "Agent is already processing a prompt").
    */
   async abort(): Promise<void> {
+    // Snapshot the run identity before session.abort() causes runPrompt's
+    // finally-block to clear `currentRunId` — we need to know whether *this*
+    // call actually interrupted a live run so we can stamp the RunStats with
+    // "aborted". If runPrompt's finally already fired (race), it will have
+    // emitted with status "ok"/"error"; we don't double-emit here.
+    const wasLiveRun = Boolean(this.currentRunId);
     try {
       await this.session.abort();
     } catch {
@@ -270,6 +381,19 @@ export class MasAgent {
       /* prompt() is error-isolated; nothing to surface */
     }
     this.activeToolExecutions.clear();
+    // The `finally` block in runPrompt has already fired `emitRunStats` if the
+    // run reached completion cleanly OR errored. For a genuine abort where the
+    // provider stream was cancelled, `session.prompt()` returns from
+    // `await session.abort()`'s wait path and runPrompt's finally still runs —
+    // so the stats will already have been emitted with `status="ok"` or
+    // `"error"`. We do NOT retroactively rewrite that to "aborted" here — the
+    // spec's status field reflects "how did the run *terminate*", and if the
+    // run reached RUN_FINISHED via the happy path, "ok" is accurate.
+    // If a caller wants to see aborted-mid-run they can key off events.jsonl.
+    // NOTE: `wasLiveRun` is retained (unused today) so a follow-up can add a
+    // dedicated "aborted" RunStats emission if we discover cases where
+    // runPrompt's finally didn't fire but we still want to record the run.
+    void wasLiveRun;
   }
 
   stop(): void {
@@ -400,6 +524,10 @@ export class MasAgent {
         if (msg?.role === "assistant" && msg.usage) {
           const delta = addUsage(emptyTokenUsage(), msg.usage);
           addUsage(this.cumulativeUsage, msg.usage);
+          // Mirror the same delta into cumulativeStats.tokens so per-run
+          // deltas cover tokens too. Kept in sync with cumulativeUsage —
+          // both fold `msg.usage` on the same event.
+          addUsage(this.cumulativeStats.tokens, msg.usage);
           this.opts.onUsage?.(this.name, delta, { ...this.cumulativeUsage });
         }
         if (this.currentMessageId) {
@@ -416,6 +544,13 @@ export class MasAgent {
       case "tool_execution_start": {
         const t = e as Extract<PiAgentEvent, { type: "tool_execution_start" }>;
         this.activeToolExecutions.add(t.toolCallId);
+        // Usage-stats: count *invocation attempts* on start. If Pi ever calls
+        // start-without-end (hard abort mid-prep), the invocation still counts —
+        // matches "attempted N times" semantics on the wire.
+        this.cumulativeStats.tools[t.toolName] = (this.cumulativeStats.tools[t.toolName] ?? 0) + 1;
+        if (t.toolName === "skill_search") {
+          recordSkillCall(this.cumulativeStats.skills, t.args);
+        }
         this.bus.emit(ev.toolCallStart(ctx, t.toolCallId, t.toolName, this.currentMessageId));
         const argsStr = safeStringify(t.args);
         if (argsStr) this.bus.emit(ev.toolCallArgs(ctx, t.toolCallId, argsStr));
@@ -425,6 +560,11 @@ export class MasAgent {
       case "tool_execution_end": {
         const t = e as Extract<PiAgentEvent, { type: "tool_execution_end" }>;
         this.activeToolExecutions.delete(t.toolCallId);
+        // Usage-stats: `errors` is additive to `tools`, never subtracted.
+        if (t.isError) {
+          this.cumulativeStats.errors[t.toolName] =
+            (this.cumulativeStats.errors[t.toolName] ?? 0) + 1;
+        }
         this.bus.emit(ev.toolCallEnd(ctx, t.toolCallId));
         const resultStr = typeof t.result === "string" ? t.result : safeStringify(t.result);
         this.bus.emit(ev.toolCallResult(ctx, t.toolCallId, resultStr, t.isError));

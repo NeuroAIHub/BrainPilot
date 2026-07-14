@@ -15,10 +15,13 @@ import { randomUUID } from "node:crypto";
 import {
   CUSTOM_EVENT,
   type AgUiEvent,
+  type AgentStats,
   type AgentStatus,
   type FileContent,
   type FileEntry,
+  type RunStats,
   type Session,
+  type SessionStats,
   type SessionTokenUsage,
   type TokenUsage,
   type TraceGraph,
@@ -27,6 +30,13 @@ import { EventBus } from "./event-bus.js";
 import { Mailbox, type MailboxMessage } from "./mailbox.js";
 import { GraphOfTrace } from "./trace.js";
 import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
+import {
+  addStatsDelta,
+  cloneAgentStats,
+  emptyAgentStats,
+  emptySessionStats,
+  recomputeSessionTotal,
+} from "./usage-stats.js";
 import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
@@ -159,6 +169,14 @@ interface SessionEntry {
    * callback, surfaced in `session_state` frames, and persisted to usage.json.
    */
   tokenUsage: SessionTokenUsage;
+  /**
+   * Full per-run + per-session usage stats: mirrors `tokenUsage` but includes
+   * tool/skill/error counters and a time-ordered `byRun` timeline. Persisted
+   * to `.bp/<sid>/stats.json`. Written on each `RUN_FINISHED`/`RUN_ERROR` (via
+   * a MasAgent `onRunStats` callback), never on individual tool calls — the
+   * fan-in of a busy run would otherwise churn disk.
+   */
+  stats: SessionStats;
 }
 
 export interface SessionManagerOptions {
@@ -226,6 +244,18 @@ function roleFor(name: string): AgentRole {
  */
 export function estimateTokens(text: string): number {
   return Math.ceil(text.length / 3.5);
+}
+
+/** Deep clone a SessionStats snapshot for safe external hand-out. */
+function cloneSessionStats(s: SessionStats): SessionStats {
+  return {
+    sessionId: s.sessionId,
+    total: cloneAgentStats(s.total),
+    byAgent: Object.fromEntries(
+      Object.entries(s.byAgent).map(([k, v]) => [k, cloneAgentStats(v)]),
+    ),
+    byRun: s.byRun.map((r) => ({ ...r, delta: cloneAgentStats(r.delta) })),
+  };
 }
 
 /** Sum a per-agent token usage breakdown into a single session total. */
@@ -711,6 +741,7 @@ export class SessionManager {
       pendingInputs: new Map(),
       providerRef,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
+      stats: emptySessionStats(id),
     };
     this.sessions.set(id, entry);
     if (!_restore) {
@@ -740,6 +771,10 @@ export class SessionManager {
       await this.loadTrace(entry);
       // Rehydrate cumulative token usage so the running total survives restarts.
       await this.loadUsage(entry);
+      // Rehydrate full per-run/per-session stats (tokens+tools+skills+errors).
+      // Separate file from usage.json so old sessions without stats.json still
+      // rehydrate their token counts.
+      await this.loadStats(entry);
     }
     return this.toSession(entry);
   }
@@ -1254,9 +1289,27 @@ export class SessionManager {
         this.emitSessionState(entry);
         void this.writeUsage(entry);
       },
+      // Per-run stats: append a RunStats entry, refresh the per-agent
+      // cumulative snapshot, recompute the session `total`, and persist
+      // stats.json. Called once per completed run.
+      onRunStats: (info) => {
+        const run: RunStats = {
+          runId: info.runId,
+          agentName: info.name,
+          startedAt: info.startedAt,
+          finishedAt: info.finishedAt,
+          status: info.status,
+          delta: info.delta,
+        };
+        entry.stats.byRun.push(run);
+        entry.stats.byAgent[info.name] = cloneAgentStats(info.cumulative);
+        recomputeSessionTotal(entry.stats);
+        void this.writeStats(entry);
+      },
     });
     // Continue this agent's cumulative count across restarts / lazy revival.
     agent.seedUsage(entry.tokenUsage.byAgent[name]);
+    agent.seedStats(entry.stats.byAgent[name]);
     entry.agents.set(name, agent);
     if (!entry.tasks.has(name)) entry.tasks.set(name, "");
     return agent;
@@ -1635,6 +1688,18 @@ export class SessionManager {
   }
 
   /**
+   * Per-run + per-session usage stats snapshot for a session, or undefined if
+   * the session is unknown. Returns a deep copy so callers can safely mutate.
+   * The wire shape is `SessionStatsSchema` — this is what
+   * `GET /sessions/:id/stats` serializes.
+   */
+  getSessionStats(sessionId: string): SessionStats | undefined {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    return cloneSessionStats(entry.stats);
+  }
+
+  /**
    * Read persisted AG-UI events for a session from `.bp/<sid>/events.jsonl`.
    * Used by the web to rehydrate chat history after a runtime restart (the
    * in-memory bus ring buffer only carries `recent()` for live SSE replay).
@@ -1856,6 +1921,65 @@ export class SessionManager {
       entry.tokenUsage = { byAgent, total: sumAgentUsage(byAgent) };
     } catch {
       /* no usage yet — keep the zeroed default */
+    }
+  }
+
+  private statsPath(sid: string): string {
+    return join(this.bpDir(sid), "stats.json");
+  }
+
+  /**
+   * Persist full per-run/per-session stats (`stats.json`). Best-effort — a
+   * failed write never surfaces (mirrors `writeUsage`). Written on each
+   * `onRunStats` callback, not per tool call, so throughput is bounded by
+   * completed-runs-per-minute.
+   */
+  private async writeStats(entry: SessionEntry): Promise<void> {
+    if (!this.persist) return;
+    await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
+    await writeFile(
+      this.statsPath(entry.id),
+      JSON.stringify(entry.stats, null, 2),
+      "utf8",
+    ).catch(() => {});
+  }
+
+  /**
+   * Rehydrate per-run/per-session stats from disk (restore path). Silent
+   * fallback to the zeroed default when the file is missing (old session that
+   * predates the feature) or malformed. Only shallow-validates the top-level
+   * shape; the per-run entries and inner counters are trusted from disk since
+   * we wrote them.
+   */
+  private async loadStats(entry: SessionEntry): Promise<void> {
+    try {
+      const raw = await readFile(this.statsPath(entry.id), "utf8");
+      const parsed = JSON.parse(raw) as Partial<SessionStats>;
+      const seeded = emptySessionStats(entry.id);
+      const byAgent = (parsed.byAgent ?? {}) as Record<string, AgentStats>;
+      for (const [name, s] of Object.entries(byAgent)) {
+        seeded.byAgent[name] = cloneAgentStats(s);
+      }
+      // Trust byRun on disk — normalize types via cloneAgentStats on each delta
+      // to keep runtime references disjoint from the parsed JSON graph.
+      const byRun = Array.isArray(parsed.byRun) ? parsed.byRun : [];
+      for (const r of byRun) {
+        if (!r || typeof r !== "object") continue;
+        const rr = r as RunStats;
+        seeded.byRun.push({
+          runId: String(rr.runId ?? ""),
+          agentName: String(rr.agentName ?? ""),
+          startedAt: Number(rr.startedAt ?? 0),
+          finishedAt: Number(rr.finishedAt ?? 0),
+          status:
+            rr.status === "error" || rr.status === "aborted" ? rr.status : "ok",
+          delta: cloneAgentStats(rr.delta as AgentStats),
+        });
+      }
+      recomputeSessionTotal(seeded);
+      entry.stats = seeded;
+    } catch {
+      /* no stats yet — keep the zeroed default */
     }
   }
 
