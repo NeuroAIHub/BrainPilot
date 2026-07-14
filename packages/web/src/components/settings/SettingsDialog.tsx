@@ -35,11 +35,25 @@ const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> =
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
 
-// Local single-user mode has no host-managed identity — the account tab would
-// only show placeholder "local / local / 1970" values, so drop it entirely.
-const tabs = runtimeConfig.localMode
-  ? ALL_TABS.filter((tab) => tab.id !== "account")
-  : ALL_TABS;
+type SettingsTabConfig = Pick<
+  typeof runtimeConfig,
+  "localMode" | "knowledgeBaseSettingsEnabled"
+>;
+
+/** Apply deployment capabilities to the Settings navigation. */
+export function getSettingsTabs(config: SettingsTabConfig) {
+  return ALL_TABS.filter((tab) => {
+    // Local single-user mode has no host-managed identity — the account tab
+    // would only show placeholder "local / local / 1970" values.
+    if (config.localMode && tab.id === "account") return false;
+    // Managed deployments may ship a pre-provisioned knowledge base and hide
+    // the local build/configuration surface while retaining retrieval tools.
+    if (!config.knowledgeBaseSettingsEnabled && tab.id === "knowledgeBase") return false;
+    return true;
+  });
+}
+
+const tabs = getSettingsTabs(runtimeConfig);
 
 const DEFAULT_PROVIDER_FORM = {
   name: "",
@@ -543,7 +557,9 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
               </>
             ) : null}
 
-            {activeTab === "knowledgeBase" ? <KnowledgeBasePanel /> : null}
+            {runtimeConfig.knowledgeBaseSettingsEnabled && activeTab === "knowledgeBase" ? (
+              <KnowledgeBasePanel />
+            ) : null}
 
             {activeTab === "preferences" ? (
               <section className="settings-section">

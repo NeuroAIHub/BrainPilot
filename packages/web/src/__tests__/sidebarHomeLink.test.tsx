@@ -30,7 +30,12 @@ vi.mock("../contexts/SessionContext", () => ({
   }),
 }));
 vi.mock("../config", () => ({
-  runtimeConfig: { useMockBackend: false, localMode: true, homeUrl: "/" },
+  runtimeConfig: {
+    useMockBackend: false,
+    localMode: true,
+    knowledgeBaseSettingsEnabled: true,
+    homeUrl: "/",
+  },
 }));
 
 import { Sidebar } from "../components/sidebar/Sidebar";

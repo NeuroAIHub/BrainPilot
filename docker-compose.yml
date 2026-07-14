@@ -52,6 +52,7 @@ services:
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
         APT_MIRROR: ${APT_MIRROR:-}
+        VITE_KB_SETTINGS_ENABLED: ${VITE_KB_SETTINGS_ENABLED:-1}
     image: brainpilot-main:latest
     depends_on:
       sandbox:
