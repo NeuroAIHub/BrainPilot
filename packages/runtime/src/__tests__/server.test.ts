@@ -373,8 +373,8 @@ describe("workspace file routes", () => {
     expect(read.status).toBe(200);
     expect((await read.json()) as { content: string }).toMatchObject({ content: "reusable dataset" });
 
-    // On disk it lives under data/local/, not workspaces/.
-    const onDisk = await readFile(join(dataRoot, "data", "local", "lib", "set.csv"), "utf8");
+    // On disk it lives flat under data/ (#287 removed the per-user subdir).
+    const onDisk = await readFile(join(dataRoot, "data", "lib", "set.csv"), "utf8");
     expect(onDisk).toBe("reusable dataset");
   });
 
