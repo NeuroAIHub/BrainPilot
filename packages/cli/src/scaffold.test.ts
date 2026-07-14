@@ -2,7 +2,7 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtemp, rm, readFile, stat, writeFile, readdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { scaffold, isScaffolded } from "./scaffold.js";
+import { scaffold, isScaffolded, shouldSkipSkillCopy } from "./scaffold.js";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 
 let dir: string;
@@ -118,5 +118,50 @@ describe("scaffold", () => {
       await readFile(join(paths.bpTemplate, "providers.example.json"), "utf8"),
     );
     expect(example.profiles[0].models).toEqual([EXAMPLE_MODEL]);
+  });
+});
+
+// #284: the bundled-skill copy is the single most expensive thing scaffold does
+// (hundreds of files, growing with the skill catalogue). It is gated so the CLI
+// test suite doesn't pay it on every scaffold. These tests pin the gate.
+//
+// The gate's on-disk marker is the materialised category tree
+// `bp_template/skills/<ALWAYS_ON_CATEGORY>/` — scaffold's own default writes only
+// put README.md/example.md directly in `bp_template/skills/`, so a materialised
+// category dir appears iff `materializeSkills` actually ran.
+describe("shouldSkipSkillCopy (#284)", () => {
+  it("reads BP_SKIP_SKILL_COPY (1/true on, anything else off)", () => {
+    expect(shouldSkipSkillCopy({ BP_SKIP_SKILL_COPY: "1" })).toBe(true);
+    expect(shouldSkipSkillCopy({ BP_SKIP_SKILL_COPY: "true" })).toBe(true);
+    expect(shouldSkipSkillCopy({ BP_SKIP_SKILL_COPY: "0" })).toBe(false);
+    expect(shouldSkipSkillCopy({ BP_SKIP_SKILL_COPY: "" })).toBe(false);
+    expect(shouldSkipSkillCopy({})).toBe(false);
+  });
+});
+
+describe("scaffold — skill copy gate (#284)", () => {
+  // The materialised always-on category (01_Meta-Skills) — present only when
+  // the recursive copy actually ran.
+  const materialisedMarker = (root: string) =>
+    join(root, "bp_template", "skills", "01_Meta-Skills");
+
+  it("skips the bundled-skill copy when skipSkillCopy is set", async () => {
+    const root = join(dir, "skip");
+    const { created } = await scaffold(root, { skipSkillCopy: true });
+    // The skeleton + default files are still written…
+    expect(await exists(join(root, "bp_template", "skills", "README.md"))).toBe(true);
+    expect(await isScaffolded(root)).toBe(true);
+    // …but the heavy category copy did not run.
+    expect(await exists(materialisedMarker(root))).toBe(false);
+    expect(created.some((c) => c.includes("skill files"))).toBe(false);
+  });
+
+  it("still copies the bundled skills when the gate is off (skipSkillCopy: false)", async () => {
+    const root = join(dir, "copy");
+    // Explicit override so this test is independent of the suite-wide
+    // BP_SKIP_SKILL_COPY set in vitest.setup.ts — it proves the copy path is a
+    // real, reachable gate, not dead code.
+    await scaffold(root, { skipSkillCopy: false });
+    expect(await exists(materialisedMarker(root))).toBe(true);
   });
 });
