@@ -11,7 +11,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 <p align="center">
   <a href="https://www.npmjs.com/package/@brainpilot/app"><img src="https://img.shields.io/npm/v/@brainpilot/app?style=flat-square&logo=npm&color=CB3837" alt="npm version"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square" alt="License: AGPL v3"/></a>
-  <a href="#"><img src="https://img.shields.io/badge/Demo-即将上线-lightgrey?style=flat-square" alt="Live Demo (coming soon)"/></a>
+  <a href="https://brainpilot.chat"><img src="https://img.shields.io/badge/Hosted_Demo-brainpilot.chat-0E7490?style=flat-square" alt="在线体验"/></a>
   <a href="#"><img src="https://img.shields.io/badge/Paper-即将公开-lightgrey?style=flat-square" alt="Paper (coming soon)"/></a>
   <a href="https://github.com/NeuroAIHub/BrainPilot/stargazers"><img src="https://img.shields.io/github/stars/NeuroAIHub/BrainPilot?style=flat-square" alt="Stars"/></a>
   <br/>
@@ -29,6 +29,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
   <a href="https://brainpilot.chat/docs">文档</a> ·
   <a href="#-快速开始">快速开始</a> ·
   <a href="#-资源与知识库">资源</a> ·
+  <a href="#-真实研究案例">案例</a> ·
   <a href="#-接入-mcp-服务">MCP</a> ·
   <a href="#-docker-部署">Docker</a> ·
   <a href="#-参与贡献">参与贡献</a> ·
@@ -40,15 +41,15 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ## 📖 概览
 
-BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助研究者将宽泛的科学问题转化为结构化、可执行、可检查的研究流程。系统以总控智能体为核心，由它与研究者对话、理解研究目标、规划任务，并协调文献智能体、分析智能体、实验智能体、写作智能体和审查智能体等专业智能体协同工作。BrainPilot 强调人在回路的科研协作范式：研究者始终保留判断权和控制权，而智能体负责处理证据密集、跨领域和重复性的研究任务。系统集成了脑科学领域知识、方法技能、分析流程和科研工具，并通过流程追踪图记录研究过程，使中间操作、证据来源、生成结论和潜在风险都可以被检查和回溯。
+BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助研究者将宽泛的科学问题转化为结构化、可执行、可检查的研究流程。系统以主研究员（PI）智能体为核心，由它与研究者对话、理解研究目标、规划任务，并协调文献、实验、工程、写作和审查智能体协同工作。BrainPilot 强调人在回路的科研协作范式：研究者始终保留判断权和控制权，而智能体负责处理证据密集、跨领域和重复性的研究任务。系统集成了脑科学领域知识、方法技能、分析流程和科研工具，并通过 Graph of Trace（GoT）记录研究过程，使中间操作、证据来源、生成结论和潜在风险都可以被检查和回溯。
 
 ## ✨ 亮点
 
 - **🧠 面向脑科学研究** — 支持从文献综述、假设细化、实验设计到数据分析、论文写作和科学审查的完整科研流程。
-- **🤝 总控智能体协调专业智能体团队** — 由总控智能体统一理解用户需求、规划任务，并协调文献智能体、分析智能体、实验智能体、写作智能体和审查智能体等专业智能体协同工作。
+- **🤝 PI 智能体协调专业智能体团队** — PI 智能体统一理解用户需求、规划任务，并协调文献、实验、工程、写作和审查智能体协同工作。
 - **📚 整合领域知识与科研技能** — 集成脑科学相关知识、研究方法、分析流程、写作规范和工具接口，使智能体能够调用专业知识完成具体科研任务。
 - **🛡️ 审查智能体提升科研可靠性** — 审查科学结论、证据链、引用来源、幻觉风险、遗漏信息和缺乏支撑的推理，帮助研究者发现潜在问题。
-- **🔭 流程追踪图展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
+- **🔭 Graph of Trace 展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
 - **🔌 可扩展的科研工具生态** — 支持连接模型、MCP 工具、文献数据库、代码执行环境和自定义科研工具，适配不同研究场景。
 - **🚀 快速本地启动** — 简单安装后即可在浏览器中开始使用，降低脑科学智能体系统的部署和使用门槛。
 
@@ -166,10 +167,17 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 - [Awesome Cognitive & Neuroscience Skills](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)，精选的认知科学与神经科学技能合集
 - [nature-skills](https://github.com/Yuan1z0825/nature-skills)，从 Nature 系列方法中提炼的技能
 - [MNE-Python](https://github.com/mne-tools/mne-python) 与 [pycortex](https://github.com/gallantlab/pycortex)，用 `repo-to-skill` 集成（见下文）
+- [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut)，用于无标记动物姿态估计
 
 - **目录结构** —— `packages/skills/skills/`，两级目录树 `<category>/<skill-name>/SKILL.md`（可选 `references/` 存放可下钻的细节）。
 - **部署时** —— **物化到你的数据目录** `<data-dir>/bp_template/skills/`，一份可编辑的副本；已存在的技能永不会被覆盖。
-- **覆盖领域** —— EEG/ERP、fMRI、计算建模、心理语言学、临床神经心理学、可视化、科研写作等。
+- **当前规模** —— 74 个内置技能，分属 21 个细粒度类别，并归入 7 个研究领域。
+- **覆盖领域** —— 细胞、分子、遗传与药理；认知与行为；基础方法与基础设施；人类神经影像与电生理；计算建模与理论；文献与报告工具；临床与应用研究。
+
+<p align="center">
+  <img src="assets/readme/brainpilot-knowledge-base.png" alt="BrainPilot 科研技能覆盖、托管知识库学科分布与词汇概览" width="100%"/>
+</p>
+<p align="center"><sub>74 个科研技能随开源包提供；7,233 条知识库内容及词汇统计描述的是托管语料，该语料不随本仓库分发。</sub></p>
 
 <details>
 <summary><b>技能分类与如何新增技能</b></summary>
@@ -193,6 +201,11 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 | `13_Visualization` | Nature 风格图表创作与设计 |
 | `14_Writing` | Markdown 报告写作 |
 | `15_Others` | 神经影像功效/样本量指南 |
+| `16_Animal_Behavior` | 动物姿态估计与行为分析 |
+| `17_Literature_Databases` | PubMed、arXiv、bioRxiv、Europe PMC 与 OpenAlex 检索 |
+| `18_Genetics_Genomics` | ClinVar、dbSNP、gnomAD 与变异分析 |
+| `19_Pharmacology` | 药物、靶点、临床试验与监管数据库 |
+| `20_Infrastructure` | 科研计算基础设施 |
 | `21_Electrophysiology` | 胞外电生理 spike sorting（SpikeInterface） |
 
 **新增一个技能：**
@@ -238,9 +251,9 @@ repo-to-skill、批量提取流水线和公开技能合集。
 
 ### 知识库与论文库
 
-我们的托管 demo 是基于 **我们自己精选的知识库与论文库** 来回答的。这些我们暂时还无法以公开服务的
-形式提供，因此 BrainPilot 不内置知识库 —— 而是让你 **接入你自己的**。内置的 `librarian` 智能体已
-经能通过你提供的检索工具去搜索论文、网络来源和知识库：
+BrainPilot 托管服务使用一套覆盖 11 个学科组、包含 **7,233 条获授权内容** 的精选语料。该语料不随
+开源包分发；本地部署可以自行构建或接入知识库。内置的 `librarian` 智能体能够通过你提供的检索工具
+搜索论文、网络来源和知识库：
 
 - **接入一个检索型 MCP 服务**，对准你自己的语料（向量库、论文归档、一堆 PDF 的文件系统、内网搜索
   API）—— 见 **[MCP 工具文档](https://brainpilot.chat/docs/zh-cn/mcp)**。你添加的任何 MCP 服务都会
@@ -277,6 +290,46 @@ Runtime 的 `POST /sessions` 接口支持
 发出不含内容的 `CUSTOM(name="domain_resource_usage")` 记录。记录不包含查询、工具结果、
 技能正文或凭证；provider 上报的累计 token 用量仍位于
 `session_state.tokenUsage`。
+
+---
+
+## 🧪 真实研究案例
+
+以下案例使用真实脑科学数据，并保留结果的统计边界。它们展示的是完整研究流程，而非排行榜式结论。
+
+### Neuropixels 小鼠视觉层级分析
+
+在 58 个 Allen Neuropixels session 上，BrainPilot 选择响应延迟、本征时间尺度和感受野直径作为功能
+层级指标。初次 smoke test 中，弱响应神经元与噪声阈值导致响应延迟方向反转；系统定位问题后加入
+responsiveness filter，再扩展至全量数据。三个最终相关均为正，但都未达到传统显著性阈值（响应延迟：
+$\rho=0.667$，$p=0.083$；本征时间尺度：$\rho=0.476$，$p=0.243$；感受野直径：$\rho=0.714$，
+$p=0.058$）。
+
+<p align="center">
+  <img src="assets/readme/case-visual-hierarchy.png" alt="BrainPilot 小鼠视觉层级案例" width="760"/>
+</p>
+
+### fMRI 疼痛功能连接特征
+
+BrainPilot 在 279 个脑区、38,781 条功能连接边上训练疼痛特征，并在独立数据上评估冻结后的模型。
+在 held-out 数据中，10 名被试有 9 名表现为疼痛条件响应高于对照条件；在另一项慢性腰痛分类中，
+日本队列 AUC 为 0.793，英国队列 AUC 为 0.699，显示出部分迁移能力，同时保留英国数据泛化较弱的
+限制。
+
+<p align="center">
+  <img src="assets/readme/case-fmri-pain.png" alt="BrainPilot fMRI 疼痛功能连接案例" width="760"/>
+</p>
+
+### EEG 运动想象解码
+
+在 BCI Competition IV 2a 上，BrainPilot 设计了可执行的四分类解码器，并在 9 名被试、3 个随机种子
+上进行评估。模型在 7/9 名被试上超过 EEGNet 基线，平均准确率从 0.580 提升到 0.620，Cohen's kappa
+从 0.440 提升到 0.493。配对检验未达到传统显著性阈值（$p=0.107$ 与 $p=0.129$），因此该结果支持
+正向趋势，而非最先进性能声明。
+
+<p align="center">
+  <img src="assets/readme/case-eeg-motor-imagery.png" alt="BrainPilot EEG 运动想象解码案例" width="760"/>
+</p>
 
 ---
 
