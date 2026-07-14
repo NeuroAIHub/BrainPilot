@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, startServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
+import { PERSISTENT_LAYOUT_MARKER } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 
 /**
@@ -463,6 +464,10 @@ describe("startServer boot-time restore", () => {
       agentFactory: mockAgentFactory,
     });
     try {
+      const layout = JSON.parse(
+        await readFile(join(dataRoot, PERSISTENT_LAYOUT_MARKER), "utf8"),
+      );
+      expect(layout).toMatchObject({ version: 2, status: "ready" });
       const res = await fetch(`http://127.0.0.1:${handle.port}/sessions`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as { sessions: Array<{ id: string; createdAt: string }> };

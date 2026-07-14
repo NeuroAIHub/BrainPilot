@@ -46,6 +46,10 @@ import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import { isWindows } from "./platform.js";
+import {
+  ensurePersistentLayout as initializePersistentLayout,
+  resolveLegacyPersistentUserId,
+} from "./persistent-layout.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
 
 interface Deferred<T> {
@@ -105,23 +109,11 @@ function resolveMaxConcurrentAgents(opt?: number): number {
 }
 
 /**
- * #287: name of the one-shot migration sentinel written under `<dataRoot>/data/`
- * once the legacy `data/<legacyUserId>/` layout has been flattened. Its
- * presence is what makes `maybeMigrateLegacyPersistentLayout` idempotent — a
- * second boot sees the sentinel and takes no action, even if a new
- * subdirectory named identically to a former user id is later created by an
- * agent.
- */
-const MIGRATION_SENTINEL_PREFIX = ".bp-migrated-from-";
-
-/**
  * #287 (former #257 hook): the runtime is now single-user by contract, so
- * `BP_USER_ID` no longer influences on-disk layout. We keep reading the env
- * only to print a one-shot deprecation notice — a hosted deployment that still
- * exports it should learn quickly that the value is ignored, without a hard
- * error that would break rollout. `opt` is likewise ignored (kept in the
- * SessionManagerOptions surface for API compatibility) but a non-empty value
- * still triggers the same warning so integrators notice.
+ * `BP_USER_ID` no longer influences the active on-disk root. A separate
+ * migration helper may use its old value once to locate data/<legacyUserId>;
+ * this warning tells hosted deployments that it can be removed after rollout.
+ * `opt` is likewise retained only for API/migration compatibility.
  * Returns true when a warning was printed, purely so tests can assert on it.
  */
 export function warnOnDeprecatedPersistentUserId(
@@ -139,9 +131,10 @@ export function warnOnDeprecatedPersistentUserId(
         ? `persistentUserId option ("${optVal}")`
         : `BP_USER_ID env ("${envVal}")`;
   log(
-    `[persistent-data] ${source} is ignored since #287: the runtime is single-user ` +
-      `and stores its persistent library flat under <dataRoot>/data/. Multi-user ` +
-      `isolation is the deployment layer's job (one dataRoot per user).`,
+    `[persistent-data] ${source} no longer controls path resolution since #287; ` +
+      `it is used only to locate a legacy directory during one-shot migration. ` +
+      `The runtime stores its library flat under <dataRoot>/data/; multi-user ` +
+      `isolation requires one dataRoot per user.`,
   );
   return true;
 }
@@ -305,10 +298,11 @@ export interface SessionManagerOptions {
   /**
    * @deprecated since #287. The runtime is single-user by contract and the
    * persistent library lives flat under `<dataRoot>/data/`. This field (and
-   * the `BP_USER_ID` env var) are IGNORED for path resolution — supplying
-   * either only produces a one-shot deprecation warning so old integrations
-   * find out quickly. Multi-user isolation belongs to the deployment layer:
-   * give each user their own `dataRoot` (bind mount / container / volume).
+   * the `BP_USER_ID` env var) are IGNORED for active path resolution. During
+   * upgrade only, the old value identifies the one legacy directory eligible
+   * for migration; it also produces a deprecation warning. Multi-user
+   * isolation belongs to the deployment layer: give each user their own
+   * `dataRoot` (bind mount / container / volume).
    */
   persistentUserId?: string;
   /**
@@ -430,12 +424,10 @@ export class SessionManager {
   // so hosted deployments can accept large files; default 20 MiB.
   private readonly uploadMaxBytes: number;
 
-  // #287: legacy `data/<userId>/` was flattened to `data/`. `BP_USER_ID` / the
-  // `persistentUserId` option are ignored (with a one-shot deprecation warning
-  // in the ctor). Multi-user isolation is delegated to the deployment layer
-  // (one dataRoot per user). See `maybeMigrateLegacyPersistentLayout` for the
-  // one-shot on-disk migration.
-  private migrationChecked = false;
+  // #287: active addressing is always flat data/. The deprecated value is
+  // retained only as a v1 migration hint; it never changes the v2 root.
+  private readonly legacyPersistentUserId: string;
+  private persistentLayoutReady?: Promise<void>;
 
   // Per-tool on/off overrides. Populated by `ensureToolToggles()` on the
   // first agent creation and cached for the process lifetime; a restart is
@@ -476,9 +468,10 @@ export class SessionManager {
 
     this.maxConcurrentAgents = resolveMaxConcurrentAgents(opts.maxConcurrentAgents);
     this.uploadMaxBytes = resolveUploadMaxBytes(opts.uploadMaxBytes);
-    // #287: persistentUserId / BP_USER_ID are ignored; warn once so anything
-    // still setting them notices instead of silently getting the new layout.
+    // #287: these no longer select the active root. Warn and retain the old
+    // resolved value solely to identify the directory eligible for migration.
     warnOnDeprecatedPersistentUserId(opts.persistentUserId);
+    this.legacyPersistentUserId = resolveLegacyPersistentUserId(opts.persistentUserId);
     this.sharedDir = resolveSharedDir(opts.sharedDir);
 
     // Test-only injection path: if callers pass `toolToggles`, use it verbatim
@@ -588,145 +581,19 @@ export class SessionManager {
   private persistentDir(): string {
     return join(this.dataRoot, "data");
   }
+
   /**
-   * #287 one-shot migration: flatten the legacy per-user layout
-   * `<dataRoot>/data/<legacyUserId>/…` to `<dataRoot>/data/…`. Guarded by a
-   * `.bp-migrated-from-<name>` sentinel written under `data/` so subsequent
-   * boots take no action even if an agent later creates a directory named
-   * identically to a former user id.
-   *
-   * Design guarantees:
-   *   - **Idempotent.** Sentinel presence short-circuits. The in-process
-   *     `migrationChecked` flag additionally collapses concurrent createSession
-   *     calls within one process boot so the disk scan runs at most once.
-   *   - **Cautious.** Migration only fires when `data/` contains EXACTLY one
-   *     subdirectory (no other files, no other subdirs). Two or more subdirs
-   *     means "state we don't understand" (dev copied trees around, cloud
-   *     mislabelled a user, tests seeded weird layouts) — we log a one-line
-   *     warning and leave everything alone so a human can resolve it.
-   *   - **Non-destructive on conflict.** During move, an existing entry at the
-   *     destination is preserved: the legacy source stays put, we log a
-   *     warning naming the file, and other files continue to migrate. The
-   *     legacy subdir is `rmdir`'d only if it ends up empty. Even a partially-
-   *     complete migration still writes the sentinel so we don't keep retrying
-   *     — the operator's next boot log has the exact skipped names.
-   *   - **Best-effort.** ANY error surfaces as a warning and returns without
-   *     throwing: this migration is a convenience, not a hard gate; a broken
-   *     migration must never prevent the runtime from serving sessions.
+   * Initialize the flat persistent layout exactly once per manager. The shared
+   * promise is awaited by startup and every /data operation, so requests cannot
+   * race migration. Failures stay rejected: serving a split library is less
+   * safe than refusing the request with an actionable error.
    */
-  private async maybeMigrateLegacyPersistentLayout(): Promise<void> {
-    if (this.migrationChecked) return;
-    this.migrationChecked = true;
-
-    const dataDir = this.persistentDir();
-    try {
-      let entries;
-      try {
-        entries = await readdir(dataDir, { withFileTypes: true });
-      } catch (err) {
-        // Fresh install (ENOENT) — nothing to migrate; the caller's mkdir will
-        // create it. Any other error we surface but do not throw.
-        const code = (err as NodeJS.ErrnoException).code;
-        if (code !== "ENOENT") {
-          console.warn(`[persistent-data] scan failed at ${dataDir}: ${(err as Error).message}`);
-        }
-        return;
-      }
-
-      // Sentinel already written on a previous boot → migration is done.
-      if (entries.some((e) => e.isFile() && e.name.startsWith(MIGRATION_SENTINEL_PREFIX))) return;
-
-      // Split into (regular files) + (candidate legacy subdirs, ignoring dotted
-      // helper entries like `.git` / `.tmp` that agents may drop). If there is
-      // ANY regular file in `data/`, the new flat layout is already in use —
-      // don't migrate on top of it.
-      const files = entries.filter((e) => e.isFile());
-      const dirs = entries.filter((e) => e.isDirectory() && !e.name.startsWith("."));
-
-      if (files.length > 0) return; // already flat — no-op
-      if (dirs.length === 0) return; // empty tree — nothing to move
-      if (dirs.length > 1) {
-        console.warn(
-          `[persistent-data] ${dataDir} contains ${dirs.length} subdirectories ` +
-            `(${dirs.map((d) => d.name).join(", ")}); refusing to auto-flatten. ` +
-            `#287 migration expects exactly one legacy user subdir. Please ` +
-            `resolve manually and re-run.`,
-        );
-        return;
-      }
-
-      const legacyName = dirs[0]!.name;
-      const legacyDir = join(dataDir, legacyName);
-      let legacyEntries;
-      try {
-        legacyEntries = await readdir(legacyDir, { withFileTypes: true });
-      } catch (err) {
-        console.warn(`[persistent-data] cannot read legacy dir ${legacyDir}: ${(err as Error).message}`);
-        return;
-      }
-
-      let moved = 0;
-      const skipped: string[] = [];
-      for (const child of legacyEntries) {
-        const src = join(legacyDir, child.name);
-        const dst = join(dataDir, child.name);
-        try {
-          // Refuse to overwrite: if a same-named entry already exists at the
-          // destination (partial prior migration, race, whatever), skip it and
-          // keep the legacy copy intact for the operator to reconcile.
-          try {
-            await stat(dst);
-            skipped.push(child.name);
-            continue;
-          } catch (err) {
-            const code = (err as NodeJS.ErrnoException).code;
-            if (code !== "ENOENT") throw err;
-          }
-          await rename(src, dst);
-          moved++;
-        } catch (err) {
-          skipped.push(child.name);
-          console.warn(
-            `[persistent-data] failed to move ${src} → ${dst}: ${(err as Error).message}`,
-          );
-        }
-      }
-
-      // Try to `rmdir` the (now hopefully empty) legacy dir. If files were
-      // skipped it stays put — that is the intended safety net.
-      try {
-        await rm(legacyDir, { recursive: false });
-      } catch {
-        /* not empty or already gone — either way, nothing else to do */
-      }
-
-      // Write the sentinel even on a partial move: we don't want to keep
-      // retrying every boot. The next-boot operator can read the file's name
-      // and the console warnings to understand what happened.
-      const sentinel = join(dataDir, `${MIGRATION_SENTINEL_PREFIX}${legacyName}`);
-      try {
-        await writeFile(
-          sentinel,
-          `#287 flattened data/${legacyName}/ → data/ at ${new Date().toISOString()}\n` +
-            `moved: ${moved} entries; skipped (kept in legacy dir): ${skipped.length}\n` +
-            (skipped.length ? `skipped names: ${skipped.join(", ")}\n` : ""),
-          "utf8",
-        );
-      } catch (err) {
-        // Sentinel write failed — log but don't rethrow. Next boot will retry
-        // migration; the guards above (files.length > 0) make that safe.
-        console.warn(
-          `[persistent-data] wrote no sentinel at ${sentinel}: ${(err as Error).message}`,
-        );
-      }
-
-      console.info(
-        `[persistent-data] flattened data/${legacyName}/ → data/ ` +
-          `(${moved} moved${skipped.length ? `, ${skipped.length} skipped` : ""})`,
-      );
-    } catch (err) {
-      console.warn(`[persistent-data] migration aborted: ${(err as Error).message}`);
-    }
+  ensurePersistentLayout(): Promise<void> {
+    this.persistentLayoutReady ??= initializePersistentLayout(
+      this.dataRoot,
+      this.legacyPersistentUserId,
+    );
+    return this.persistentLayoutReady;
   }
   /**
    * Conversation-attachments subdir of a session's workspace —
@@ -845,13 +712,18 @@ export class SessionManager {
     return { abs, root, prefix };
   }
 
-  /** Back-compat shim: resolve to just the absolute path (workspace or /data). */
-  private resolveWorkspacePath(sid: string, rawPath: string): string {
-    return this.resolveManagedPath(sid, rawPath).abs;
+  private isPersistentPath(rawPath: string): boolean {
+    const normalized = (rawPath ?? "").replace(/\\/g, "/");
+    return normalized === "/data" || normalized.startsWith("/data/");
+  }
+
+  private async ensureLayoutForPath(rawPath: string): Promise<void> {
+    if (this.isPersistentPath(rawPath)) await this.ensurePersistentLayout();
   }
 
   /** List one directory level under the session workspace (default: root). */
   async listSessionFiles(sid: string, rel = ""): Promise<FileEntry[]> {
+    await this.ensureLayoutForPath(rel);
     const { abs: dir, root, prefix } = this.resolveManagedPath(sid, rel);
     let dirents;
     try {
@@ -908,19 +780,22 @@ export class SessionManager {
 
   /** Read a workspace text file as UTF-8. */
   async readSessionFile(sid: string, rel: string): Promise<FileContent> {
-    const abs = this.resolveWorkspacePath(sid, rel);
+    await this.ensureLayoutForPath(rel);
+    const abs = this.resolveManagedPath(sid, rel).abs;
     const content = await readFile(abs, "utf8");
     return { path: rel, content, size: Buffer.byteLength(content) };
   }
 
   /** Read a workspace file's raw bytes (images/PDF/download). */
   async readSessionFileRaw(sid: string, rel: string): Promise<Buffer> {
-    const abs = this.resolveWorkspacePath(sid, rel);
+    await this.ensureLayoutForPath(rel);
+    const abs = this.resolveManagedPath(sid, rel).abs;
     return readFile(abs);
   }
 
   /** Delete a workspace file. Returns false if it was already gone. */
   async deleteSessionFile(sid: string, rel: string): Promise<boolean> {
+    await this.ensureLayoutForPath(rel);
     const { abs, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
     try {
@@ -968,6 +843,7 @@ export class SessionManager {
     if (buf.byteLength > maxBytes) {
       throw new Error(`file too large: ${buf.byteLength} bytes exceeds limit of ${maxBytes}`);
     }
+    await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
     await mkdir(dirname(abs), { recursive: true });
@@ -996,6 +872,7 @@ export class SessionManager {
     body: ReadableStream<Uint8Array> | Readable | null,
     maxBytes = this.uploadMaxBytes,
   ): Promise<{ path: string; size: number }> {
+    await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
     await mkdir(dirname(abs), { recursive: true });
@@ -1182,6 +1059,9 @@ export class SessionManager {
     if (this.memWatchdog?.isOverSoftLimit()) {
       throw new Error("memory budget exceeded: refusing new session");
     }
+    // Persisted sessions may hand the absolute data/ path to agents, so finish
+    // layout initialization before creating any durable session state.
+    if (this.persist) await this.ensurePersistentLayout();
     const id = input.id ?? randomUUID();
     if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
     const nowIso = _restore ? _restore.updatedAt : new Date().toISOString();
@@ -1246,13 +1126,6 @@ export class SessionManager {
       this.lastActivityAt = Math.max(this.lastActivityAt, Date.now());
     }
 
-    // #287: one-shot migration from the legacy `data/<userId>/` layout to
-    // flat `data/`. Runs unconditionally (not gated on `persist`) because the
-    // persistent library at `data/` is a real on-disk resource even when
-    // per-session metadata is not persisted, and migration is a cheap no-op
-    // (ENOENT) on fresh installs. Guarded by a sentinel so it fires at most
-    // once per dataRoot.
-    await this.maybeMigrateLegacyPersistentLayout();
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });

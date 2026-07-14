@@ -105,6 +105,10 @@ brainpilot down          # 停止后台后端
 默认情况下，BrainPilot 会把数据放在当前目录下的 `./brainpilot`。可以用 `--dir <path>` 或
 `BP_DATA_DIR` 覆盖。
 
+跨 session 复用的文件直接位于 `<BP_DATA_DIR>/data/`，仅属于单个 session 的工作文件位于
+`workspaces/<sessionId>/`。每个 runtime 只管理一个单用户数据根；托管多用户部署必须为每位
+用户提供独立的 `BP_DATA_DIR`/volume，而不是在 `data/` 内增加用户目录。
+
 > **信任边界。** 在本地（非 Docker）模式下 **没有容器隔离** —— 智能体直接在你的机器上读写，路径
 > 为 `brainpilot/workspaces/<sessionId>/`。该模式下 UI 会隐藏 *Sandbox* 控件，因为没有可挂载的
 > Docker 沙箱。如需隔离，请使用 [Docker 部署](#-docker-部署)，它会把智能体跑在沙箱容器内。

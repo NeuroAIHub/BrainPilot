@@ -1,21 +1,19 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
 import { SessionManager, warnOnDeprecatedPersistentUserId, resolveSharedDir } from "../session-manager.js";
+import {
+  PERSISTENT_LAYOUT_MARKER,
+  PERSISTENT_LAYOUT_STAGING,
+} from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
 
 function mgr(): SessionManager {
   // persist:false keeps tests hermetic; mock factory => no Pi SDK / API.
   return new SessionManager({ persist: false, agentFactory: mockAgentFactory });
-}
-
-/** Sorted names in a directory (dotfiles included), for migration assertions. */
-async function readdirNames(dir: string): Promise<string[]> {
-  const entries = await readdir(dir, { withFileTypes: true });
-  return entries.map((e) => e.name).sort();
 }
 
 describe("SessionManager (mock mode)", () => {
@@ -367,7 +365,7 @@ describe("warnOnDeprecatedPersistentUserId (#287)", () => {
     expect(warnOnDeprecatedPersistentUserId(undefined, { BP_USER_ID: "bob" }, (m) => msgs.push(m))).toBe(true);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]).toMatch(/BP_USER_ID env \("bob"\)/);
-    expect(msgs[0]).toMatch(/ignored since #287/);
+    expect(msgs[0]).toMatch(/no longer controls path resolution since #287/);
   });
   it("warns (mentioning the option source) when only persistentUserId is passed", () => {
     const msgs: string[] = [];
@@ -387,102 +385,98 @@ describe("SessionManager legacy `data/<userId>/` migration (#287)", () => {
     root = await mkdtemp(join(tmpdir(), "bp-mig-"));
   });
 
-  it("flattens a single legacy user subdir into data/ and drops a sentinel", async () => {
-    // Seed the legacy layout on disk BEFORE constructing the manager.
+  it("migrates only the known default data/local directory", async () => {
     await mkdir(join(root, "data", "local"), { recursive: true });
     await writeFile(join(root, "data", "local", "dataset.csv"), "cols\n1,2\n", "utf8");
     await mkdir(join(root, "data", "local", "subdir"), { recursive: true });
     await writeFile(join(root, "data", "local", "subdir", "notes.md"), "kept together", "utf8");
 
     const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
-    await m.createSession({ title: "S" }); // triggers migration
+    await m.ensurePersistentLayout();
 
-    // Files are now flat under data/.
     expect(await readFile(join(root, "data", "dataset.csv"), "utf8")).toBe("cols\n1,2\n");
     expect(await readFile(join(root, "data", "subdir", "notes.md"), "utf8")).toBe("kept together");
-    // Legacy subdir is gone (empty → rmdir'd).
     await expect(readFile(join(root, "data", "local", "dataset.csv"), "utf8")).rejects.toThrow();
-    // Sentinel is present and names the source.
-    const sentinelBody = await readFile(join(root, "data", ".bp-migrated-from-local"), "utf8");
-    expect(sentinelBody).toMatch(/data\/local\//);
+    const marker = JSON.parse(await readFile(join(root, PERSISTENT_LAYOUT_MARKER), "utf8"));
+    expect(marker).toMatchObject({ version: 2, status: "ready", migratedFrom: "data/local" });
   });
 
-  it("is idempotent across manager restarts (sentinel short-circuits)", async () => {
-    await mkdir(join(root, "data", "local"), { recursive: true });
-    await writeFile(join(root, "data", "local", "a.txt"), "one", "utf8");
-    const m1 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
-    await m1.createSession({ title: "S1" });
-    expect(await readFile(join(root, "data", "a.txt"), "utf8")).toBe("one");
-
-    // Simulate an agent later creating a directory named identically to a
-    // former user — this must NOT re-trigger migration once the sentinel is
-    // in place. The stray dir stays put; a.txt is untouched.
-    await mkdir(join(root, "data", "local"), { recursive: true });
-    await writeFile(join(root, "data", "local", "should_stay_here.txt"), "x", "utf8");
-
-    const m2 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
-    await m2.createSession({ title: "S2" });
-    // The stray file was NOT flattened (would've overwritten nothing but
-    // still: the guard is "sentinel present → no-op").
-    expect(await readFile(join(root, "data", "local", "should_stay_here.txt"), "utf8")).toBe("x");
-    expect(await readFile(join(root, "data", "a.txt"), "utf8")).toBe("one");
-  });
-
-  it("refuses to migrate when data/ has ≥2 subdirs (unknown state → leave alone)", async () => {
+  it("uses BP_USER_ID only as a legacy migration hint", async () => {
     await mkdir(join(root, "data", "alice"), { recursive: true });
-    await mkdir(join(root, "data", "bob"), { recursive: true });
     await writeFile(join(root, "data", "alice", "a.txt"), "alice", "utf8");
-    await writeFile(join(root, "data", "bob", "b.txt"), "bob", "utf8");
-
-    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
-    await m.createSession({ title: "S" });
-
-    // Nothing was touched.
-    expect(await readFile(join(root, "data", "alice", "a.txt"), "utf8")).toBe("alice");
-    expect(await readFile(join(root, "data", "bob", "b.txt"), "utf8")).toBe("bob");
-    // And no sentinel was written (migration bailed BEFORE writing it).
-    const rootEntries = await readdirNames(join(root, "data"));
-    expect(rootEntries.filter((n) => n.startsWith(".bp-migrated-from-"))).toEqual([]);
+    const previous = process.env.BP_USER_ID;
+    process.env.BP_USER_ID = "alice";
+    try {
+      const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+      await m.ensurePersistentLayout();
+      expect(await readFile(join(root, "data", "a.txt"), "utf8")).toBe("alice");
+    } finally {
+      if (previous === undefined) delete process.env.BP_USER_ID;
+      else process.env.BP_USER_ID = previous;
+    }
   });
 
-  it("ignores dotted helper entries at data/ root (e.g. a stray .tmp)", async () => {
-    // A hidden dotfile at data/ (say, .tmp from a prior interrupted op) should
-    // not count as "already-flat" — those dotted entries are filtered so a
-    // real legacy subdir alongside them still migrates. This exercises the
-    // `!e.name.startsWith(".")` filter on the dirs list; files at the root
-    // still count, but a dotted file is rare and we let it count as
-    // "already-flat" via the `files.length > 0` guard (safe default).
-    await mkdir(join(root, "data", ".tmp"), { recursive: true }); // dotted subdir
+  it("does not flatten a valid v2 tree containing only data/project/", async () => {
+    await mkdir(join(root, "data", "project"), { recursive: true });
+    await writeFile(join(root, "data", "project", "dataset.csv"), "kept", "utf8");
+
+    const m1 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m1.ensurePersistentLayout();
+    const m2 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m2.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "project", "dataset.csv"), "utf8")).toBe("kept");
+    await expect(readFile(join(root, "data", "dataset.csv"), "utf8")).rejects.toThrow();
+  });
+
+  it("refuses a mixed v1/v2 tree without moving either side", async () => {
     await mkdir(join(root, "data", "local"), { recursive: true });
-    await writeFile(join(root, "data", "local", "x.txt"), "moved", "utf8");
+    await writeFile(join(root, "data", "local", "old.txt"), "old", "utf8");
+    await writeFile(join(root, "data", "new.txt"), "new", "utf8");
 
     const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
-    await m.createSession({ title: "S" });
-
-    // Legacy content flattened, .tmp dir left in place.
-    expect(await readFile(join(root, "data", "x.txt"), "utf8")).toBe("moved");
-    const rootEntries = await readdirNames(join(root, "data"));
-    expect(rootEntries).toContain(".tmp");
-    expect(rootEntries).toContain(".bp-migrated-from-local");
+    await expect(m.ensurePersistentLayout()).rejects.toThrow(/cannot migrate/);
+    expect(await readFile(join(root, "data", "local", "old.txt"), "utf8")).toBe("old");
+    expect(await readFile(join(root, "data", "new.txt"), "utf8")).toBe("new");
   });
 
-  it("is a no-op when data/ already contains files at the root (new layout)", async () => {
-    // Someone (or a prior migration) already flattened data/ but no sentinel:
-    // presence of any regular file at the root proves the new layout is live
-    // and we should NOT try to migrate anything.
+  it("single-flights migration before concurrent /data writes with no session", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "old.txt"), "old", "utf8");
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+
+    await Promise.all([
+      m.writeSessionFile("not-created", "/data/new.txt", Buffer.from("new").toString("base64")),
+      m.writeSessionFile("not-created", "/data/other.txt", Buffer.from("other").toString("base64")),
+    ]);
+
+    expect(await readFile(join(root, "data", "old.txt"), "utf8")).toBe("old");
+    expect(await readFile(join(root, "data", "new.txt"), "utf8")).toBe("new");
+    expect(await readFile(join(root, "data", "other.txt"), "utf8")).toBe("other");
+  });
+
+  it("resumes a staged whole-directory migration after interruption", async () => {
+    await mkdir(join(root, PERSISTENT_LAYOUT_STAGING), { recursive: true });
+    await writeFile(join(root, PERSISTENT_LAYOUT_STAGING, "old.txt"), "old", "utf8");
     await mkdir(join(root, "data"), { recursive: true });
-    await writeFile(join(root, "data", "already-flat.txt"), "hi", "utf8");
-    await mkdir(join(root, "data", "sub"), { recursive: true }); // a legit subdir
-    await writeFile(join(root, "data", "sub", "leave-alone.txt"), "sub", "utf8");
+    await writeFile(
+      join(root, PERSISTENT_LAYOUT_MARKER),
+      JSON.stringify({
+        version: 2,
+        status: "migrating",
+        phase: "staged",
+        legacyUserId: "local",
+        startedAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
 
     const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
-    await m.createSession({ title: "S" });
+    await m.ensurePersistentLayout();
 
-    // Untouched.
-    expect(await readFile(join(root, "data", "sub", "leave-alone.txt"), "utf8")).toBe("sub");
-    // No sentinel (nothing to migrate).
-    const rootEntries = await readdirNames(join(root, "data"));
-    expect(rootEntries.filter((n) => n.startsWith(".bp-migrated-from-"))).toEqual([]);
+    expect(await readFile(join(root, "data", "old.txt"), "utf8")).toBe("old");
+    const marker = JSON.parse(await readFile(join(root, PERSISTENT_LAYOUT_MARKER), "utf8"));
+    expect(marker).toMatchObject({ status: "ready", migratedFrom: "data/local" });
   });
 });
 

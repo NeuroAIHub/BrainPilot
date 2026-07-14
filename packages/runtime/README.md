@@ -19,6 +19,19 @@ byte-passthrough) and, in hosted deployments, by the platform layer.
 
 All wire types come from `@brainpilot/protocol` (the zod SSOT).
 
+## Persistent storage contract
+
+The runtime is single-user: reusable cross-session files live directly under
+`<BP_DATA_DIR>/data/`, while session workspaces live under
+`<BP_DATA_DIR>/workspaces/<sessionId>/`. `/data/...` is the stable logical API
+prefix. A hosted multi-user deployment must isolate users with separate data
+roots/volumes; `BP_USER_ID` no longer selects a nested storage root.
+
+On upgrade from the former `data/<userId>/` layout, startup migrates only the
+known legacy directory (`BP_USER_ID`, or `local` when unset) and records the v2
+layout outside the user-visible `data/` tree. Ambiguous mixed layouts fail
+readiness without moving files so an operator can resolve them safely.
+
 ## Liveness contract (R-3)
 
 The runtime imposes **no fixed wall-clock cap on a single agent turn.** A

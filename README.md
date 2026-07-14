@@ -107,6 +107,11 @@ brainpilot down          # stop the detached backend
 By default, BrainPilot stores data under `./brainpilot` in the current directory. Override it
 with `--dir <path>` or `BP_DATA_DIR`.
 
+Reusable files shared across sessions live directly under `<BP_DATA_DIR>/data/`; session-only
+work stays under `workspaces/<sessionId>/`. A runtime owns one single-user data root. Hosted
+multi-user deployments must give each user a separate `BP_DATA_DIR`/volume rather than adding
+a user-id directory inside `data/`.
+
 > **Trust boundary.** In local (non-Docker) mode there is **no container isolation** —
 > agents read and write directly on your machine, under
 > `brainpilot/workspaces/<sessionId>/`. The UI hides the *Sandbox* control in this mode
