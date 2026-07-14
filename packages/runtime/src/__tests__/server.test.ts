@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, startServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
+import { PERSISTENT_LAYOUT_MARKER } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 
 /**
@@ -373,8 +374,8 @@ describe("workspace file routes", () => {
     expect(read.status).toBe(200);
     expect((await read.json()) as { content: string }).toMatchObject({ content: "reusable dataset" });
 
-    // On disk it lives under data/local/, not workspaces/.
-    const onDisk = await readFile(join(dataRoot, "data", "local", "lib", "set.csv"), "utf8");
+    // On disk it lives flat under data/ (#287 removed the per-user subdir).
+    const onDisk = await readFile(join(dataRoot, "data", "lib", "set.csv"), "utf8");
     expect(onDisk).toBe("reusable dataset");
   });
 
@@ -463,6 +464,10 @@ describe("startServer boot-time restore", () => {
       agentFactory: mockAgentFactory,
     });
     try {
+      const layout = JSON.parse(
+        await readFile(join(dataRoot, PERSISTENT_LAYOUT_MARKER), "utf8"),
+      );
+      expect(layout).toMatchObject({ version: 2, status: "ready" });
       const res = await fetch(`http://127.0.0.1:${handle.port}/sessions`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as { sessions: Array<{ id: string; createdAt: string }> };

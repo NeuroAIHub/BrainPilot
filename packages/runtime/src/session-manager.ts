@@ -46,6 +46,10 @@ import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import { isWindows } from "./platform.js";
+import {
+  ensurePersistentLayout as initializePersistentLayout,
+  resolveLegacyPersistentUserId,
+} from "./persistent-layout.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
 
 interface Deferred<T> {
@@ -104,22 +108,35 @@ function resolveMaxConcurrentAgents(opt?: number): number {
   return DEFAULT_MAX_CONCURRENT_AGENTS;
 }
 
-/** #257 default per-user persistent root id (self-hosted single user). */
-const DEFAULT_PERSISTENT_USER_ID = "local";
-
 /**
- * #257: resolve the persistent-root user id. Explicit option wins, else
- * `BP_USER_ID`, else `local`. The id names a subdir under `<dataRoot>/data/`,
- * so it is sanitized to a single safe path segment (no separators, no `..`) —
- * a hostile `BP_USER_ID` must not let the "persistent root" escape `data/`.
- * An empty/blank value falls back to the default.
+ * #287 (former #257 hook): the runtime is now single-user by contract, so
+ * `BP_USER_ID` no longer influences the active on-disk root. A separate
+ * migration helper may use its old value once to locate data/<legacyUserId>;
+ * this warning tells hosted deployments that it can be removed after rollout.
+ * `opt` is likewise retained only for API/migration compatibility.
+ * Returns true when a warning was printed, purely so tests can assert on it.
  */
-export function resolvePersistentUserId(opt?: string, env = process.env): string {
-  const raw = (opt ?? env.BP_USER_ID ?? "").trim();
-  const candidate = raw === "" ? DEFAULT_PERSISTENT_USER_ID : raw;
-  // Collapse any path separators / traversal to keep this a single segment.
-  const safe = candidate.replace(/[\\/]/g, "_").replace(/\.\.+/g, "_");
-  return safe === "" || safe === "." ? DEFAULT_PERSISTENT_USER_ID : safe;
+export function warnOnDeprecatedPersistentUserId(
+  opt?: string,
+  env: NodeJS.ProcessEnv = process.env,
+  log: (msg: string) => void = (m) => console.warn(m),
+): boolean {
+  const envVal = (env.BP_USER_ID ?? "").trim();
+  const optVal = (opt ?? "").trim();
+  if (envVal === "" && optVal === "") return false;
+  const source =
+    optVal !== "" && envVal !== ""
+      ? `persistentUserId option ("${optVal}") + BP_USER_ID env ("${envVal}")`
+      : optVal !== ""
+        ? `persistentUserId option ("${optVal}")`
+        : `BP_USER_ID env ("${envVal}")`;
+  log(
+    `[persistent-data] ${source} no longer controls path resolution since #287; ` +
+      `it is used only to locate a legacy directory during one-shot migration. ` +
+      `The runtime stores its library flat under <dataRoot>/data/; multi-user ` +
+      `isolation requires one dataRoot per user.`,
+  );
+  return true;
 }
 
 /**
@@ -279,13 +296,13 @@ export interface SessionManagerOptions {
    */
   uploadMaxBytes?: number;
   /**
-   * #257: per-user persistent root identity. Files under
-   * `<dataRoot>/data/<persistentUserId>/` are shared across ALL sessions of
-   * this runtime (a private "library" that outlives any single session),
-   * unlike the per-session `workspaces/<sid>/`. Default `local` (self-hosted
-   * single user); env override `BP_USER_ID`. Hosted deployments set this
-   * per-user (they already isolate users by container/dataRoot, so this just
-   * names the on-disk subdir). Tests inject directly.
+   * @deprecated since #287. The runtime is single-user by contract and the
+   * persistent library lives flat under `<dataRoot>/data/`. This field (and
+   * the `BP_USER_ID` env var) are IGNORED for active path resolution. During
+   * upgrade only, the old value identifies the one legacy directory eligible
+   * for migration; it also produces a deprecation warning. Multi-user
+   * isolation belongs to the deployment layer: give each user their own
+   * `dataRoot` (bind mount / container / volume).
    */
   persistentUserId?: string;
   /**
@@ -407,10 +424,10 @@ export class SessionManager {
   // so hosted deployments can accept large files; default 20 MiB.
   private readonly uploadMaxBytes: number;
 
-  // #257: per-user persistent root identity. `data/<persistentUserId>/` is
-  // shared across all sessions (cross-session library), unlike per-session
-  // `workspaces/<sid>/`. Default `local`; env `BP_USER_ID`.
-  private readonly persistentUserId: string;
+  // #287: active addressing is always flat data/. The deprecated value is
+  // retained only as a v1 migration hint; it never changes the v2 root.
+  private readonly legacyPersistentUserId: string;
+  private persistentLayoutReady?: Promise<void>;
 
   // Per-tool on/off overrides — TEST INJECTION SEED ONLY.
   //
@@ -454,7 +471,10 @@ export class SessionManager {
 
     this.maxConcurrentAgents = resolveMaxConcurrentAgents(opts.maxConcurrentAgents);
     this.uploadMaxBytes = resolveUploadMaxBytes(opts.uploadMaxBytes);
-    this.persistentUserId = resolvePersistentUserId(opts.persistentUserId);
+    // #287: these no longer select the active root. Warn and retain the old
+    // resolved value solely to identify the directory eligible for migration.
+    warnOnDeprecatedPersistentUserId(opts.persistentUserId);
+    this.legacyPersistentUserId = resolveLegacyPersistentUserId(opts.persistentUserId);
     this.sharedDir = resolveSharedDir(opts.sharedDir);
 
     // Test-only injection path: if callers pass `toolToggles`, use it verbatim
@@ -561,15 +581,31 @@ export class SessionManager {
     return join(this.dataRoot, "workspaces", sid);
   }
   /**
-   * #257: the per-user persistent root, shared across all sessions —
-   * `<dataRoot>/data/<persistentUserId>/`. Files here outlive any single
-   * session (a reusable "library"), unlike `workspaces/<sid>/`. The whole
-   * `dataRoot` is already the persisted volume, so no extra mount is needed.
-   * Addressed by agents/file-routes via the `/data` prefix (see
+   * #287 (formerly #257): the persistent library shared across all sessions
+   * of this runtime — `<dataRoot>/data/`. Files here outlive any single
+   * session (a reusable "library"), unlike `workspaces/<sid>/`. Flat: the
+   * runtime is single-user by contract, so there is no per-user subdir; a
+   * hosted multi-user deployment gives each user their own dataRoot. The
+   * whole `dataRoot` is already the persisted volume, so no extra mount is
+   * needed. Addressed by agents/file-routes via the `/data` prefix (see
    * `resolveManagedPath`).
    */
   private persistentDir(): string {
-    return join(this.dataRoot, "data", this.persistentUserId);
+    return join(this.dataRoot, "data");
+  }
+
+  /**
+   * Initialize the flat persistent layout exactly once per manager. The shared
+   * promise is awaited by startup and every /data operation, so requests cannot
+   * race migration. Failures stay rejected: serving a split library is less
+   * safe than refusing the request with an actionable error.
+   */
+  ensurePersistentLayout(): Promise<void> {
+    this.persistentLayoutReady ??= initializePersistentLayout(
+      this.dataRoot,
+      this.legacyPersistentUserId,
+    );
+    return this.persistentLayoutReady;
   }
   /**
    * Conversation-attachments subdir of a session's workspace —
@@ -618,8 +654,8 @@ export class SessionManager {
    * FOUR roots are addressable, by path prefix:
    *  - `/workspace[/...]` → the per-session workspace `workspaces/<sid>/`
    *    (the agent's cwd; default when no prefix is given, for backward compat).
-   *  - `/data[/...]`      → the shared per-user persistent root
-   *    `data/<userId>/`, reusable across sessions (#257).
+   *  - `/data[/...]`      → the persistent library `data/`, reusable across
+   *    sessions (#287; flat, single-user — per-user layout was removed).
    *  - `/attachments[/...]` → conversation attachments the user attached to a
    *    message, kept in the hidden `workspaces/<sid>/.attachments/` subdir so
    *    they are scoped to the session but visually separate from agent-produced
@@ -688,13 +724,18 @@ export class SessionManager {
     return { abs, root, prefix };
   }
 
-  /** Back-compat shim: resolve to just the absolute path (workspace or /data). */
-  private resolveWorkspacePath(sid: string, rawPath: string): string {
-    return this.resolveManagedPath(sid, rawPath).abs;
+  private isPersistentPath(rawPath: string): boolean {
+    const normalized = (rawPath ?? "").replace(/\\/g, "/");
+    return normalized === "/data" || normalized.startsWith("/data/");
+  }
+
+  private async ensureLayoutForPath(rawPath: string): Promise<void> {
+    if (this.isPersistentPath(rawPath)) await this.ensurePersistentLayout();
   }
 
   /** List one directory level under the session workspace (default: root). */
   async listSessionFiles(sid: string, rel = ""): Promise<FileEntry[]> {
+    await this.ensureLayoutForPath(rel);
     const { abs: dir, root, prefix } = this.resolveManagedPath(sid, rel);
     let dirents;
     try {
@@ -751,19 +792,22 @@ export class SessionManager {
 
   /** Read a workspace text file as UTF-8. */
   async readSessionFile(sid: string, rel: string): Promise<FileContent> {
-    const abs = this.resolveWorkspacePath(sid, rel);
+    await this.ensureLayoutForPath(rel);
+    const abs = this.resolveManagedPath(sid, rel).abs;
     const content = await readFile(abs, "utf8");
     return { path: rel, content, size: Buffer.byteLength(content) };
   }
 
   /** Read a workspace file's raw bytes (images/PDF/download). */
   async readSessionFileRaw(sid: string, rel: string): Promise<Buffer> {
-    const abs = this.resolveWorkspacePath(sid, rel);
+    await this.ensureLayoutForPath(rel);
+    const abs = this.resolveManagedPath(sid, rel).abs;
     return readFile(abs);
   }
 
   /** Delete a workspace file. Returns false if it was already gone. */
   async deleteSessionFile(sid: string, rel: string): Promise<boolean> {
+    await this.ensureLayoutForPath(rel);
     const { abs, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
     try {
@@ -811,6 +855,7 @@ export class SessionManager {
     if (buf.byteLength > maxBytes) {
       throw new Error(`file too large: ${buf.byteLength} bytes exceeds limit of ${maxBytes}`);
     }
+    await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
     await mkdir(dirname(abs), { recursive: true });
@@ -839,6 +884,7 @@ export class SessionManager {
     body: ReadableStream<Uint8Array> | Readable | null,
     maxBytes = this.uploadMaxBytes,
   ): Promise<{ path: string; size: number }> {
+    await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
     await mkdir(dirname(abs), { recursive: true });
@@ -1025,6 +1071,9 @@ export class SessionManager {
     if (this.memWatchdog?.isOverSoftLimit()) {
       throw new Error("memory budget exceeded: refusing new session");
     }
+    // Persisted sessions may hand the absolute data/ path to agents, so finish
+    // layout initialization before creating any durable session state.
+    if (this.persist) await this.ensurePersistentLayout();
     const id = input.id ?? randomUUID();
     if (this.sessions.has(id)) return this.toSession(this.sessions.get(id)!);
     const nowIso = _restore ? _restore.updatedAt : new Date().toISOString();
@@ -1092,9 +1141,8 @@ export class SessionManager {
     if (this.persist) {
       await mkdir(join(this.bpDir(id), "history"), { recursive: true });
       await mkdir(this.workspaceDir(id), { recursive: true });
-      // #257: ensure the shared per-user persistent root exists so the agent
-      // (and file routes) can read/write the cross-session library from the
-      // first session onward. Cheap + idempotent.
+      // Ensure the persistent library exists so the agent + file routes can
+      // read/write it from the first session onward. Cheap + idempotent.
       await mkdir(this.persistentDir(), { recursive: true });
       // On restore, meta.json on disk is the authority — do not write it back.
       if (!_restore) await this.writeMeta(entry);

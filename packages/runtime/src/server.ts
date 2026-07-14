@@ -279,6 +279,12 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
 }> {
   const { app, manager } = createServer(opts);
 
+  // #287: complete or recover the persistent-library layout migration before
+  // restoring sessions or accepting requests. Unlike session restore, this is
+  // a readiness gate: serving a half-migrated /data tree could split or hide
+  // user data, so initialization failures intentionally abort startup.
+  await manager.ensurePersistentLayout();
+
   // Restore sessions persisted under `<dataRoot>/.bp/*/meta.json` before we
   // accept the first HTTP request, so `GET /sessions` reflects history on
   // boot instead of an empty list. Persist defaults to true on the manager

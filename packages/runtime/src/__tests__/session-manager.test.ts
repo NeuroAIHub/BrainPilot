@@ -3,7 +3,11 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
-import { SessionManager, resolvePersistentUserId, resolveSharedDir } from "../session-manager.js";
+import { SessionManager, warnOnDeprecatedPersistentUserId, resolveSharedDir } from "../session-manager.js";
+import {
+  PERSISTENT_LAYOUT_MARKER,
+  PERSISTENT_LAYOUT_STAGING,
+} from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
 
@@ -262,8 +266,9 @@ describe("SessionManager persistent cross-session root (#257)", () => {
     const read = await m.readSessionFile(b.id, "/data/dataset.csv");
     expect(read.content).toBe("shared,data");
 
-    // On disk it lives under data/<userId>/, NOT workspaces/<sid>/.
-    const onDisk = await readFile(join(root, "data", "local", "dataset.csv"), "utf8");
+    // On disk it lives flat under data/, NOT workspaces/<sid>/ (#287 removed
+    // the per-user subdir; the runtime is single-user by contract).
+    const onDisk = await readFile(join(root, "data", "dataset.csv"), "utf8");
     expect(onDisk).toBe("shared,data");
   });
 
@@ -286,17 +291,21 @@ describe("SessionManager persistent cross-session root (#257)", () => {
     await expect(m.readSessionFile(s.id, "/data/../../etc/passwd")).rejects.toThrow(/escapes/);
   });
 
-  it("honors a custom persistentUserId in the on-disk layout", async () => {
+  it("ignores the deprecated persistentUserId option and lands flat under data/ (#287)", async () => {
     const m = new SessionManager({
       dataRoot: root,
       persist: false,
       agentFactory: mockAgentFactory,
+      // #287: this option is now ignored; the write must NOT land under
+      // data/alice/ but flat in data/, mirroring the single-user contract.
       persistentUserId: "alice",
     });
     const s = await m.createSession({ title: "S" });
     await m.writeSessionFile(s.id, "/data/lib.txt", b64("hi"));
-    const onDisk = await readFile(join(root, "data", "alice", "lib.txt"), "utf8");
+    const onDisk = await readFile(join(root, "data", "lib.txt"), "utf8");
     expect(onDisk).toBe("hi");
+    // The legacy layout must not have been created.
+    await expect(readFile(join(root, "data", "alice", "lib.txt"), "utf8")).rejects.toThrow();
   });
 });
 
@@ -344,26 +353,130 @@ describe("SessionManager conversation attachments (.attachments/)", () => {
   });
 });
 
-describe("resolvePersistentUserId (#257)", () => {
-  it("defaults to `local` when unset", () => {
-    expect(resolvePersistentUserId(undefined, {})).toBe("local");
-    expect(resolvePersistentUserId("   ", {})).toBe("local");
+describe("warnOnDeprecatedPersistentUserId (#287)", () => {
+  it("is silent when neither the option nor the env is set", () => {
+    const msgs: string[] = [];
+    expect(warnOnDeprecatedPersistentUserId(undefined, {}, (m) => msgs.push(m))).toBe(false);
+    expect(warnOnDeprecatedPersistentUserId("   ", { BP_USER_ID: "" }, (m) => msgs.push(m))).toBe(false);
+    expect(msgs).toEqual([]);
   });
-  it("reads BP_USER_ID from env when no explicit option", () => {
-    expect(resolvePersistentUserId(undefined, { BP_USER_ID: "bob" })).toBe("bob");
+  it("warns (once, mentioning the env source) when only BP_USER_ID is set", () => {
+    const msgs: string[] = [];
+    expect(warnOnDeprecatedPersistentUserId(undefined, { BP_USER_ID: "bob" }, (m) => msgs.push(m))).toBe(true);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toMatch(/BP_USER_ID env \("bob"\)/);
+    expect(msgs[0]).toMatch(/no longer controls path resolution since #287/);
   });
-  it("explicit option wins over env", () => {
-    expect(resolvePersistentUserId("carol", { BP_USER_ID: "bob" })).toBe("carol");
+  it("warns (mentioning the option source) when only persistentUserId is passed", () => {
+    const msgs: string[] = [];
+    expect(warnOnDeprecatedPersistentUserId("alice", {}, (m) => msgs.push(m))).toBe(true);
+    expect(msgs[0]).toMatch(/persistentUserId option \("alice"\)/);
   });
-  it("sanitizes separators and traversal to a single safe segment", () => {
-    // Whatever the input, the result is a single segment with no separators or
-    // `..` (so the "persistent root" can never escape `data/`).
-    for (const bad of ["../../etc", "a/b", "..", "x/../y", "..\\..\\z"]) {
-      const out = resolvePersistentUserId(bad, {});
-      expect(out).not.toContain("..");
-      expect(out).not.toMatch(/[\\/]/);
+  it("names BOTH sources when they are both set", () => {
+    const msgs: string[] = [];
+    warnOnDeprecatedPersistentUserId("alice", { BP_USER_ID: "bob" }, (m) => msgs.push(m));
+    expect(msgs[0]).toMatch(/persistentUserId option \("alice"\).*BP_USER_ID env \("bob"\)/);
+  });
+});
+
+describe("SessionManager legacy `data/<userId>/` migration (#287)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-mig-"));
+  });
+
+  it("migrates only the known default data/local directory", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "dataset.csv"), "cols\n1,2\n", "utf8");
+    await mkdir(join(root, "data", "local", "subdir"), { recursive: true });
+    await writeFile(join(root, "data", "local", "subdir", "notes.md"), "kept together", "utf8");
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "dataset.csv"), "utf8")).toBe("cols\n1,2\n");
+    expect(await readFile(join(root, "data", "subdir", "notes.md"), "utf8")).toBe("kept together");
+    await expect(readFile(join(root, "data", "local", "dataset.csv"), "utf8")).rejects.toThrow();
+    const marker = JSON.parse(await readFile(join(root, PERSISTENT_LAYOUT_MARKER), "utf8"));
+    expect(marker).toMatchObject({ version: 2, status: "ready", migratedFrom: "data/local" });
+  });
+
+  it("uses BP_USER_ID only as a legacy migration hint", async () => {
+    await mkdir(join(root, "data", "alice"), { recursive: true });
+    await writeFile(join(root, "data", "alice", "a.txt"), "alice", "utf8");
+    const previous = process.env.BP_USER_ID;
+    process.env.BP_USER_ID = "alice";
+    try {
+      const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+      await m.ensurePersistentLayout();
+      expect(await readFile(join(root, "data", "a.txt"), "utf8")).toBe("alice");
+    } finally {
+      if (previous === undefined) delete process.env.BP_USER_ID;
+      else process.env.BP_USER_ID = previous;
     }
-    expect(resolvePersistentUserId("a/b", {})).toBe("a_b");
+  });
+
+  it("does not flatten a valid v2 tree containing only data/project/", async () => {
+    await mkdir(join(root, "data", "project"), { recursive: true });
+    await writeFile(join(root, "data", "project", "dataset.csv"), "kept", "utf8");
+
+    const m1 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m1.ensurePersistentLayout();
+    const m2 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m2.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "project", "dataset.csv"), "utf8")).toBe("kept");
+    await expect(readFile(join(root, "data", "dataset.csv"), "utf8")).rejects.toThrow();
+  });
+
+  it("refuses a mixed v1/v2 tree without moving either side", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "old.txt"), "old", "utf8");
+    await writeFile(join(root, "data", "new.txt"), "new", "utf8");
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await expect(m.ensurePersistentLayout()).rejects.toThrow(/cannot migrate/);
+    expect(await readFile(join(root, "data", "local", "old.txt"), "utf8")).toBe("old");
+    expect(await readFile(join(root, "data", "new.txt"), "utf8")).toBe("new");
+  });
+
+  it("single-flights migration before concurrent /data writes with no session", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "old.txt"), "old", "utf8");
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+
+    await Promise.all([
+      m.writeSessionFile("not-created", "/data/new.txt", Buffer.from("new").toString("base64")),
+      m.writeSessionFile("not-created", "/data/other.txt", Buffer.from("other").toString("base64")),
+    ]);
+
+    expect(await readFile(join(root, "data", "old.txt"), "utf8")).toBe("old");
+    expect(await readFile(join(root, "data", "new.txt"), "utf8")).toBe("new");
+    expect(await readFile(join(root, "data", "other.txt"), "utf8")).toBe("other");
+  });
+
+  it("resumes a staged whole-directory migration after interruption", async () => {
+    await mkdir(join(root, PERSISTENT_LAYOUT_STAGING), { recursive: true });
+    await writeFile(join(root, PERSISTENT_LAYOUT_STAGING, "old.txt"), "old", "utf8");
+    await mkdir(join(root, "data"), { recursive: true });
+    await writeFile(
+      join(root, PERSISTENT_LAYOUT_MARKER),
+      JSON.stringify({
+        version: 2,
+        status: "migrating",
+        phase: "staged",
+        legacyUserId: "local",
+        startedAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "old.txt"), "utf8")).toBe("old");
+    const marker = JSON.parse(await readFile(join(root, PERSISTENT_LAYOUT_MARKER), "utf8"));
+    expect(marker).toMatchObject({ status: "ready", migratedFrom: "data/local" });
   });
 });
 

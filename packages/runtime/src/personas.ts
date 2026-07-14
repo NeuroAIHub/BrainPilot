@@ -68,13 +68,13 @@ export function withLanguageDirective(persona: string): string {
 }
 
 /**
- * Persistent cross-session storage directive (#257). Your working directory is
- * the per-session workspace — anything there is scoped to THIS session. A
- * separate persistent root, given here as an absolute path, is SHARED across all
- * of the user's sessions: files there (uploaded datasets, reference documents,
- * reusable models) remain available in future sessions. `${absPath}` is
- * interpolated at load time with the deployment's real path so the agent can
- * `read`/`write`/`bash` it directly.
+ * Persistent cross-session storage directive (#257; flattened by #287). Your
+ * working directory is the per-session workspace — anything there is scoped to
+ * THIS session. A separate persistent root, given here as an absolute path, is
+ * SHARED across all sessions of this runtime: files there (uploaded datasets,
+ * reference documents, reusable models) remain available in future sessions.
+ * `${absPath}` is interpolated at load time with the deployment's real path so
+ * the agent can `read`/`write`/`bash` it directly.
  */
 export function persistentRootDirective(absPath: string): string {
   return `## Persistent cross-session storage
