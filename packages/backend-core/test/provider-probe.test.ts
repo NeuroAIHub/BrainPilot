@@ -1,112 +1,168 @@
 import { describe, expect, it, vi } from "vitest";
 import { probeProvider } from "../src/provider-probe.js";
 
-describe("probeProvider (#55)", () => {
-  it("reports healthy on a 2xx /models response", async () => {
-    const fetchFn = vi.fn(async (url: string) => {
-      expect(url).toBe("https://gw.example.com/api/models");
-      return new Response('{"data":[]}', { status: 200 });
+describe("probeProvider — protocol-aware model test", () => {
+  it("probes Anthropic Messages with Anthropic headers", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("https://api.anthropic.com/v1/messages");
+      expect((init.headers as Record<string, string>)["x-api-key"]).toBe("sk-ant");
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: "claude", max_tokens: 1 });
+      return new Response("{}", { status: 200 });
     });
-    const r = await probeProvider(
-      { baseUrl: "https://gw.example.com/api", apiKey: "sk-x" },
+    const result = await probeProvider(
+      {
+        baseUrl: "https://api.anthropic.com",
+        apiKey: "sk-ant",
+        model: "claude",
+        api: "anthropic-messages",
+      },
       { fetchFn: fetchFn as never },
     );
-    expect(r.status).toBe("healthy");
+    expect(result.status).toBe("healthy");
   });
 
-  it("sends the API key as a Bearer token", async () => {
-    const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
-      const headers = init.headers as Record<string, string>;
-      expect(headers.authorization).toBe("Bearer sk-secret");
+  it("probes OpenAI Completions at the configured version root", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("https://open.bigmodel.cn/api/paas/v4/chat/completions");
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer sk-oai");
+      expect(JSON.parse(String(init.body))).toHaveProperty("messages");
       return new Response("{}", { status: 200 });
     });
     await probeProvider(
-      { baseUrl: "https://gw/api", apiKey: "sk-secret" },
+      {
+        baseUrl: "https://open.bigmodel.cn/api/paas/v4",
+        apiKey: "sk-oai",
+        model: "glm",
+        api: "openai-completions",
+      },
       { fetchFn: fetchFn as never },
     );
-    expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
-  it("reports unavailable when the gateway is unreachable (network error)", async () => {
+  it("probes OpenAI Responses with store:false", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("https://api.openai.com/v1/responses");
+      expect((init.headers as Record<string, string>).authorization).toBe("Bearer sk-resp");
+      expect(JSON.parse(String(init.body))).toMatchObject({
+        model: "gpt-test",
+        input: "ping",
+        store: false,
+      });
+      return new Response("{}", { status: 200 });
+    });
+    await probeProvider(
+      {
+        baseUrl: "https://api.openai.com/v1",
+        apiKey: "sk-resp",
+        model: "gpt-test",
+        api: "openai-responses",
+      },
+      { fetchFn: fetchFn as never },
+    );
+  });
+
+  it("probes Azure OpenAI Responses with normalized resource URL and api-key", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("https://research.openai.azure.com/openai/v1/responses?api-version=v1");
+      expect((init.headers as Record<string, string>)["api-key"]).toBe("azure-key");
+      expect(JSON.parse(String(init.body))).toMatchObject({ model: "deployment-name", store: false });
+      return new Response("{}", { status: 200 });
+    });
+    await probeProvider(
+      {
+        baseUrl: "https://research.openai.azure.com",
+        apiKey: "azure-key",
+        model: "deployment-name",
+        api: "azure-openai-responses",
+      },
+      { fetchFn: fetchFn as never },
+    );
+  });
+
+  it("defaults legacy profiles to Anthropic Messages", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("https://gw.example.com/v1/messages");
+      return new Response("{}", { status: 200 });
+    });
+    await probeProvider(
+      { baseUrl: "https://gw.example.com", apiKey: "sk", model: "m" },
+      { fetchFn: fetchFn as never },
+    );
+  });
+
+  it("reports unavailable when the gateway is unreachable", async () => {
     const fetchFn = vi.fn(async () => {
       throw new TypeError("fetch failed: ENOTFOUND example.invalid");
     });
-    const r = await probeProvider(
-      { baseUrl: "https://example.invalid/api", apiKey: "sk" },
+    const result = await probeProvider(
+      { baseUrl: "https://example.invalid", apiKey: "sk", model: "m" },
       { fetchFn: fetchFn as never },
     );
-    expect(r.status).toBe("unavailable");
-    expect(r.message).toContain("ENOTFOUND");
+    expect(result.status).toBe("unavailable");
+    expect(result.message).toContain("ENOTFOUND");
   });
 
   it("reports unavailable on timeout", async () => {
     const fetchFn = vi.fn((_url: string, init: RequestInit) => {
       return new Promise<Response>((_resolve, reject) => {
         const signal = init.signal as AbortSignal;
-        signal?.addEventListener("abort", () => {
-          const e = new Error("aborted");
-          e.name = "AbortError";
-          reject(e);
+        signal.addEventListener("abort", () => {
+          const error = new Error("aborted");
+          error.name = "AbortError";
+          reject(error);
         });
       });
     });
-    const r = await probeProvider(
-      { baseUrl: "https://slow/api", apiKey: "sk" },
+    const result = await probeProvider(
+      { baseUrl: "https://slow.example.com", apiKey: "sk", model: "m" },
       { fetchFn: fetchFn as never, timeoutMs: 10 },
     );
-    expect(r.status).toBe("unavailable");
-    expect(r.message).toMatch(/timed out/i);
+    expect(result.status).toBe("unavailable");
+    expect(result.message).toMatch(/timed out/i);
   });
 
-  it("reports error on 401/403 (auth rejected)", async () => {
-    const fetchFn = vi.fn(async () => new Response("nope", { status: 401 }));
-    const r = await probeProvider(
-      { baseUrl: "https://gw/api", apiKey: "bad" },
+  it("reports protocol/model HTTP failures instead of false healthy", async () => {
+    const fetchFn = vi.fn(async () => new Response("wrong endpoint", { status: 404 }));
+    const result = await probeProvider(
+      {
+        baseUrl: "https://gw.example.com/v1",
+        apiKey: "sk",
+        model: "m",
+        api: "openai-responses",
+      },
       { fetchFn: fetchFn as never },
     );
-    expect(r.status).toBe("error");
-    expect(r.message).toMatch(/auth/i);
+    expect(result.status).toBe("error");
+    expect(result.message).toContain("HTTP 404");
+    expect(result.message).toContain("wrong endpoint");
   });
 
-  it("treats a non-2xx, non-auth response (e.g. 404 no /models) as healthy connectivity", async () => {
-    const fetchFn = vi.fn(async () => new Response("not found", { status: 404 }));
-    const r = await probeProvider(
-      { baseUrl: "https://anthropic-gw/api", apiKey: "sk" },
-      { fetchFn: fetchFn as never },
-    );
-    expect(r.status).toBe("healthy");
-  });
-
-  it("errors on an empty base URL without calling fetch", async () => {
+  it("returns configuration errors without calling fetch", async () => {
     const fetchFn = vi.fn();
-    const r = await probeProvider({ baseUrl: "", apiKey: "sk" }, { fetchFn: fetchFn as never });
-    expect(r.status).toBe("error");
+    const noUrl = await probeProvider(
+      { baseUrl: "", apiKey: "sk", model: "m" },
+      { fetchFn: fetchFn as never },
+    );
+    const noModel = await probeProvider(
+      { baseUrl: "https://gw.example.com", apiKey: "sk" },
+      { fetchFn: fetchFn as never },
+    );
+    expect(noUrl.status).toBe("error");
+    expect(noModel.status).toBe("error");
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
-  it("redacts node_modules paths from error messages", async () => {
-    const fetchFn = vi.fn(async () => {
-      throw new Error("boom at /home/u/app/node_modules/undici/lib/x.js:1");
-    });
-    const r = await probeProvider(
-      { baseUrl: "https://gw/api", apiKey: "sk" },
-      { fetchFn: fetchFn as never },
-    );
-    expect(r.message).not.toMatch(/node_modules/);
-  });
-
-  it("redacts native Windows node_modules paths (incl. username) from error messages (#157)", async () => {
-    const fetchFn = vi.fn(async () => {
-      throw new Error(
-        "boom at C:\\Users\\alice\\AppData\\Roaming\\npm\\node_modules\\undici\\lib\\x.js:1",
+  it("redacts native and POSIX node_modules paths from errors", async () => {
+    for (const message of [
+      "boom at /home/u/app/node_modules/undici/lib/x.js:1",
+      "boom at C:\\Users\\alice\\npm\\node_modules\\undici\\lib\\x.js:1",
+    ]) {
+      const result = await probeProvider(
+        { baseUrl: "https://gw.example.com", apiKey: "sk", model: "m" },
+        { fetchFn: vi.fn(async () => { throw new Error(message); }) as never },
       );
-    });
-    const r = await probeProvider(
-      { baseUrl: "https://gw/api", apiKey: "sk" },
-      { fetchFn: fetchFn as never },
-    );
-    expect(r.message).not.toMatch(/node_modules/);
-    expect(r.message).not.toMatch(/alice/);
-    expect(r.message).not.toMatch(/C:\\Users/i);
+      expect(result.message).not.toMatch(/node_modules/);
+      expect(result.message).not.toMatch(/alice/);
+    }
   });
 });

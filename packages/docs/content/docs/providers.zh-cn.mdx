@@ -12,6 +12,9 @@ BrainPilot 支持多种模型服务商协议：
 
 对新手来说，最稳妥的方式是使用 Web UI，因为它会自动写入配置文件。
 
+BrainPilot 不会根据模型名称自动切换到 Responses API。新增 Provider 时，界面默认选择
+`Anthropic Messages`；请根据服务商实际提供的接口明确选择协议。
+
 ## 在界面中添加服务商
 
 1. 运行 `brainpilot up`。
@@ -47,11 +50,14 @@ brainpilot init --api-key <your-api-key>
 ```bash
 brainpilot init \
   --api-key <your-api-key> \
-  --base-url https://your-gateway.example.com \
-  --model glm-5.2
+  --base-url https://api.openai.com/v1 \
+  --model <model-id> \
+  --api openai-responses
 ```
 
-如果需要多个 provider 或模型列表，仍然建议使用 UI 配置。
+`--api` 可取 `anthropic-messages`、`openai-completions`、`openai-responses` 或
+`azure-openai-responses`。省略时保留向后兼容默认值 `anthropic-messages`。如果需要多个
+provider 或模型列表，仍然建议使用 UI 配置。
 
 ## 配置文件在哪里
 
@@ -67,18 +73,26 @@ brainpilot/bp_template/providers.json
 
 选择与你的模型网关匹配的协议：
 
-| 网关行为 | 优先尝试的协议 |
-| --- | --- |
-| Anthropic 兼容的 `/messages` API | `Anthropic Messages` |
-| OpenAI 兼容的 chat/completions API | `OpenAI Completions` |
-| OpenAI Responses API | `OpenAI Responses` |
-| Azure 托管的 Responses API | `Azure OpenAI Responses` |
+| 网关行为 | 协议 | Base URL 示例 | Model ID |
+| --- | --- | --- | --- |
+| Anthropic 兼容的 `/messages` API | `Anthropic Messages` | `https://api.anthropic.com` | 服务商模型 ID |
+| OpenAI 兼容的 chat/completions API | `OpenAI Completions` | `https://api.openai.com/v1` | 服务商模型 ID |
+| OpenAI Responses API | `OpenAI Responses` | `https://api.openai.com/v1` | 支持 Responses 的模型 ID |
+| Azure 托管的 Responses API | `Azure OpenAI Responses` | `https://<resource>.openai.azure.com` | Azure deployment 名称 |
+
+Azure 建议填写资源根地址；BrainPilot 会将 Azure OpenAI 资源地址归一化到
+`/openai/v1`。如果 Azure 中的 deployment 名称与基础模型名称不同，请在 Model ID 中填写
+deployment 名称。
+
+**Test** 会使用所选协议发起一次极小的真实模型请求，用于同时检查 URL、协议、模型和
+key。该请求可能产生少量模型用量。
 
 如果测试失败，先确认 base URL、协议、模型 ID 和 key 是否与服务商要求一致。
 
 ## 新手检查清单
 
 - Base URL 不要随意带多余路径，除非网关明确要求。
+- OpenAI 官方接口通常填写包含 `/v1` 的 API 根地址；第三方兼容网关以其文档为准。
 - 模型 ID 必须与网关支持的 ID 完全一致。
 - 先保存，再点 **Use（使用）**。
 - 如果已有会话仍在使用旧配置，修改当前服务商后新建一个会话。
