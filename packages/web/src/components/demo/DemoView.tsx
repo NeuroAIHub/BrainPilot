@@ -3,7 +3,7 @@ import type { CSSProperties, DragEvent, PointerEvent as ReactPointerEvent } from
 import { FileUp, MessageSquare, Pause, Play, RotateCcw, SkipBack, SkipForward, Upload } from "lucide-react";
 import type { ChatMessage, TraceNode, WebSocketEvent } from "../../contracts/backend";
 import { normalizeWebSocketEvent } from "../../contracts/backend";
-import { DemoBundle, DemoFile } from "../../contracts/demoBundle";
+import { DemoBundle, DemoFile, MAX_DEMO_BUNDLE_BYTES } from "../../contracts/demoBundle";
 import { applyMessageFilters, defaultFilterRules } from "../../contexts/messageFilters";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
@@ -15,7 +15,7 @@ import { getPreviewKind, isMarkdown } from "../files/filePreview";
 import { IconButton } from "../primitives/IconButton";
 import { TraceGraphView } from "../session/TraceGraphView";
 import { getNodeKindLabelKey } from "../session/traceLayout";
-import { buildDemoBundle, PackAbortedError, parseDemoBundle } from "./demoBundle";
+import { buildDemoBundle, DemoBundleTooLargeError, PackAbortedError, parseDemoBundle } from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
 import { shouldResetDemo } from "./demoReset";
 import { foldUpTo, type FoldCache } from "./foldCache";
@@ -551,7 +551,9 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
           createdAt: currentSession?.id === sessionId ? currentSession.createdAt : undefined,
           updatedAt: updatedAt ?? (currentSession?.id === sessionId ? currentSession.updatedAt : undefined),
         },
-        sandboxId: runningSandbox?.id,
+        // File routes are session-addressed in both local and hosted mode. The
+        // sandbox object only tells the packer whether file access is live.
+        filesAvailable: !!runningSandbox,
         filesUnavailableDetail: runningSandbox ? undefined : t("demo.files.noSandbox"),
         fallbackMessages: currentSession?.id === sessionId ? messages : undefined,
         onProgress: setProgress,
@@ -567,7 +569,13 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
       if (err instanceof PackAbortedError || controller.signal.aborted) {
         return;
       }
-      setError(err instanceof Error ? err.message : t("demo.error.build"));
+      setError(
+        err instanceof DemoBundleTooLargeError
+          ? t("demo.error.tooLarge", { size: Math.floor(MAX_DEMO_BUNDLE_BYTES / 1024 / 1024) })
+          : err instanceof Error
+            ? err.message
+            : t("demo.error.build"),
+      );
     } finally {
       if (packAbortRef.current === controller) {
         packAbortRef.current = null;
@@ -583,10 +591,19 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
     setBusy(true);
     setError(null);
     try {
+      if (file.size > MAX_DEMO_BUNDLE_BYTES) {
+        throw new Error(t("demo.error.tooLarge", { size: Math.floor(MAX_DEMO_BUNDLE_BYTES / 1024 / 1024) }));
+      }
       const parsed = parseDemoBundle(await file.text());
       setBundle(parsed);
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("demo.error.parse"));
+      setError(
+        err instanceof DemoBundleTooLargeError
+          ? t("demo.error.tooLarge", { size: Math.floor(MAX_DEMO_BUNDLE_BYTES / 1024 / 1024) })
+          : err instanceof Error
+            ? err.message
+            : t("demo.error.parse"),
+      );
     } finally {
       setBusy(false);
     }
@@ -606,6 +623,9 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
 
   const handleExport = () => {
     if (!bundle) {
+      return;
+    }
+    if (!window.confirm(t("demo.exportConfirm"))) {
       return;
     }
     const blob = new Blob([JSON.stringify(bundle)], { type: "application/json" });
@@ -630,6 +650,7 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
                 <h2>{t("demo.landing.fromSession.title")}</h2>
               </div>
               <p>{t("demo.landing.fromSession.desc")}</p>
+              <p className="demo-card__privacy">{t("demo.privacyNotice")}</p>
               <div className="demo-card__sessions">
                 {sessions.length === 0 ? (
                   <p className="demo-card__empty">{t("demo.landing.fromSession.empty")}</p>

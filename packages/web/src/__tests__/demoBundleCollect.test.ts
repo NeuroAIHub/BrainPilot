@@ -1,4 +1,5 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
+import { MAX_TIMELINE_BYTES } from "../contracts/demoBundle";
 
 /**
  * Coverage for buildDemoBundle's file collection (#5 concurrent fetch,
@@ -29,7 +30,7 @@ vi.mock("../utils/api", () => ({
 }));
 
 // Imported after the mock is registered.
-const { buildDemoBundle, PackAbortedError } = await import("../components/demo/demoBundle");
+const { buildDemoBundle, DemoBundleTooLargeError, PackAbortedError, toDemoFilePath } = await import("../components/demo/demoBundle");
 
 function traceWith(paths: string[]) {
   return {
@@ -53,6 +54,14 @@ beforeEach(() => {
 });
 
 describe("buildDemoBundle file collection", () => {
+  it("preserves supported file roots and defaults relative paths to workspace", () => {
+    expect(toDemoFilePath("results/report.md")).toBe("/workspace/results/report.md");
+    expect(toDemoFilePath("workspace/results/report.md")).toBe("/workspace/results/report.md");
+    expect(toDemoFilePath("/data/shared.csv")).toBe("/data/shared.csv");
+    expect(toDemoFilePath("shared/reference.pdf")).toBe("/shared/reference.pdf");
+    expect(toDemoFilePath("/tmp/output.txt")).toBe("/workspace/tmp/output.txt");
+  });
+
   it("marks all files unreadable when no sandbox is available", async () => {
     getTrace.mockResolvedValue(traceWith(["a.txt", "b.png"]));
     const bundle = await buildDemoBundle({
@@ -76,9 +85,10 @@ describe("buildDemoBundle file collection", () => {
       inFlight -= 1;
       return { content: path, size: path.length };
     });
-    const bundle = await buildDemoBundle({ session: { id: "s", title: "S" }, sandboxId: "sb" });
+    const bundle = await buildDemoBundle({ session: { id: "s", title: "S" }, filesAvailable: true });
     expect(bundle.files.map((f) => f.path)).toEqual(["1.txt", "2.txt", "3.txt"]);
     expect(bundle.files.map((f) => f.data)).toEqual(["/workspace/1.txt", "/workspace/2.txt", "/workspace/3.txt"]);
+    expect(readFile).toHaveBeenCalledWith("s", "/workspace/1.txt");
     expect(maxInFlight).toBeGreaterThan(1); // genuinely concurrent
   });
 
@@ -90,10 +100,20 @@ describe("buildDemoBundle file collection", () => {
       }
       return { content: "hi", size: 2 };
     });
-    const bundle = await buildDemoBundle({ session: { id: "s", title: "S" }, sandboxId: "sb" });
+    const bundle = await buildDemoBundle({ session: { id: "s", title: "S" }, filesAvailable: true });
     const bad = bundle.files.find((f) => f.path === "bad.txt")!;
     expect(bad.reason).toBe("unreadable");
     expect(bad.detail).toBe("boom");
+  });
+
+  it("reads /data and /shared artifacts from their original roots", async () => {
+    getTrace.mockResolvedValue(traceWith(["/data/results.csv", "/shared/reference.txt"]));
+    readFile.mockImplementation(async (_sid: string, path: string) => ({ content: path, size: path.length }));
+
+    await buildDemoBundle({ session: { id: "session-42", title: "S" }, filesAvailable: true });
+
+    expect(readFile).toHaveBeenNthCalledWith(1, "session-42", "/data/results.csv");
+    expect(readFile).toHaveBeenNthCalledWith(2, "session-42", "/shared/reference.txt");
   });
 
   it("throws PackAbortedError when the signal is already aborted", async () => {
@@ -101,7 +121,20 @@ describe("buildDemoBundle file collection", () => {
     const controller = new AbortController();
     controller.abort();
     await expect(
-      buildDemoBundle({ session: { id: "s", title: "S" }, sandboxId: "sb", signal: controller.signal }),
+      buildDemoBundle({ session: { id: "s", title: "S" }, filesAvailable: true, signal: controller.signal }),
     ).rejects.toBeInstanceOf(PackAbortedError);
+  });
+
+  it("rejects an unbounded raw-event timeline", async () => {
+    getTrace.mockResolvedValue(traceWith([]));
+    getHistory.mockResolvedValue({
+      events: [{ type: "TEXT_MESSAGE_CONTENT", delta: "x".repeat(MAX_TIMELINE_BYTES) }],
+      total: 1,
+      truncated: false,
+    });
+
+    await expect(buildDemoBundle({ session: { id: "s", title: "S" } })).rejects.toBeInstanceOf(
+      DemoBundleTooLargeError,
+    );
   });
 });
