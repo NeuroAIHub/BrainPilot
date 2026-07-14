@@ -76,6 +76,16 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
     await expect(api.sessions.list()).resolves.toEqual([]);
   });
+
+  // handleJson guard: a 200 that isn't JSON (SPA index.html fallback for an
+  // endpoint missing on this deployment) must throw a readable message, NOT the
+  // raw "Unexpected token '<'" SyntaxError that res.json() would raise.
+  it("throws a readable error (not a JSON SyntaxError) when a 200 returns non-JSON", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "text/html", jsonThrows: true, json: "<!doctype html>" }),
+    );
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected \(non-JSON\) response/i);
+  });
 });
 
 describe("api.sessions.create — unwraps the { id, session } envelope (#96)", () => {
@@ -263,6 +273,42 @@ describe("api.sandbox.uploadFile — #47 base64 upload to the workspace", () => 
       makeResponse({ ok: false, status: 400, contentType: "application/json", json: { detail: "file too large" } }),
     );
     await expect(api.sandbox.uploadFile("s1", "big.bin", new Blob(["hi"]))).rejects.toThrow("file too large");
+  });
+});
+
+describe("api.sandbox.uploadFile — #256 raw octet-stream for large files", () => {
+  // A Blob reporting a size at/above the 4 MiB threshold: uploadFile must switch
+  // to the raw streaming path (bytes as the body, path in ?path=) and never
+  // touch base64 (no FileReader stub here, so a base64 attempt would throw).
+  function bigBlob(): Blob {
+    const b = new Blob(["x"]);
+    Object.defineProperty(b, "size", { value: 4 * 1024 * 1024 });
+    return b;
+  }
+
+  it("streams raw bytes with ?path= and an octet-stream content-type", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ status: 201, contentType: "application/json", json: { path: "data/big.bin", size: 4194304 } }),
+    );
+    const file = bigBlob();
+    const out = await api.sandbox.uploadFile("s1", "data/big.bin", file);
+
+    const [url, init] = fetchMock.mock.calls[0]!;
+    // path is carried in the query, URL-encoded
+    expect(String(url)).toMatch(/\/sandbox\/s1\/files\?path=data%2Fbig\.bin$/);
+    const ri = init as RequestInit;
+    expect(ri.method).toBe("POST");
+    expect((ri.headers as Record<string, string>)["content-type"]).toBe("application/octet-stream");
+    // the Blob itself is the body — not a JSON string
+    expect(ri.body).toBe(file);
+    expect(out).toEqual({ path: "data/big.bin", size: 4194304 });
+  });
+
+  it("throws the backend error message on a non-ok raw response", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { error: "file too large" } }),
+    );
+    await expect(api.sandbox.uploadFile("s1", "data/big.bin", bigBlob())).rejects.toThrow("file too large");
   });
 });
 

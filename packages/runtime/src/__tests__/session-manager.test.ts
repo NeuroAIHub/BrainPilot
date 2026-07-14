@@ -1,9 +1,13 @@
 import { describe, it, expect, beforeEach } from "vitest";
-import { mkdtemp, mkdir, writeFile, rm } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
-import { SessionManager } from "../session-manager.js";
+import { SessionManager, warnOnDeprecatedPersistentUserId, resolveSharedDir } from "../session-manager.js";
+import {
+  PERSISTENT_LAYOUT_MARKER,
+  PERSISTENT_LAYOUT_STAGING,
+} from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
 
@@ -236,6 +240,344 @@ describe("SessionManager workspace path normalization (#5)", () => {
     const out = await m.writeSessionFile(s.id, "top.txt", b64);
     expect(out.path).toBe("top.txt");
     await rm(root, { recursive: true, force: true });
+  });
+});
+
+describe("SessionManager persistent cross-session root (#257)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-data-"));
+  });
+
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+  it("a /data write is visible from a DIFFERENT session (cross-session reuse)", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const a = await m.createSession({ title: "A" });
+    const b = await m.createSession({ title: "B" });
+
+    // Upload into the persistent root from session A...
+    const wrote = await m.writeSessionFile(a.id, "/data/dataset.csv", b64("shared,data"));
+    // ...the returned path carries the /data prefix so it round-trips.
+    expect(wrote.path).toBe("/data/dataset.csv");
+
+    // ...and session B reads the SAME bytes via /data (would be impossible with
+    // the per-session workspace, which is scoped to one sid).
+    const read = await m.readSessionFile(b.id, "/data/dataset.csv");
+    expect(read.content).toBe("shared,data");
+
+    // On disk it lives flat under data/, NOT workspaces/<sid>/ (#287 removed
+    // the per-user subdir; the runtime is single-user by contract).
+    const onDisk = await readFile(join(root, "data", "dataset.csv"), "utf8");
+    expect(onDisk).toBe("shared,data");
+  });
+
+  it("a workspace write stays per-session (NOT visible via another session)", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const a = await m.createSession({ title: "A" });
+    const b = await m.createSession({ title: "B" });
+    await m.writeSessionFile(a.id, "notes.txt", b64("only in A"));
+    // B's workspace does not have it → read throws (ENOENT).
+    await expect(m.readSessionFile(b.id, "notes.txt")).rejects.toThrow();
+  });
+
+  it("guards each root independently: /data cannot escape into the workspace or beyond", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    // `..` from /data must not reach the sibling workspaces/ tree or outside dataRoot.
+    await expect(m.writeSessionFile(s.id, "/data/../workspaces/evil.txt", b64("x"))).rejects.toThrow(
+      /escapes/,
+    );
+    await expect(m.readSessionFile(s.id, "/data/../../etc/passwd")).rejects.toThrow(/escapes/);
+  });
+
+  it("ignores the deprecated persistentUserId option and lands flat under data/ (#287)", async () => {
+    const m = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: mockAgentFactory,
+      // #287: this option is now ignored; the write must NOT land under
+      // data/alice/ but flat in data/, mirroring the single-user contract.
+      persistentUserId: "alice",
+    });
+    const s = await m.createSession({ title: "S" });
+    await m.writeSessionFile(s.id, "/data/lib.txt", b64("hi"));
+    const onDisk = await readFile(join(root, "data", "lib.txt"), "utf8");
+    expect(onDisk).toBe("hi");
+    // The legacy layout must not have been created.
+    await expect(readFile(join(root, "data", "alice", "lib.txt"), "utf8")).rejects.toThrow();
+  });
+});
+
+describe("SessionManager conversation attachments (.attachments/)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-att-"));
+  });
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+
+  it("an /attachments write lands in the session's hidden .attachments/ subdir", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    const wrote = await m.writeSessionFile(s.id, "/attachments/report.pdf", b64("PDF"));
+    // path round-trips WITH the /attachments prefix
+    expect(wrote.path).toBe("/attachments/report.pdf");
+    // physically under workspaces/<sid>/.attachments/, scoped to the session
+    const onDisk = await readFile(join(root, "workspaces", s.id, ".attachments", "report.pdf"), "utf8");
+    expect(onDisk).toBe("PDF");
+  });
+
+  it("hides .attachments/ from the workspace root listing but lists it via /attachments", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    await m.writeSessionFile(s.id, "notes.txt", b64("agent output"));
+    await m.writeSessionFile(s.id, "/attachments/input.csv", b64("a,b"));
+
+    // Workspace root listing shows the agent file but NOT the .attachments dir.
+    const wsRoot = await m.listSessionFiles(s.id, "/workspace");
+    const names = wsRoot.map((e) => e.name);
+    expect(names).toContain("notes.txt");
+    expect(names).not.toContain(".attachments");
+
+    // The attachments tier is listed via its own prefix.
+    const att = await m.listSessionFiles(s.id, "/attachments");
+    expect(att.map((e) => e.name)).toEqual(["input.csv"]);
+  });
+
+  it("guards the attachments boundary against traversal", async () => {
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    await expect(
+      m.writeSessionFile(s.id, "/attachments/../escape.txt", b64("x")),
+    ).rejects.toThrow(/escapes/);
+  });
+});
+
+describe("warnOnDeprecatedPersistentUserId (#287)", () => {
+  it("is silent when neither the option nor the env is set", () => {
+    const msgs: string[] = [];
+    expect(warnOnDeprecatedPersistentUserId(undefined, {}, (m) => msgs.push(m))).toBe(false);
+    expect(warnOnDeprecatedPersistentUserId("   ", { BP_USER_ID: "" }, (m) => msgs.push(m))).toBe(false);
+    expect(msgs).toEqual([]);
+  });
+  it("warns (once, mentioning the env source) when only BP_USER_ID is set", () => {
+    const msgs: string[] = [];
+    expect(warnOnDeprecatedPersistentUserId(undefined, { BP_USER_ID: "bob" }, (m) => msgs.push(m))).toBe(true);
+    expect(msgs).toHaveLength(1);
+    expect(msgs[0]).toMatch(/BP_USER_ID env \("bob"\)/);
+    expect(msgs[0]).toMatch(/no longer controls path resolution since #287/);
+  });
+  it("warns (mentioning the option source) when only persistentUserId is passed", () => {
+    const msgs: string[] = [];
+    expect(warnOnDeprecatedPersistentUserId("alice", {}, (m) => msgs.push(m))).toBe(true);
+    expect(msgs[0]).toMatch(/persistentUserId option \("alice"\)/);
+  });
+  it("names BOTH sources when they are both set", () => {
+    const msgs: string[] = [];
+    warnOnDeprecatedPersistentUserId("alice", { BP_USER_ID: "bob" }, (m) => msgs.push(m));
+    expect(msgs[0]).toMatch(/persistentUserId option \("alice"\).*BP_USER_ID env \("bob"\)/);
+  });
+});
+
+describe("SessionManager legacy `data/<userId>/` migration (#287)", () => {
+  let root: string;
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-mig-"));
+  });
+
+  it("migrates only the known default data/local directory", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "dataset.csv"), "cols\n1,2\n", "utf8");
+    await mkdir(join(root, "data", "local", "subdir"), { recursive: true });
+    await writeFile(join(root, "data", "local", "subdir", "notes.md"), "kept together", "utf8");
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "dataset.csv"), "utf8")).toBe("cols\n1,2\n");
+    expect(await readFile(join(root, "data", "subdir", "notes.md"), "utf8")).toBe("kept together");
+    await expect(readFile(join(root, "data", "local", "dataset.csv"), "utf8")).rejects.toThrow();
+    const marker = JSON.parse(await readFile(join(root, PERSISTENT_LAYOUT_MARKER), "utf8"));
+    expect(marker).toMatchObject({ version: 2, status: "ready", migratedFrom: "data/local" });
+  });
+
+  it("uses BP_USER_ID only as a legacy migration hint", async () => {
+    await mkdir(join(root, "data", "alice"), { recursive: true });
+    await writeFile(join(root, "data", "alice", "a.txt"), "alice", "utf8");
+    const previous = process.env.BP_USER_ID;
+    process.env.BP_USER_ID = "alice";
+    try {
+      const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+      await m.ensurePersistentLayout();
+      expect(await readFile(join(root, "data", "a.txt"), "utf8")).toBe("alice");
+    } finally {
+      if (previous === undefined) delete process.env.BP_USER_ID;
+      else process.env.BP_USER_ID = previous;
+    }
+  });
+
+  it("does not flatten a valid v2 tree containing only data/project/", async () => {
+    await mkdir(join(root, "data", "project"), { recursive: true });
+    await writeFile(join(root, "data", "project", "dataset.csv"), "kept", "utf8");
+
+    const m1 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m1.ensurePersistentLayout();
+    const m2 = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m2.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "project", "dataset.csv"), "utf8")).toBe("kept");
+    await expect(readFile(join(root, "data", "dataset.csv"), "utf8")).rejects.toThrow();
+  });
+
+  it("refuses a mixed v1/v2 tree without moving either side", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "old.txt"), "old", "utf8");
+    await writeFile(join(root, "data", "new.txt"), "new", "utf8");
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await expect(m.ensurePersistentLayout()).rejects.toThrow(/cannot migrate/);
+    expect(await readFile(join(root, "data", "local", "old.txt"), "utf8")).toBe("old");
+    expect(await readFile(join(root, "data", "new.txt"), "utf8")).toBe("new");
+  });
+
+  it("single-flights migration before concurrent /data writes with no session", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "old.txt"), "old", "utf8");
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+
+    await Promise.all([
+      m.writeSessionFile("not-created", "/data/new.txt", Buffer.from("new").toString("base64")),
+      m.writeSessionFile("not-created", "/data/other.txt", Buffer.from("other").toString("base64")),
+    ]);
+
+    expect(await readFile(join(root, "data", "old.txt"), "utf8")).toBe("old");
+    expect(await readFile(join(root, "data", "new.txt"), "utf8")).toBe("new");
+    expect(await readFile(join(root, "data", "other.txt"), "utf8")).toBe("other");
+  });
+
+  it("resumes a staged whole-directory migration after interruption", async () => {
+    await mkdir(join(root, PERSISTENT_LAYOUT_STAGING), { recursive: true });
+    await writeFile(join(root, PERSISTENT_LAYOUT_STAGING, "old.txt"), "old", "utf8");
+    await mkdir(join(root, "data"), { recursive: true });
+    await writeFile(
+      join(root, PERSISTENT_LAYOUT_MARKER),
+      JSON.stringify({
+        version: 2,
+        status: "migrating",
+        phase: "staged",
+        legacyUserId: "local",
+        startedAt: new Date().toISOString(),
+      }),
+      "utf8",
+    );
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "old.txt"), "utf8")).toBe("old");
+    const marker = JSON.parse(await readFile(join(root, PERSISTENT_LAYOUT_MARKER), "utf8"));
+    expect(marker).toMatchObject({ status: "ready", migratedFrom: "data/local" });
+  });
+});
+
+describe("resolveSharedDir (#261)", () => {
+  it("is undefined (feature off) when unset or blank", () => {
+    expect(resolveSharedDir(undefined, {})).toBeUndefined();
+    expect(resolveSharedDir("   ", {})).toBeUndefined();
+    expect(resolveSharedDir(undefined, { BP_SHARED_DIR: "" })).toBeUndefined();
+  });
+  it("reads BP_SHARED_DIR from env when no explicit option", () => {
+    expect(resolveSharedDir(undefined, { BP_SHARED_DIR: "/srv/shared" })).toBe("/srv/shared");
+  });
+  it("explicit option wins over env", () => {
+    expect(resolveSharedDir("/opt/lib", { BP_SHARED_DIR: "/srv/shared" })).toBe("/opt/lib");
+  });
+});
+
+describe("SessionManager cross-user shared root (#261)", () => {
+  let root: string; // dataRoot (per-user)
+  let shared: string; // cross-user shared dir, OUTSIDE dataRoot
+  beforeEach(async () => {
+    root = await mkdtemp(join(tmpdir(), "bp-shroot-"));
+    shared = await mkdtemp(join(tmpdir(), "bp-shared-"));
+  });
+  const b64 = (s: string) => Buffer.from(s, "utf8").toString("base64");
+  const mkMgr = () =>
+    new SessionManager({
+      dataRoot: root,
+      sharedDir: shared,
+      persist: false,
+      agentFactory: mockAgentFactory,
+    });
+
+  it("reads a file from the shared root via the /shared prefix", async () => {
+    await writeFile(join(shared, "atlas.csv"), "x,y,z");
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    const read = await m.readSessionFile(s.id, "/shared/atlas.csv");
+    expect(read.content).toBe("x,y,z");
+  });
+
+  it("is shared across sessions AND users (same bytes for any session)", async () => {
+    await writeFile(join(shared, "ref.txt"), "public");
+    const m = mkMgr();
+    const a = await m.createSession({ title: "A" });
+    const b = await m.createSession({ title: "B" });
+    expect((await m.readSessionFile(a.id, "/shared/ref.txt")).content).toBe("public");
+    expect((await m.readSessionFile(b.id, "/shared/ref.txt")).content).toBe("public");
+  });
+
+  it("lists the shared root via /shared", async () => {
+    await writeFile(join(shared, "one.txt"), "1");
+    await writeFile(join(shared, "two.txt"), "2");
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    const names = (await m.listSessionFiles(s.id, "/shared")).map((e) => e.name).sort();
+    expect(names).toEqual(["one.txt", "two.txt"]);
+  });
+
+  it("rejects writes to the shared root (read-only)", async () => {
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    await expect(m.writeSessionFile(s.id, "/shared/nope.txt", b64("x"))).rejects.toThrow(
+      /read-only/,
+    );
+  });
+
+  it("rejects streamed writes to the shared root (read-only)", async () => {
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    const { Readable } = await import("node:stream");
+    await expect(
+      m.writeSessionFileStream(s.id, "/shared/nope.txt", Readable.from([Buffer.from("x")])),
+    ).rejects.toThrow(/read-only/);
+  });
+
+  it("rejects deletes in the shared root (read-only)", async () => {
+    await writeFile(join(shared, "keep.txt"), "safe");
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    await expect(m.deleteSessionFile(s.id, "/shared/keep.txt")).rejects.toThrow(/read-only/);
+    // The file is untouched.
+    expect(await readFile(join(shared, "keep.txt"), "utf8")).toBe("safe");
+  });
+
+  it("guards the shared boundary against traversal", async () => {
+    const m = mkMgr();
+    const s = await m.createSession({ title: "S" });
+    await expect(m.readSessionFile(s.id, "/shared/../../etc/passwd")).rejects.toThrow(/escapes/);
+  });
+
+  it("does NOT recognize /shared when unconfigured (backward-compatible)", async () => {
+    // No sharedDir → `/shared/...` falls through to the session workspace, so a
+    // write is allowed and lands under workspaces/<sid>/shared/.
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const s = await m.createSession({ title: "S" });
+    const wrote = await m.writeSessionFile(s.id, "/shared/plain.txt", b64("ok"));
+    // Emitted prefix-less (workspace path), NOT as /shared/...
+    expect(wrote.path).toBe("shared/plain.txt");
+    const onDisk = await readFile(join(root, "workspaces", s.id, "shared", "plain.txt"), "utf8");
+    expect(onDisk).toBe("ok");
   });
 });
 

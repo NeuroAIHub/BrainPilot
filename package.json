@@ -1,6 +1,6 @@
 {
   "name": "brainpilot",
-  "version": "0.0.11",
+  "version": "0.0.14",
   "private": true,
   "type": "module",
   "description": "BrainPilot — multi-agent research collaboration platform (TS + Pi SDK)",
@@ -16,6 +16,7 @@
     "packages/docs"
   ],
   "scripts": {
+    "postinstall": "node scripts/patch-pi-ai.cjs",
     "build": "npm run build --workspaces --if-present",
     "docs:build": "npm run build -w @brainpilot/docs",
     "docs:check": "npm run check:secrets -w @brainpilot/docs && npm run typecheck -w @brainpilot/docs",

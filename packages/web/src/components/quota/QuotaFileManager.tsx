@@ -1,3 +1,6 @@
+// Hosted-only disk-quota UI — a hosted trust-front hook, not dead code.
+// Rendered by DiskQuotaCriticalDialog, which is inert single-user.
+// See ./README.md and issue #262 before touching this.
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { ChevronRight, File, Folder, Trash2 } from "lucide-react";
 import { FileEntry } from "../../contracts/backend";

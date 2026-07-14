@@ -50,6 +50,22 @@ export type { StartServerOptions } from "./server.js";
 export { McpBridge, loadMcpServersConfig, defaultMcpConnect } from "./mcp-bridge.js";
 export type { McpServersConfig, McpServerSpec, McpClientLike, McpConnectFn } from "./mcp-bridge.js";
 
+export {
+  loadToolToggles,
+  isToolEnabled,
+  TOGGLEABLE_TOOL_NAMES,
+} from "./tool-toggles.js";
+export type { ToolToggles, ToggleableToolName } from "./tool-toggles.js";
+
+export {
+  DOMAIN_TOOL_NAMES,
+  resolveDomainResources,
+  toolTogglesForDomainResources,
+  withoutDomainResourceInstructions,
+  domainResourceUsageOnStart,
+  domainResourceUsageOnSuccess,
+} from "./domain-resources.js";
+
 export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
 export type { MaterializeSkillsResult } from "./materialize-skills.js";
 

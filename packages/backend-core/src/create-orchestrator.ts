@@ -36,7 +36,13 @@ export function createOrchestrator(
   const mode = options.mode ?? resolveOrchestratorMode(env);
 
   if (mode === "docker") {
-    return new DockerOrchestrator(options.docker);
+    // #261: the container gets a fresh env, so the cross-user shared root must
+    // be passed in explicitly (from BP_SHARED_DIR) — it's then bind-mounted
+    // read-only and re-exported to the container as BP_SHARED_DIR. (Local/static
+    // modes inherit the parent env, so the runtime reads BP_SHARED_DIR directly.)
+    const sharedRaw = options.docker?.sharedDir ?? env.BP_SHARED_DIR ?? "";
+    const sharedDir = sharedRaw.trim() === "" ? undefined : sharedRaw;
+    return new DockerOrchestrator({ ...options.docker, sharedDir });
   }
 
   if (mode === "static") {

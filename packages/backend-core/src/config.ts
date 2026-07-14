@@ -677,6 +677,95 @@ export async function deleteMcpServer(dataDir: string, name: string): Promise<bo
   return true;
 }
 
+/* ----------------------- Built-in tool toggles ------------------------- *
+ * Per-tool on/off overrides for the three user-controllable Pi-native
+ * SystemTools (`skill_search`, `get_domain_knowledge_local`,
+ * `search_papers_local`), persisted at
+ * `<dataDir>/bp_template/tool_toggles.json`. The runtime consumes the same
+ * file via `packages/runtime/src/tool-toggles.ts:loadToolToggles`.
+ *
+ * Semantics:
+ *   - Every field is optional. Missing / non-boolean → runtime treats as
+ *     enabled (default-on).
+ *   - Write is a MERGE (PATCH), not a REPLACE: passing `{ skill_search: false }`
+ *     leaves the other two keys untouched. Matches how the frontend toggle
+ *     UI operates (flip one row, save).
+ *   - Written 0o600 through the same tmp+rename dance as providers.json /
+ *     mcp_servers.json. Preserves unrelated top-level keys the user may have
+ *     hand-edited (forward-compat with future toggles).
+ * ------------------------------------------------------------------------- */
+
+export const TOGGLEABLE_TOOL_NAMES = [
+  "skill_search",
+  "get_domain_knowledge_local",
+  "search_papers_local",
+] as const;
+
+export type ToggleableToolName = (typeof TOGGLEABLE_TOOL_NAMES)[number];
+
+export type ToolToggles = Partial<Record<ToggleableToolName, boolean>>;
+
+export function toolTogglesPath(dataDir: string): string {
+  return path.join(dataDir, "bp_template", "tool_toggles.json");
+}
+
+/**
+ * Read the toggles file. Malformed / missing → `{}` (all enabled).
+ * Unknown keys are silently dropped; non-boolean values are dropped
+ * (matches the runtime loader's contract).
+ */
+export async function readToolToggles(dataDir: string): Promise<ToolToggles> {
+  const raw = await readJsonSafe(toolTogglesPath(dataDir));
+  if (!raw || typeof raw !== "object") return {};
+  const out: ToolToggles = {};
+  for (const name of TOGGLEABLE_TOOL_NAMES) {
+    const v = (raw as Record<string, unknown>)[name];
+    if (typeof v === "boolean") out[name] = v;
+  }
+  return out;
+}
+
+/**
+ * Merge `patch` into the current toggles and persist. Returns the new
+ * complete state (post-merge). Any keys in `patch` that aren't in the
+ * strict tool-name union are ignored. Any non-boolean values are ignored
+ * (so the disk file only ever contains booleans on the strict keys).
+ *
+ * We preserve unknown top-level keys already on disk (a future field the
+ * user's build doesn't know about survives round-trip through this
+ * endpoint). Known keys not present in the merged result are dropped —
+ * `writeToolToggles(x, {})` still normalises the file.
+ */
+export async function writeToolToggles(
+  dataDir: string,
+  patch: ToolToggles,
+): Promise<ToolToggles> {
+  const current = await readToolToggles(dataDir);
+  const merged: ToolToggles = { ...current };
+  for (const name of TOGGLEABLE_TOOL_NAMES) {
+    const v = patch[name];
+    if (typeof v === "boolean") merged[name] = v;
+  }
+  // Preserve unrelated top-level keys the user may have hand-edited.
+  const existingRaw = (await readJsonSafe(toolTogglesPath(dataDir))) ?? {};
+  const withUnknowns: Record<string, unknown> = { ...existingRaw };
+  // Strip the strict fields from `withUnknowns` first, then reapply from
+  // `merged`, so a strict field's on-disk value is authoritative from the
+  // merge (not accidentally reintroduced from the raw read).
+  for (const name of TOGGLEABLE_TOOL_NAMES) delete withUnknowns[name];
+  Object.assign(withUnknowns, merged);
+
+  const target = toolTogglesPath(dataDir);
+  await fs.mkdir(path.dirname(target), { recursive: true });
+  const tmp = `${target}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(withUnknowns, null, 2), {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  await fs.rename(tmp, target);
+  return merged;
+}
+
 /* ---------------------- KnowledgeBase API config -------------------------
  * OCR + metadata-extract API keys the Python pipeline reads at build time.
  * Stored at ``<KB_ROOT>/source/API_config.json`` — the exact path

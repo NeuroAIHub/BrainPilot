@@ -1,13 +1,13 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, ChatMessage, MessageFilterRule, Session, SessionTokenUsage, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, ChatMessage, DomainResources, MessageFilterConfig, MessageFilterRule, Session, SessionTokenUsage, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
 import { useSandbox } from "./SandboxContext";
 import { useSSE } from "./SSEContext";
 import { draftStore } from "./draftStore";
-import { defaultFilterRules } from "./messageFilters";
+import { defaultFilterRules, isNonFatalAgentErrorMessage, HIDE_NON_FATAL_AGENT_ERRORS } from "./messageFilters";
 import {
   eventSessionId,
   finalizeAssistant,
@@ -66,7 +66,7 @@ interface SessionContextValue {
   /** Re-seed the trace graph from the HTTP route (manual refresh). */
   refreshTrace: (sessionId: string) => Promise<void>;
   selectSession: (sessionId: string) => void;
-  createSession: (title?: string, opts?: { providerId?: string; modelId?: string }) => Promise<Session | null>;
+  createSession: (title?: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources }) => Promise<Session | null>;
   /**
    * Open a fresh draft conversation without persisting anything. Idempotent —
    * repeated calls collapse to the single draft state. The real session is
@@ -77,7 +77,7 @@ interface SessionContextValue {
   deleteSession: (sessionId: string) => Promise<void>;
   /** Resolves true when the message was accepted, false on validation/timeout/
    *  error — the composer uses this to restore the draft so input isn't lost. */
-  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string }) => Promise<boolean>;
+  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources }) => Promise<boolean>;
   interruptCurrent: () => Promise<void>;
   /**
    * 修正6 — answer an ask_user (user_input_request) card. Optimistically
@@ -89,12 +89,78 @@ interface SessionContextValue {
   setCurrentView: (view: "chat" | "agents" | "trace") => void;
   setAgentFilter: (agentName: string, hideMessages: boolean, hideTools: boolean, hideHooks?: boolean) => void;
   messageFilters: MessageFilterRule[];
+  /**
+   * Issue #278 — toggle a message-filter rule by id. Persists the `{id,
+   * enabled}` map to localStorage under MESSAGE_FILTERS_STORAGE_KEY so the
+   * user's preference survives reloads and new rule additions merge in by id
+   * (see loadMessageFilterConfig).
+   */
+  setMessageFilterEnabled: (ruleId: string, enabled: boolean) => void;
+  /**
+   * Issue #278 — count of non-fatal agent errors that were hidden from the
+   * main chat stream by the `hide-non-fatal-agent-errors` filter for the
+   * current session. Drives the "hidden errors" red dot on the Agents tab.
+   * Cleared when the user opens the Agents view or disables the rule.
+   */
+  hiddenErrorsCount: number;
+  /** True iff hiddenErrorsCount > 0 AND the user hasn't seen it yet. */
+  hiddenErrorsUnread: boolean;
 }
 
 // Stable key for the not-yet-persisted draft session. The composer keys its
 // draft text by this id while `isDraft` is true; once the real session is
 // created on first send, the composer switches to the real session id.
 export const DRAFT_SESSION_ID = "__draft__";
+
+/**
+ * Issue #278 — localStorage key holding the user's message-filter overrides.
+ * Persists a `MessageFilterConfig[]` (id + enabled only — the predicate
+ * functions come from code). New rules added to `defaultFilterRules` in a
+ * future release inherit their own defaults; only the ids the user has ever
+ * touched are pinned by storage. See loadMessageFilterConfig().
+ */
+export const MESSAGE_FILTERS_STORAGE_KEY = "message-filters";
+
+/**
+ * Read the persisted `{id, enabled}` overrides and apply them by id to the
+ * in-code defaults. Missing or corrupt storage → return defaults untouched.
+ * New rules added in a future release (that were never in storage) keep
+ * their default `enabled`, and old rules dropped from code just get ignored.
+ */
+function loadMessageFilters(): MessageFilterRule[] {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") {
+    return defaultFilterRules;
+  }
+  const raw = window.localStorage.getItem(MESSAGE_FILTERS_STORAGE_KEY);
+  if (!raw) return defaultFilterRules;
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return defaultFilterRules;
+    const overrides = new Map<string, boolean>();
+    for (const entry of parsed as MessageFilterConfig[]) {
+      if (entry && typeof entry.id === "string" && typeof entry.enabled === "boolean") {
+        overrides.set(entry.id, entry.enabled);
+      }
+    }
+    return defaultFilterRules.map((rule) =>
+      overrides.has(rule.id) ? { ...rule, enabled: overrides.get(rule.id)! } : rule,
+    );
+  } catch {
+    return defaultFilterRules;
+  }
+}
+
+/** Serialize the enabled bits of every rule so a future load merges by id. */
+function persistMessageFilters(rules: MessageFilterRule[]): void {
+  if (typeof window === "undefined" || typeof window.localStorage === "undefined") return;
+  const config: MessageFilterConfig[] = rules.map((r) => ({ id: r.id, enabled: r.enabled }));
+  try {
+    window.localStorage.setItem(MESSAGE_FILTERS_STORAGE_KEY, JSON.stringify(config));
+  } catch {
+    // Quota / access errors are non-fatal — the toggle still works in-memory
+    // for this session; we just lose persistence.
+  }
+}
 
 const SessionContext = createContext<SessionContextValue | null>(null);
 // Runtime treats `limit=0` as "return the full persisted event log". Rehydrate
@@ -232,7 +298,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // Cumulative real token usage for the current session, fed from session_state.
   const [tokenUsage, setTokenUsage] = useState<SessionTokenUsage | null>(null);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
-  const [messageFilters, setMessageFilters] = useState<MessageFilterRule[]>(defaultFilterRules);
+  // Issue #278 — messageFilters seed merges persisted `{id, enabled}` overrides
+  // (localStorage) onto the in-code defaults. Persisted through the setter
+  // wrapper below so a user's disable of "fold agent errors" survives reloads.
+  const [messageFilters, setMessageFilters] = useState<MessageFilterRule[]>(() => loadMessageFilters());
+  // Issue #278 — per-session count of non-fatal agent errors that the
+  // `hide-non-fatal-agent-errors` rule folded out of the main chat stream,
+  // plus whether the user has already looked at the Agents panel since the
+  // last one arrived. The pair drives the Agents-tab red dot in DesktopShell.
+  const [hiddenErrorsBySession, setHiddenErrorsBySession] = useState<
+    Record<string, { count: number; seen: boolean }>
+  >({});
+  // Ref mirror of messageFilters so the SSE queue drain (keyed on
+  // session/tick, not filters) can read the CURRENT rule state without
+  // re-subscribing on every toggle.
+  const messageFiltersRef = useRef<MessageFilterRule[]>(messageFilters);
+  useEffect(() => {
+    messageFiltersRef.current = messageFilters;
+  }, [messageFilters]);
   // #79: live Graph of Trace per session. Seeded by a fetch on session change,
   // then kept live by CUSTOM:trace_node SSE events (see the queue drain below).
   const [traceBySession, setTraceBySession] = useState<Record<string, TraceGraph>>({});
@@ -419,7 +502,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [disconnectSession]);
 
   const createSession = useCallback(
-    async (title = "New research session", opts: { providerId?: string; modelId?: string } = {}) => {
+    async (title = "New research session", opts: { providerId?: string; modelId?: string; domainResources?: DomainResources } = {}) => {
       if (!currentSandbox || currentSandbox.status !== "running") {
         setError(tg("ctx.session.startSandbox"));
         return null;
@@ -451,7 +534,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [sessions.length, isLoading, currentSandbox, currentSessionId, isDraft, startDraftSession]);
 
   const sendPrompt = useCallback(
-    async (content: string, opts: { providerId?: string; modelId?: string } = {}) => {
+    async (content: string, opts: { providerId?: string; modelId?: string; domainResources?: DomainResources } = {}) => {
       const trimmed = content.trim();
       console.log(`[SessionContext] sendPrompt: "${trimmed.slice(0, 40)}...", isConnected=${isConnected}, isDraft=${isDraft}`);
       if (!trimmed) {
@@ -860,23 +943,60 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       return current;
     });
 
-    // Process all events through the message reducer.
+    // Process all events through the message reducer. While we're at it, count
+    // any newly-appended non-fatal system_message per session so the Agents-tab
+    // red dot (issue #278) reflects hidden errors even though the message
+    // stream folded them out. We diff by id so coalesced updates to an
+    // existing bubble don't double-count.
+    const hiddenAdds = new Map<string, number>();
+    const foldRuleEnabled = messageFiltersRef.current.some(
+      (r) => r.id === HIDE_NON_FATAL_AGENT_ERRORS && r.enabled,
+    );
     setMessagesBySession((current) => {
       let messages = current[sid] ?? [];
+      const countHiddenAdds = (from: ChatMessage[], to: ChatMessage[], sessionId: string) => {
+        if (!foldRuleEnabled) return;
+        const beforeIds = new Set(
+          from.filter(isNonFatalAgentErrorMessage).map((m) => m.id),
+        );
+        let added = 0;
+        for (const m of to) {
+          if (!isNonFatalAgentErrorMessage(m)) continue;
+          if (!beforeIds.has(m.id)) added += 1;
+        }
+        if (added > 0) {
+          hiddenAdds.set(sessionId, (hiddenAdds.get(sessionId) ?? 0) + added);
+        }
+      };
       for (const event of queue) {
         const eventSid = eventSessionId(event);
         if (eventSid && eventSid !== sid) {
           // Background session event — also update its message list.
-          messages = current[eventSid] ?? [];
-          const next = reduceMessagesForEvent(messages, event);
+          const before = current[eventSid] ?? [];
+          const next = reduceMessagesForEvent(before, event);
+          countHiddenAdds(before, next, eventSid);
           current = { ...current, [eventSid]: next };
           messages = current[sid] ?? [];
           continue;
         }
+        const before = messages;
         messages = reduceMessagesForEvent(messages, event);
+        countHiddenAdds(before, messages, sid);
       }
       return { ...current, [sid]: messages };
     });
+    if (hiddenAdds.size > 0) {
+      setHiddenErrorsBySession((cur) => {
+        const next = { ...cur };
+        for (const [sessionId, added] of hiddenAdds.entries()) {
+          const prev = cur[sessionId] ?? { count: 0, seen: true };
+          // Landing new hidden errors flips `seen` back to false so the dot
+          // re-appears even if the user cleared it earlier this session.
+          next[sessionId] = { count: prev.count + added, seen: false };
+        }
+        return next;
+      });
+    }
   }, [currentSessionId, tick]);
 
   const setAgentFilter = useCallback(
@@ -892,6 +1012,34 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [],
   );
 
+  // Issue #278 — toggle a filter rule and persist. Also marks any pending
+  // hidden-error badge for the current session as seen when the "fold agent
+  // errors" rule is disabled — the user has explicitly opted to see errors
+  // inline again, so the "you have hidden errors" hint is no longer useful.
+  const setMessageFilterEnabled = useCallback(
+    (ruleId: string, enabled: boolean) => {
+      setMessageFilters((current) => {
+        let changed = false;
+        const next = current.map((rule) => {
+          if (rule.id !== ruleId || rule.enabled === enabled) return rule;
+          changed = true;
+          return { ...rule, enabled };
+        });
+        if (!changed) return current;
+        persistMessageFilters(next);
+        return next;
+      });
+      if (ruleId === HIDE_NON_FATAL_AGENT_ERRORS && !enabled && currentSessionId) {
+        setHiddenErrorsBySession((cur) => {
+          const entry = cur[currentSessionId];
+          if (!entry || entry.seen) return cur;
+          return { ...cur, [currentSessionId]: { ...entry, seen: true } };
+        });
+      }
+    },
+    [currentSessionId],
+  );
+
   const currentTrace = useMemo(
     () => (currentSessionId ? (traceBySession[currentSessionId] ?? null) : null),
     [currentSessionId, traceBySession],
@@ -905,7 +1053,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setTraceUnreadBySession((u) => (u[currentSessionId] ? { ...u, [currentSessionId]: false } : u));
   }, [currentView, currentSessionId]);
 
+  // Issue #278 — opening the Agents view marks any hidden-error badge for the
+  // current session as seen. Mirrors the traceUnread clear above.
+  useEffect(() => {
+    if (currentView !== "agents" || !currentSessionId) return;
+    setHiddenErrorsBySession((cur) => {
+      const entry = cur[currentSessionId];
+      if (!entry || entry.seen) return cur;
+      return { ...cur, [currentSessionId]: { ...entry, seen: true } };
+    });
+  }, [currentView, currentSessionId]);
+
   const traceUnread = currentSessionId ? (traceUnreadBySession[currentSessionId] ?? false) : false;
+  const hiddenErrorsEntry = currentSessionId ? hiddenErrorsBySession[currentSessionId] : undefined;
+  const hiddenErrorsCount = hiddenErrorsEntry?.count ?? 0;
+  const hiddenErrorsUnread = !!(hiddenErrorsEntry && hiddenErrorsEntry.count > 0 && !hiddenErrorsEntry.seen);
 
   const value = useMemo(
     () => ({
@@ -939,6 +1101,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setCurrentView,
       setAgentFilter,
       messageFilters,
+      setMessageFilterEnabled,
+      hiddenErrorsCount,
+      hiddenErrorsUnread,
     }),
     [
       sessions,
@@ -971,6 +1136,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setCurrentView,
       setAgentFilter,
       messageFilters,
+      setMessageFilterEnabled,
+      hiddenErrorsCount,
+      hiddenErrorsUnread,
     ],
   );
 

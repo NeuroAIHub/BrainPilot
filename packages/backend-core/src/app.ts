@@ -44,6 +44,10 @@ import {
   type StoredProviderProfile,
   readKbApiConfig,
   writeKbApiConfig,
+  readToolToggles,
+  writeToolToggles,
+  TOGGLEABLE_TOOL_NAMES,
+  type ToolToggles,
 } from "./config.js";
 import {
   cancelKbBuild,
@@ -111,6 +115,25 @@ export function createApp(options: CreateAppOptions): Hono {
   const app = new Hono();
   const api = new Hono();
 
+  // Catch-all error handler: any uncaught throw returns JSON, never Hono's
+  // default text/plain "Internal Server Error" (which the frontend's handleJson
+  // chokes on — the same non-JSON hazard #30 fixed at the 404 layer, here at the
+  // 500 layer). The message carries the orchestrator's own diagnostic (runtime
+  // failed to start / provider misconfigured / missing docker dep), and `hint`
+  // names the user-actionable next step so the guidance actually reaches the UI
+  // instead of being flattened into an opaque 500.
+  app.onError((err, c) => {
+    const message = err instanceof Error ? err.message : String(err);
+    return c.json(
+      {
+        error: message,
+        code: "runtime_unavailable",
+        hint: "The agent runtime failed to start or is unreachable. Check the provider config in Settings → Providers, ensure no port conflict, and see the backend/runtime logs.",
+      },
+      500,
+    );
+  });
+
   // ---- Health (backend-local; does not require runtime) ----------------
   api.get("/health", (c) => c.json({ status: "ok" }));
 
@@ -174,8 +197,25 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
   api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
   api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
-  // #47: file upload — POST the base64 body through to the runtime writeFile route.
-  api.post("/sandbox/:id/files", forward("writeFile", { idParam: "id", withBody: true }));
+  // #47/#256: file upload. A base64 JSON body goes through the buffered
+  // `forward` helper; a raw `application/octet-stream` body is streamed to the
+  // runtime untouched (forward() reads the body via `text()`, which would
+  // UTF-8-decode and corrupt binary bytes — so we must NOT route it there).
+  api.post("/sandbox/:id/files", async (c) => {
+    const contentType = c.req.header("content-type") ?? "";
+    if (contentType.includes("application/octet-stream")) {
+      const rc = await getClient();
+      const query = new URL(c.req.url).search.replace(/^\?/, "");
+      const upstream = await rc.forward("writeFile", {
+        params: { id: c.req.param("id") ?? "" },
+        body: c.req.raw.body, // byte ReadableStream — streamed, not buffered
+        headers: { "content-type": "application/octet-stream" },
+        query: query.length > 0 ? query : undefined,
+      });
+      return relay(c, upstream);
+    }
+    return forward("writeFile", { idParam: "id", withBody: true })(c);
+  });
 
   // ---- SSE byte passthrough (修正4) ------------------------------------
   // Canonical protocol path `/sse/:id` (RUNTIME_ROUTES.sessionEvents) plus the
@@ -335,6 +375,38 @@ export function createApp(options: CreateAppOptions): Hono {
     const ok = await deleteMcpServer(dataDir, c.req.param("name"));
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.body(null, 204);
+  });
+
+  // ---- Built-in tool toggles (disk-backed: bp_template/tool_toggles.json) ----
+  //
+  // Per-tool on/off overrides for the three user-controllable Pi-native
+  // SystemTools: skill_search, get_domain_knowledge_local, search_papers_local.
+  // Missing / non-boolean → runtime treats as enabled (default-on). PUT is a
+  // MERGE (partial patch); unknown keys and non-boolean values are ignored.
+  //
+  // Liveness: the runtime reads this file on every `ensureAgent`, so a PUT
+  // here takes effect on the next new session (or the next expert spawn in
+  // an existing session) immediately. Already-running agents keep the tool
+  // list they were given at agent-creation time — Pi caches it inside the
+  // provider session — so applying the change to a currently-active agent
+  // still requires a backend restart. The frontend panel spells this out.
+  api.get("/tool-toggles", async (c) => {
+    return c.json(await readToolToggles(dataDir));
+  });
+  api.put("/tool-toggles", async (c) => {
+    const body = (await safeJson(c)) as Record<string, unknown>;
+    // Manual coercion instead of a Zod schema — the shape is trivially small
+    // (three booleans, all optional) and rejecting the whole PUT on a stray
+    // non-boolean would be user-hostile ("your JSON is fine, we just dropped
+    // the fields we didn't recognise" is friendlier). Non-boolean values fall
+    // through to the writer, which drops them.
+    const patch: ToolToggles = {};
+    for (const name of TOGGLEABLE_TOOL_NAMES) {
+      const v = body[name];
+      if (typeof v === "boolean") patch[name] = v;
+    }
+    const merged = await writeToolToggles(dataDir, patch);
+    return c.json(merged);
   });
 
   // ---- Knowledge Base build orchestration ------------------------------

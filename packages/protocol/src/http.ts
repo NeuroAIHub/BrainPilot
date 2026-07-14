@@ -83,6 +83,8 @@ export const CreateSessionRequestSchema = z.object({
   providerId: z.string().optional(),
   /** Optional model id within that provider. */
   modelId: z.string().optional(),
+  /** Per-session domain resources; omitted means full for backward compatibility. */
+  domainResources: z.enum(["full", "base"]).optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
@@ -206,9 +208,20 @@ export type InterruptResponse = z.infer<typeof InterruptResponseSchema>;
 
 /* ------------------------------------------------------------------ *
  * POST /sessions/:id/files  (#47 — upload a file into the workspace)
- * ------------------------------------------------------------------ */
+ * ------------------------------------------------------------------ *
+ * Two accepted request shapes, negotiated by `Content-Type` (#256):
+ *   1. base64 JSON — `application/json` body `{ path, contentBase64 }`
+ *      (this schema). Whole payload is buffered in memory; +33% wire
+ *      inflation. Kept for backward compatibility / small files.
+ *   2. raw stream — `application/octet-stream` body is the file bytes
+ *      verbatim, with the workspace-relative path in the `?path=` query
+ *      (e.g. `POST /sessions/:id/files?path=docs/foo.pdf`). Streamed to
+ *      disk, symmetric with the `readRawFile` download. Preferred for
+ *      large uploads.
+ * Both return `WriteFileResponseSchema` and enforce the same traversal
+ * guard + size cap (`BP_UPLOAD_MAX_BYTES`, default 20 MiB). */
 
-/** #47: upload body. Content is base64 (binary-safe over the JSON byte chain). */
+/** #47: base64 JSON upload body. Content is base64 (binary-safe over the JSON byte chain). */
 export const WriteFileRequestSchema = z.object({
   /** Workspace-relative path (a leading `/workspace` prefix is tolerated). */
   path: z.string().trim().min(1),
@@ -281,12 +294,25 @@ export const RUNTIME_ROUTES = {
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },
-  /** Workspace files (`workspaces/:id/`). `?path=` is relative to the workspace root. */
+  /**
+   * Workspace files. `?path=` addresses one of several roots by prefix:
+   *  - `/workspace[/...]` (or a bare relative path) → per-session workspace
+   *    `workspaces/:id/` (the agent's cwd);
+   *  - `/data[/...]` → the runtime's single-user persistent root `data/`,
+   *    reusable across sessions (#257/#287);
+   *  - `/shared[/...]` → the cross-user READ-ONLY shared root (#261), when the
+   *    deployment configures one (`BP_SHARED_DIR`); writes/deletes are rejected.
+   * Each root is traversal-guarded independently.
+   */
   listFiles: { method: "GET", path: "/sessions/:id/files" },
   readFile: { method: "GET", path: "/sessions/:id/files/content" },
   readRawFile: { method: "GET", path: "/sessions/:id/files/raw" },
   deleteFile: { method: "DELETE", path: "/sessions/:id/files" },
-  /** #47: upload a file into the workspace. Body: { path, contentBase64 }. */
+  /**
+   * #47/#256: upload a file into the workspace. Two shapes negotiated by
+   * Content-Type: `application/json` body `{ path, contentBase64 }`, or
+   * `application/octet-stream` raw bytes with `?path=` (streamed to disk).
+   */
   writeFile: { method: "POST", path: "/sessions/:id/files" },
 } as const satisfies Record<string, RouteDef>;
 

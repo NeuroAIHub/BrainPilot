@@ -51,6 +51,36 @@ describe("ask_user (SessionManager)", () => {
     expect(toolEnd).toBeTruthy();
   });
 
+  it("routes an ordinary message as the answer while an ask_user is pending (#272)", async () => {
+    const session = await m.createSession({ title: "T" });
+    const events: AgUiEvent[] = [];
+    m.subscribe(session.id, (e) => events.push(e));
+
+    // Drive the agent to block on ask_user.
+    await m.sendMessage(session.id, 'decide [[tool:ask_user {"question":"Pick A or B"}]]');
+    await new Promise((r) => setTimeout(r, 20));
+    const req = events.find((e) => e.type === "user_input_request") as any;
+    expect(req).toBeTruthy();
+
+    // Instead of answering via resolveInput, the user sends a plain message.
+    // It must be consumed as the answer (not "already processing"), unblocking
+    // the tool — a user_input_response echo carries the message content.
+    const res = await m.sendMessage(session.id, "A");
+    expect(res.accepted).toBe(true);
+
+    const resp = events.find((e) => e.type === "user_input_response") as any;
+    expect(resp).toBeTruthy();
+    expect(resp.request_id).toBe(req.request_id);
+    expect(resp.answer).toBe("A");
+
+    // The blocked tool resolves with the routed answer.
+    await new Promise((r) => setTimeout(r, 20));
+    const toolEnd = events.find(
+      (e) => e.type === "TOOL_CALL_RESULT" && (e as any).content?.includes("A"),
+    );
+    expect(toolEnd).toBeTruthy();
+  });
+
   it("resolveInput returns false for unknown request_id", async () => {
     const session = await m.createSession({ title: "T" });
     const events: AgUiEvent[] = [];

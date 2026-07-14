@@ -4,6 +4,7 @@ import {
   AgUiEventSchema,
   CompactionCustomValueSchema,
   CUSTOM_EVENT,
+  DomainResourceUsageValueSchema,
   isAgUiEvent,
   parseEvent,
   safeParseEvent,
@@ -219,6 +220,32 @@ describe("discriminated union behavior", () => {
     // Rejects unknown op / reason.
     expect(CompactionCustomValueSchema.safeParse({ op: "middle", reason: "threshold" }).success).toBe(false);
     expect(CompactionCustomValueSchema.safeParse({ op: "start", reason: "nope" }).success).toBe(false);
+  });
+
+  it("CUSTOM domain-resource usage exposes counts without resource contents", () => {
+    const value = DomainResourceUsageValueSchema.parse({
+      schemaVersion: "1.0",
+      kind: "skill_load",
+      skillName: "fmri-analysis",
+      source: "router",
+    });
+    expect(value.skillName).toBe("fmri-analysis");
+    expect(value).not.toHaveProperty("query");
+    expect(value).not.toHaveProperty("content");
+    expect(DomainResourceUsageValueSchema.safeParse({
+      schemaVersion: "1.0",
+      kind: "skill_load",
+      source: "router",
+      query: "private query",
+    }).success).toBe(false);
+    const wrapped = parseEvent({
+      type: "CUSTOM",
+      session_id: "s1",
+      agent_name: "engineer",
+      name: CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE,
+      value,
+    });
+    expect((wrapped as { name?: string }).name).toBe("domain_resource_usage");
   });
 
   it("passthrough keeps forward-compat extras", () => {

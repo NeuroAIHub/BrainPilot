@@ -1,5 +1,11 @@
 import { describe, it, expect } from "vitest";
-import { PERSONAS, BUILTIN_PERSONA_NAMES, personaFor } from "../personas.js";
+import {
+  PERSONAS,
+  BUILTIN_PERSONA_NAMES,
+  personaFor,
+  sharedRootDirective,
+  withSharedRootDirective,
+} from "../personas.js";
 
 describe("personas", () => {
   const EXPECTED = [
@@ -98,6 +104,13 @@ describe("personas", () => {
     expect(p.toLowerCase()).toContain("exemption");
   });
 
+  it("principal audit gate covers analysis/modelling validity risks", () => {
+    const p = PERSONAS.principal!;
+    expect(p.toLowerCase()).toContain("leakage");
+    expect(p.toLowerCase()).toContain("cross-validation");
+    expect(p).toContain("data-split");
+  });
+
   it("principal and writer personas keep internal status out of user-facing prose", () => {
     const pi = PERSONAS.principal!;
     const writer = PERSONAS.writer!;
@@ -146,6 +159,22 @@ describe("personas", () => {
     expect(a).toMatch(/cannot call\s+`?get_trace_graph`?/);
   });
 
+  it("auditor persona audits scientific-reliability defects, open-ended", () => {
+    const a = PERSONAS.auditor!;
+    // Still an evidence/fabrication auditor …
+    expect(a.toLowerCase()).toContain("fabrication");
+    // … now also a bounded-but-open reliability reviewer.
+    expect(a.toLowerCase()).toContain("reliability");
+    expect(a.toLowerCase()).toContain("leakage");
+    expect(a.toLowerCase()).toContain("baseline");
+    expect(a.toLowerCase()).toContain("metric");
+    // Reliability verdict vocabulary.
+    expect(a).toContain("concern");
+    expect(a).toContain("flaw");
+    // Scope is explicitly non-exhaustive.
+    expect(a.toLowerCase()).toMatch(/not exhaustive|including but not limited/);
+  });
+
   it("authoring experts mention their write/run capability", () => {
     expect(PERSONAS.engineer!).toContain("bash");
     expect(PERSONAS.writer!).toContain("write");
@@ -160,5 +189,22 @@ describe("personas", () => {
 
   it("personaFor returns the curated persona when one exists", () => {
     expect(personaFor("engineer", "expert")).toBe(PERSONAS.engineer);
+  });
+});
+
+describe("sharedRootDirective (#261)", () => {
+  it("interpolates the absolute path and states the read-only constraint", () => {
+    const d = sharedRootDirective("/srv/shared");
+    expect(d).toContain("/srv/shared");
+    expect(d).toContain("READ-ONLY");
+    // It must NOT invite writes — the whole point is a read-only cross-user root.
+    expect(d.toLowerCase()).toMatch(/cannot write|read-only/);
+  });
+
+  it("withSharedRootDirective appends the directive to a persona", () => {
+    const base = personaFor("engineer", "expert");
+    const out = withSharedRootDirective(base, "/srv/shared");
+    expect(out.startsWith(base)).toBe(true);
+    expect(out).toContain("/srv/shared");
   });
 });

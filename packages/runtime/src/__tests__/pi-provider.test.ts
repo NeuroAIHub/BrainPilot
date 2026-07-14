@@ -96,7 +96,9 @@ describe("resolveGatewayModel", () => {
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     const m = cfg.providers[GATEWAY_PROVIDER].models[0];
     expect(m.contextWindow).toBe(200_000);
-    expect(m.maxTokens).toBe(8_192);
+    // #293: default raised to 32_768 so long tool-call arguments (write/edit/
+    // send_message content) don't get truncated mid-stream.
+    expect(m.maxTokens).toBe(32_768);
   });
 
   it("honours ANTHROPIC_CONTEXT_WINDOW / ANTHROPIC_MAX_TOKENS overrides", () => {

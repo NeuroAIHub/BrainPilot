@@ -15,6 +15,7 @@ import {
   createGetDomainKnowledgeLocalTool,
   createSearchPapersLocalTool,
 } from "./kb/tools.js";
+import { isToolEnabled, type ToolToggles } from "../tool-toggles.js";
 
 export interface ToolDeps {
   sessionId: string;
@@ -330,9 +331,25 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
   };
 }
 
-/** All system tools, keyed by name. */
-export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
-  const tools = [
+/**
+ * All system tools, keyed by name.
+ *
+ * `toggles` is an OPTIONAL user-configured per-tool on/off table (loaded from
+ * `<dataRoot>/bp_template/tool_toggles.json`). When a tool is disabled, we
+ * omit it from the Map entirely so it never appears in any role's tool list —
+ * the agent can't see it in its `tools` block and can't call it (Pi rejects
+ * unknown tool names). When `toggles` is undefined or a given field is unset,
+ * the tool is enabled (default-on for backwards compatibility). Only the three
+ * user-facing Pi-native tools (skill_search, get_domain_knowledge_local,
+ * search_papers_local) are toggleable — communication/orchestration/trace
+ * primitives are unconditional (removing them would break §9 role contracts).
+ */
+export function allSystemTools(
+  deps: ToolDeps,
+  toggles?: ToolToggles | null,
+): Map<string, SystemTool> {
+  // Always-on tools (comms, orchestration, trace primitives).
+  const tools: SystemTool[] = [
     createSendMessageTool(deps),
     createAskUserTool(deps),
     createCreateAgentTool(deps),
@@ -342,14 +359,20 @@ export function allSystemTools(deps: ToolDeps): Map<string, SystemTool> {
     createUpdateTraceNodeTool(deps),
     createAddTraceRelationTool(deps),
     createGetTraceGraphTool(deps),
-    createSkillSearchTool(deps),
-    // Local KB tools: powered by the KnowledgeBase/ directory (its scripts
-    // build the store; here we just consume the on-disk artefacts plus an
-    // auto-spawned bge sidecar). Both are no-op-safe when the KB hasn't
-    // been built yet — they return a clear "build the KB first" error.
-    createGetDomainKnowledgeLocalTool(),
-    createSearchPapersLocalTool(),
   ];
+  if (isToolEnabled(toggles, "skill_search")) {
+    tools.push(createSkillSearchTool(deps));
+  }
+  // Local KB tools: powered by the KnowledgeBase/ directory (its scripts
+  // build the store; here we just consume the on-disk artefacts plus an
+  // auto-spawned bge sidecar). Both are no-op-safe when the KB hasn't
+  // been built yet — they return a clear "build the KB first" error.
+  if (isToolEnabled(toggles, "get_domain_knowledge_local")) {
+    tools.push(createGetDomainKnowledgeLocalTool());
+  }
+  if (isToolEnabled(toggles, "search_papers_local")) {
+    tools.push(createSearchPapersLocalTool());
+  }
   return new Map(tools.map((t) => [t.name, t]));
 }
 
@@ -466,8 +489,13 @@ export function systemToolsForRole(
   role: AgentRole,
   agentName: string,
   deps: ToolDeps,
+  toggles?: ToolToggles | null,
 ): SystemTool[] {
   const allowed = new Set(systemToolNamesForRole(role, agentName));
-  const all = allSystemTools(deps);
+  // Toggles filter INSIDE `allSystemTools`; if a role names a disabled tool,
+  // the lookup misses and the filter drops it. Role config stays declarative
+  // ("who is allowed") and orthogonal to physical availability ("does this
+  // tool exist at all right now").
+  const all = allSystemTools(deps, toggles);
   return [...allowed].map((n) => all.get(n)).filter((t): t is SystemTool => !!t);
 }

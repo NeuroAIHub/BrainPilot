@@ -7,6 +7,12 @@ export const runtimeConfig = {
   // real per-user sandbox orchestrator opts out by building with
   // VITE_LOCAL_MODE=0.
   localMode: import.meta.env.VITE_LOCAL_MODE !== "0",
+  // The bundled knowledge-base builder is intended for local/self-hosted
+  // installations. Managed deployments that provision a knowledge base for
+  // every user can hide its Settings tab by building with
+  // VITE_KB_SETTINGS_ENABLED=0. This only hides the management UI; it does not
+  // disable the get_domain_knowledge_local retrieval tool.
+  knowledgeBaseSettingsEnabled: import.meta.env.VITE_KB_SETTINGS_ENABLED !== "0",
   // Hosted multi-user deployments mount this app under a subpath (e.g. /app)
   // while the marketing/home page lives at the site root. Non-local builds show
   // a "return home" entry pointing here; override with VITE_HOME_URL so the host

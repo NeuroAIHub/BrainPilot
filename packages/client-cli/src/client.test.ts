@@ -57,6 +57,20 @@ describe("BrainPilotClient.url", () => {
       "http://localhost:8081/sessions/s/agents",
     );
   });
+
+  it("sends the requested per-session domain-resource mode", async () => {
+    let body: unknown;
+    const fetchFn = (async (_url: string | URL, init?: RequestInit) => {
+      body = JSON.parse(String(init?.body));
+      return new Response(JSON.stringify({ id: "base-session" }), {
+        status: 201,
+        headers: { "content-type": "application/json" },
+      });
+    }) as unknown as typeof fetch;
+    const client = new BrainPilotClient({ baseUrl: "http://runtime", fetchFn });
+    expect(await client.createSession({ domainResources: "base" })).toBe("base-session");
+    expect(body).toEqual({ domainResources: "base" });
+  });
 });
 
 /** Build a ReadableStream from string chunks (simulating wire fragmentation). */

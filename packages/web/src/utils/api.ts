@@ -9,9 +9,11 @@ import {
   Sandbox,
   SandboxStats,
   Session,
+  DomainResources,
   SessionMessageEntry,
   SessionStateSnapshot,
   SettingsData,
+  ToolToggles,
   TraceGraph,
   normalizeFileContent,
   normalizeFileEntry,
@@ -116,8 +118,28 @@ async function handleJson<T>(res: Response): Promise<T> {
   if (res.status === 204) {
     return undefined as T;
   }
+  // Guard the success path against a 2xx that isn't JSON. The classic case is
+  // the SPA index.html fallback (an endpoint not implemented on this
+  // deployment): res.json() would throw a raw "Unexpected token '<'" that means
+  // nothing to the user. Fail with a readable message instead. (getInfo /
+  // getEvents / getHistory each defended this inline; this centralizes it for
+  // every other caller.)
+  const contentType = res.headers.get("content-type") || "";
+  if (!contentType.includes("application/json")) {
+    throw new Error(
+      "The server returned an unexpected (non-JSON) response — this endpoint may not be available on this deployment.",
+    );
+  }
   return (await res.json()) as T;
 }
+
+/**
+ * #256: files at/above this size upload as a raw `application/octet-stream`
+ * stream instead of base64 JSON. Small files stay on the base64 path (one
+ * request shape, no streaming overhead); large files avoid the +33% base64
+ * inflation and whole-file memory buffering. 4 MiB is a conservative cutoff.
+ */
+const RAW_UPLOAD_THRESHOLD_BYTES = 4 * 1024 * 1024;
 
 /** #47: encode a Blob/File as base64 (without the data: prefix) for upload. */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -376,8 +398,25 @@ export const api = {
       }
     },
 
-    // #47: upload a file into the workspace (base64 over the JSON byte chain).
+    // #47/#256: upload a file into the workspace. Files at/above the raw
+    // threshold stream as `application/octet-stream` (no +33% base64 inflation,
+    // no whole-file buffering on the proxy/runtime); smaller files keep the
+    // base64 JSON path. The runtime accepts both (negotiated by Content-Type).
     async uploadFile(sandboxId: string, path: string, file: Blob): Promise<{ path: string; size: number }> {
+      if (file.size >= RAW_UPLOAD_THRESHOLD_BYTES) {
+        const res = await apiFetch(
+          `${API_BASE}/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,
+          {
+            method: "POST",
+            headers: { ...authHeaders(), "content-type": "application/octet-stream" },
+            body: file,
+          },
+        );
+        if (!res.ok) {
+          throw new Error(await parseError(res));
+        }
+        return handleJson(res);
+      }
       const contentBase64 = await blobToBase64(file);
       const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files`, {
         method: "POST",
@@ -421,7 +460,7 @@ export const api = {
 
     async create(
       title = "New research session",
-      opts: { providerId?: string; modelId?: string } = {},
+      opts: { providerId?: string; modelId?: string; domainResources?: DomainResources } = {},
     ): Promise<Session> {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.createSession(title);
@@ -435,6 +474,7 @@ export const api = {
             title,
             ...(opts.providerId ? { providerId: opts.providerId } : {}),
             ...(opts.modelId ? { modelId: opts.modelId } : {}),
+            ...(opts.domainResources ? { domainResources: opts.domainResources } : {}),
           }),
         }),
       );
@@ -719,6 +759,38 @@ export const api = {
         await apiFetch(`${API_BASE}/mcp-servers/${name}`, {
           method: "DELETE",
           headers: authHeaders(),
+        }),
+      );
+    },
+  },
+
+  // Built-in tool toggles. Missing / non-boolean → runtime treats as enabled;
+  // a fresh backend returns `{}`. `update` is a PATCH — pass one field to flip
+  // just that tool. The backend merges and returns the resulting full state.
+  //
+  // See BuiltinToolsSection.tsx for the UI. Changes on this endpoint DO NOT
+  // affect already-running sessions — the runtime lazy-reads this file once
+  // per process. Restart the backend, or create a new session, to apply.
+  toolToggles: {
+    async get(): Promise<ToolToggles> {
+      if (runtimeConfig.useMockBackend) {
+        // Mock: pretend all enabled. Keeps demo mode from surfacing a real
+        // network error when the UI reads on mount.
+        return {};
+      }
+      return handleJson<ToolToggles>(
+        await apiFetch(`${API_BASE}/tool-toggles`, { headers: authHeaders() }),
+      );
+    },
+    async update(patch: ToolToggles): Promise<ToolToggles> {
+      if (runtimeConfig.useMockBackend) {
+        return patch;
+      }
+      return handleJson<ToolToggles>(
+        await apiFetch(`${API_BASE}/tool-toggles`, {
+          method: "PUT",
+          headers: { ...authHeaders(), "Content-Type": "application/json" },
+          body: JSON.stringify(patch),
         }),
       );
     },

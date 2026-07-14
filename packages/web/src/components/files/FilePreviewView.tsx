@@ -23,6 +23,7 @@ export type PreviewSource =
   | { kind: "pdf"; blobUrl?: string }
   | { kind: "download"; blobUrl?: string }
   | { kind: "tooLarge" }
+  | { kind: "missing" }
   | { kind: "unreadable"; detail?: string };
 
 interface FilePreviewViewProps {
@@ -92,6 +93,9 @@ export function FilePreviewView({
         t={t}
       />
     );
+  }
+  if (source.kind === "missing") {
+    return <p className="file-preview__notice">{t("files.preview.missing")}</p>;
   }
   if (source.kind === "unreadable") {
     return (

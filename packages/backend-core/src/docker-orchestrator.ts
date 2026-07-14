@@ -50,6 +50,15 @@ export interface DockerOrchestratorOptions {
   dataDir?: string;
   /** Container path BP_DATA_DIR points at. Default `/root/.bp-root`. */
   containerDataDir?: string;
+  /**
+   * #261: host dir bind-mounted READ-ONLY as the cross-user shared root. When
+   * set, it is mounted at `containerSharedDir` with `ReadOnly:true` and its
+   * container path is injected as `BP_SHARED_DIR` so the runtime exposes it at
+   * the `/shared` prefix. Omitted → no shared mount (feature off).
+   */
+  sharedDir?: string;
+  /** Container path the shared root is mounted at (= `BP_SHARED_DIR`). Default `/shared`. */
+  containerSharedDir?: string;
   /** Injectable dockerode-like instance (for tests / advanced callers). */
   docker?: DockerLike;
   /** Injectable lazy loader (for tests). Defaults to dynamic import("dockerode"). */
@@ -87,10 +96,12 @@ export class DockerOrchestrator implements Orchestrator {
   private readonly hostPort: number;
   private readonly host: string;
   private readonly containerDataDir: string;
+  private readonly containerSharedDir: string;
   private readonly healthProbe: (baseUrl: string) => Promise<boolean>;
   private readonly healthTimeoutMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
   private dataDir?: string;
+  private sharedDir?: string;
   private env: Record<string, string>;
   private container: DockerContainerLike | null = null;
 
@@ -102,7 +113,9 @@ export class DockerOrchestrator implements Orchestrator {
     this.hostPort = options.hostPort ?? this.containerPort;
     this.host = options.host ?? "127.0.0.1";
     this.containerDataDir = options.containerDataDir ?? "/root/.bp-root";
+    this.containerSharedDir = options.containerSharedDir ?? "/shared";
     this.dataDir = options.dataDir;
+    this.sharedDir = options.sharedDir;
     this.env = options.env ?? {};
     this.healthProbe = options.healthProbe ?? defaultHealthProbe;
     this.healthTimeoutMs = options.healthTimeoutMs ?? 30_000;
@@ -131,6 +144,7 @@ export class DockerOrchestrator implements Orchestrator {
 
   async ensureRuntime(opts?: EnsureRuntimeOptions): Promise<RuntimeHandle> {
     if (opts?.dataDir) this.dataDir = opts.dataDir;
+    if (opts?.sharedDir) this.sharedDir = opts.sharedDir;
     if (opts?.env) this.env = { ...this.env, ...opts.env };
 
     if (this.container && (await this.health())) {
@@ -140,10 +154,41 @@ export class DockerOrchestrator implements Orchestrator {
     const portKey = `${this.containerPort}/tcp`;
     const envList = Object.entries({
       BP_DATA_DIR: this.containerDataDir,
+      // #261: when a shared root is mounted, tell the runtime its container path
+      // so it exposes the `/shared` prefix. Injected before `...this.env` so an
+      // explicit caller-provided BP_SHARED_DIR still wins.
+      ...(this.sharedDir ? { BP_SHARED_DIR: this.containerSharedDir } : {}),
       PORT: String(this.containerPort),
       AGENT_RUNTIME_PORT: String(this.containerPort),
       ...this.env,
     }).map(([k, v]) => `${k}=${v}`);
+
+    // Cross-platform (#1): the legacy `Binds: ["src:dst:mode"]` colon-delimited
+    // form is unparseable when `src` is a Windows path that already contains a
+    // colon after the drive letter (`C:\Users\foo\bp` → `...:/root/...:rw`),
+    // causing dockerode/Docker Engine to mis-split the spec. Use the structured
+    // `Mounts` API (Docker Engine ≥1.25) instead — Source / Target / ReadOnly
+    // are separate fields, so Engine's own Windows-aware path translation does
+    // the right thing.
+    const mounts: Array<{ Type: string; Source: string; Target: string; ReadOnly: boolean }> = [];
+    if (this.dataDir) {
+      mounts.push({
+        Type: "bind",
+        Source: this.dataDir,
+        Target: this.containerDataDir,
+        ReadOnly: false,
+      });
+    }
+    // #261: the cross-user shared root is mounted READ-ONLY (legacy `/shared:ro`
+    // parity), so no user's container can mutate the shared library.
+    if (this.sharedDir) {
+      mounts.push({
+        Type: "bind",
+        Source: this.sharedDir,
+        Target: this.containerSharedDir,
+        ReadOnly: true,
+      });
+    }
 
     const createSpec = {
       Image: this.image,
@@ -151,27 +196,7 @@ export class DockerOrchestrator implements Orchestrator {
       ExposedPorts: { [portKey]: {} },
       HostConfig: {
         PortBindings: { [portKey]: [{ HostPort: String(this.hostPort) }] },
-        // Cross-platform (#1): the legacy `Binds: ["src:dst:mode"]` colon-
-        // delimited form is unparseable when `src` is a Windows path that
-        // already contains a colon after the drive letter
-        // (`C:\Users\foo\bp` → `C:\Users\foo\bp:/root/...:rw`), causing
-        // dockerode/Docker Engine to mis-split the spec and either 422 the
-        // container create or mount a host directory named just `C`. Use the
-        // structured `Mounts` API (Docker Engine ≥1.25) instead — Source /
-        // Target / ReadOnly are separate fields, so Engine's own
-        // Windows-aware path translation does the right thing.
-        ...(this.dataDir
-          ? {
-              Mounts: [
-                {
-                  Type: "bind",
-                  Source: this.dataDir,
-                  Target: this.containerDataDir,
-                  ReadOnly: false,
-                },
-              ],
-            }
-          : {}),
+        ...(mounts.length > 0 ? { Mounts: mounts } : {}),
       },
     };
 

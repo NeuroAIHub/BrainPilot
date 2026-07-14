@@ -10,10 +10,12 @@ FROM node:22-slim AS builder
 ARG NPM_REGISTRY=""
 ARG HTTP_PROXY=""
 ARG HTTPS_PROXY=""
+ARG VITE_KB_SETTINGS_ENABLED="1"
 ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY}
 
 WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
+COPY scripts ./scripts
 COPY packages ./packages
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
     && npm ci

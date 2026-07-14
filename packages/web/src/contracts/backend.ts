@@ -12,6 +12,7 @@
 // ---------------------------------------------------------------------------
 import type {
   Session,
+  DomainResources,
   AgentStatus,
   SessionStateSnapshot,
   SessionTokenUsage,
@@ -36,6 +37,7 @@ import type {
 // all `import { … } from "../contracts/backend"` sites continue to resolve.
 export type {
   Session,
+  DomainResources,
   AgentStatus,
   SessionStateSnapshot,
   SessionTokenUsage,
@@ -55,6 +57,29 @@ export type {
   TraceTimestamp,
   TraceGraph,
 };
+
+/**
+ * Per-tool on/off overrides for the three user-controllable Pi-native
+ * SystemTools. Mirrors `packages/backend-core/src/config.ts:ToolToggles` and
+ * `packages/runtime/src/tool-toggles.ts:ToolToggles` — kept in triplicate
+ * because the frontend must not import from either non-published package.
+ *
+ * All fields optional; missing / non-boolean → runtime treats as enabled.
+ */
+export interface ToolToggles {
+  skill_search?: boolean;
+  get_domain_knowledge_local?: boolean;
+  search_papers_local?: boolean;
+}
+
+/** The exhaustive list of toggleable tool names, in display order. */
+export const TOGGLEABLE_TOOL_NAMES = [
+  "skill_search",
+  "get_domain_knowledge_local",
+  "search_papers_local",
+] as const;
+
+export type ToggleableToolName = (typeof TOGGLEABLE_TOOL_NAMES)[number];
 
 export type SandboxStatus =
   | "creating"
@@ -106,7 +131,19 @@ export interface SandboxStats {
     limit: number | null;
   };
   disk: {
+    // Plain workspace usage. Meaningful in every deployment (single-user and
+    // hosted) — the SandboxStatus disk meter reads this.
     workspaceUsedBytes: number;
+    // HOSTED-ONLY HOOK (see #262). `quotaBytes` / `percentOfQuota` are supplied
+    // only by a managed/multi-tenant hosting layer that fills `/stats`. In a
+    // self-hosted single-user run backend-core serves no quota fields, so both
+    // normalize to `0` (numberValue fallback) and the disk-quota dialogs
+    // (components/quota/*) stay intentionally inert — the `>= 90` / `>= 100`
+    // gates never fire. Do NOT remove these: the hosting layer consumes
+    // @brainpilot/web as an unpatched npm artifact, so these fields + the quota
+    // components are the only way a managed deployment can surface quota inside
+    // /app. Same pattern as auth stripping (R-11) and subpath hosting (R-9):
+    // open-source ships the front, the hosted layer drives it.
     quotaBytes: number;
     percentOfQuota: number;
   };
@@ -379,6 +416,8 @@ interface RawSession {
   createdAt?: string;
   updated_at?: string;
   updatedAt?: string;
+  domain_resources?: unknown;
+  domainResources?: unknown;
 }
 
 interface RawFileEntry {
@@ -602,6 +641,8 @@ export function normalizeSession(raw: RawSession): Session {
     title: stringValue(raw.title, id ? `Session ${id.slice(0, 8)}` : "Untitled session"),
     createdAt: isoValue(raw.createdAt ?? raw.created_at),
     updatedAt: isoValue(raw.updatedAt ?? raw.updated_at ?? raw.createdAt ?? raw.created_at),
+    domainResources:
+      (raw.domainResources ?? raw.domain_resources) === "base" ? "base" : "full",
   };
 }
 
@@ -789,6 +830,7 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     },
     agents,
     lastActivityTs: stringValue(camelized.lastActivityTs, ""),
+    domainResources: camelized.domainResources === "base" ? "base" : "full",
   };
   const tokenUsage = normalizeSessionTokenUsage(camelized.tokenUsage);
   if (tokenUsage) out.tokenUsage = tokenUsage;

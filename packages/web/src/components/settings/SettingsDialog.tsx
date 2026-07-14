@@ -1,5 +1,5 @@
 import { FormEvent, useEffect, useState } from "react";
-import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, X } from "lucide-react";
+import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
@@ -11,27 +11,49 @@ import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
+import { BuiltinToolsSection } from "./BuiltinToolsSection";
 
-type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
+export type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
 
 type SettingsDialogProps = {
   isOpen: boolean;
   onClose: () => void;
+  /** Deep-link target: when opening, jump straight to this tab (e.g. the
+   *  no-provider banner opens directly to "providers"). */
+  initialTab?: SettingsTab;
 };
 
 const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
   { id: "account", labelKey: "settings.tab.account", icon: UserRound },
   { id: "providers", labelKey: "settings.tab.providers", icon: SlidersHorizontal },
-  { id: "mcp", labelKey: "settings.tab.mcp", icon: Plug },
+  // "工具" tab: hosts both the built-in tool toggles (BuiltinToolsSection at
+  // the top) and the MCP servers CRUD (below). Kept as tab id "mcp" for URL
+  // stability; the label + icon shift to a generic tool motif since the tab
+  // now covers more than MCP.
+  { id: "mcp", labelKey: "settings.tab.mcp", icon: Wrench },
   { id: "knowledgeBase", labelKey: "settings.tab.knowledgeBase", icon: Database },
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
 
-// Local single-user mode has no host-managed identity — the account tab would
-// only show placeholder "local / local / 1970" values, so drop it entirely.
-const tabs = runtimeConfig.localMode
-  ? ALL_TABS.filter((tab) => tab.id !== "account")
-  : ALL_TABS;
+type SettingsTabConfig = Pick<
+  typeof runtimeConfig,
+  "localMode" | "knowledgeBaseSettingsEnabled"
+>;
+
+/** Apply deployment capabilities to the Settings navigation. */
+export function getSettingsTabs(config: SettingsTabConfig) {
+  return ALL_TABS.filter((tab) => {
+    // Local single-user mode has no host-managed identity — the account tab
+    // would only show placeholder "local / local / 1970" values.
+    if (config.localMode && tab.id === "account") return false;
+    // Managed deployments may ship a pre-provisioned knowledge base and hide
+    // the local build/configuration surface while retaining retrieval tools.
+    if (!config.knowledgeBaseSettingsEnabled && tab.id === "knowledgeBase") return false;
+    return true;
+  });
+}
+
+const tabs = getSettingsTabs(runtimeConfig);
 
 const DEFAULT_PROVIDER_FORM = {
   name: "",
@@ -62,7 +84,7 @@ function splitList(value: string) {
     .filter(Boolean);
 }
 
-export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
+export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogProps) {
   const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
@@ -149,6 +171,10 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
 
   useEffect(() => {
     if (isOpen) {
+      // Honour a deep-link target (e.g. the composer's no-provider banner jumps
+      // straight to Providers). Only on the open transition, so a user can still
+      // navigate to other tabs while the dialog stays open.
+      if (initialTab) setActiveTab(initialTab);
       void loadSettings();
       void api.getVersion().then((v) => setVersion(v.version)).catch(() => setVersion(null));
     }
@@ -487,7 +513,9 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
             ) : null}
 
             {activeTab === "mcp" ? (
-              <section className="settings-section">
+              <>
+                <BuiltinToolsSection />
+                <section className="settings-section">
                 <div className="settings-section__header">
                   <div>
                     <h3>{t("settings.mcp.title")}</h3>
@@ -525,10 +553,13 @@ export function SettingsDialog({ isOpen, onClose }: SettingsDialogProps) {
                     ))}
                   </div>
                 )}
-              </section>
+                </section>
+              </>
             ) : null}
 
-            {activeTab === "knowledgeBase" ? <KnowledgeBasePanel /> : null}
+            {runtimeConfig.knowledgeBaseSettingsEnabled && activeTab === "knowledgeBase" ? (
+              <KnowledgeBasePanel />
+            ) : null}
 
             {activeTab === "preferences" ? (
               <section className="settings-section">

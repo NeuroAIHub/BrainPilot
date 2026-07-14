@@ -14,12 +14,13 @@
  * (`extensions/trace-reminder.ts`), registered per AgentSession by the real
  * factory. MasAgent is back to a pure Pi→AG-UI translator.
  */
-import type {
-  AgUiEvent,
-  AgentState,
-  AgentStats,
-  RunStatsStatus,
-  TokenUsage,
+import {
+  CUSTOM_EVENT,
+  type AgUiEvent,
+  type AgentState,
+  type AgentStats,
+  type RunStatsStatus,
+  type TokenUsage,
 } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
@@ -37,6 +38,10 @@ import type {
   PiAssistantMessageEvent,
   PiUsage,
 } from "./types.js";
+import {
+  domainResourceUsageOnStart,
+  domainResourceUsageOnSuccess,
+} from "./domain-resources.js";
 
 export type AgentStatus = "idle" | "running" | "error" | "stopped";
 
@@ -110,6 +115,8 @@ export class MasAgent {
   private currentMessageId: string | undefined;
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
+  /** Correlates end events with start args without emitting those args again. */
+  private activeToolCalls = new Map<string, { toolName: string; args: Record<string, unknown> }>();
   private lastError: AgentState["lastError"];
   /**
    * Cumulative real token usage for THIS agent across every assistant turn,
@@ -381,6 +388,7 @@ export class MasAgent {
       /* prompt() is error-isolated; nothing to surface */
     }
     this.activeToolExecutions.clear();
+    this.activeToolCalls.clear();
     // The `finally` block in runPrompt has already fired `emitRunStats` if the
     // run reached completion cleanly OR errored. For a genuine abort where the
     // provider stream was cancelled, `session.prompt()` returns from
@@ -399,6 +407,8 @@ export class MasAgent {
   stop(): void {
     this.unsubscribe();
     this.session.dispose();
+    this.activeToolExecutions.clear();
+    this.activeToolCalls.clear();
     this.setStatus("stopped");
   }
 
@@ -544,6 +554,11 @@ export class MasAgent {
       case "tool_execution_start": {
         const t = e as Extract<PiAgentEvent, { type: "tool_execution_start" }>;
         this.activeToolExecutions.add(t.toolCallId);
+        const args =
+          typeof t.args === "object" && t.args !== null && !Array.isArray(t.args)
+            ? (t.args as Record<string, unknown>)
+            : {};
+        this.activeToolCalls.set(t.toolCallId, { toolName: t.toolName, args });
         // Usage-stats: count *invocation attempts* on start. If Pi ever calls
         // start-without-end (hard abort mid-prep), the invocation still counts —
         // matches "attempted N times" semantics on the wire.
@@ -554,12 +569,18 @@ export class MasAgent {
         this.bus.emit(ev.toolCallStart(ctx, t.toolCallId, t.toolName, this.currentMessageId));
         const argsStr = safeStringify(t.args);
         if (argsStr) this.bus.emit(ev.toolCallArgs(ctx, t.toolCallId, argsStr));
+        const usage = domainResourceUsageOnStart(t.toolName, args);
+        if (usage) {
+          this.bus.emit(ev.custom(ctx, CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE, usage));
+        }
         return;
       }
 
       case "tool_execution_end": {
         const t = e as Extract<PiAgentEvent, { type: "tool_execution_end" }>;
         this.activeToolExecutions.delete(t.toolCallId);
+        const started = this.activeToolCalls.get(t.toolCallId);
+        this.activeToolCalls.delete(t.toolCallId);
         // Usage-stats: `errors` is additive to `tools`, never subtracted.
         if (t.isError) {
           this.cumulativeStats.errors[t.toolName] =
@@ -568,6 +589,15 @@ export class MasAgent {
         this.bus.emit(ev.toolCallEnd(ctx, t.toolCallId));
         const resultStr = typeof t.result === "string" ? t.result : safeStringify(t.result);
         this.bus.emit(ev.toolCallResult(ctx, t.toolCallId, resultStr, t.isError));
+        const usage = domainResourceUsageOnSuccess(
+          started?.toolName ?? t.toolName,
+          started?.args ?? {},
+          t.isError,
+          t.result,
+        );
+        if (usage) {
+          this.bus.emit(ev.custom(ctx, CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE, usage));
+        }
         // §7 L1: surface tool errors as system_message.
         if (t.isError) {
           this.bus.emit(

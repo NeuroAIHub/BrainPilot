@@ -1,5 +1,10 @@
 import { describe, it, expect } from "vitest";
-import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
+import {
+  CUSTOM_EVENT,
+  DomainResourceUsageValueSchema,
+  parseEvent,
+  type AgUiEvent,
+} from "@brainpilot/protocol";
 import { EventBus } from "../event-bus.js";
 import { MasAgent } from "../mas-agent.js";
 import { MockAgentSession } from "../mock-agent.js";
@@ -87,6 +92,53 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(types).toContain("TOOL_CALL_RESULT");
     const result = captured.find((e) => e.type === "TOOL_CALL_RESULT") as { content: string };
     expect(result.content).toBe("pong");
+  });
+
+  it("emits content-free domain tool, skill search, and successful skill load events", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+    const okTool = (name: string) => ({
+      name,
+      description: name,
+      parameters: { type: "object", properties: {} },
+      execute: async () => ({ content: [{ type: "text" as const, text: "resource body" }] }),
+    });
+    const session = new MockAgentSession({
+      sessionId: "resource-session",
+      agentName: "principal",
+      systemTools: [
+        okTool("get_domain_knowledge_local"),
+        okTool("skill_search"),
+        okTool("read"),
+      ],
+    });
+    const agent = new MasAgent({
+      sessionId: "resource-session",
+      name: "principal",
+      role: "principal",
+      session,
+      bus,
+    });
+    await agent.prompt('[[tool:get_domain_knowledge_local {"query":"private query"}]]');
+    await agent.prompt('[[tool:skill_search {"mode":"query","keywords":"private keywords"}]]');
+    await agent.prompt('[[tool:skill_search {"mode":"query","skill_name":"fmri-analysis"}]]');
+    await agent.prompt('[[tool:read {"path":"/skills/place-cell/SKILL.md"}]]');
+
+    const usage = captured
+      .filter((event) => event.type === "CUSTOM" && (event as { name?: string }).name === CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE)
+      .map((event) => DomainResourceUsageValueSchema.parse((event as { value?: unknown }).value));
+    expect(usage.map((value) => value.kind)).toEqual([
+      "domain_tool_call",
+      "skill_search",
+      "skill_load",
+      "skill_load",
+    ]);
+    expect(usage[2]).toMatchObject({ skillName: "fmri-analysis", source: "router" });
+    expect(usage[3]).toMatchObject({ skillName: "place-cell", source: "builtin_read" });
+    expect(JSON.stringify(usage)).not.toContain("private query");
+    expect(JSON.stringify(usage)).not.toContain("private keywords");
+    expect(JSON.stringify(usage)).not.toContain("resource body");
   });
 
   describe("ev.userInputRequest", () => {

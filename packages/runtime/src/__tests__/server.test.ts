@@ -4,6 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, startServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
+import { PERSISTENT_LAYOUT_MARKER } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 
 /**
@@ -44,11 +45,15 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const created = await a.request("/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Demo" }),
+      body: JSON.stringify({ title: "Demo", domainResources: "base" }),
     });
     expect(created.status).toBe(201);
-    const { id } = (await created.json()) as { id: string };
+    const { id, session } = (await created.json()) as {
+      id: string;
+      session: { domainResources?: string };
+    };
     expect(id).toBeTruthy();
+    expect(session.domainResources).toBe("base");
 
     // list
     const list = (await (await a.request("/sessions")).json()) as { sessions: unknown[] };
@@ -75,6 +80,7 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     // state
     const state = await a.request(`/sessions/${id}/state`);
     expect(state.status).toBe(200);
+    expect((await state.json()) as { domainResources?: string }).toMatchObject({ domainResources: "base" });
 
     // trace (Graph of Trace) — returns { meta, nodes } for an existing session
     const trace = await a.request(`/sessions/${id}/trace`);
@@ -91,6 +97,18 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const evict = await a.request(`/sessions/${id}/evict`, { method: "POST" });
     expect(evict.status).toBe(200);
     expect((await evict.json()) as { evicted: boolean }).toMatchObject({ evicted: true });
+  });
+
+  it("rejects an invalid domain-resource mode instead of silently creating full", async () => {
+    const a = app();
+    const invalid = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ domainResources: "bsae" }),
+    });
+    expect(invalid.status).toBe(400);
+    const list = (await (await a.request("/sessions")).json()) as { sessions: unknown[] };
+    expect(list.sessions).toEqual([]);
   });
 
   it("PUT /sessions/:id renames and the new title survives a re-GET (#29)", async () => {
@@ -273,6 +291,121 @@ describe("workspace file routes", () => {
     expect(res.status).toBe(400);
   });
 
+  // #256: raw streaming upload — bytes in the body, path in ?path=.
+  it("uploads a file via raw octet-stream and makes it readable", async () => {
+    const { app: a } = await appWithWorkspace();
+    const bytes = new Uint8Array([0, 1, 2, 3, 255, 254, 128]);
+    const res = await a.request("/sessions/s1/files?path=/workspace/raw/blob.bin", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: bytes,
+    });
+    expect(res.status).toBe(201);
+    const body = (await res.json()) as { path: string; size: number };
+    expect(body.path).toBe("raw/blob.bin");
+    expect(body.size).toBe(bytes.byteLength);
+    // exact bytes round-trip through the raw read route (binary-safe)
+    const raw = await a.request("/sessions/s1/files/raw?path=/workspace/raw/blob.bin");
+    expect(new Uint8Array(await raw.arrayBuffer())).toEqual(bytes);
+  });
+
+  it("rejects a raw upload with no ?path= (400)", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  it("rejects a raw upload that escapes the workspace with 400", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files?path=../../../etc/evil", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array([1, 2, 3]),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // #256: the configurable cap (BP_UPLOAD_MAX_BYTES) bounds both paths, and an
+  // oversize raw upload leaves no partial file behind.
+  it("rejects an oversize raw upload with 400 and cleans up the partial file", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-cap-"));
+    await mkdir(join(dataRoot, "workspaces", "s1"), { recursive: true });
+    const manager = new SessionManager({
+      persist: false,
+      dataRoot,
+      agentFactory: mockAgentFactory,
+      uploadMaxBytes: 8,
+    });
+    const a = createServer({ manager }).app;
+    const res = await a.request("/sessions/s1/files?path=/workspace/big.bin", {
+      method: "POST",
+      headers: { "content-type": "application/octet-stream" },
+      body: new Uint8Array(64), // 64 bytes > 8-byte cap
+    });
+    expect(res.status).toBe(400);
+    // no partial file left on disk
+    const listed = await readdir(join(dataRoot, "workspaces", "s1"));
+    expect(listed).not.toContain("big.bin");
+  });
+
+  it("rejects an oversize base64 upload with 400", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-cap64-"));
+    await mkdir(join(dataRoot, "workspaces", "s1"), { recursive: true });
+    const manager = new SessionManager({
+      persist: false,
+      dataRoot,
+      agentFactory: mockAgentFactory,
+      uploadMaxBytes: 8,
+    });
+    const a = createServer({ manager }).app;
+    const contentBase64 = Buffer.from("x".repeat(64)).toString("base64");
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/workspace/big.txt", contentBase64 }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  // #257: uploading to /data writes the shared persistent root, readable from a
+  // DIFFERENT session id via the same /data path (cross-session reuse).
+  it("uploads to /data and reads it back from another session (#257)", async () => {
+    const { app: a, dataRoot } = await appWithWorkspace();
+    const contentBase64 = Buffer.from("reusable dataset").toString("base64");
+    const up = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/data/lib/set.csv", contentBase64 }),
+    });
+    expect(up.status).toBe(201);
+    const body = (await up.json()) as { path: string };
+    // path round-trips WITH the /data prefix
+    expect(body.path).toBe("/data/lib/set.csv");
+
+    // A different session id resolves the same /data root.
+    const read = await a.request("/sessions/other-session/files/content?path=/data/lib/set.csv");
+    expect(read.status).toBe(200);
+    expect((await read.json()) as { content: string }).toMatchObject({ content: "reusable dataset" });
+
+    // On disk it lives flat under data/ (#287 removed the per-user subdir).
+    const onDisk = await readFile(join(dataRoot, "data", "lib", "set.csv"), "utf8");
+    expect(onDisk).toBe("reusable dataset");
+  });
+
+  it("rejects a /data upload that escapes the data root with 400 (#257)", async () => {
+    const { app: a } = await appWithWorkspace();
+    const res = await a.request("/sessions/s1/files", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ path: "/data/../workspaces/evil", contentBase64: "eA==" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
   // #60: a composer upload staged under workspaces/local/ (the draft sandbox id)
   // must be drained into the real session workspace before the agent runs, so
   // the agent's cwd (workspaces/<sid>/) contains the file the user attached.
@@ -348,6 +481,10 @@ describe("startServer boot-time restore", () => {
       agentFactory: mockAgentFactory,
     });
     try {
+      const layout = JSON.parse(
+        await readFile(join(dataRoot, PERSISTENT_LAYOUT_MARKER), "utf8"),
+      );
+      expect(layout).toMatchObject({ version: 2, status: "ready" });
       const res = await fetch(`http://127.0.0.1:${handle.port}/sessions`);
       expect(res.status).toBe(200);
       const body = (await res.json()) as { sessions: Array<{ id: string; createdAt: string }> };
