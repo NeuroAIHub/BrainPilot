@@ -29,7 +29,17 @@ export const GATEWAY_PROVIDER = "bp-gateway";
 
 /** Defaults applied to an auto-generated gateway model when env is unset. */
 const DEFAULT_CONTEXT_WINDOW = 200_000;
-const DEFAULT_MAX_TOKENS = 8_192;
+// #293: 8_192 is far below what modern models (Claude Sonnet 5, GPT-5, Gemini 2.5)
+// support and — critically — below what a single tool call can require. Anthropic/
+// OpenAI stream tool_use arguments as JSON in order, so a `write` / `edit` /
+// `send_message` whose `content` runs long gets its stream cut off mid-string when
+// `max_tokens` is hit; Pi's streaming JSON repair recovers earlier fields (`path`)
+// but the truncated `content` is lost, and the agent then retries indefinitely
+// against the same ceiling. 32_768 matches the modal maxTokens in Pi's built-in
+// model catalogue (see `pi-ai/dist/models.generated.js`) and is well above the
+// 16_384 SDK-side fallback (`model-registry.js`). Users can still raise it
+// further via the `ANTHROPIC_MAX_TOKENS` env override.
+const DEFAULT_MAX_TOKENS = 32_768;
 
 /** Minimal structural surface of the Pi SDK bits this module needs. */
 export interface PiProviderSdk {
