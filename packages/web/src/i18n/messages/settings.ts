@@ -19,7 +19,7 @@ export default defineMessages(
     // Pi-native SystemTools whose exposure to agents is user-controllable.
     "settings.builtinTools.title": "内置工具",
     "settings.builtinTools.desc": "控制这三个内置工具是否对 agent 可见。关闭后 agent 的工具列表不再包含该工具，也无法调用。",
-    "settings.builtinTools.restartHint": "改动会立即写入磁盘，但只在「重启后端」或「新建会话」时生效于所有会话。要让当前所有会话立即使用新设置，请重启后端。",
+    "settings.builtinTools.restartHint": "改动会立即生效于「新建会话」和新拉起的 expert。已经在跑的 agent 会保留创建时的工具列表，要让所有正在运行的会话立即生效，请重启后端。",
     "settings.builtinTools.loadFailed": "加载工具开关失败",
     "settings.builtinTools.saveFailed": "保存失败：{message}",
     "settings.builtinTools.tool.skill_search.title": "路由技能库检索",
@@ -256,7 +256,7 @@ export default defineMessages(
     "settings.tab.preferences": "Preferences",
     "settings.builtinTools.title": "Built-in tools",
     "settings.builtinTools.desc": "Control whether each built-in tool is exposed to agents. When off, the tool disappears from the agent's tool list and can't be called.",
-    "settings.builtinTools.restartHint": "Changes are written to disk immediately, but they only take effect for running sessions after a backend restart. New sessions pick up the new setting on their first turn.",
+    "settings.builtinTools.restartHint": "Changes take effect immediately for new sessions and newly-spawned experts. Already-running agents keep the tool list they were given at creation time — restart the backend to apply the change to them too.",
     "settings.builtinTools.loadFailed": "Failed to load tool toggles",
     "settings.builtinTools.saveFailed": "Save failed: {message}",
     "settings.builtinTools.tool.skill_search.title": "Router skill search",

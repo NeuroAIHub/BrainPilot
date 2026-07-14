@@ -9,10 +9,12 @@
  * these are Pi-native tools, not MCP transports.
  *
  * Persistence model: each toggle flip immediately PUTs {name: bool} to
- * /api/tool-toggles (partial-merge write). The runtime lazy-reads the file
- * once per process, so a change here only affects newly-created sessions.
- * A running-backend restart applies the change to all sessions. This is
- * spelled out in the panel via `settings.builtinTools.restartHint`.
+ * /api/tool-toggles (partial-merge write). The runtime reads the file on
+ * every agent creation, so a change here takes effect on the next new
+ * session (or the next expert spawn) without a restart. Already-running
+ * agents keep the tool list they were given at creation time — restart the
+ * backend to force the change onto them. Spelled out via
+ * `settings.builtinTools.restartHint`.
  */
 import { useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";
