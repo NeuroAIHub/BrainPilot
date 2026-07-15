@@ -4316,6 +4316,33 @@ button {
   opacity: 0.62;
 }
 
+/* #307: batch delete next to multi-select download */
+.file-sidebar__delete-selected {
+  display: inline-flex;
+  height: 28px;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 0 8px;
+  font-size: 12px;
+}
+
+.file-sidebar__delete-selected:hover:not(:disabled),
+.file-sidebar__delete-selected:focus-visible {
+  border-color: color-mix(in srgb, var(--color-danger) 45%, var(--color-border));
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--color-surface));
+  color: var(--color-danger);
+  outline: none;
+}
+
+.file-sidebar__delete-selected:disabled {
+  color: var(--color-text-subtle);
+  opacity: 0.62;
+}
+
 .file-sidebar__path {
   display: flex;
   min-width: 0;

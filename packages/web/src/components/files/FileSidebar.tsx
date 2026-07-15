@@ -12,6 +12,7 @@ import {
   Maximize2,
   Minimize2,
   RefreshCw,
+  Trash2,
   Upload,
   X,
 } from "lucide-react";
@@ -103,6 +104,40 @@ function removeNestedSelections(paths: string[]): string[] {
     .filter((path, index, sorted) => !sorted.slice(0, index).some((parent) => path.startsWith(`${parent}/`)));
 }
 
+/** #307: roots shown as tiers — never deletable from the file tree UI. */
+export function isProtectedRoot(path: string): boolean {
+  return path === WORKSPACE_ROOT_PATH || path === DATA_ROOT_PATH;
+}
+
+/** True when `path` is `deleted` or a descendant of it. */
+export function isPathUnderOrEqual(path: string, deleted: string): boolean {
+  return path === deleted || path.startsWith(`${deleted}/`);
+}
+
+/** Minimal tree shape for `removeNode` (FileNode satisfies this). */
+export type PathTreeNode = { path: string; children?: PathTreeNode[] };
+
+/** Drop `targetPath` from the tree (any depth). */
+export function removeNode<T extends PathTreeNode>(root: T, targetPath: string): T {
+  if (root.children) {
+    const filtered = root.children
+      .filter((child) => child.path !== targetPath)
+      .map((child) => removeNode(child as T, targetPath));
+    return { ...root, children: filtered };
+  }
+  return root;
+}
+
+function prunePathsUnder(paths: Set<string>, deleted: string): Set<string> {
+  const next = new Set<string>();
+  for (const path of paths) {
+    if (!isPathUnderOrEqual(path, deleted)) {
+      next.add(path);
+    }
+  }
+  return next;
+}
+
 function FileIcon({ node }: { node: FileNode }) {
   if (node.type === "folder" || node.type === "symlink") {
     return <Folder size={16} />;
@@ -175,6 +210,9 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const [selectedDownloadPaths, setSelectedDownloadPaths] = useState<Set<string>>(() => new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
+  // #307: paths currently mid-delete (row + batch); disables repeat clicks.
+  const [isDeleting, setIsDeleting] = useState<Set<string>>(() => new Set());
+  const [isDeletingSelection, setIsDeletingSelection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
   // #305: replace boolean busy with progress UI state; null = idle.
@@ -367,6 +405,97 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const clearDownloadSelection = useCallback(() => {
     setSelectedDownloadPaths(new Set());
   }, []);
+
+  /** #307: after a successful delete, drop the node and any dependent UI state. */
+  const applyLocalDelete = useCallback(
+    (deletedPath: string) => {
+      setTree((current) => removeNode(current, deletedPath));
+      setExpandedPaths((current) => prunePathsUnder(current, deletedPath));
+      setSelectedDownloadPaths((current) => prunePathsUnder(current, deletedPath));
+      const closesPreview =
+        (selectedPath != null && isPathUnderOrEqual(selectedPath, deletedPath)) ||
+        (selectedContent != null && isPathUnderOrEqual(selectedContent.path, deletedPath));
+      if (closesPreview) {
+        setSelectedPath(null);
+        setSelectedContent(null);
+        setIsPreviewMaximized(false);
+      }
+    },
+    [selectedPath, selectedContent],
+  );
+
+  const markDeleting = useCallback((paths: string[], on: boolean) => {
+    setIsDeleting((current) => {
+      const next = new Set(current);
+      for (const path of paths) {
+        if (on) next.add(path);
+        else next.delete(path);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleDeleteOne = useCallback(
+    async (node: FileNode) => {
+      if (!sandboxId || isProtectedRoot(node.path) || isDeleting.has(node.path)) {
+        return;
+      }
+      if (!window.confirm(t("files.confirmDelete", { name: node.name }))) {
+        return;
+      }
+      markDeleting([node.path], true);
+      setError(null);
+      try {
+        await api.sandbox.deleteFile(sandboxId, node.path);
+        applyLocalDelete(node.path);
+      } catch (err) {
+        setError(err instanceof Error ? err.message : t("files.error.deleteFailed"));
+      } finally {
+        markDeleting([node.path], false);
+      }
+    },
+    [sandboxId, isDeleting, t, markDeleting, applyLocalDelete],
+  );
+
+  const handleDeleteSelected = useCallback(async () => {
+    if (!sandboxId || isDeletingSelection || isDownloadingSelection) {
+      return;
+    }
+    const paths = removeNestedSelections(Array.from(selectedDownloadPaths)).filter(
+      (path) => !isProtectedRoot(path),
+    );
+    if (!paths.length) {
+      return;
+    }
+    if (!window.confirm(t("files.confirmDeleteBatch", { count: paths.length }))) {
+      return;
+    }
+    setIsDeletingSelection(true);
+    markDeleting(paths, true);
+    setError(null);
+    try {
+      for (const path of paths) {
+        try {
+          await api.sandbox.deleteFile(sandboxId, path);
+          applyLocalDelete(path);
+        } catch (err) {
+          setError(err instanceof Error ? err.message : t("files.error.deleteFailed"));
+          break;
+        }
+      }
+    } finally {
+      markDeleting(paths, false);
+      setIsDeletingSelection(false);
+    }
+  }, [
+    sandboxId,
+    isDeletingSelection,
+    isDownloadingSelection,
+    selectedDownloadPaths,
+    t,
+    markDeleting,
+    applyLocalDelete,
+  ]);
 
   const downloadPaths = useCallback(
     async (paths: string[]) => {
@@ -597,15 +726,20 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
     const isExpanded = expandedPaths.has(node.path);
     const isSelected = selectedPath === node.path;
     const isDownloadSelected = selectedDownloadPaths.has(node.path);
+    const canDelete = !isProtectedRoot(node.path);
+    const isRowDeleting = isDeleting.has(node.path);
+    const selectionBusy = isDownloadingSelection || isDeletingSelection;
 
     return (
       <div className="file-node" key={node.path}>
-        <div className={`file-row ${isSelected ? "is-selected" : ""} ${isDownloadSelected ? "is-download-selected" : ""}`}>
+        <div
+          className={`file-row ${canDelete ? "file-row--deletable" : ""} ${isSelected ? "is-selected" : ""} ${isDownloadSelected ? "is-download-selected" : ""}`}
+        >
           <label className="file-row__check" style={{ marginLeft: 10 + depth * 16 }}>
             <span className="sr-only">{t("files.selectForDownload", { name: node.name })}</span>
             <input
               checked={isDownloadSelected}
-              disabled={isDownloadingSelection}
+              disabled={selectionBusy}
               onChange={() => toggleDownloadSelection(node.path)}
               type="checkbox"
             />
@@ -628,6 +762,18 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
             <span className="file-row__name">{node.name}</span>
             <span className="file-row__size">{formatBytes(node.size)}</span>
           </button>
+          {canDelete ? (
+            <button
+              className="file-row__delete"
+              disabled={isRowDeleting || selectionBusy || !sandboxId || currentSandbox?.status !== "running"}
+              onClick={() => void handleDeleteOne(node)}
+              title={t("files.delete")}
+              aria-label={t("files.aria.delete", { name: node.name })}
+              type="button"
+            >
+              <Trash2 size={14} />
+            </button>
+          ) : null}
         </div>
         {isFolder && isExpanded ? node.children?.map((child) => renderNode(child, depth + 1)) : null}
       </div>
@@ -657,14 +803,35 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
                 <span>{t("files.selectedCount", { count: selectedDownloadCount })}</span>
                 <button
                   className="file-sidebar__download-selected"
-                  disabled={!currentSandbox || isDownloadingSelection}
+                  disabled={!currentSandbox || isDownloadingSelection || isDeletingSelection}
                   onClick={() => void downloadPaths(Array.from(selectedDownloadPaths))}
                   type="button"
                 >
                   <Package size={14} />
                   <span>{isDownloadingSelection ? t("files.packing") : t("files.download")}</span>
                 </button>
-                <IconButton disabled={isDownloadingSelection} label={t("files.aria.clearSelection")} onClick={clearDownloadSelection}>
+                <button
+                  className="file-sidebar__delete-selected"
+                  disabled={
+                    !currentSandbox ||
+                    currentSandbox.status !== "running" ||
+                    !sandboxId ||
+                    isDownloadingSelection ||
+                    isDeletingSelection
+                  }
+                  onClick={() => void handleDeleteSelected()}
+                  type="button"
+                  title={t("files.aria.deleteSelected")}
+                  aria-label={t("files.aria.deleteSelected")}
+                >
+                  <Trash2 size={14} />
+                  <span>{isDeletingSelection ? t("files.deleting") : t("files.delete")}</span>
+                </button>
+                <IconButton
+                  disabled={isDownloadingSelection || isDeletingSelection}
+                  label={t("files.aria.clearSelection")}
+                  onClick={clearDownloadSelection}
+                >
                   <X size={14} />
                 </IconButton>
               </div>
