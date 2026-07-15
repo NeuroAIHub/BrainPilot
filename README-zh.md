@@ -2,7 +2,7 @@
   <img src="assets/banner.png" alt="BrainPilot" width="680"/>
 </p> -->
 
-<h1 align="center">🧠 BrainPilot</h1>
+<h1 align="center"><img src="assets/brand/icon_light.png" alt="BrainPilot 图标" height="46" align="absmiddle"/> BrainPilot</h1>
 
 <p align="center">
 BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它整合专业智能体、领域知识、科研技能和工具接口，帮助研究者覆盖完整科研流程：文献综述、假设细化、实验设计、数据分析、报告撰写和科学结论审查。
