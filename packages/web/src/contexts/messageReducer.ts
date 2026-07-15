@@ -70,7 +70,7 @@ function sweepStreaming(messages: ChatMessage[], agentName?: string): ChatMessag
   const next = messages.map((m) => {
     if (m.streaming && (!agentName || m.agent === agentName)) {
       changed = true;
-      return { ...m, streaming: false };
+      return finalizeStreamMessage(m);
     }
     return m;
   });
@@ -106,10 +106,47 @@ export function agUiMessageToChatMessage(msg: AgUiMessage): ChatMessage {
 }
 
 /**
+ * Stable identity for a stream-append event so history rehydrate + SSE ring
+ * buffer replay can merge idempotently (#314). Requires transport `_ts` (always
+ * set by the runtime EventBus envelope). Events without `_ts` (unit tests /
+ * legacy) return null and fall back to "always apply while streaming".
+ *
+ * Key = type + stream id + _ts + delta. Distinct CONTENT events that happen to
+ * carry the same text (intentional model repetition) still differ when `_ts`
+ * differs, so they are not collapsed.
+ */
+function streamAppendKey(event: WebSocketEvent, streamId: string, delta: string): string | null {
+  const raw = event as Record<string, unknown>;
+  const ts = raw._ts;
+  if (typeof ts !== "string" || !ts) return null;
+  return `${event.type}\0${streamId}\0${ts}\0${delta}`;
+}
+
+function withAppliedStreamKey(msg: ChatMessage, key: string | null): ChatMessage {
+  if (!key) return msg;
+  const prev = msg.appliedStreamKeys;
+  if (prev?.includes(key)) return msg;
+  return { ...msg, appliedStreamKeys: prev ? [...prev, key] : [key] };
+}
+
+function finalizeStreamMessage(msg: ChatMessage): ChatMessage {
+  // Drop reducer-internal keys once the stream is closed — further CONTENT is
+  // rejected via streaming:false, so the fingerprint set is no longer needed.
+  if (!msg.streaming && !msg.appliedStreamKeys) return msg;
+  const { appliedStreamKeys: _drop, ...rest } = msg;
+  return { ...rest, streaming: false };
+}
+
+/**
  * Apply an AG-UI canonical event to the running messages array. Events are
  * keyed by `messageId` / `toolCallId`; START emits a placeholder, CONTENT
  * appends delta, END marks completion. MESSAGES_SNAPSHOT replaces state
  * wholesale.
+ *
+ * Stream-append events (CONTENT / REASONING_CONTENT / TOOL_CALL_ARGS) are
+ * idempotent under replay (#314): a finalized message (`streaming:false`)
+ * ignores further appends, and events carrying a stable `_ts` identity are
+ * applied at most once per message even while still streaming.
  */
 export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocketEvent): ChatMessage[] {
   const agent = event.agentName;
@@ -171,6 +208,7 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // Strip NO-RENDER wrapper used by record_trace "Message Complete" hint
       delta = delta.replace(/<!--NO-RENDER-->[\s\S]*?<!--\/NO-RENDER-->/g, "");
       if (!delta) return existing;
+      const key = streamAppendKey(event, id, delta);
       // Orphaned CONTENT (no matching START) — recover gracefully instead of
       // dropping it. This happens when a demo bundle was exported from a
       // tail-sliced history: the leading START of the earliest messages is gone,
@@ -179,20 +217,27 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       if (!existing.some((m) => m.id === id)) {
         return [
           ...existing,
-          {
-            id,
-            role: "assistant",
-            content: delta,
-            createdAt: new Date().toISOString(),
-            agent,
-            streaming: true,
-            kind: "text",
-          },
+          withAppliedStreamKey(
+            {
+              id,
+              role: "assistant",
+              content: delta,
+              createdAt: new Date().toISOString(),
+              agent,
+              streaming: true,
+              kind: "text",
+            },
+            key,
+          ),
         ];
       }
-      return existing.map((m) =>
-        m.id === id ? { ...m, content: (m.content ?? "") + delta } : m,
-      );
+      return existing.map((m) => {
+        if (m.id !== id) return m;
+        // Finalized message: history/SSE replay must not re-append (#314).
+        if (m.streaming === false) return m;
+        if (key && m.appliedStreamKeys?.includes(key)) return m;
+        return withAppliedStreamKey({ ...m, content: (m.content ?? "") + delta }, key);
+      });
     }
 
     case "TEXT_MESSAGE_END": {
@@ -201,7 +246,7 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // Drop messages whose entire content was a NO-RENDER wrapper
       return existing
         .filter((m) => !(m.id === id && (m.content ?? "").trim() === ""))
-        .map((m) => (m.id === id ? { ...m, streaming: false } : m));
+        .map((m) => (m.id === id ? finalizeStreamMessage(m) : m));
     }
 
     case "TEXT_MESSAGE_CHUNK": {
@@ -250,15 +295,22 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       const id = event.toolCallId;
       const delta = typeof event.delta === "string" ? event.delta : "";
       if (!id || !delta) return existing;
-      return existing.map((m) =>
-        m.id === id ? { ...m, toolInput: ((m.toolInput as string) ?? "") + delta } : m,
-      );
+      const key = streamAppendKey(event, id, delta);
+      return existing.map((m) => {
+        if (m.id !== id) return m;
+        if (m.streaming === false) return m;
+        if (key && m.appliedStreamKeys?.includes(key)) return m;
+        return withAppliedStreamKey(
+          { ...m, toolInput: ((m.toolInput as string) ?? "") + delta },
+          key,
+        );
+      });
     }
 
     case "TOOL_CALL_END": {
       const id = event.toolCallId;
       if (!id) return existing;
-      return existing.map((m) => (m.id === id ? { ...m, streaming: false } : m));
+      return existing.map((m) => (m.id === id ? finalizeStreamMessage(m) : m));
     }
 
     case "TOOL_CALL_RESULT": {
@@ -307,17 +359,26 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       const id = event.messageId;
       const delta = typeof event.delta === "string" ? event.delta : "";
       if (!id || !delta) return existing;
-      return existing.map((m) =>
-        m.id === id
-          ? { ...m, content: (m.content ?? "") + delta, reasoning: (m.reasoning ?? "") + delta }
-          : m,
-      );
+      const key = streamAppendKey(event, id, delta);
+      return existing.map((m) => {
+        if (m.id !== id) return m;
+        if (m.streaming === false) return m;
+        if (key && m.appliedStreamKeys?.includes(key)) return m;
+        return withAppliedStreamKey(
+          {
+            ...m,
+            content: (m.content ?? "") + delta,
+            reasoning: (m.reasoning ?? "") + delta,
+          },
+          key,
+        );
+      });
     }
 
     case "REASONING_MESSAGE_END": {
       const id = event.messageId;
       if (!id) return existing;
-      return existing.map((m) => (m.id === id ? { ...m, streaming: false } : m));
+      return existing.map((m) => (m.id === id ? finalizeStreamMessage(m) : m));
     }
 
     case "RUN_ERROR": {

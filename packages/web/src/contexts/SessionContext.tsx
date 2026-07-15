@@ -386,8 +386,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
         // Replay the persisted event stream through the same reducers SSE uses
         // (messageReducer / traceReducer / agents seed via session_state). The
-        // SSE ring buffer that arrives next is deduped by messageId/toolCallId
-        // inside the reducer, so any overlap is a no-op.
+        // SSE ring buffer that arrives next is deduped inside the reducer:
+        // START/CHUNK by messageId/toolCallId, and CONTENT/ARGS by stable
+        // event identity + finalized-message guard (#314), so overlap is a no-op.
         const { messages: nextMessages, trace: nextTrace, agents: lastAgents, tokenUsage: lastUsage } =
           foldSessionHistory(events, sessionId);
 

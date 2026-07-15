@@ -182,6 +182,13 @@ export interface ChatMessage {
   askUser?: AskUserView;
   // kind === "auto_retry": auto-retry countdown + cancel indicator (doc §6)
   autoRetry?: AutoRetryView;
+  /**
+   * Reducer-internal: stable keys of stream-append events already applied to
+   * this message (`TEXT_MESSAGE_CONTENT` / `REASONING_MESSAGE_CONTENT` /
+   * `TOOL_CALL_ARGS`). Used so history rehydrate + SSE ring-buffer replay do
+   * not concatenate the same delta twice (#314). Not rendered.
+   */
+  appliedStreamKeys?: string[];
 }
 
 /** View-model for a `system_message` AG-UI event (post-normalize). */
