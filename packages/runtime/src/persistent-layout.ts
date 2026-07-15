@@ -8,7 +8,7 @@
  * directory-count heuristic cannot distinguish a v1 user id from a perfectly
  * valid v2 directory such as data/project/.
  */
-import { mkdir, readFile, readdir, rename, rmdir, writeFile } from "node:fs/promises";
+import { mkdir, readFile, readdir, rename, rmdir, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 const LAYOUT_VERSION = 2;
@@ -82,6 +82,13 @@ async function readDirOrNull(path: string) {
   }
 }
 
+function isIgnorableDataRootEntry(entry: { name: string; isFile(): boolean }): boolean {
+  // Finder creates this file merely by viewing data/. It is not persistent
+  // library content and must not turn an otherwise unambiguous v1 tree into a
+  // mixed-layout conflict.
+  return entry.name === ".DS_Store" && entry.isFile();
+}
+
 function layoutConflict(dataDir: string, legacyUserId: string, entries: string[]): Error {
   return new Error(
     `[persistent-data] cannot migrate ${dataDir}/${legacyUserId}: data/ also contains ` +
@@ -106,12 +113,18 @@ async function finishStagedMigration(
     }
   } else {
     const dataEntries = await readDirOrNull(dataDir);
-    if (dataEntries !== null && dataEntries.length > 0) {
+    const meaningfulEntries = dataEntries?.filter((entry) => !isIgnorableDataRootEntry(entry));
+    if (meaningfulEntries !== undefined && meaningfulEntries.length > 0) {
       throw new Error(
         `[persistent-data] cannot resume migration: ${dataDir} is non-empty while ${stagingDir} exists`,
       );
     }
-    if (dataEntries !== null) await rmdir(dataDir);
+    if (dataEntries !== null) {
+      for (const entry of dataEntries) {
+        if (isIgnorableDataRootEntry(entry)) await unlink(join(dataDir, entry.name));
+      }
+      await rmdir(dataDir);
+    }
     await rename(stagingDir, dataDir);
   }
 
@@ -138,7 +151,9 @@ async function runOrResumeMigration(
       if (entries === null) {
         throw new Error(`[persistent-data] migration source is missing: ${dataDir}`);
       }
-      const others = entries.filter((entry) => entry.name !== marker.legacyUserId);
+      const others = entries.filter(
+        (entry) => entry.name !== marker.legacyUserId && !isIgnorableDataRootEntry(entry),
+      );
       const legacy = entries.find((entry) => entry.name === marker.legacyUserId);
       if (!legacy?.isDirectory() || others.length > 0) {
         throw layoutConflict(dataDir, marker.legacyUserId, others.map((entry) => entry.name));
@@ -210,7 +225,9 @@ export async function ensurePersistentLayout(
     );
   }
 
-  const others = entries.filter((entry) => entry.name !== legacyUserId);
+  const others = entries.filter(
+    (entry) => entry.name !== legacyUserId && !isIgnorableDataRootEntry(entry),
+  );
   if (others.length > 0) {
     throw layoutConflict(dataDir, legacyUserId, others.map((entry) => entry.name));
   }
