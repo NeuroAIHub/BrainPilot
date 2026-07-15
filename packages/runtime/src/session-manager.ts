@@ -52,7 +52,7 @@ import {
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
-import { loadToolToggles, type ToolToggles } from "./tool-toggles.js";
+import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
@@ -65,6 +65,7 @@ import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemT
 import {
   toolTogglesForDomainResources,
   withoutDomainResourceInstructions,
+  withoutRouterSkillInstructions,
   resolveDomainResources,
 } from "./domain-resources.js";
 
@@ -1072,6 +1073,12 @@ export class SessionManager {
     name: string,
     role: AgentRole,
     domainResources: DomainResources,
+    /**
+     * #309: when false, strip router / skill_search teaching from the persona
+     * (always-on Meta-Skills guidance is kept). Ignored when domainResources
+     * is "base", which already removes all skill/router sections.
+     */
+    skillSearchEnabled = true,
   ): Promise<string> {
     let base: string | undefined;
     try {
@@ -1084,9 +1091,15 @@ export class SessionManager {
     // / on-disk prompt.md) so it also reaches users who scaffolded earlier, and
     // applies whether the persona came from disk or the built-in constant.
     const selected = base ?? personaFor(name, role);
-    let persona = withLanguageDirective(
-      domainResources === "base" ? withoutDomainResourceInstructions(selected) : selected,
-    );
+    let filtered = selected;
+    if (domainResources === "base") {
+      // Stronger isolation: no skills, no router, no local KB instructions.
+      filtered = withoutDomainResourceInstructions(selected);
+    } else if (!skillSearchEnabled) {
+      // #309: skill_search toggle off — hide router teaching only.
+      filtered = withoutRouterSkillInstructions(selected);
+    }
+    let persona = withLanguageDirective(filtered);
     // #257: tell working agents (not the passive trace recorder) where the
     // shared cross-session persistent root lives, by absolute path, so they can
     // read/write reusable data directly. Injected at load time (like the
@@ -1696,6 +1709,7 @@ export class SessionManager {
       entry.domainResources,
       await this.ensureToolToggles(),
     );
+    const skillSearchEnabled = isToolEnabled(toolToggles, "skill_search");
     const systemTools = systemToolsForRole(role, name, deps, toolToggles);
     // External MCP tools go to non-trace agents (trace agent is graph-only, §9).
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
@@ -1725,8 +1739,17 @@ export class SessionManager {
       cwd: this.workspaceDir(sessionId),
       systemTools: agentTools,
       allowedToolNames,
-      systemPrompt: await this.loadPersona(name, role, entry.domainResources),
+      systemPrompt: await this.loadPersona(
+        name,
+        role,
+        entry.domainResources,
+        skillSearchEnabled,
+      ),
       skillPaths,
+      // #309: when skill_search is off, block generic file tools from the router
+      // skill directory (Pi tool_call extension). Always-on skills stay readable.
+      blockRouterSkills: !skillSearchEnabled,
+      routerSkillsDir: this.routerSkillsDir,
       providerConfig,
       // 意图二 fallback: the trace-reminder extension calls this when an expert
       // was reminded once and still didn't report back, so the principal never

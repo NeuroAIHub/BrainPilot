@@ -53,6 +53,64 @@ export function withoutDomainResourceInstructions(persona: string): string {
   return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
 }
 
+/**
+ * #309: when only `skill_search` is off (always-on Meta-Skills still load),
+ * strip router-library teaching from the persona while keeping always-on skill
+ * guidance. Applies to built-in and on-disk `prompt.md` copies.
+ *
+ * Rules (deterministic, unit-tested):
+ *  1. Drop H1/H2 sections whose title matches "router skill library".
+ *  2. Drop numbered/bulleted list items that introduce the **Router** library.
+ *  3. Drop any remaining line that references the `skill_search` tool.
+ */
+export function withoutRouterSkillInstructions(persona: string): string {
+  const lines = persona.split("\n");
+  const kept: string[] = [];
+  let skippingSection = false;
+  let skippingRouterItem = false;
+
+  for (const line of lines) {
+    const heading = /^(#{1,6})\s+(.+?)\s*$/.exec(line);
+    if (heading && heading[1]!.length <= 2) {
+      skippingSection = /router\s+skill\s+library/i.test(heading[2]!);
+      skippingRouterItem = false;
+      if (skippingSection) continue;
+    }
+    if (skippingSection) continue;
+
+    // List item that introduces the Router library (e.g. "2. **Router** — ...").
+    if (/^\s*(?:\d+\.\s+)?(?:[-*]\s+)?\*{0,2}Router\*{0,2}\b/i.test(line)) {
+      skippingRouterItem = true;
+      continue;
+    }
+    if (skippingRouterItem) {
+      // End the dropped item at the next sibling list entry or blank line.
+      if (/^\s*$/.test(line) || /^\s*(?:\d+\.\s+|[-*]\s+)/.test(line)) {
+        skippingRouterItem = false;
+        // Re-process the line as a potential new item / blank.
+        if (/^\s*(?:\d+\.\s+)?(?:[-*]\s+)?\*{0,2}Router\*{0,2}\b/i.test(line)) {
+          skippingRouterItem = true;
+          continue;
+        }
+        if (/^\s*$/.test(line)) {
+          kept.push(line);
+          continue;
+        }
+        // Fall through to normal handling for a new non-Router list item.
+      } else {
+        continue;
+      }
+    }
+
+    // Any leftover skill_search call / mention (tool is not registered).
+    if (/\bskill_search\b/i.test(line)) continue;
+
+    kept.push(line);
+  }
+
+  return kept.join("\n").replace(/\n{3,}/g, "\n\n").trim();
+}
+
 function safeSkillName(value: unknown): string | undefined {
   if (typeof value !== "string") return undefined;
   const name = value.trim();

@@ -155,4 +155,39 @@ describe("two-path skill loading", () => {
     expect(mgr.getSessionState(base.id)?.domainResources).toBe("base");
     expect(mgr.getSessionState(full.id)?.domainResources).toBe("full");
   });
+
+  it("skill_search off: strips router prompt, drops tool, and flags blockRouterSkills (#309)", async () => {
+    const root = await tmp();
+    type Captured = Parameters<AgentSessionFactory>[0];
+    const captured: Captured[] = [];
+    const wrappedFactory: AgentSessionFactory = async (params) => {
+      captured.push(params);
+      return mockAgentFactory(params);
+    };
+    const mgr = new SessionManager({
+      dataRoot: root,
+      agentFactory: wrappedFactory,
+      persist: false,
+      toolToggles: { skill_search: false },
+    });
+    const session = await mgr.createSession({ domainResources: "full" });
+    await mgr.ensureAgent(session.id, "principal");
+    await mgr.ensureAgent(session.id, "librarian");
+
+    expect(captured.length).toBe(2);
+    for (const params of captured) {
+      expect(params.systemTools.map((t) => t.name)).not.toContain("skill_search");
+      // Always-on skills still load; KB tools unaffected by this single toggle.
+      expect(params.skillPaths).toEqual([join(root, "bp_template", "skills")]);
+      expect(params.systemTools.map((t) => t.name)).toContain("get_domain_knowledge_local");
+      // Prompt no longer teaches skill_search / router library.
+      expect(params.systemPrompt).not.toMatch(/skill_search/i);
+      expect(params.systemPrompt).not.toMatch(/Router skill library/i);
+      // Hard path guard is armed for the real factory.
+      expect(params.blockRouterSkills).toBe(true);
+      expect(params.routerSkillsDir).toBe(join(root, "bp_template", "skills-router"));
+      // Builtins still include read (always-on skills remain loadable via read).
+      expect(params.allowedToolNames).toContain("read");
+    }
+  });
 });
