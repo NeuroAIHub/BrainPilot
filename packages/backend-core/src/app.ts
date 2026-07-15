@@ -101,13 +101,17 @@ export function createApp(options: CreateAppOptions): Hono {
   const orchestrator = options.orchestrator;
   const env = options.env;
 
-  // Lazily-created runtime client, bound to the ensured runtime's baseUrl.
-  let client: RuntimeClient | null = null;
-  async function getClient(): Promise<RuntimeClient> {
-    const handle = await orchestrator.ensureRuntime();
-    if (!client || (client as { _baseUrl?: string })._baseUrl !== handle.baseUrl) {
+  // Runtime clients cached per runtime baseUrl. In single-instance modes
+  // (local/static/single-user-docker) this Map holds exactly one entry; in
+  // dynamic (per-user) docker mode it holds one client per user's sandbox.
+  const clients = new Map<string, RuntimeClient>();
+  async function getClient(c?: import("hono").Context): Promise<RuntimeClient> {
+    const userId = c ? resolveUserId(c) : undefined;
+    const handle = await orchestrator.ensureRuntime(userId ? { userId } : undefined);
+    let client = clients.get(handle.baseUrl);
+    if (!client) {
       client = new RuntimeClient({ baseUrl: handle.baseUrl, fetchFn: options.fetchFn });
-      (client as { _baseUrl?: string })._baseUrl = handle.baseUrl;
+      clients.set(handle.baseUrl, client);
     }
     return client;
   }
@@ -164,9 +168,14 @@ export function createApp(options: CreateAppOptions): Hono {
   // self-hosted `bp --up` there is no gateway, so we answer locally with a
   // single default identity. Without this the SPA's auth bootstrap 404s into a
   // hosted-login redirect loop (#38). Shape matches the web `User` contract.
-  api.get("/auth/me", (c) =>
-    c.json({ id: "local", username: "local", createdAt: new Date(0).toISOString() }),
-  );
+  api.get("/auth/me", (c) => {
+    const id = resolveUserId(c);
+    return c.json({
+      id,
+      username: id,
+      createdAt: new Date(0).toISOString(),
+    });
+  });
 
   // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
   api.get("/metrics", forward("metrics"));
@@ -203,7 +212,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.post("/sandbox/:id/files", async (c) => {
     const contentType = c.req.header("content-type") ?? "";
     if (contentType.includes("application/octet-stream")) {
-      const rc = await getClient();
+      const rc = await getClient(c);
       const query = new URL(c.req.url).search.replace(/^\?/, "");
       const upstream = await rc.forward("writeFile", {
         params: { id: c.req.param("id") ?? "" },
@@ -717,12 +726,29 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---------------- helpers ----------------
 
+  /**
+   * Resolve the current user id for per-user sandbox routing (#301).
+   *
+   * Trust-front (#21/#35): hosted deployments run an upstream gateway that
+   * authenticates the request and forwards the resolved user id in the
+   * `X-BP-User` header. Self-hosted `bp --up` has no gateway, so the header is
+   * absent and we fall back to the single `local` identity — keeping the
+   * single-user path (and its /auth/me contract) unchanged. The value is used
+   * only as an opaque routing key, so we defensively sanitize it.
+   */
+  function resolveUserId(c: import("hono").Context): string {
+    const raw = c.req.header("x-bp-user")?.trim();
+    if (!raw) return "local";
+    const safe = raw.replace(/[^A-Za-z0-9._-]/g, "").slice(0, 128);
+    return safe.length > 0 ? safe : "local";
+  }
+
   function forward(
     route: keyof typeof RUNTIME_ROUTES,
     opts: { idParam?: string; withBody?: boolean; withQuery?: boolean } = {},
   ) {
     return async (c: import("hono").Context) => {
-      const rc = await getClient();
+      const rc = await getClient(c);
       const params: Record<string, string> = {};
       if (opts.idParam) params.id = c.req.param(opts.idParam) ?? "";
       const body = opts.withBody ? await c.req.text() : undefined;
@@ -741,7 +767,7 @@ export function createApp(options: CreateAppOptions): Hono {
   }
 
   async function sseHandler(c: import("hono").Context): Promise<Response> {
-    const rc = await getClient();
+    const rc = await getClient(c);
     const id = c.req.param("id") ?? "";
     const upstream = await rc.openSse(id, {
       query: c.req.query("token") ? `token=${encodeURIComponent(c.req.query("token")!)}` : undefined,

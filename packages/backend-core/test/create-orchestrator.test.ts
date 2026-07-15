@@ -6,6 +6,7 @@ import { createOrchestrator } from "../src/create-orchestrator.js";
 import { resolveOrchestratorMode } from "../src/orchestrator.js";
 import { LocalProcessOrchestrator } from "../src/local-orchestrator.js";
 import { DockerOrchestrator } from "../src/docker-orchestrator.js";
+import { PerUserDockerOrchestrator } from "../src/per-user-docker-orchestrator.js";
 import { StaticRuntimeOrchestrator } from "../src/static-orchestrator.js";
 
 describe("resolveOrchestratorMode", () => {
@@ -53,6 +54,22 @@ describe("createOrchestrator factory", () => {
   it("creates a DockerOrchestrator when mode=docker", () => {
     const fakeDocker = {} as never;
     const orch = createOrchestrator({ mode: "docker", docker: { docker: fakeDocker } });
+    expect(orch).toBeInstanceOf(DockerOrchestrator);
+  });
+  it("creates a PerUserDockerOrchestrator when docker mode + BP_DYNAMIC=1 (#301)", () => {
+    const orch = createOrchestrator({
+      mode: "docker",
+      env: { BP_DYNAMIC: "1" },
+      docker: { docker: {} as never },
+    });
+    expect(orch).toBeInstanceOf(PerUserDockerOrchestrator);
+  });
+  it("stays single-instance DockerOrchestrator in docker mode without BP_DYNAMIC (#301)", () => {
+    const orch = createOrchestrator({
+      mode: "docker",
+      env: {},
+      docker: { docker: {} as never },
+    });
     expect(orch).toBeInstanceOf(DockerOrchestrator);
   });
   it("respects an explicit mode override", () => {

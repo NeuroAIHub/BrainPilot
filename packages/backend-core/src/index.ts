@@ -40,6 +40,9 @@ export type {
 export { DockerOrchestrator } from "./docker-orchestrator.js";
 export type { DockerOrchestratorOptions } from "./docker-orchestrator.js";
 
+export { PerUserDockerOrchestrator } from "./per-user-docker-orchestrator.js";
+export type { PerUserDockerOrchestratorOptions } from "./per-user-docker-orchestrator.js";
+
 export { StaticRuntimeOrchestrator } from "./static-orchestrator.js";
 export type { StaticOrchestratorOptions } from "./static-orchestrator.js";
 
