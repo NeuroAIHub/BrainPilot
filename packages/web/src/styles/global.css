@@ -4379,6 +4379,34 @@ button {
   padding: 8px;
 }
 
+/* Compact error banner inside the tree scroll region — must NOT be a sibling
+   grid row of the tree, or it steals the sidebar's 1fr track (#layout). */
+.file-sidebar__error {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0 0 8px;
+  padding: 8px 8px 8px 10px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-danger);
+}
+
+.file-sidebar__error-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  word-break: break-word;
+}
+
+.file-sidebar__error .icon-button {
+  flex: 0 0 auto;
+  color: inherit;
+}
+
 /* #257: the two file tiers (session workspace vs persistent library). */
 .file-tier {
   margin-bottom: 10px;

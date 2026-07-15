@@ -88,15 +88,19 @@ function makeDeferred<T>(): Deferred<T> {
 /** #167 default concurrent-provider-calls cap when nothing is configured. */
 const DEFAULT_MAX_CONCURRENT_AGENTS = 4;
 
-/** #256 default upload size cap (20 MiB) when `BP_UPLOAD_MAX_BYTES` is unset. */
-const DEFAULT_UPLOAD_MAX_BYTES = 20 * 1024 * 1024;
+/**
+ * #256 default upload size cap (1 GiB) when `BP_UPLOAD_MAX_BYTES` is unset.
+ * Matches the common hosted default so local and cloud behave the same for
+ * large PDFs / datasets; override down (or further up) via the env var.
+ */
+const DEFAULT_UPLOAD_MAX_BYTES = 1024 * 1024 * 1024;
 
 /**
  * #256: resolve the max upload size in bytes. Precedence: explicit option →
- * `BP_UPLOAD_MAX_BYTES` env → 20 MiB default. A non-positive or unparseable
+ * `BP_UPLOAD_MAX_BYTES` env → 1 GiB default. A non-positive or unparseable
  * value falls back to the default (a 0 cap would reject everything). `0` is NOT
- * treated as "unlimited": hosted deployments raise the cap explicitly; there is
- * intentionally no infinite setting.
+ * treated as "unlimited": set a finite cap explicitly; there is intentionally
+ * no infinite setting.
  */
 export function resolveUploadMaxBytes(opt?: number, env = process.env): number {
   if (typeof opt === "number" && Number.isFinite(opt) && opt > 0) {
@@ -319,8 +323,8 @@ export interface SessionManagerOptions {
   maxConcurrentAgents?: number;
   /**
    * #256: max upload size in bytes for workspace file writes (both the base64
-   * and raw-stream paths). Default 20 MiB; env override `BP_UPLOAD_MAX_BYTES`.
-   * Hosts raise this to accept large datasets/models. Tests inject directly.
+   * and raw-stream paths). Default 1 GiB; env override `BP_UPLOAD_MAX_BYTES`.
+   * Tests inject a small cap directly.
    */
   uploadMaxBytes?: number;
   /**
@@ -461,7 +465,7 @@ export class SessionManager {
   private readonly providerSlots = new Map<string, ProviderSemaphore>();
 
   // #256: max upload size in bytes (base64 + raw-stream paths). Configurable
-  // so hosted deployments can accept large files; default 20 MiB.
+  // via BP_UPLOAD_MAX_BYTES / opts; default 1 GiB.
   private readonly uploadMaxBytes: number;
 
   // #287: active addressing is always flat data/. The deprecated value is
@@ -883,7 +887,7 @@ export class SessionManager {
    * shared cross-session persistent root (reusable in later sessions); anything
    * else writes to the session workspace (the agent's cwd). `maxBytes` bounds
    * the decoded size (default: the configured upload cap, `BP_UPLOAD_MAX_BYTES`
-   * / 20 MiB — see #256).
+   * / 1 GiB — see #256).
    */
   async writeSessionFile(
     sid: string,

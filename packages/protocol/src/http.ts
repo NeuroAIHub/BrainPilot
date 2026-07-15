@@ -219,7 +219,7 @@ export type InterruptResponse = z.infer<typeof InterruptResponseSchema>;
  *      disk, symmetric with the `readRawFile` download. Preferred for
  *      large uploads.
  * Both return `WriteFileResponseSchema` and enforce the same traversal
- * guard + size cap (`BP_UPLOAD_MAX_BYTES`, default 20 MiB). */
+ * guard + size cap (`BP_UPLOAD_MAX_BYTES`, default 1 GiB). */
 
 /** #47: base64 JSON upload body. Content is base64 (binary-safe over the JSON byte chain). */
 export const WriteFileRequestSchema = z.object({
