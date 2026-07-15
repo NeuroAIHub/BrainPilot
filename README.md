@@ -2,7 +2,7 @@
   <img src="assets/banner.png" alt="BrainPilot" width="680"/>
 </p> -->
 
-<h1 align="center">🧠 BrainPilot: Enabling Agentic Research for Brain Science</h1>
+<h1 align="center"><img src="assets/brand/icon_light.png" alt="BrainPilot icon" height="46" align="absmiddle"/> BrainPilot: Enabling Agentic Research for Brain Science</h1>
 
 <p align="center">
 BrainPilot is an open-source, human-in-the-loop agentic system for brain science that brings together specialist agents, domain knowledge, skills, and tools to help researchers in all scientific stages — review literature, design studies, run analyses, draft reports, and audit scientific claims.
