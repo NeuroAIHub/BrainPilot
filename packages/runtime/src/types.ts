@@ -179,6 +179,17 @@ export type AgentSessionFactory = (params: {
    */
   skillPaths?: string[];
   /**
+   * #309: when true, register the router-skill-guard extension so generic file
+   * tools cannot read `<dataRoot>/bp_template/skills-router`. Set when
+   * `skill_search` is disabled. Requires `routerSkillsDir`.
+   */
+  blockRouterSkills?: boolean;
+  /**
+   * Absolute path to the router skill library. Required when
+   * `blockRouterSkills` is true; ignored otherwise.
+   */
+  routerSkillsDir?: string;
+  /**
    * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
    * when an expert was reminded once and STILL did not report back, so the host
    * can write a fallback note into the principal's mailbox (the PI never

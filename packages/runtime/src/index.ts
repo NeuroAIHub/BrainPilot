@@ -62,9 +62,20 @@ export {
   resolveDomainResources,
   toolTogglesForDomainResources,
   withoutDomainResourceInstructions,
+  withoutRouterSkillInstructions,
   domainResourceUsageOnStart,
   domainResourceUsageOnSuccess,
 } from "./domain-resources.js";
+
+export {
+  isUnderRouterSkillsDir,
+  pathsFromToolCall,
+  bashTouchesRouterSkills,
+  shouldBlockToolCall,
+  denyRouterSkillsReason,
+} from "./router-skill-access.js";
+
+export { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 
 export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
 export type { MaterializeSkillsResult } from "./materialize-skills.js";

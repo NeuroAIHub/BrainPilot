@@ -19,6 +19,7 @@ import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
+import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -84,6 +85,16 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   const extensionFactories: unknown[] = [traceReminder];
   if (params.renderAgentStatus) {
     extensionFactories.push(makeAgentStatusExt({ renderStatus: params.renderAgentStatus }));
+  }
+  // #309: when skill_search is off, hard-deny file-tool access to skills-router.
+  if (params.blockRouterSkills && params.routerSkillsDir) {
+    extensionFactories.push(
+      makeRouterSkillGuardExt({
+        routerSkillsDir: params.routerSkillsDir,
+        cwd: params.cwd,
+        enforce: true,
+      }),
+    );
   }
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,

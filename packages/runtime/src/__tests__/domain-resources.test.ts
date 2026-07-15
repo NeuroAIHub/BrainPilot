@@ -8,6 +8,7 @@ import {
   domainResourceUsageOnSuccess,
   toolTogglesForDomainResources,
   withoutDomainResourceInstructions,
+  withoutRouterSkillInstructions,
   resolveDomainResources,
 } from "../domain-resources.js";
 import { PERSONAS, personaFor } from "../personas.js";
@@ -40,6 +41,25 @@ describe("per-session domain resources", () => {
     }
     expect(withoutDomainResourceInstructions(PERSONAS.principal!)).toContain("User authorization gate");
     expect(withoutDomainResourceInstructions(PERSONAS.engineer!)).toContain("Execution discipline");
+  });
+
+  it("withoutRouterSkillInstructions strips router teaching but keeps always-on skill guidance (#309)", () => {
+    for (const persona of [...Object.values(PERSONAS), personaFor("statistician", "expert")]) {
+      if (!persona.includes("skill_search") && !/router skill library/i.test(persona)) continue;
+      const stripped = withoutRouterSkillInstructions(persona);
+      expect(stripped, "no skill_search").not.toMatch(/skill_search/i);
+      expect(stripped, "no router library section").not.toMatch(/Router skill library/i);
+      // Always-on guidance (or other non-router persona content) should survive.
+      expect(stripped.length).toBeGreaterThan(200);
+    }
+    // Principal still has skills-first / always-on language when present after strip.
+    const principal = withoutRouterSkillInstructions(PERSONAS.principal!);
+    expect(principal).toContain("User authorization gate");
+    expect(principal).not.toMatch(/skill_search/i);
+    // Engineer keeps execution discipline and is free of skill_search.
+    const engineer = withoutRouterSkillInstructions(PERSONAS.engineer!);
+    expect(engineer).toContain("Execution discipline");
+    expect(engineer).not.toMatch(/skill_search/i);
   });
 
   it("classifies only the frozen, content-free usage edges", () => {
