@@ -12,6 +12,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
   <a href="https://www.npmjs.com/package/@brainpilot/app"><img src="https://img.shields.io/npm/v/@brainpilot/app?style=flat-square&logo=npm&color=CB3837" alt="npm version"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square" alt="License: AGPL v3"/></a>
   <a href="https://brainpilot.chat"><img src="https://img.shields.io/badge/Hosted_Demo-brainpilot.chat-0E7490?style=flat-square" alt="在线体验"/></a>
+  <a href="https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A"><img src="https://img.shields.io/badge/Slack-加入社区-4A154B?style=flat-square&logo=slack&logoColor=white" alt="加入 BrainPilot Slack"/></a>
   <a href="#"><img src="https://img.shields.io/badge/Paper-即将公开-lightgrey?style=flat-square" alt="Paper (coming soon)"/></a>
   <a href="https://github.com/NeuroAIHub/BrainPilot/stargazers"><img src="https://img.shields.io/github/stars/NeuroAIHub/BrainPilot?style=flat-square" alt="Stars"/></a>
   <br/>
@@ -27,9 +28,10 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
   <a href="https://brainpilot.chat/docs">文档</a> ·
+  <a href="#-评测结果">评测</a> ·
+  <a href="#-真实研究案例">案例</a> ·
   <a href="#-快速开始">快速开始</a> ·
   <a href="#-资源与知识库">资源</a> ·
-  <a href="#-真实研究案例">案例</a> ·
   <a href="#-接入-mcp-服务">MCP</a> ·
   <a href="#-docker-部署">Docker</a> ·
   <a href="#-参与贡献">参与贡献</a> ·
@@ -52,6 +54,74 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 - **🔭 Graph of Trace 展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
 - **🔌 可扩展的科研工具生态** — 支持连接模型、MCP 工具、文献数据库、代码执行环境和自定义科研工具，适配不同研究场景。
 - **🚀 快速本地启动** — 简单安装后即可在浏览器中开始使用，降低脑科学智能体系统的部署和使用门槛。
+
+<p align="center">
+  <img src="assets/readme/brainpilot-overview.svg" alt="BrainPilot 多智能体科研系统与 Graph of Trace" width="100%"/>
+</p>
+
+<p align="center">
+  <img src="assets/readme/brainpilot-knowledge-flow-zh.svg" alt="BrainPilot 领域知识、科研技能与运行时服务架构" width="100%"/>
+</p>
+
+---
+
+## 📊 评测结果
+
+### Agents' Last Exam（ALE）
+
+在 ALE 的三项脑科学任务上，BrainPilot 搭载 DeepSeek-V4-Pro 分别获得 1.00、0.70 和
+0.09 分。图中实测运行也显示，BrainPilot 的多个配置成本低于 Codex + GPT-5.5 和
+Claude Code + Opus 4.8。T2 的满分为 1.00；T3 不设通过阈值，`F` 表示该次任务失败且没有可评分产物。
+每个单元格均为一次运行的结果。
+
+<p align="center">
+  <img src="assets/readme/evaluation-ale.svg" alt="BrainPilot 在 Agents' Last Exam 三项脑科学任务上的结果" width="100%"/>
+</p>
+
+### BrainPilotBench-v0——阶段性结果
+
+BrainPilotBench-v0 使用任务专属 grader、冻结参考或 held-out 数据评估 Agent 提交的产物，不依赖
+LLM-as-judge。当前图中仅 RSC 对比运行已经完成；
+TOPS-fMRI、运动想象 EEG 与 Sleep-EDF 仍在等待正式结果（`P`），`F` 表示该次运行没有可评分的
+完整产物。最新结果见 [Leaderboard](https://brainpilot.chat/bench#leaderboard)，公开任务数据见
+[Hugging Face](https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public)。
+
+<p align="center">
+  <img src="assets/readme/evaluation-brainpilotbench.png" alt="BrainPilotBench-v0 阶段性评测结果" width="100%"/>
+</p>
+
+---
+
+## 🧪 真实研究案例
+
+以下案例使用真实脑科学数据，并保留结果的统计边界。
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>RSC 空间编码</b><br/><br/>
+      在 RSC 双光子钙成像与虚拟现实行为数据上，BrainPilot 完成五部分分析流程；held-out 贝叶斯位置解码达到 MAE = 16.8 cm、r = 0.646。<br/><br/>
+      <img src="assets/readme/case-rsc.png" alt="BrainPilot RSC 空间编码案例" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>小鼠视觉层级</b><br/><br/>
+      在 58 个 Allen Neuropixels session 上，三个功能指标均与解剖层级正相关，但都未达到传统显著性阈值（p = 0.083、0.243 和 0.058）。<br/><br/>
+      <img src="assets/readme/case-visual-hierarchy.png" alt="BrainPilot 小鼠视觉层级案例" width="100%"/>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>fMRI 疼痛功能连接</b><br/><br/>
+      冻结后的 279 脑区疼痛功能连接特征在 10 名 held-out 被试中有 9 名对疼痛条件响应更高，并在日本与英国队列中呈现不同迁移表现（AUC = 0.793 和 0.699）。<br/><br/>
+      <img src="assets/readme/case-fmri-pain.png" alt="BrainPilot fMRI 疼痛功能连接案例" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>EEG 运动想象解码</b><br/><br/>
+      在 BCI Competition IV 2a 上，BrainPilot 在 7/9 名被试上超过 EEGNet（准确率：0.580 → 0.620；kappa：0.440 → 0.493），但配对检验未达到传统显著性阈值（p = 0.107 和 0.129）。<br/><br/>
+      <img src="assets/readme/case-eeg-motor-imagery.png" alt="BrainPilot EEG 运动想象解码案例" width="100%"/>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -174,11 +244,6 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 - **当前规模** —— 74 个内置技能，分属 21 个细粒度类别，并归入 7 个研究领域。
 - **覆盖领域** —— 细胞、分子、遗传与药理；认知与行为；基础方法与基础设施；人类神经影像与电生理；计算建模与理论；文献与报告工具；临床与应用研究。
 
-<p align="center">
-  <img src="assets/readme/brainpilot-knowledge-base.png" alt="BrainPilot 科研技能覆盖、托管知识库学科分布与词汇概览" width="100%"/>
-</p>
-<p align="center"><sub>74 个科研技能随开源包提供；7,233 条知识库内容及词汇统计描述的是托管语料，该语料不随本仓库分发。</sub></p>
-
 <details>
 <summary><b>技能分类与如何新增技能</b></summary>
 
@@ -251,8 +316,8 @@ repo-to-skill、批量提取流水线和公开技能合集。
 
 ### 知识库与论文库
 
-BrainPilot 托管服务使用一套覆盖 11 个学科组、包含 **7,233 条获授权内容** 的精选语料。该语料不随
-开源包分发；本地部署可以自行构建或接入知识库。内置的 `librarian` 智能体能够通过你提供的检索工具
+BrainPilot 托管服务使用一套经过筛选和授权的脑科学语料。该语料不随开源包分发；本地部署可以自行
+构建或接入知识库。内置的 `librarian` 智能体能够通过你提供的检索工具
 搜索论文、网络来源和知识库：
 
 - **接入一个检索型 MCP 服务**，对准你自己的语料（向量库、论文归档、一堆 PDF 的文件系统、内网搜索
@@ -290,46 +355,6 @@ Runtime 的 `POST /sessions` 接口支持
 发出不含内容的 `CUSTOM(name="domain_resource_usage")` 记录。记录不包含查询、工具结果、
 技能正文或凭证；provider 上报的累计 token 用量仍位于
 `session_state.tokenUsage`。
-
----
-
-## 🧪 真实研究案例
-
-以下案例使用真实脑科学数据，并保留结果的统计边界。它们展示的是完整研究流程，而非排行榜式结论。
-
-### Neuropixels 小鼠视觉层级分析
-
-在 58 个 Allen Neuropixels session 上，BrainPilot 选择响应延迟、本征时间尺度和感受野直径作为功能
-层级指标。初次 smoke test 中，弱响应神经元与噪声阈值导致响应延迟方向反转；系统定位问题后加入
-responsiveness filter，再扩展至全量数据。三个最终相关均为正，但都未达到传统显著性阈值（响应延迟：
-$\rho=0.667$，$p=0.083$；本征时间尺度：$\rho=0.476$，$p=0.243$；感受野直径：$\rho=0.714$，
-$p=0.058$）。
-
-<p align="center">
-  <img src="assets/readme/case-visual-hierarchy.png" alt="BrainPilot 小鼠视觉层级案例" width="760"/>
-</p>
-
-### fMRI 疼痛功能连接特征
-
-BrainPilot 在 279 个脑区、38,781 条功能连接边上训练疼痛特征，并在独立数据上评估冻结后的模型。
-在 held-out 数据中，10 名被试有 9 名表现为疼痛条件响应高于对照条件；在另一项慢性腰痛分类中，
-日本队列 AUC 为 0.793，英国队列 AUC 为 0.699，显示出部分迁移能力，同时保留英国数据泛化较弱的
-限制。
-
-<p align="center">
-  <img src="assets/readme/case-fmri-pain.png" alt="BrainPilot fMRI 疼痛功能连接案例" width="760"/>
-</p>
-
-### EEG 运动想象解码
-
-在 BCI Competition IV 2a 上，BrainPilot 设计了可执行的四分类解码器，并在 9 名被试、3 个随机种子
-上进行评估。模型在 7/9 名被试上超过 EEGNet 基线，平均准确率从 0.580 提升到 0.620，Cohen's kappa
-从 0.440 提升到 0.493。配对检验未达到传统显著性阈值（$p=0.107$ 与 $p=0.129$），因此该结果支持
-正向趋势，而非最先进性能声明。
-
-<p align="center">
-  <img src="assets/readme/case-eeg-motor-imagery.png" alt="BrainPilot EEG 运动想象解码案例" width="760"/>
-</p>
 
 ---
 
@@ -459,8 +484,9 @@ BrainPilot 是一个 8 包的 TypeScript monorepo：
 
 ## 💬 社区交流
 
-有问题、有想法，或者只想打个招呼？欢迎加入我们的飞书开源社区群：
+有问题、有想法，或者只想打个招呼？欢迎加入 BrainPilot 社区：
 
+- 💬 **[加入 BrainPilot Slack →](https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A)**
 - 🪶 **[加入 BrainPilot 飞书群 →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
 - 📧 **联系邮箱：** [thu_neuroai@mail.tsinghua.edu.cn](mailto:thu_neuroai@mail.tsinghua.edu.cn)
 

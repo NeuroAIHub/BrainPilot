@@ -12,6 +12,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
   <a href="https://www.npmjs.com/package/@brainpilot/app"><img src="https://img.shields.io/npm/v/@brainpilot/app?style=flat-square&logo=npm&color=CB3837" alt="npm version"/></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square" alt="License: AGPL v3"/></a>
   <a href="https://brainpilot.chat"><img src="https://img.shields.io/badge/Hosted_Demo-brainpilot.chat-0E7490?style=flat-square" alt="Hosted Demo"/></a>
+  <a href="https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A"><img src="https://img.shields.io/badge/Slack-Join_Community-4A154B?style=flat-square&logo=slack&logoColor=white" alt="Join the BrainPilot Slack"/></a>
   <a href="#"><img src="https://img.shields.io/badge/Paper-coming%20soon-lightgrey?style=flat-square" alt="Paper (coming soon)"/></a>
   <a href="https://github.com/NeuroAIHub/BrainPilot/stargazers"><img src="https://img.shields.io/github/stars/NeuroAIHub/BrainPilot?style=flat-square" alt="Stars"/></a>
   <br/>
@@ -27,9 +28,10 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
   <a href="https://brainpilot.chat/docs">Docs</a> ·
+  <a href="#-evaluation">Evaluation</a> ·
+  <a href="#-research-case-studies">Cases</a> ·
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-resources--knowledge-base">Resources</a> ·
-  <a href="#-research-case-studies">Cases</a> ·
   <a href="#-connecting-mcp-servers">MCP</a> ·
   <a href="#-docker-deployment">Docker</a> ·
   <a href="#-contributing">Contributing</a> ·
@@ -51,6 +53,77 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 - 🔭 Traceable research process — represents each session as an inspectable Graph of Trace, making task structure, agent actions, evidence flow, and decision points visible.
 - 🔌 Extensible research tool ecosystem — connects models, MCP tools, paper databases, code execution environments, and custom research utilities.
 - 🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
+
+<p align="center">
+  <img src="assets/readme/brainpilot-overview.svg" alt="BrainPilot multi-agent research system and Graph of Trace" width="100%"/>
+</p>
+
+<p align="center">
+  <img src="assets/readme/brainpilot-knowledge-flow-en.svg" alt="BrainPilot domain knowledge, skill, and runtime service architecture" width="100%"/>
+</p>
+
+---
+
+## 📊 Evaluation
+
+### Agents' Last Exam (ALE)
+
+Across three neuroscience tasks from ALE, BrainPilot paired with DeepSeek-V4-Pro scored
+1.00, 0.70, and 0.09. The measured runs also show lower observed costs for several
+BrainPilot configurations than Codex + GPT-5.5 and Claude Code + Opus 4.8. T2 has a
+full-credit score of 1.00; T3 has no pass threshold, and `F` denotes a failed task with no
+gradable output. Each cell reports a single run.
+
+<p align="center">
+  <img src="assets/readme/evaluation-ale.svg" alt="BrainPilot results on three neuroscience tasks from Agents' Last Exam" width="100%"/>
+</p>
+
+### BrainPilotBench-v0 — preliminary results
+
+BrainPilotBench-v0 evaluates submitted artifacts with task-specific graders, frozen references
+or held-out data, and no LLM judge.
+The current figure reports completed RSC runs; TOPS-fMRI, motor-imagery EEG, and Sleep-EDF
+comparisons remain pending (`P`). `F` marks runs without a gradable completion. Follow the
+[leaderboard](https://brainpilot.chat/bench#leaderboard) for updated results and access the
+[public task data](https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public) on
+Hugging Face.
+
+<p align="center">
+  <img src="assets/readme/evaluation-brainpilotbench.png" alt="Preliminary BrainPilotBench-v0 results" width="100%"/>
+</p>
+
+---
+
+## 🧪 Research case studies
+
+These cases use real neuroscience data and retain the limits of the evidence.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>RSC spatial coding</b><br/><br/>
+      On two-photon RSC calcium imaging and virtual-reality behavior, BrainPilot completed a five-part analysis workflow; held-out Bayesian decoding reached MAE = 16.8 cm and r = 0.646.<br/><br/>
+      <img src="assets/readme/case-rsc.png" alt="BrainPilot RSC spatial-coding case study" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>Mouse visual hierarchy</b><br/><br/>
+      Across 58 Allen Neuropixels sessions, three functional measures correlated positively with anatomical hierarchy, but none crossed the conventional significance threshold (p = 0.083, 0.243, and 0.058).<br/><br/>
+      <img src="assets/readme/case-visual-hierarchy.png" alt="BrainPilot mouse visual-hierarchy case study" width="100%"/>
+    </td>
+  </tr>
+  <tr>
+    <td width="50%" valign="top">
+      <b>fMRI pain connectivity</b><br/><br/>
+      A frozen 279-region pain-connectivity signature assigned a higher response to pain in 9 of 10 held-out subjects and transferred unevenly across the Japan and UK cohorts (AUC = 0.793 and 0.699).<br/><br/>
+      <img src="assets/readme/case-fmri-pain.png" alt="BrainPilot fMRI pain-connectivity case study" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>EEG motor-imagery decoding</b><br/><br/>
+      On BCI Competition IV 2a, BrainPilot exceeded EEGNet in 7 of 9 subjects (accuracy: 0.580 → 0.620; kappa: 0.440 → 0.493), although paired tests did not reach conventional significance (p = 0.107 and 0.129).<br/><br/>
+      <img src="assets/readme/case-eeg-motor-imagery.png" alt="BrainPilot EEG motor-imagery case study" width="100%"/>
+    </td>
+  </tr>
+</table>
 
 ---
 
@@ -183,11 +256,6 @@ Skills sources:
 - **Inventory** — 74 bundled skills in 21 fine-grained categories, grouped into 7 broader research domains.
 - **Covered domains** — cellular, molecular, genetics, and pharmacology; cognitive and behavioral research; foundation and infrastructure; human neuroimaging and electrophysiology; computational modeling and theory; literature and reporting; and clinical and applied research.
 
-<p align="center">
-  <img src="assets/readme/brainpilot-knowledge-base.png" alt="BrainPilot skill coverage, hosted knowledge-base disciplines, and vocabulary" width="100%"/>
-</p>
-<p align="center"><sub>The 74 skills are bundled with the open-source package. The 7,233-item knowledge base and vocabulary summary describe the hosted corpus, which is not distributed in this repository.</sub></p>
-
 <details>
 <summary><b>Skill categories &amp; how to add a skill</b></summary>
 
@@ -267,9 +335,9 @@ For the full workflow and examples, see
 
 ### Knowledge & paper base
 
-The hosted BrainPilot service uses a curated corpus of **7,233 authorized items across 11
-disciplinary groups**. That corpus is not distributed with the open-source package. For local
-deployments, BrainPilot lets you build or connect your own knowledge base. The built-in
+The hosted BrainPilot service uses a curated, authorized neuroscience corpus that is not
+distributed with the open-source package. For local deployments, BrainPilot lets you build or
+connect your own knowledge base. The built-in
 `librarian` agent searches papers, web sources, and knowledge bases through the retrieval
 tools you provide:
 
@@ -317,50 +385,6 @@ For auditable evaluation, the event stream emits content-free
 keyword searches, and successful full skill-body loads. The records contain no
 query, tool result, skill body, or credential; cumulative provider-reported
 token usage remains available in `session_state.tokenUsage`.
-
----
-
-## 🧪 Research case studies
-
-These cases test BrainPilot on real neuroscience data and preserve the limits of the evidence.
-They illustrate complete research workflows rather than leaderboard claims.
-
-### Mouse visual hierarchy from Neuropixels recordings
-
-On 58 Allen Neuropixels sessions, BrainPilot selected response latency, intrinsic timescale,
-and receptive-field diameter as candidate measures of functional hierarchy. An initial smoke
-test exposed a reversed latency trend caused by weakly responsive neurons and the noise
-threshold, prompting a responsiveness filter before the full run. All three final correlations
-were positive, but none reached conventional significance (latency: $\rho=0.667$, $p=0.083$;
-timescale: $\rho=0.476$, $p=0.243$; receptive-field diameter: $\rho=0.714$, $p=0.058$).
-
-<p align="center">
-  <img src="assets/readme/case-visual-hierarchy.png" alt="BrainPilot mouse visual hierarchy case study" width="760"/>
-</p>
-
-### Functional-connectivity signature of pain
-
-BrainPilot trained a pain signature over 279 regions and 38,781 functional-connectivity edges,
-then evaluated the frozen signature on independent data. It assigned a higher response to the
-pain condition for 9 of 10 held-out subjects. In a separate chronic-back-pain classification,
-AUC was 0.793 in the Japan cohort and 0.699 in the UK cohort, indicating partial transfer with
-weaker generalization in the UK data.
-
-<p align="center">
-  <img src="assets/readme/case-fmri-pain.png" alt="BrainPilot functional-connectivity fMRI pain case study" width="760"/>
-</p>
-
-### EEG motor-imagery decoding
-
-On BCI Competition IV 2a, BrainPilot designed an executable four-class decoder and evaluated
-it across 9 subjects and 3 random seeds. The model exceeded the EEGNet baseline in 7 of 9
-subjects; mean accuracy increased from 0.580 to 0.620 and Cohen's kappa from 0.440 to 0.493.
-Paired tests did not reach conventional significance ($p=0.107$ and $p=0.129$), so the result
-supports a positive trend rather than a state-of-the-art claim.
-
-<p align="center">
-  <img src="assets/readme/case-eeg-motor-imagery.png" alt="BrainPilot EEG motor-imagery decoding case study" width="760"/>
-</p>
 
 ---
 
@@ -518,8 +542,9 @@ BrainPilot is an 8-package TypeScript monorepo:
 
 ## 💬 Community
 
-Questions, ideas, or just want to say hi? Join our open-source community on Feishu:
+Questions, ideas, or just want to say hi? Join the BrainPilot community:
 
+- 💬 **[Join the BrainPilot Slack →](https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A)**
 - 🪶 **[Join the BrainPilot Feishu group →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
 - 📧 **Contact:** [thu_neuroai@mail.tsinghua.edu.cn](mailto:thu_neuroai@mail.tsinghua.edu.cn)
 
