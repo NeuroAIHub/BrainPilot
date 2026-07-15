@@ -22,6 +22,13 @@ export interface EnsureRuntimeOptions {
   /** Host data dir injected as BP_DATA_DIR (§11A.2). */
   readonly dataDir?: string;
   /**
+   * #301: routing key for per-user (dynamic) sandbox allocation. Only the
+   * PerUserDockerOrchestrator interprets it: each distinct `userId` gets its
+   * own container. All other orchestrators ignore it (single-instance), so the
+   * local/static/single-user-docker behaviour is unchanged when it is omitted.
+   */
+  readonly userId?: string;
+  /**
    * #261: host dir for the cross-user READ-ONLY shared root. Docker mode
    * bind-mounts it read-only and injects `BP_SHARED_DIR`; other orchestrators
    * forward it as env so the runtime exposes it at the `/shared` prefix.
@@ -41,8 +48,14 @@ export interface Orchestrator {
   ensureRuntime(opts?: EnsureRuntimeOptions): Promise<RuntimeHandle>;
   /** Probe the runtime `GET /health` (§15.4). Returns false if not started. */
   health(): Promise<boolean>;
-  /** Gracefully stop the runtime. Safe to call when not started. */
-  stopRuntime(): Promise<void>;
+  /**
+   * Gracefully stop the runtime. Safe to call when not started.
+   *
+   * #301: multi-tenant orchestrators accept an optional `userId` to stop a
+   * single user's runtime; omitting it stops everything. Single-instance
+   * orchestrators ignore the argument.
+   */
+  stopRuntime(userId?: string): Promise<void>;
 }
 
 export type OrchestratorMode = "local" | "static" | "docker";

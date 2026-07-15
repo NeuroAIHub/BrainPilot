@@ -457,7 +457,31 @@ baseline (Node + runtime only).
 | Mode | Sandbox topology | Selected by | This repo |
 |------|------------------|-------------|-----------|
 | `static` | 1 shared `main` + 1 fixed `sandbox`, single user | `BP_RUNTIME_URL` set | ✅ shipped |
-| `dynamic` | shared `main` + per-user sandbox via docker.sock | `BP_ORCHESTRATOR=docker` | 🚧 skeleton only |
+| `dynamic` | shared `main` + per-user sandbox via docker.sock | `BP_ORCHESTRATOR=docker` + `BP_DYNAMIC=1` | ✅ shipped |
+
+**Choosing static vs dynamic.** Use **static** for a single user or a trusted
+small team sharing one workspace — it is the simplest topology and what `docker
+compose up` gives you. Use **dynamic** when each user needs an *isolated*
+sandbox: `main` `docker run`s one `brainpilot-sandbox` container per user on
+first request (reusing it on subsequent requests, reclaiming it once idle).
+
+Run dynamic mode with the dedicated compose file (build the sandbox image first
+so the daemon can run it per user):
+
+```bash
+docker build -f docker/sandbox/Dockerfile -t brainpilot-sandbox:latest .
+docker compose -f docker-compose.dynamic.yml up
+```
+
+Key env (see [`docker-compose.dynamic.yml`](docker-compose.dynamic.yml)):
+`BP_ORCHESTRATOR=docker` + `BP_DYNAMIC=1` (the switch), `BP_DATA_DIR` (host data
+root; each user → `<root>/<userId>`), `BP_DYNAMIC_PORT_MIN`/`MAX` (host port
+pool), `BP_DYNAMIC_IDLE_MS` (idle-reclaim threshold, `0` disables).
+
+*Identity (trust-front):* the backend routes each request to a user's sandbox by
+the `X-BP-User` request header, which a hosted auth gateway in front of `main`
+is expected to set. When the header is absent (e.g. a bare self-hosted run) it
+falls back to a single `local` sandbox, so behaviour matches single-user mode.
 
 **Memory budget (`BP_MEM_LIMIT_MB`, optional).** For capped containers:
 

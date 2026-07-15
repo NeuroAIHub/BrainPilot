@@ -816,3 +816,66 @@ describe("Hono app — local config routes", () => {
     });
   });
 });
+
+// #301: per-user (dynamic) routing. The backend passes the resolved user id
+// (X-BP-User header, trust-front) to the orchestrator and caches one runtime
+// client per baseUrl, so two users hit two different sandboxes.
+describe("per-user sandbox routing (#301)", () => {
+  function routingOrchestrator(): {
+    orch: Orchestrator;
+    seen: string[];
+  } {
+    const seen: string[] = [];
+    const orch: Orchestrator = {
+      async ensureRuntime(opts): Promise<RuntimeHandle> {
+        const userId = opts?.userId ?? "none";
+        seen.push(userId);
+        return { baseUrl: `http://runtime-${userId}.test` };
+      },
+      async health() {
+        return true;
+      },
+      async stopRuntime() {},
+    };
+    return { orch, seen };
+  }
+
+  it("routes distinct X-BP-User values to distinct runtimes", async () => {
+    const { orch, seen } = routingOrchestrator();
+    const hit: string[] = [];
+    const fetchFn = vi.fn(async (url: string) => {
+      hit.push(url);
+      return new Response("{}", {
+        status: 200,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = createApp({ orchestrator: orch, fetchFn: fetchFn as never, serveWeb: false });
+
+    await app.request("/api/sessions", { headers: { "x-bp-user": "alice" } });
+    await app.request("/api/sessions", { headers: { "x-bp-user": "bob" } });
+
+    expect(seen).toEqual(["alice", "bob"]);
+    expect(hit).toEqual([
+      "http://runtime-alice.test/sessions",
+      "http://runtime-bob.test/sessions",
+    ]);
+  });
+
+  it("falls back to `local` when no header is present", async () => {
+    const { orch, seen } = routingOrchestrator();
+    const fetchFn = vi.fn(async () =>
+      new Response("{}", { status: 200, headers: { "content-type": "application/json" } }),
+    );
+    const app = createApp({ orchestrator: orch, fetchFn: fetchFn as never, serveWeb: false });
+    await app.request("/api/sessions");
+    expect(seen).toEqual(["local"]);
+  });
+
+  it("/auth/me reflects the X-BP-User identity", async () => {
+    const { orch } = routingOrchestrator();
+    const app = createApp({ orchestrator: orch, serveWeb: false });
+    const res = await app.request("/api/auth/me", { headers: { "x-bp-user": "alice" } });
+    expect(await res.json()).toMatchObject({ id: "alice", username: "alice" });
+  });
+});

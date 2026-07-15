@@ -1,30 +1,77 @@
 # =============================================================================
-# DYNAMIC SANDBOX SKELETON — NOT IMPLEMENTED IN THIS REPO.
+# BrainPilot — DYNAMIC (multi-user) deployment: 1 shared `main` + 1 sandbox PER
+# USER, started on demand by the backend via the mounted docker.sock (#301).
 # =============================================================================
-# This file documents how a downstream multi-user repo wires Docker when each
-# user needs an isolated sandbox. In `dynamic` mode the single `main` container
-# is shared by all users and starts one sandbox container PER USER on demand,
-# via the mounted docker.sock + DockerOrchestrator.
+# How it differs from the single-user static compose (docker-compose.yml):
+#   • static  → 1 main + 1 FIXED sandbox; main is pointed at it via BP_RUNTIME_URL.
+#   • dynamic → 1 main + N sandboxes; main `docker run`s a sandbox per user on
+#     first request (PerUserDockerOrchestrator), reusing existing ones and
+#     reclaiming idle ones. There is NO fixed `sandbox` service here.
 #
-# This repo ships only `static` mode (docker-compose.yml): 1 main + 1 fixed
-# sandbox. The per-user runtime logic, auth, and gateway live in the separate
-# downstream repo. The image build (docker/main, docker/sandbox) is reused
-# UNCHANGED — only the compose file and orchestrator selection differ.
+# The sandbox IMAGE is reused UNCHANGED from docker/sandbox — build it once
+# (e.g. `docker build -f docker/sandbox/Dockerfile -t brainpilot-sandbox:latest .`)
+# so the daemon can run it per user. Only the compose file + orchestrator
+# selection differ from static mode.
 #
-# To switch a downstream repo to dynamic mode:
-#   1. Mount docker.sock into main (so backend can `docker run` sandboxes).
-#   2. Set BP_ORCHESTRATOR=docker (this is the actual switch; and DO NOT set
-#      BP_RUNTIME_URL — a non-empty value forces the `static` orchestrator).
-#   3. Do NOT define a fixed `sandbox` service; the backend creates them per user.
+# Identity / routing (trust-front, #21/#35):
+#   Hosted deployments put an auth gateway in front of `main` that resolves the
+#   user and forwards the id in the `X-BP-User` request header. The backend
+#   routes each request to that user's sandbox (falling back to a single `local`
+#   sandbox when the header is absent, e.g. a bare self-hosted run).
 #
-# services:
-#   main:
-#     build: { context: ., dockerfile: docker/main/Dockerfile }
-#     image: brainpilot-main:latest
-#     ports: ["${BP_MAIN_PORT:-9001}:${BP_MAIN_PORT:-9001}"]
-#     environment:
-#       - PORT=${BP_MAIN_PORT:-9001}
-#       - BP_ORCHESTRATOR=docker
-#       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
-#     volumes:
-#       - /var/run/docker.sock:/var/run/docker.sock
+# Run:
+#   docker build -f docker/sandbox/Dockerfile -t brainpilot-sandbox:latest .
+#   docker compose -f docker-compose.dynamic.yml up
+services:
+  main:
+    build:
+      context: .
+      dockerfile: docker/main/Dockerfile
+      args:
+        HTTP_PROXY: ${HTTP_PROXY:-}
+        HTTPS_PROXY: ${HTTPS_PROXY:-}
+        NPM_REGISTRY: ${NPM_REGISTRY:-}
+        APT_MIRROR: ${APT_MIRROR:-}
+        VITE_KB_SETTINGS_ENABLED: ${VITE_KB_SETTINGS_ENABLED:-1}
+    image: brainpilot-main:latest
+    ports:
+      - "${BP_MAIN_PORT:-9001}:${BP_MAIN_PORT:-9001}"
+    environment:
+      - PORT=${BP_MAIN_PORT:-9001}
+      # `docker` orchestrator is the switch to daemon-managed sandboxes. Do NOT
+      # set BP_RUNTIME_URL — a non-empty value forces the `static` orchestrator.
+      - BP_ORCHESTRATOR=docker
+      # BP_DYNAMIC=1 upgrades the docker orchestrator from one shared container
+      # to one PER USER (PerUserDockerOrchestrator).
+      - BP_DYNAMIC=1
+      # Image the backend runs per user (must exist on the host daemon).
+      - BP_SANDBOX_IMAGE=${BP_SANDBOX_IMAGE:-brainpilot-sandbox:latest}
+      # Host port pool for per-user sandboxes (published on the daemon host).
+      - BP_DYNAMIC_PORT_MIN=${BP_DYNAMIC_PORT_MIN:-8100}
+      - BP_DYNAMIC_PORT_MAX=${BP_DYNAMIC_PORT_MAX:-8199}
+      # Idle reclaim: stop a user's sandbox after this many ms with no running
+      # agents + no activity. 0 disables reclaim. (default 30m below)
+      - BP_DYNAMIC_IDLE_MS=${BP_DYNAMIC_IDLE_MS:-1800000}
+      # Per-user data root on the HOST (each user → <root>/<userId>). This must
+      # be a host path the daemon can bind-mount into the per-user containers.
+      - BP_DATA_DIR=${BP_DATA_DIR:-/srv/brainpilot/users}
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
+      - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
+      - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
+      - ANTHROPIC_CONTEXT_WINDOW=${ANTHROPIC_CONTEXT_WINDOW:-}
+      - ANTHROPIC_MAX_TOKENS=${ANTHROPIC_MAX_TOKENS:-}
+      - BP_MODELS_JSON=${BP_MODELS_JSON:-}
+      - BP_MODEL_PROVIDER=${BP_MODEL_PROVIDER:-}
+      - BP_MOCK=${BP_MOCK:-}
+    volumes:
+      # docker.sock: lets the backend `docker run` per-user sandbox containers.
+      - /var/run/docker.sock:/var/run/docker.sock
+      # Bind the same host data root into main so the path it hands to the
+      # daemon for per-user bind mounts resolves identically on the host.
+      - ${BP_DATA_DIR:-/srv/brainpilot/users}:${BP_DATA_DIR:-/srv/brainpilot/users}:rw
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:${BP_MAIN_PORT:-9001}/api/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
