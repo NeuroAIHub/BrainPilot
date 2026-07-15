@@ -172,6 +172,31 @@ function updateNode(root: FileNode, path: string, updater: (node: FileNode) => F
   };
 }
 
+/**
+ * Turn raw runtime upload errors into short, human-readable copy. The runtime
+ * returns `file too large: N bytes exceeds limit of M` (#256); without this the
+ * long byte strings dominate the sidebar and look like a crash dump.
+ */
+function formatSidebarError(message: string, t: (key: string, params?: Record<string, string | number>) => string): string {
+  const match = message.match(/file too large:\s*(\d+)\s*bytes exceeds limit of\s*(\d+)/i);
+  if (match) {
+    const size = Number(match[1]);
+    const limit = Number(match[2]);
+    if (Number.isFinite(size) && Number.isFinite(limit)) {
+      return t("files.error.tooLarge", { size: formatBytes(size), limit: formatBytes(limit) });
+    }
+  }
+  // Stream path uses a slightly shorter form before size is known in the catch.
+  const streamMatch = message.match(/file too large:\s*exceeds limit of\s*(\d+)/i);
+  if (streamMatch) {
+    const limit = Number(streamMatch[1]);
+    if (Number.isFinite(limit)) {
+      return t("files.error.tooLargeLimitOnly", { limit: formatBytes(limit) });
+    }
+  }
+  return message;
+}
+
 function findNode(root: FileNode, path: string | null): FileNode | null {
   if (!path) {
     return null;
@@ -850,8 +875,21 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
           <small>{currentSandbox?.status === "running" ? t("files.live") : t("files.offline")}</small>
         </div>
 
-        {error ? <p className="file-sidebar__empty">{error}</p> : null}
+        {/*
+          Error lives INSIDE the tree scroll region (not as a sibling grid row).
+          The sidebar uses `grid-template-rows: auto auto minmax(0, 1fr)` for
+          header / path / tree — inserting an error between path and tree steals
+          the 1fr track and shoves both file tiers to the bottom of the panel.
+        */}
         <div className="file-sidebar__tree" aria-label={t("files.aria.tree")}>
+          {error ? (
+            <div className="file-sidebar__error" role="alert">
+              <p className="file-sidebar__error-text">{formatSidebarError(error, t)}</p>
+              <IconButton label={t("files.aria.dismissError")} onClick={() => setError(null)}>
+                <X size={14} />
+              </IconButton>
+            </div>
+          ) : null}
           {(tree.children ?? []).map((root) => renderRootNode(root))}
         </div>
       </aside>
