@@ -8,9 +8,10 @@ import { draftStore } from "../../contexts/draftStore";
 import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
+import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
 import { ComposerInput } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
@@ -19,6 +20,16 @@ import { MessageStream } from "./MessageStream";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
 import { shouldShowNoProviderBanner } from "./noProviderBanner";
+
+/** #305: in-flight attachment upload state for the progress row. */
+type ComposerUploadState = {
+  filename: string;
+  fileIndex: number;
+  fileCount: number;
+  fileSize: number;
+  percent: number | null;
+  phase: UploadProgress["phase"];
+};
 
 type PromptComposerProps = {
   /** Open Settings deep-linked to the Providers tab — wired to the
@@ -55,9 +66,12 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // left tool cluster, not the send cluster guarded by composerSendTools.test.)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [attachments, setAttachments] = useState<string[]>([]);
-  const [uploading, setUploading] = useState(false);
+  // #305: replace boolean busy with full progress UI state; null = idle.
+  const [uploadState, setUploadState] = useState<ComposerUploadState | null>(null);
+  const uploadAbortRef = useRef<AbortController | null>(null);
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
+  const uploading = uploadState != null;
   const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
@@ -310,24 +324,55 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // real session yet, so uploads land in the `"local"` staging area and the
   // runtime drains them (incl. `.attachments/`) into the real session on send
   // (#60 drainLocalUploads).
+  // #305: sequential multi-file with progress + cancel (one AbortController for
+  // the whole batch). Abort is not treated as a failure toast; successful chips
+  // already added are kept.
   const handleFilesChosen = async (files: FileList | null) => {
     if (!files || files.length === 0) return;
     const uploadId = currentSession?.id ?? currentSandbox?.id;
     if (!uploadId) return;
-    setUploading(true);
+    const list = Array.from(files);
+    const controller = new AbortController();
+    uploadAbortRef.current = controller;
     setComposerError(null);
     try {
-      for (const file of Array.from(files)) {
-        await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file);
+      for (let i = 0; i < list.length; i++) {
+        if (controller.signal.aborted) break;
+        const file = list[i]!;
+        setUploadState({
+          filename: file.name,
+          fileIndex: i + 1,
+          fileCount: list.length,
+          fileSize: file.size,
+          percent: null,
+          phase: "uploading",
+        });
+        await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file, {
+          signal: controller.signal,
+          onProgress: (p) => {
+            setUploadState((prev) =>
+              prev && prev.filename === file.name
+                ? { ...prev, percent: p.percent, phase: p.phase }
+                : prev,
+            );
+          },
+        });
         setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
       }
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
-      setComposerError(t("chat.upload.failed", { msg }));
+      if (!isUploadAbortError(e)) {
+        const msg = e instanceof Error ? e.message : String(e);
+        setComposerError(t("chat.upload.failed", { msg }));
+      }
     } finally {
-      setUploading(false);
+      uploadAbortRef.current = null;
+      setUploadState(null);
       if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-selecting the same file
     }
+  };
+
+  const cancelUpload = () => {
+    uploadAbortRef.current?.abort();
   };
 
   // Writes to the draft store from non-text controls (slash command picks,
@@ -410,7 +455,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             ariaLabel={t("chat.srAsk")}
           />
 
-          {attachments.length > 0 || uploading ? (
+          {attachments.length > 0 || uploadState ? (
             <div className="composer__attachments" aria-label={t("chat.aria.attachFile")}>
               <span className="composer__attachments-label">
                 <Paperclip size={11} />
@@ -430,7 +475,19 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                   </button>
                 </span>
               ))}
-              {uploading ? <span className="composer__chip composer__chip--pending">{t("chat.upload.uploading")}</span> : null}
+              {uploadState ? (
+                <div className="composer__upload-progress">
+                  <UploadProgressBar
+                    filename={uploadState.filename}
+                    fileIndex={uploadState.fileIndex}
+                    fileCount={uploadState.fileCount}
+                    fileSize={uploadState.fileSize}
+                    percent={uploadState.percent}
+                    phase={uploadState.phase}
+                    onCancel={cancelUpload}
+                  />
+                </div>
+              ) : null}
             </div>
           ) : null}
 

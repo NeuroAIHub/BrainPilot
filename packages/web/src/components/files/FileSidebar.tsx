@@ -20,12 +20,23 @@ import { runtimeConfig } from "../../config";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
+import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { downloadBlob } from "../../utils/download";
 import { createZipBlob, type ZipEntry } from "../../utils/zip";
 import { IconButton } from "../primitives/IconButton";
+import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
+
+/** #305: in-flight persistent-library upload state for the progress row. */
+type DataUploadState = {
+  filename: string;
+  fileIndex: number;
+  fileCount: number;
+  fileSize: number;
+  percent: number | null;
+  phase: UploadProgress["phase"];
+};
 
 type FileNode = FileEntry & {
   path: string;
@@ -166,7 +177,10 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
-  const [isUploadingToData, setIsUploadingToData] = useState(false);
+  // #305: replace boolean busy with progress UI state; null = idle.
+  const [dataUploadState, setDataUploadState] = useState<DataUploadState | null>(null);
+  const dataUploadAbortRef = useRef<AbortController | null>(null);
+  const isUploadingToData = dataUploadState != null;
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const dataUploadInputRef = useRef<HTMLInputElement | null>(null);
 
@@ -413,22 +427,65 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   // #257: upload file(s) into the persistent library (/data), then refresh that
   // subtree so they appear. Distinct from the composer's attachment upload —
   // this targets the cross-session root, not the session.
+  // #305: sequential multi-file with progress + cancel. Refresh only when at
+  // least one file succeeded (including partial batch after cancel).
   const handleDataUpload = async (files: FileList | null) => {
     if (!files || files.length === 0 || !sandboxId) return;
-    setIsUploadingToData(true);
+    const list = Array.from(files);
+    const controller = new AbortController();
+    dataUploadAbortRef.current = controller;
     setError(null);
+    let completedCount = 0;
     try {
-      for (const file of Array.from(files)) {
-        await api.sandbox.uploadFile(sandboxId, `${DATA_ROOT_PATH}/${file.name}`, file);
+      for (let i = 0; i < list.length; i++) {
+        if (controller.signal.aborted) break;
+        const file = list[i]!;
+        setDataUploadState({
+          filename: file.name,
+          fileIndex: i + 1,
+          fileCount: list.length,
+          fileSize: file.size,
+          percent: null,
+          phase: "uploading",
+        });
+        await api.sandbox.uploadFile(sandboxId, `${DATA_ROOT_PATH}/${file.name}`, file, {
+          signal: controller.signal,
+          onProgress: (p) => {
+            setDataUploadState((prev) =>
+              prev && prev.filename === file.name
+                ? { ...prev, percent: p.percent, phase: p.phase }
+                : prev,
+            );
+          },
+        });
+        completedCount += 1;
       }
-      setExpandedPaths((current) => new Set(current).add(DATA_ROOT_PATH));
-      await loadDirectory(DATA_ROOT_PATH);
+      if (completedCount > 0) {
+        setExpandedPaths((current) => new Set(current).add(DATA_ROOT_PATH));
+        await loadDirectory(DATA_ROOT_PATH);
+      }
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("files.error.uploadFailed"));
+      if (!isUploadAbortError(err)) {
+        setError(err instanceof Error ? err.message : t("files.error.uploadFailed"));
+      }
+      // Partial success before a hard failure: still refresh so written files show.
+      if (completedCount > 0) {
+        setExpandedPaths((current) => new Set(current).add(DATA_ROOT_PATH));
+        try {
+          await loadDirectory(DATA_ROOT_PATH);
+        } catch {
+          // loadDirectory already surfaces its own error
+        }
+      }
     } finally {
-      setIsUploadingToData(false);
+      dataUploadAbortRef.current = null;
+      setDataUploadState(null);
       if (dataUploadInputRef.current) dataUploadInputRef.current.value = "";
     }
+  };
+
+  const cancelDataUpload = () => {
+    dataUploadAbortRef.current?.abort();
   };
 
   const toggleFolder = async (node: FileNode) => {
@@ -508,6 +565,19 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
             </>
           )}
         </div>
+        {!isWorkspace && dataUploadState ? (
+          <div className="file-tier__upload-progress">
+            <UploadProgressBar
+              filename={dataUploadState.filename}
+              fileIndex={dataUploadState.fileIndex}
+              fileCount={dataUploadState.fileCount}
+              fileSize={dataUploadState.fileSize}
+              percent={dataUploadState.percent}
+              phase={dataUploadState.phase}
+              onCancel={cancelDataUpload}
+            />
+          </div>
+        ) : null}
         <p className="file-tier__hint">
           {isWorkspace ? t("files.tier.workspaceHint") : t("files.tier.dataHint")}
         </p>
