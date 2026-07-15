@@ -188,6 +188,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
   api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
+  api.get("/sessions/:id/stats", forward("getSessionStats", { idParam: "id" }));
   // Persisted event tail for chat rehydrate after a restart. SSE replays only
   // the in-memory ring; this endpoint reads events.jsonl on disk. Carries the
   // ?limit query verbatim.

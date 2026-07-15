@@ -105,6 +105,107 @@ export const SessionTokenUsageSchema = z.object({
 });
 export type SessionTokenUsage = z.infer<typeof SessionTokenUsageSchema>;
 
+/* ------------------------------------------------------------------ *
+ * Per-run usage stats (tools + skills + token deltas)
+ *
+ * Purpose: **behavioural research** — answer "which tools/skills did each
+ * agent use, per run, over the life of this session". Sibling to
+ * SessionTokenUsage above; kept in its own persisted file (`stats.json`) so
+ * we can write on every RUN_FINISHED without churning `usage.json`.
+ *
+ * Coverage (see `docs/superpowers/specs/…usage-stats-design.md`):
+ *   - Tools: ~99% (every Pi tool execution goes through one core-loop path
+ *     that emits `tool_execution_start`/`end`). Only known gap is hard-abort
+ *     mid-preparation, which is rare.
+ *   - Skills: only the `skill_search` custom tool is counted. `/skill:<name>`
+ *     slash-command expansions and implicit `<available_skills>` loads are
+ *     not observable from the current event surface and are OUT OF SCOPE
+ *     (upgradable later via a Pi extension without touching this schema).
+ * ------------------------------------------------------------------ */
+
+/**
+ * Per-agent per-tool invocation counter. Key is the tool name (`"read"`,
+ * `"bash"`, `"skill_search"`, external-MCP-bridged names, …). Value is the
+ * number of times the runtime observed a `tool_execution_start` for that
+ * tool. Aborted mid-run tools still count — we count *invocations*, not
+ * *successful completions*; see `errors` on `AgentStatsSchema` for the
+ * failure counter.
+ */
+export const ToolCallCountsSchema = z.record(z.string(), z.number().int().nonnegative());
+export type ToolCallCounts = z.infer<typeof ToolCallCountsSchema>;
+
+/**
+ * Per-skill invocation counter. Split by the three `skill_search` sub-modes
+ * (see packages/runtime/src/tools/skill-search.ts):
+ *   - `queries` — `mode="query"` with `keywords` (exploration; no body read)
+ *   - `loads`   — `mode="query"` with `skill_name` (returns full SKILL.md)
+ *   - `browses` — `mode="browse"` (directory/file browse under a skill)
+ *
+ * A special key `"__search__"` collects `queries` where the args carried no
+ * `skill_name` (pure keyword search — the agent looked around but did not
+ * commit to a named skill). Args that fail to parse are also charged to
+ * `__search__.queries` so counters are never dropped silently.
+ */
+export const SkillCounterSchema = z.object({
+  queries: z.number().int().nonnegative(),
+  loads: z.number().int().nonnegative(),
+  browses: z.number().int().nonnegative(),
+});
+export type SkillCounter = z.infer<typeof SkillCounterSchema>;
+export const SkillCountsSchema = z.record(z.string(), SkillCounterSchema);
+export type SkillCounts = z.infer<typeof SkillCountsSchema>;
+
+/**
+ * All countable stats for one agent, in one accounting unit (session
+ * cumulative, or a single RUN_STATS delta).
+ *
+ * `errors` counts `tool_execution_end.isError === true` per tool name; it is
+ * additive to `tools` — `tools[name]` is "attempted N times", `errors[name]`
+ * is "of those, M failed". We do not subtract.
+ */
+export const AgentStatsSchema = z.object({
+  tokens: TokenUsageSchema,
+  tools: ToolCallCountsSchema,
+  skills: SkillCountsSchema,
+  errors: ToolCallCountsSchema,
+});
+export type AgentStats = z.infer<typeof AgentStatsSchema>;
+
+/** Status stamped onto a `RunStats` entry when it is finalized. */
+export const RunStatsStatusSchema = z.enum(["ok", "error", "aborted"]);
+export type RunStatsStatus = z.infer<typeof RunStatsStatusSchema>;
+
+/**
+ * One completed run's contribution, computed as `cumulative_after -
+ * cumulative_before`. Appended to `SessionStats.byRun` when the run reaches
+ * a terminal event (`RUN_FINISHED` / `RUN_ERROR`) or is aborted.
+ */
+export const RunStatsSchema = z.object({
+  runId: z.string(),
+  agentName: z.string(),
+  startedAt: z.number().int().nonnegative(),
+  finishedAt: z.number().int().nonnegative(),
+  status: RunStatsStatusSchema,
+  delta: AgentStatsSchema,
+});
+export type RunStats = z.infer<typeof RunStatsSchema>;
+
+/**
+ * Full stats snapshot for one session:
+ *   - `total`   — everything summed across agents and runs.
+ *   - `byAgent` — per-agent cumulative (mirrors `SessionTokenUsage.byAgent`).
+ *   - `byRun`   — time-ordered per-run deltas. Append-only; never truncated
+ *                 (`events.jsonl` is the ultimate SSOT and is uncapped, so
+ *                 this stays bounded by the same envelope).
+ */
+export const SessionStatsSchema = z.object({
+  sessionId: z.string(),
+  total: AgentStatsSchema,
+  byAgent: z.record(z.string(), AgentStatsSchema),
+  byRun: z.array(RunStatsSchema),
+});
+export type SessionStats = z.infer<typeof SessionStatsSchema>;
+
 /**
  * Authoritative live session state. Identical shape across SSE first frame
  * (`CUSTOM:session_state`), push events, and `GET /sessions/:id/state`.

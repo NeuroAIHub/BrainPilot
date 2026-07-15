@@ -77,6 +77,16 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return graph ? c.json(graph) : c.json({ error: "not found" }, 404);
   });
 
+  // Per-run + per-session usage stats — see RUNTIME_ROUTES.getSessionStats.
+  // Persisted alongside the session at `.bp/<sid>/stats.json`; returns the
+  // in-memory snapshot fed by MasAgent.onRunStats.
+  app.get("/sessions/:id/stats", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const stats = manager.getSessionStats(id);
+    return stats ? c.json(stats) : c.json({ error: "not found" }, 404);
+  });
+
   // Persisted event history (events.jsonl) — see RUNTIME_ROUTES.getSessionHistory.
   // Used by the web to rehydrate chat after a runtime restart; SSE only replays
   // the in-memory ring buffer.

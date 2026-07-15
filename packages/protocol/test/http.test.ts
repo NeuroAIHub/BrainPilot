@@ -105,5 +105,9 @@ describe("Runtime HTTP contract", () => {
     expect(RUNTIME_ROUTES.interrupt.path).toBe("/sessions/:id/interrupt");
     expect(RUNTIME_ROUTES.listAgents.path).toBe("/sessions/:id/agents");
     expect(RUNTIME_ROUTES.evictSession).toEqual({ method: "POST", path: "/sessions/:id/evict" });
+    expect(RUNTIME_ROUTES.getSessionStats).toEqual({
+      method: "GET",
+      path: "/sessions/:id/stats",
+    });
   });
 });
