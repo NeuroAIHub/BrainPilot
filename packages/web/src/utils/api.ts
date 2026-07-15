@@ -88,24 +88,46 @@ function formatIssues(details: unknown): string | null {
   return parts.length > 0 ? parts.join("; ") : null;
 }
 
+/** Shared error-body shaping for fetch `parseError` and XHR upload responses. */
+function formatErrorBody(
+  body: { detail?: unknown; error?: unknown; details?: unknown } | null,
+): string | null {
+  if (!body) return null;
+  // #206: the backend uses two shapes — `{ detail }` (single string) and the
+  // Zod validation shape `{ error, details }`. Read all three: detail →
+  // error(+formatted details) → error.
+  if (typeof body.detail === "string" && body.detail.length > 0) {
+    return body.detail;
+  }
+  const issues = formatIssues(body.details);
+  if (typeof body.error === "string" && body.error.length > 0) {
+    return issues ? `${body.error} (${issues})` : body.error;
+  }
+  if (issues) return issues;
+  return null;
+}
+
+function parseErrorFromParts(status: number, contentType: string, text: string): string {
+  if (contentType.includes("application/json") && text) {
+    try {
+      const body = JSON.parse(text) as { detail?: unknown; error?: unknown; details?: unknown };
+      const formatted = formatErrorBody(body);
+      if (formatted) return formatted;
+    } catch {
+      // fall through to raw text
+    }
+  }
+  return text || `Request failed (${status})`;
+}
+
 async function parseError(res: Response): Promise<string> {
   const contentType = res.headers.get("content-type") || "";
   if (contentType.includes("application/json")) {
-    // #206: the backend uses two shapes — `{ detail }` (single string) and the
-    // Zod validation shape `{ error, details }`. parseError previously read only
-    // `detail`, so every `{ error, details }` 400/409 fell through to the generic
-    // text fallback. Read all three: detail → error(+formatted details) → error.
     const body = (await res.json().catch(() => null)) as
       | { detail?: unknown; error?: unknown; details?: unknown }
       | null;
-    if (typeof body?.detail === "string" && body.detail.length > 0) {
-      return body.detail;
-    }
-    const issues = formatIssues(body?.details);
-    if (typeof body?.error === "string" && body.error.length > 0) {
-      return issues ? `${body.error} (${issues})` : body.error;
-    }
-    if (issues) return issues;
+    const formatted = formatErrorBody(body);
+    if (formatted) return formatted;
   }
   const text = await res.text().catch(() => "");
   return text || `Request failed (${res.status})`;
@@ -138,8 +160,38 @@ async function handleJson<T>(res: Response): Promise<T> {
  * stream instead of base64 JSON. Small files stay on the base64 path (one
  * request shape, no streaming overhead); large files avoid the +33% base64
  * inflation and whole-file memory buffering. 4 MiB is a conservative cutoff.
+ *
+ * #305: UI also uses this as the percent-vs-indeterminate display threshold
+ * (small files would flash 0→100 on a fast link).
  */
-const RAW_UPLOAD_THRESHOLD_BYTES = 4 * 1024 * 1024;
+export const RAW_UPLOAD_THRESHOLD_BYTES = 4 * 1024 * 1024;
+
+/** #305: network upload progress reported by `uploadFile` via XHR. */
+export type UploadProgress = {
+  loaded: number;
+  total: number;
+  /** 0–100 when total > 0; else null (indeterminate). */
+  percent: number | null;
+  /**
+   * `uploading` while bytes are handed to the network stack;
+   * `processing` after the body is fully sent and the response is still pending
+   * (proxy buffering / runtime write).
+   */
+  phase: "uploading" | "processing";
+};
+
+export type UploadFileOptions = {
+  onProgress?: (p: UploadProgress) => void;
+  signal?: AbortSignal;
+};
+
+/** True when `uploadFile` (or fetch) rejected because the request was aborted. */
+export function isUploadAbortError(err: unknown): boolean {
+  return (
+    (typeof DOMException !== "undefined" && err instanceof DOMException && err.name === "AbortError") ||
+    (err instanceof Error && err.name === "AbortError")
+  );
+}
 
 /** #47: encode a Blob/File as base64 (without the data: prefix) for upload. */
 function blobToBase64(blob: Blob): Promise<string> {
@@ -153,6 +205,98 @@ function blobToBase64(blob: Blob): Promise<string> {
       resolve(comma >= 0 ? result.slice(comma + 1) : result);
     };
     reader.readAsDataURL(blob);
+  });
+}
+
+/**
+ * #305: POST a file upload with XHR so `upload.onprogress` can report network
+ * send progress. fetch() has no portable upload-progress events for a whole
+ * Blob body. Credentials match `apiFetch` (cookie auth via withCredentials).
+ */
+function xhrUploadJson<T>(opts: {
+  url: string;
+  headers: Record<string, string>;
+  body: Document | XMLHttpRequestBodyInit | null;
+  onProgress?: (p: UploadProgress) => void;
+  signal?: AbortSignal;
+}): Promise<T> {
+  return new Promise((resolve, reject) => {
+    if (opts.signal?.aborted) {
+      reject(new DOMException("Upload aborted", "AbortError"));
+      return;
+    }
+
+    const xhr = new XMLHttpRequest();
+    xhr.open("POST", opts.url);
+    xhr.withCredentials = true;
+    for (const [key, value] of Object.entries(opts.headers)) {
+      xhr.setRequestHeader(key, value);
+    }
+
+    const report = (p: UploadProgress) => {
+      opts.onProgress?.(p);
+    };
+
+    xhr.upload.onprogress = (ev) => {
+      const total = ev.lengthComputable ? ev.total : 0;
+      const loaded = ev.loaded;
+      const percent = total > 0 ? Math.min(100, Math.round((loaded / total) * 100)) : null;
+      report({ loaded, total, percent, phase: "uploading" });
+    };
+
+    // Body fully handed off; response (and any proxy/runtime work) still pending.
+    xhr.upload.onload = () => {
+      report({ loaded: 1, total: 1, percent: 100, phase: "processing" });
+    };
+
+    const onAbort = () => {
+      xhr.abort();
+    };
+    opts.signal?.addEventListener("abort", onAbort);
+
+    const cleanup = () => {
+      opts.signal?.removeEventListener("abort", onAbort);
+    };
+
+    xhr.onerror = () => {
+      cleanup();
+      reject(new Error("Network error during upload"));
+    };
+
+    xhr.onabort = () => {
+      cleanup();
+      reject(new DOMException("Upload aborted", "AbortError"));
+    };
+
+    xhr.onload = () => {
+      cleanup();
+      const status = xhr.status;
+      const contentType = xhr.getResponseHeader("content-type") || "";
+      const text = xhr.responseText ?? "";
+      if (status < 200 || status >= 300) {
+        reject(new Error(parseErrorFromParts(status, contentType, text)));
+        return;
+      }
+      if (status === 204) {
+        resolve(undefined as T);
+        return;
+      }
+      if (!contentType.includes("application/json")) {
+        reject(
+          new Error(
+            "The server returned an unexpected (non-JSON) response — this endpoint may not be available on this deployment.",
+          ),
+        );
+        return;
+      }
+      try {
+        resolve(JSON.parse(text) as T);
+      } catch {
+        reject(new Error("Invalid JSON response"));
+      }
+    };
+
+    xhr.send(opts.body);
   });
 }
 
@@ -398,35 +542,35 @@ export const api = {
       }
     },
 
-    // #47/#256: upload a file into the workspace. Files at/above the raw
+    // #47/#256/#305: upload a file into the workspace. Files at/above the raw
     // threshold stream as `application/octet-stream` (no +33% base64 inflation,
     // no whole-file buffering on the proxy/runtime); smaller files keep the
     // base64 JSON path. The runtime accepts both (negotiated by Content-Type).
-    async uploadFile(sandboxId: string, path: string, file: Blob): Promise<{ path: string; size: number }> {
+    // Uses XHR (not fetch) so optional `onProgress` can report network send
+    // progress; `signal` aborts via xhr.abort(). Cookie auth via withCredentials.
+    async uploadFile(
+      sandboxId: string,
+      path: string,
+      file: Blob,
+      opts?: UploadFileOptions,
+    ): Promise<{ path: string; size: number }> {
       if (file.size >= RAW_UPLOAD_THRESHOLD_BYTES) {
-        const res = await apiFetch(
-          `${API_BASE}/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,
-          {
-            method: "POST",
-            headers: { ...authHeaders(), "content-type": "application/octet-stream" },
-            body: file,
-          },
-        );
-        if (!res.ok) {
-          throw new Error(await parseError(res));
-        }
-        return handleJson(res);
+        return xhrUploadJson<{ path: string; size: number }>({
+          url: `${API_BASE}/sandbox/${sandboxId}/files?path=${encodeURIComponent(path)}`,
+          headers: { "content-type": "application/octet-stream" },
+          body: file,
+          onProgress: opts?.onProgress,
+          signal: opts?.signal,
+        });
       }
       const contentBase64 = await blobToBase64(file);
-      const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files`, {
-        method: "POST",
-        headers: { ...authHeaders(), "content-type": "application/json" },
+      return xhrUploadJson<{ path: string; size: number }>({
+        url: `${API_BASE}/sandbox/${sandboxId}/files`,
+        headers: { "content-type": "application/json" },
         body: JSON.stringify({ path, contentBase64 }),
+        onProgress: opts?.onProgress,
+        signal: opts?.signal,
       });
-      if (!res.ok) {
-        throw new Error(await parseError(res));
-      }
-      return handleJson(res);
     },
   },
 

@@ -235,10 +235,105 @@ describe("api.sessions.interrupt — hits the interrupt route, not /messages (#9
   });
 });
 
+// #305: uploadFile uses XHR (for upload.onprogress). FakeXHR records the last
+// request and completes via settle() so tests can inspect method/headers/body
+// and drive progress / abort / status.
+type FakeXhrInstance = {
+  method: string;
+  url: string;
+  headers: Record<string, string>;
+  body: unknown;
+  withCredentials: boolean;
+  status: number;
+  responseText: string;
+  upload: {
+    onprogress: ((ev: ProgressEvent) => void) | null;
+    onload: (() => void) | null;
+  };
+  onload: (() => void) | null;
+  onerror: (() => void) | null;
+  onabort: (() => void) | null;
+  aborted: boolean;
+  open: (method: string, url: string) => void;
+  setRequestHeader: (k: string, v: string) => void;
+  getResponseHeader: (k: string) => string | null;
+  send: (body?: unknown) => void;
+  abort: () => void;
+  /** Resolve the request with status + JSON body (or raw text). */
+  settle: (init: { status?: number; contentType?: string; json?: unknown; text?: string }) => void;
+  /** Fire upload progress events then upload.onload (processing phase). */
+  fireProgress: (events: Array<{ loaded: number; total: number }>) => void;
+};
+
+let lastXhr: FakeXhrInstance | null = null;
+let xhrInstances: FakeXhrInstance[] = [];
+
+function installFakeXhr() {
+  lastXhr = null;
+  xhrInstances = [];
+  class FakeXHR {
+    method = "";
+    url = "";
+    headers: Record<string, string> = {};
+    body: unknown = null;
+    withCredentials = false;
+    status = 0;
+    responseText = "";
+    private responseHeaders: Record<string, string> = {};
+    upload: FakeXhrInstance["upload"] = { onprogress: null, onload: null };
+    onload: (() => void) | null = null;
+    onerror: (() => void) | null = null;
+    onabort: (() => void) | null = null;
+    aborted = false;
+
+    open(method: string, url: string) {
+      this.method = method;
+      this.url = url;
+    }
+    setRequestHeader(k: string, v: string) {
+      this.headers[k.toLowerCase()] = v;
+    }
+    getResponseHeader(k: string) {
+      return this.responseHeaders[k.toLowerCase()] ?? null;
+    }
+    send(body?: unknown) {
+      this.body = body;
+      lastXhr = this as unknown as FakeXhrInstance;
+      xhrInstances.push(lastXhr);
+    }
+    abort() {
+      this.aborted = true;
+      this.onabort?.();
+    }
+    settle(init: { status?: number; contentType?: string; json?: unknown; text?: string }) {
+      this.status = init.status ?? 201;
+      if (init.contentType) this.responseHeaders["content-type"] = init.contentType;
+      if (init.text != null) {
+        this.responseText = init.text;
+      } else if (init.json !== undefined) {
+        this.responseText = JSON.stringify(init.json);
+        if (!init.contentType) this.responseHeaders["content-type"] = "application/json";
+      }
+      this.onload?.();
+    }
+    fireProgress(events: Array<{ loaded: number; total: number }>) {
+      for (const e of events) {
+        this.upload.onprogress?.({
+          lengthComputable: e.total > 0,
+          loaded: e.loaded,
+          total: e.total,
+        } as ProgressEvent);
+      }
+      this.upload.onload?.();
+    }
+  }
+  vi.stubGlobal("XMLHttpRequest", FakeXHR);
+}
+
 describe("api.sandbox.uploadFile — #47 base64 upload to the workspace", () => {
   // blobToBase64 uses the browser FileReader, absent in the node test env; stub
   // it with a minimal readAsDataURL that emits a data: URL so the base64 path
-  // (prefix stripping) is exercised end-to-end.
+  // (prefix stripping) is exercised end-to-end. #305: transport is XHR.
   beforeEach(() => {
     class FakeFileReader {
       result: string | null = null;
@@ -252,27 +347,34 @@ describe("api.sandbox.uploadFile — #47 base64 upload to the workspace", () => 
       }
     }
     vi.stubGlobal("FileReader", FakeFileReader);
+    installFakeXhr();
   });
 
   it("POSTs { path, contentBase64 } and returns the runtime's { path, size }", async () => {
-    fetchMock.mockResolvedValueOnce(
-      makeResponse({ status: 201, contentType: "application/json", json: { path: "notes.txt", size: 2 } }),
-    );
-    const out = await api.sandbox.uploadFile("s1", "notes.txt", new Blob(["hi"]));
-
-    const [url, init] = fetchMock.mock.calls[0]!;
-    expect(String(url)).toMatch(/\/sandbox\/s1\/files$/);
-    expect((init as RequestInit).method).toBe("POST");
-    const body = JSON.parse(String((init as RequestInit).body));
-    expect(body).toEqual({ path: "notes.txt", contentBase64: "aGk=" });
-    expect(out).toEqual({ path: "notes.txt", size: 2 });
+    const p = api.sandbox.uploadFile("s1", "notes.txt", new Blob(["hi"]));
+    // microtask: blobToBase64 resolves, then XHR is created + send()
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(lastXhr).not.toBeNull();
+    expect(lastXhr!.method).toBe("POST");
+    expect(lastXhr!.url).toMatch(/\/sandbox\/s1\/files$/);
+    expect(lastXhr!.withCredentials).toBe(true);
+    expect(lastXhr!.headers["content-type"]).toBe("application/json");
+    expect(JSON.parse(String(lastXhr!.body))).toEqual({ path: "notes.txt", contentBase64: "aGk=" });
+    lastXhr!.settle({ status: 201, json: { path: "notes.txt", size: 2 } });
+    await expect(p).resolves.toEqual({ path: "notes.txt", size: 2 });
   });
 
   it("throws the backend error message on a non-ok response", async () => {
-    fetchMock.mockResolvedValueOnce(
-      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { detail: "file too large" } }),
-    );
-    await expect(api.sandbox.uploadFile("s1", "big.bin", new Blob(["hi"]))).rejects.toThrow("file too large");
+    const p = api.sandbox.uploadFile("s1", "big.bin", new Blob(["hi"]));
+    await Promise.resolve();
+    await Promise.resolve();
+    lastXhr!.settle({
+      status: 400,
+      contentType: "application/json",
+      json: { detail: "file too large" },
+    });
+    await expect(p).rejects.toThrow("file too large");
   });
 });
 
@@ -286,29 +388,97 @@ describe("api.sandbox.uploadFile — #256 raw octet-stream for large files", () 
     return b;
   }
 
-  it("streams raw bytes with ?path= and an octet-stream content-type", async () => {
-    fetchMock.mockResolvedValueOnce(
-      makeResponse({ status: 201, contentType: "application/json", json: { path: "data/big.bin", size: 4194304 } }),
-    );
-    const file = bigBlob();
-    const out = await api.sandbox.uploadFile("s1", "data/big.bin", file);
+  beforeEach(() => {
+    installFakeXhr();
+  });
 
-    const [url, init] = fetchMock.mock.calls[0]!;
+  it("streams raw bytes with ?path= and an octet-stream content-type", async () => {
+    const file = bigBlob();
+    const p = api.sandbox.uploadFile("s1", "data/big.bin", file);
+    await Promise.resolve();
+    expect(lastXhr).not.toBeNull();
     // path is carried in the query, URL-encoded
-    expect(String(url)).toMatch(/\/sandbox\/s1\/files\?path=data%2Fbig\.bin$/);
-    const ri = init as RequestInit;
-    expect(ri.method).toBe("POST");
-    expect((ri.headers as Record<string, string>)["content-type"]).toBe("application/octet-stream");
+    expect(lastXhr!.url).toMatch(/\/sandbox\/s1\/files\?path=data%2Fbig\.bin$/);
+    expect(lastXhr!.method).toBe("POST");
+    expect(lastXhr!.headers["content-type"]).toBe("application/octet-stream");
     // the Blob itself is the body — not a JSON string
-    expect(ri.body).toBe(file);
-    expect(out).toEqual({ path: "data/big.bin", size: 4194304 });
+    expect(lastXhr!.body).toBe(file);
+    lastXhr!.settle({ status: 201, json: { path: "data/big.bin", size: 4194304 } });
+    await expect(p).resolves.toEqual({ path: "data/big.bin", size: 4194304 });
   });
 
   it("throws the backend error message on a non-ok raw response", async () => {
-    fetchMock.mockResolvedValueOnce(
-      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { error: "file too large" } }),
-    );
-    await expect(api.sandbox.uploadFile("s1", "data/big.bin", bigBlob())).rejects.toThrow("file too large");
+    const p = api.sandbox.uploadFile("s1", "data/big.bin", bigBlob());
+    await Promise.resolve();
+    lastXhr!.settle({
+      status: 400,
+      contentType: "application/json",
+      json: { error: "file too large" },
+    });
+    await expect(p).rejects.toThrow("file too large");
+  });
+});
+
+describe("api.sandbox.uploadFile — #305 progress + abort", () => {
+  function bigBlob(): Blob {
+    const b = new Blob(["x"]);
+    Object.defineProperty(b, "size", { value: 4 * 1024 * 1024 });
+    return b;
+  }
+
+  beforeEach(() => {
+    installFakeXhr();
+  });
+
+  it("reports monotonic progress then processing phase", async () => {
+    const events: Array<{ percent: number | null; phase: string }> = [];
+    const p = api.sandbox.uploadFile("s1", "data/big.bin", bigBlob(), {
+      onProgress: (ev) => events.push({ percent: ev.percent, phase: ev.phase }),
+    });
+    await Promise.resolve();
+    lastXhr!.fireProgress([
+      { loaded: 1_000_000, total: 4_000_000 },
+      { loaded: 2_000_000, total: 4_000_000 },
+      { loaded: 4_000_000, total: 4_000_000 },
+    ]);
+    lastXhr!.settle({ status: 201, json: { path: "data/big.bin", size: 4_000_000 } });
+    await p;
+    expect(events.map((e) => e.phase)).toEqual([
+      "uploading",
+      "uploading",
+      "uploading",
+      "processing",
+    ]);
+    expect(events.map((e) => e.percent)).toEqual([25, 50, 100, 100]);
+    // percent is non-decreasing across uploading events
+    const uploading = events.filter((e) => e.phase === "uploading").map((e) => e.percent!);
+    for (let i = 1; i < uploading.length; i++) {
+      expect(uploading[i]!).toBeGreaterThanOrEqual(uploading[i - 1]!);
+    }
+  });
+
+  it("rejects with AbortError when signal aborts", async () => {
+    const controller = new AbortController();
+    const p = api.sandbox.uploadFile("s1", "data/big.bin", bigBlob(), { signal: controller.signal });
+    await Promise.resolve();
+    controller.abort();
+    await expect(p).rejects.toMatchObject({ name: "AbortError" });
+    expect(lastXhr!.aborted).toBe(true);
+  });
+
+  it("rejects immediately when signal is already aborted", async () => {
+    const controller = new AbortController();
+    controller.abort();
+    await expect(
+      api.sandbox.uploadFile("s1", "data/big.bin", bigBlob(), { signal: controller.signal }),
+    ).rejects.toMatchObject({ name: "AbortError" });
+  });
+
+  it("works without onProgress (backward compatible)", async () => {
+    const p = api.sandbox.uploadFile("s1", "data/big.bin", bigBlob());
+    await Promise.resolve();
+    lastXhr!.settle({ status: 201, json: { path: "data/big.bin", size: 4194304 } });
+    await expect(p).resolves.toEqual({ path: "data/big.bin", size: 4194304 });
   });
 });
 
