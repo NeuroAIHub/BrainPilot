@@ -213,6 +213,36 @@ const fileEntries: Record<string, FileEntry[]> = {
   ],
 };
 
+/**
+ * #307: pure mock FS delete — removes `path` (and any descendants) from listing
+ * maps and content maps. Exported for unit tests.
+ */
+export function applyMockFileDelete(
+  path: string,
+  entries: Record<string, FileEntry[]>,
+  contents: Record<string, string>,
+): void {
+  for (const key of Object.keys(contents)) {
+    if (key === path || key.startsWith(`${path}/`)) {
+      delete contents[key];
+    }
+  }
+  for (const key of Object.keys(entries)) {
+    if (key === path || key.startsWith(`${path}/`)) {
+      delete entries[key];
+    }
+  }
+  const lastSlash = path.lastIndexOf("/");
+  if (lastSlash > 0) {
+    const parentPath = path.slice(0, lastSlash);
+    const name = path.slice(lastSlash + 1);
+    const parent = entries[parentPath];
+    if (parent) {
+      entries[parentPath] = parent.filter((entry) => entry.name !== name);
+    }
+  }
+}
+
 const fileContents: Record<string, string> = {
   "/workspace/README.md":
     "# Mock research workspace\n\nThis mock workspace mirrors the backend file API shape.\n\n- `src/` contains analysis code\n- `data/` contains small fixtures\n- `reports/` contains generated notes\n",
@@ -346,10 +376,11 @@ export const mockBackend = {
 
   async deleteFile(_sandboxId: string, path: string): Promise<void> {
     await wait();
-    if (path === "/workspace") {
-      throw new Error("Deleting /workspace root is not allowed");
+    // #307: block protected roots (matches FileSidebar UI + runtime expectations).
+    if (path === "/workspace" || path === "/data") {
+      throw new Error(`Deleting ${path} root is not allowed`);
     }
-    delete fileContents[path];
+    applyMockFileDelete(path, fileEntries, fileContents);
   },
 
   async listSessions(): Promise<Session[]> {
