@@ -401,6 +401,18 @@ describe("SessionManager legacy `data/<userId>/` migration (#287)", () => {
     expect(marker).toMatchObject({ version: 2, status: "ready", migratedFrom: "data/local" });
   });
 
+  it("ignores Finder metadata beside the legacy directory", async () => {
+    await mkdir(join(root, "data", "local"), { recursive: true });
+    await writeFile(join(root, "data", "local", "dataset.csv"), "kept", "utf8");
+    await writeFile(join(root, "data", ".DS_Store"), "finder metadata", "utf8");
+
+    const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    await m.ensurePersistentLayout();
+
+    expect(await readFile(join(root, "data", "dataset.csv"), "utf8")).toBe("kept");
+    await expect(readFile(join(root, "data", ".DS_Store"), "utf8")).rejects.toThrow();
+  });
+
   it("uses BP_USER_ID only as a legacy migration hint", async () => {
     await mkdir(join(root, "data", "alice"), { recursive: true });
     await writeFile(join(root, "data", "alice", "a.txt"), "alice", "utf8");
