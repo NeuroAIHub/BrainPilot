@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
@@ -12,6 +12,13 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 import { BuiltinToolsSection } from "./BuiltinToolsSection";
+import {
+  canSubmitProviderForm,
+  providerFieldErrorKey,
+  validateProviderForm,
+  type ProviderFormErrors,
+} from "./providerFormValidation";
+import { listFocusable, resolveEscapeLayer, trapFocusKeyDown } from "./settingsModalStack";
 
 export type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
 
@@ -95,6 +102,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [isProviderFormOpen, setIsProviderFormOpen] = useState(false);
   const [showProviderKey, setShowProviderKey] = useState(false);
+  const [providerFieldErrors, setProviderFieldErrors] = useState<ProviderFormErrors>({});
+  const [showProviderValidation, setShowProviderValidation] = useState(false);
   const [mcpForm, setMcpForm] = useState(DEFAULT_MCP_FORM);
   const [editingMcpName, setEditingMcpName] = useState<string | null>(null);
   const [isMcpFormOpen, setIsMcpFormOpen] = useState(false);
@@ -103,6 +112,14 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   const [error, setError] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+
+  // #328 — modal a11y: focus return, traps, nested Escape stack.
+  const settingsRootRef = useRef<HTMLDivElement | null>(null);
+  const settingsPanelRef = useRef<HTMLElement | null>(null);
+  const providerDialogRef = useRef<HTMLDivElement | null>(null);
+  const mcpDialogRef = useRef<HTMLDivElement | null>(null);
+  const returnFocusRef = useRef<HTMLElement | null>(null);
+  const providerNameInputRef = useRef<HTMLInputElement | null>(null);
 
   const mergeHealth = (profiles: ProviderProfile[], healthProfiles: ProviderProfile[]): ProviderProfile[] => {
     const healthById = new Map(healthProfiles.map((p) => [p.id, p]));
@@ -186,9 +203,119 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     return () => window.clearInterval(id);
   }, [isOpen, activeTab]);
 
+  // Capture the control that opened Settings and restore focus on close (#328).
+  useEffect(() => {
+    if (!isOpen) return;
+    returnFocusRef.current =
+      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    // Focus the settings panel after paint.
+    const id = window.requestAnimationFrame(() => {
+      const panel = settingsPanelRef.current;
+      if (!panel) return;
+      const focusable = listFocusable(panel);
+      (focusable[0] ?? panel).focus();
+    });
+    return () => {
+      window.cancelAnimationFrame(id);
+      const el = returnFocusRef.current;
+      if (el && typeof el.focus === "function") {
+        try {
+          el.focus();
+        } catch {
+          /* element may be gone */
+        }
+      }
+    };
+  }, [isOpen]);
+
+  // Isolate background content from AT while any settings layer is open (#328).
+  useEffect(() => {
+    if (!isOpen) return;
+    const root = settingsRootRef.current;
+    const parent = root?.parentElement;
+    if (!parent || !root) return;
+    const siblings = Array.from(parent.children).filter((c) => c !== root);
+    for (const el of siblings) {
+      if (el instanceof HTMLElement) {
+        el.setAttribute("inert", "");
+        el.setAttribute("aria-hidden", "true");
+      }
+    }
+    return () => {
+      for (const el of siblings) {
+        if (el instanceof HTMLElement) {
+          el.removeAttribute("inert");
+          el.removeAttribute("aria-hidden");
+        }
+      }
+    };
+  }, [isOpen]);
+
+  // Nested Escape + focus trap for the topmost dialog (#328).
+  useEffect(() => {
+    if (!isOpen) return;
+    const onKeyDown = (event: KeyboardEvent) => {
+      const layer = resolveEscapeLayer({
+        isSettingsOpen: isOpen,
+        isProviderFormOpen,
+        isMcpFormOpen,
+      });
+      const topEl =
+        layer === "mcp"
+          ? mcpDialogRef.current
+          : layer === "provider"
+            ? providerDialogRef.current
+            : settingsPanelRef.current;
+      if (topEl && trapFocusKeyDown(topEl, event)) {
+        return;
+      }
+      if (event.key === "Escape" || event.key === "Esc") {
+        event.preventDefault();
+        event.stopPropagation();
+        if (layer === "mcp") {
+          closeMcpForm();
+        } else if (layer === "provider") {
+          closeProviderForm();
+        } else {
+          onClose();
+        }
+      }
+    };
+    document.addEventListener("keydown", onKeyDown, true);
+    return () => document.removeEventListener("keydown", onKeyDown, true);
+  }, [isOpen, isProviderFormOpen, isMcpFormOpen, onClose]);
+
+  // Focus first field when nested provider form opens.
+  useEffect(() => {
+    if (!isProviderFormOpen) return;
+    const id = window.requestAnimationFrame(() => {
+      providerNameInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [isProviderFormOpen]);
+
+  // Focus first field when nested MCP form opens.
+  useEffect(() => {
+    if (!isMcpFormOpen) return;
+    const id = window.requestAnimationFrame(() => {
+      const dialog = mcpDialogRef.current;
+      if (!dialog) return;
+      const focusable = listFocusable(dialog);
+      focusable[0]?.focus();
+    });
+    return () => window.cancelAnimationFrame(id);
+  }, [isMcpFormOpen]);
+
   if (!isOpen) {
     return null;
   }
+
+  const providerValidation = validateProviderForm(providerForm, {
+    isEdit: Boolean(editingProviderId),
+  });
+  const canSubmitProvider = canSubmitProviderForm(providerForm, {
+    isEdit: Boolean(editingProviderId),
+  });
 
   const emitProviderUpdated = () => {
     window.dispatchEvent(new Event(PROVIDER_UPDATED_EVENT));
@@ -198,6 +325,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     setEditingProviderId(null);
     setProviderForm(DEFAULT_PROVIDER_FORM);
     setShowProviderKey(false);
+    setProviderFieldErrors({});
+    setShowProviderValidation(false);
     setIsProviderFormOpen(true);
   };
 
@@ -205,17 +334,23 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     setEditingProviderId(null);
     setProviderForm(DEFAULT_PROVIDER_FORM);
     setShowProviderKey(false);
+    setProviderFieldErrors({});
+    setShowProviderValidation(false);
     setIsProviderFormOpen(false);
   };
 
   const saveProvider = async (event: FormEvent) => {
     event.preventDefault();
     setError(null);
-    const models = providerForm.models.map((model) => model.trim()).filter(Boolean);
-    if (!models.length) {
-      setError(t("settings.providers.modelRequired"));
+    const validation = validateProviderForm(providerForm, {
+      isEdit: Boolean(editingProviderId),
+    });
+    if (!validation.ok) {
+      setShowProviderValidation(true);
+      setProviderFieldErrors(validation.errors);
       return;
     }
+    const models = providerForm.models.map((model) => model.trim()).filter(Boolean);
     try {
       const provider = editingProviderId
         ? await api.providers.update(editingProviderId, {
@@ -346,13 +481,23 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   };
 
   return (
-    <div className="settings-modal" role="dialog" aria-label={t("settings.aria.dialog")}>
+    <div
+      className="settings-modal"
+      ref={settingsRootRef}
+      role="dialog"
+      aria-modal="true"
+      aria-labelledby="settings-dialog-title"
+    >
       <div className="settings-modal__backdrop" onClick={onClose} />
-      <section className="settings-modal__panel">
+      <section
+        className="settings-modal__panel"
+        ref={settingsPanelRef}
+        tabIndex={-1}
+      >
         <header className="settings-modal__header">
           <div>
             <span className="settings-modal__eyebrow">{t("settings.eyebrow.workspace")}</span>
-            <h2>{t("settings.title")}</h2>
+            <h2 id="settings-dialog-title">{t("settings.title")}</h2>
           </div>
           <IconButton label={t("settings.aria.close")} onClick={onClose}>
             <X size={16} />
@@ -639,13 +784,21 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
       </section>
 
       {isProviderFormOpen ? (
-        <div className="provider-form-modal" role="dialog" aria-label={editingProviderId ? t("settings.providerForm.editAria") : t("settings.providerForm.addAria")}>
+        <div
+          className="provider-form-modal"
+          ref={providerDialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="provider-form-title"
+        >
           <div className="provider-form-modal__backdrop" onClick={closeProviderForm} />
-          <form className="provider-form provider-form--modal" onSubmit={saveProvider}>
+          <form className="provider-form provider-form--modal" onSubmit={saveProvider} noValidate>
             <header className="provider-form-modal__header">
               <div>
                 <span className="settings-modal__eyebrow">{t("settings.providerForm.eyebrow")}</span>
-                <h3>{editingProviderId ? t("settings.providerForm.editTitle") : t("settings.providerForm.addTitle")}</h3>
+                <h3 id="provider-form-title">
+                  {editingProviderId ? t("settings.providerForm.editTitle") : t("settings.providerForm.addTitle")}
+                </h3>
               </div>
               <IconButton label={t("settings.providerForm.close")} onClick={closeProviderForm}>
                 <X size={15} />
@@ -654,12 +807,81 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
 
             <div className="provider-form__grid">
               <label>
-                <span>{t("settings.providerForm.name")}</span>
-                <input placeholder="Anthropic" required value={providerForm.name} onChange={(event) => setProviderForm({ ...providerForm, name: event.target.value })} />
+                <span>
+                  {t("settings.providerForm.name")}
+                  <span className="provider-form__required" aria-hidden="true">
+                    {" "}
+                    *
+                  </span>
+                </span>
+                <input
+                  ref={providerNameInputRef}
+                  id="provider-form-name"
+                  placeholder="Anthropic"
+                  required
+                  aria-required="true"
+                  aria-invalid={showProviderValidation && providerFieldErrors.name ? true : undefined}
+                  aria-describedby={
+                    showProviderValidation && providerFieldErrors.name
+                      ? "provider-form-name-error"
+                      : undefined
+                  }
+                  value={providerForm.name}
+                  onChange={(event) => {
+                    setProviderForm({ ...providerForm, name: event.target.value });
+                    if (showProviderValidation) {
+                      setProviderFieldErrors(
+                        validateProviderForm(
+                          { ...providerForm, name: event.target.value },
+                          { isEdit: Boolean(editingProviderId) },
+                        ).errors,
+                      );
+                    }
+                  }}
+                />
+                {showProviderValidation && providerFieldErrors.name ? (
+                  <span id="provider-form-name-error" className="provider-form__error" role="alert">
+                    {t(providerFieldErrorKey("name"))}
+                  </span>
+                ) : null}
               </label>
               <label>
-                <span>{t("settings.providerForm.baseUrl")}</span>
-                <input placeholder="https://api.anthropic.com" required value={providerForm.baseUrl} onChange={(event) => setProviderForm({ ...providerForm, baseUrl: event.target.value })} />
+                <span>
+                  {t("settings.providerForm.baseUrl")}
+                  <span className="provider-form__required" aria-hidden="true">
+                    {" "}
+                    *
+                  </span>
+                </span>
+                <input
+                  id="provider-form-baseUrl"
+                  placeholder="https://api.anthropic.com"
+                  required
+                  aria-required="true"
+                  aria-invalid={showProviderValidation && providerFieldErrors.baseUrl ? true : undefined}
+                  aria-describedby={
+                    showProviderValidation && providerFieldErrors.baseUrl
+                      ? "provider-form-baseUrl-error"
+                      : undefined
+                  }
+                  value={providerForm.baseUrl}
+                  onChange={(event) => {
+                    setProviderForm({ ...providerForm, baseUrl: event.target.value });
+                    if (showProviderValidation) {
+                      setProviderFieldErrors(
+                        validateProviderForm(
+                          { ...providerForm, baseUrl: event.target.value },
+                          { isEdit: Boolean(editingProviderId) },
+                        ).errors,
+                      );
+                    }
+                  }}
+                />
+                {showProviderValidation && providerFieldErrors.baseUrl ? (
+                  <span id="provider-form-baseUrl-error" className="provider-form__error" role="alert">
+                    {t(providerFieldErrorKey("baseUrl"))}
+                  </span>
+                ) : null}
               </label>
               <div className="provider-form__field">
                 <span>{t("settings.providerForm.protocol")}</span>
@@ -676,17 +898,47 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                 />
               </div>
               <label className="provider-form__key">
-                <span>{t("settings.providerForm.apiKey")} {editingProviderId ? t("settings.providerForm.apiKeyKeep") : ""}</span>
+                <span>
+                  {t("settings.providerForm.apiKey")}{" "}
+                  {editingProviderId ? t("settings.providerForm.apiKeyKeep") : (
+                    <span className="provider-form__required" aria-hidden="true">
+                      *
+                    </span>
+                  )}
+                </span>
                 <input
+                  id="provider-form-apiKey"
                   placeholder={editingProviderId ? (providerForm.apiKeyMasked || "****") : ""}
                   required={!editingProviderId}
+                  aria-required={!editingProviderId ? true : undefined}
+                  aria-invalid={showProviderValidation && providerFieldErrors.apiKey ? true : undefined}
+                  aria-describedby={
+                    showProviderValidation && providerFieldErrors.apiKey
+                      ? "provider-form-apiKey-error"
+                      : undefined
+                  }
                   type={showProviderKey ? "text" : "password"}
                   value={providerForm.apiKey}
-                  onChange={(event) => setProviderForm({ ...providerForm, apiKey: event.target.value })}
+                  onChange={(event) => {
+                    setProviderForm({ ...providerForm, apiKey: event.target.value });
+                    if (showProviderValidation) {
+                      setProviderFieldErrors(
+                        validateProviderForm(
+                          { ...providerForm, apiKey: event.target.value },
+                          { isEdit: Boolean(editingProviderId) },
+                        ).errors,
+                      );
+                    }
+                  }}
                 />
                 <button aria-label={showProviderKey ? t("settings.providerForm.hideKey") : t("settings.providerForm.showKey")} onClick={() => setShowProviderKey((current) => !current)} type="button">
                   {showProviderKey ? <EyeOff size={15} /> : <Eye size={15} />}
                 </button>
+                {showProviderValidation && providerFieldErrors.apiKey ? (
+                  <span id="provider-form-apiKey-error" className="provider-form__error" role="alert">
+                    {t(providerFieldErrorKey("apiKey"))}
+                  </span>
+                ) : null}
               </label>
               <label>
                 <span>{t("settings.providerForm.notes")}</span>
@@ -696,19 +948,47 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
 
             <div className="provider-form__models">
               <div className="provider-form__models-header">
-                <span>{t("settings.providerForm.models")}</span>
+                <span>
+                  {t("settings.providerForm.models")}
+                  <span className="provider-form__required" aria-hidden="true">
+                    {" "}
+                    *
+                  </span>
+                </span>
                 <button onClick={addProviderModel} type="button">
                   <Plus size={13} />
                   {t("settings.providerForm.addModel")}
                 </button>
               </div>
-              <div className="provider-model-list">
+              <div
+                className="provider-model-list"
+                aria-invalid={showProviderValidation && providerFieldErrors.models ? true : undefined}
+                aria-describedby={
+                  showProviderValidation && providerFieldErrors.models
+                    ? "provider-form-models-error"
+                    : undefined
+                }
+              >
                 {providerForm.models.map((model, index) => (
                   <label className="provider-model-row" key={`${index}-${providerForm.models.length}`}>
                     <input
                       placeholder={EXAMPLE_MODEL}
                       value={model}
-                      onChange={(event) => updateProviderModel(index, event.target.value)}
+                      aria-required="true"
+                      onChange={(event) => {
+                        updateProviderModel(index, event.target.value);
+                        if (showProviderValidation) {
+                          const nextModels = providerForm.models.map((m, i) =>
+                            i === index ? event.target.value : m,
+                          );
+                          setProviderFieldErrors(
+                            validateProviderForm(
+                              { ...providerForm, models: nextModels },
+                              { isEdit: Boolean(editingProviderId) },
+                            ).errors,
+                          );
+                        }
+                      }}
                     />
                     <button
                       aria-label={t("settings.providerForm.removeModel")}
@@ -721,9 +1001,15 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                   </label>
                 ))}
               </div>
-              <p className="provider-form__models-hint">
-                {t("settings.providerForm.modelsHint")}
-              </p>
+              {showProviderValidation && providerFieldErrors.models ? (
+                <span id="provider-form-models-error" className="provider-form__error" role="alert">
+                  {t(providerFieldErrorKey("models"))}
+                </span>
+              ) : (
+                <p className="provider-form__models-hint">
+                  {t("settings.providerForm.modelsHint")}
+                </p>
+              )}
             </div>
 
             <div className="provider-form__appearance">
@@ -746,14 +1032,26 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
 
             <div className="settings-actions provider-form-modal__actions">
               <button className="settings-button settings-button--ghost" onClick={closeProviderForm} type="button">{t("settings.providerForm.cancel")}</button>
-              <button className="settings-button" type="submit">{editingProviderId ? t("settings.providerForm.save") : t("settings.providerForm.addTitle")}</button>
+              <button
+                className="settings-button"
+                type="submit"
+                aria-disabled={!canSubmitProvider}
+              >
+                {editingProviderId ? t("settings.providerForm.save") : t("settings.providerForm.addTitle")}
+              </button>
             </div>
           </form>
         </div>
       ) : null}
 
       {isMcpFormOpen ? (
-        <div className="provider-form-modal" role="dialog" aria-label={editingMcpName ? t("settings.mcpForm.editAria") : t("settings.mcpForm.addAria")}>
+        <div
+          className="provider-form-modal"
+          ref={mcpDialogRef}
+          role="dialog"
+          aria-modal="true"
+          aria-label={editingMcpName ? t("settings.mcpForm.editAria") : t("settings.mcpForm.addAria")}
+        >
           <div className="provider-form-modal__backdrop" onClick={closeMcpForm} />
           <form className="provider-form provider-form--modal mcp-form--modal" onSubmit={saveMcpServer}>
             <header className="provider-form-modal__header">
