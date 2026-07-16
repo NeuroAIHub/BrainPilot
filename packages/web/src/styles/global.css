@@ -2182,6 +2182,110 @@ button {
   max-height: 180px;
 }
 
+/* #316: wrapper so the mention menu can position above the textarea */
+.composer-input {
+  display: block;
+  position: relative;
+  flex: 1 1 auto;
+  min-width: 0;
+}
+
+.composer-input textarea {
+  width: 100%;
+}
+
+/* #316: `@` mention candidate list (fixed; portaled to body) */
+.mention-picker {
+  position: fixed;
+  z-index: 140;
+  display: flex;
+  flex-direction: column;
+  max-height: min(280px, 45vh);
+  overflow: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-raised);
+  padding: 4px;
+  box-shadow: var(--shadow-lg);
+  scrollbar-color: var(--color-border) transparent;
+  scrollbar-width: thin;
+}
+
+.mention-picker__block {
+  display: contents;
+}
+
+.mention-picker__group {
+  padding: 6px 8px 2px;
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--color-text-subtle);
+}
+
+.mention-picker__option,
+.mention-picker__status {
+  display: flex;
+  width: 100%;
+  min-width: 0;
+  min-height: 30px;
+  align-items: center;
+  gap: 10px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 4px 8px;
+  font: inherit;
+  font-size: 13px;
+  text-align: left;
+}
+
+.mention-picker__option {
+  cursor: pointer;
+}
+
+.mention-picker__option:hover,
+.mention-picker__option:focus-visible,
+.mention-picker__option.is-active {
+  background: var(--color-hover);
+  color: var(--color-text);
+  outline: none;
+}
+
+.mention-picker__status {
+  cursor: default;
+  opacity: 0.85;
+  font-size: 12px;
+}
+
+.mention-picker__label {
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.mention-picker__detail {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: var(--color-text-subtle);
+  text-align: right;
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .mention-picker {
+    animation: scaleIn var(--duration-fast) var(--ease-out) both;
+  }
+}
+
 .command-picker {
   position: relative;
 }
