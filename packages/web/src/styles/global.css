@@ -5917,6 +5917,150 @@ button {
   padding: 8px 18px;
 }
 
+/* #318 settings-mobile-start
+   Narrow viewports: drop the fixed 190px side nav so the content pane is not
+   crushed to ~134px (390×844). Desktop two-column IA above 860px is unchanged. */
+@media (max-width: 860px) {
+  .settings-modal__panel {
+    width: calc(100vw - 24px);
+    height: min(90dvh, calc(100vh - 24px));
+    max-height: calc(100vh - 24px);
+    aspect-ratio: auto;
+  }
+
+  .settings-modal__body {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto minmax(0, 1fr);
+  }
+
+  .settings-tabs {
+    display: flex;
+    flex-direction: row;
+    flex-wrap: nowrap;
+    align-content: stretch;
+    gap: 4px;
+    overflow-x: auto;
+    overscroll-behavior-x: contain;
+    border-right: none;
+    border-bottom: 1px solid var(--color-border);
+    padding: 8px 10px;
+    -webkit-overflow-scrolling: touch;
+    scrollbar-width: thin;
+  }
+
+  .settings-tabs button {
+    flex: 0 0 auto;
+    white-space: nowrap;
+  }
+
+  .settings-content {
+    padding: 14px;
+  }
+
+  .settings-section__header {
+    flex-direction: column;
+    align-items: stretch;
+  }
+
+  .settings-section__header .settings-button {
+    align-self: stretch;
+  }
+
+  .settings-list-item {
+    grid-template-columns: 1fr;
+    align-items: start;
+  }
+
+  .settings-list-item span,
+  .settings-list-item small {
+    white-space: normal;
+  }
+
+  .settings-list-item__actions {
+    flex-wrap: wrap;
+    width: 100%;
+  }
+
+  .provider-actions,
+  .mcp-actions {
+    grid-template-columns: repeat(auto-fill, minmax(72px, 1fr));
+    justify-content: stretch;
+    width: 100%;
+  }
+
+  .provider-actions button {
+    width: 100%;
+  }
+
+  .settings-field--split {
+    grid-template-columns: 1fr;
+    align-items: stretch;
+  }
+
+  .settings-kv div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .settings-kv dd {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+  }
+
+  .settings-inline-form {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-form__grid {
+    grid-template-columns: 1fr;
+  }
+
+  .provider-form-modal {
+    padding: 12px;
+  }
+
+  .provider-form--modal {
+    width: min(720px, calc(100vw - 24px));
+    max-height: min(720px, calc(100vh - 24px));
+    padding: 16px;
+  }
+
+  .provider-form-modal__actions {
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: stretch;
+    gap: 8px;
+  }
+
+  .provider-form-modal__actions .settings-button {
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .settings-toggle-row {
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .kb-env__facts div {
+    grid-template-columns: 1fr;
+    gap: 2px;
+  }
+
+  .kb-env__facts dd,
+  .kb-inv__metrics dd {
+    white-space: normal;
+    overflow: visible;
+    text-overflow: unset;
+  }
+
+  .kb-inv__metrics {
+    grid-template-columns: 1fr;
+  }
+}
+/* #318 settings-mobile-end */
+
 /* Inline checkbox row — used by the Knowledge Base panel (reuse-agent-key,
    per-stage toggles). Preferences uses .settings-toggle-row instead. */
 .settings-check {

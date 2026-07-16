@@ -367,6 +367,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                 <button
                   className={activeTab === tab.id ? "is-active" : ""}
                   key={tab.id}
+                  aria-current={activeTab === tab.id ? "page" : undefined}
                   onClick={() => setActiveTab(tab.id)}
                   type="button"
                 >
