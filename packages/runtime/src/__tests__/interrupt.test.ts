@@ -1,11 +1,13 @@
 /**
- * #90: whole-session Stop must really interrupt + clear mailboxes + notify PI.
+ * #90 / #327: whole-session Stop must interrupt + clear mailboxes without a
+ * follow-up model run solely to acknowledge the stop.
  *
  * The frontend Stop button calls POST /sessions/:id/interrupt with no agent,
- * meaning "interrupt the whole session". Beyond aborting every agent, that must:
+ * meaning "interrupt the whole session". That must:
  *   - clear ALL mailboxes so a queued message can't re-wake a stopped agent;
- *   - immediately prompt the principal one run with an interrupt notice so PI
- *     knows the user interrupted and should await further instructions.
+ *   - emit one deterministic system_message acknowledgement;
+ *   - settle runActive so the UI can clear Stop immediately;
+ *   - NOT prompt the principal (no extra provider tokens for "I stopped").
  *
  * A targeted interrupt(id, agent) keeps its narrow contract: abort just that
  * agent, leave mailboxes and the principal alone.
@@ -13,6 +15,7 @@
 import { describe, it, expect } from "vitest";
 import { SessionManager } from "../session-manager.js";
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "../types.js";
+import type { AgUiEvent } from "@brainpilot/protocol";
 
 interface Script {
   onPrompt?: (text: string) => { tool: string; args: Record<string, unknown> } | undefined;
@@ -97,7 +100,7 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-describe("whole-session interrupt (#90)", () => {
+describe("whole-session interrupt (#90 / #327)", () => {
   it("clears all mailboxes so a queued message can't re-wake a stopped agent", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = scriptedFactory(
@@ -131,23 +134,38 @@ describe("whole-session interrupt (#90)", () => {
     expect(m.mailboxCount(s.id, "librarian")).toBe(0);
   });
 
-  it("prompts the principal with an interrupt notice after stopping", async () => {
+  it("does not prompt the principal after stop; emits one system acknowledgement (#327)", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = scriptedFactory({ principal: {}, librarian: {} }, observe);
     const m = new SessionManager({ persist: false, agentFactory: factory });
     const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (e) => events.push(e));
 
     await m.sendMessage(s.id, "hello");
     await waitFor(() => observe.prompts.some((p) => p.agent === "principal"));
-    const before = observe.prompts.filter((p) => p.agent === "principal").length;
+    const principalBefore = observe.prompts.filter((p) => p.agent === "principal").length;
 
     await m.interrupt(s.id);
+    // Allow any accidental async follow-up prompt to surface.
+    await new Promise((r) => setTimeout(r, 40));
 
-    // Principal is prompted again, and the prompt carries an interrupt notice
-    // telling it the user interrupted and to await further instructions.
-    await waitFor(() => observe.prompts.filter((p) => p.agent === "principal").length > before);
-    const notice = observe.prompts.filter((p) => p.agent === "principal").at(-1)!;
-    expect(notice.text).toContain("interrupt");
+    // No follow-up model run solely to acknowledge the interruption.
+    expect(observe.prompts.filter((p) => p.agent === "principal").length).toBe(principalBefore);
+    expect(observe.prompts.some((p) => /interrupt|system_notice/i.test(p.text))).toBe(false);
+
+    // One deterministic system acknowledgement (not model-generated).
+    const sysAcks = events.filter(
+      (e) =>
+        e.type === "system_message" &&
+        typeof (e as { message?: string }).message === "string" &&
+        String((e as { message?: string }).message).includes("中断"),
+    );
+    expect(sysAcks.length).toBeGreaterThanOrEqual(1);
+
+    // Run state settled so the UI can clear Stop immediately.
+    const state = m.getSessionState(s.id);
+    expect(state?.runState?.active).toBe(false);
   });
 
   it("targeted interrupt(agent) does not prompt the principal with a notice", async () => {
@@ -174,8 +192,6 @@ describe("whole-session interrupt (#90)", () => {
 
     await m.interrupt(s.id, "librarian");
 
-    // A targeted interrupt is narrow: it must NOT re-prompt the principal with
-    // an interrupt notice (that is the whole-session Stop behavior only).
     await new Promise((r) => setTimeout(r, 20));
     expect(observe.prompts.filter((p) => p.agent === "principal").length).toBe(principalBefore);
   });

@@ -364,9 +364,9 @@ export class MasAgent {
    * already awaits the agent back to idle). We then await the in-flight
    * `prompt()` promise so that by the time abort() resolves: the original run
    * has emitted its terminal RUN_FINISHED/RUN_ERROR, `status` has settled, and
-   * no further assistant content can be appended. This lets `interrupt()` start
-   * the principal's interrupt-notice run WITHOUT racing the old run (which would
-   * otherwise throw "Agent is already processing a prompt").
+   * no further assistant content can be appended. Whole-session interrupt waits
+   * on this settlement before emitting its deterministic system ack (#327) —
+   * it must not start a follow-up provider run while the old run is still open.
    */
   async abort(): Promise<void> {
     // Snapshot the run identity before session.abort() causes runPrompt's
