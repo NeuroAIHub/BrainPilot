@@ -704,18 +704,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           setError(tg("ctx.session.interruptFailed"));
           return;
         }
-        // Confirmed stopped: insert the status line. Agent state (incl. the PI
-        // interrupt-acknowledgement run the runtime now fires) flows in via SSE.
+        // #330 — do NOT insert a client-only stop row. The runtime emits one
+        // canonical system_message with a stable id (interrupt:session:runId)
+        // that persists to events.jsonl and dedupes across history + SSE replay.
+        // A local UUID status bubble would vanish on reload and conflict with it.
+        // Fence any still-streaming assistant partial so content freezes at the
+        // interrupt boundary; the acknowledgement arrives via SSE.
         setMessagesBySession((current) => {
           const msgs = current[sid] ?? [];
-          const stoppedMsg: ChatMessage = {
-            id: generateUUID(),
-            role: "system",
-            content: tg("chat.stoppedByUser"),
-            createdAt: new Date().toISOString(),
-            kind: "status",
-          };
-          return { ...current, [sid]: [...finalizeAssistant(msgs), stoppedMsg] };
+          return { ...current, [sid]: finalizeAssistant(msgs) };
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : tg("ctx.session.interruptFailed"));
