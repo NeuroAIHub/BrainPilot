@@ -1,4 +1,4 @@
-import { Check, ChevronDown, Copy, Users } from "lucide-react";
+import { AlertCircle, Check, ChevronDown, Copy, Users } from "lucide-react";
 import { memo, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ChatMessage } from "../../contracts/backend";
 import { buildRenderItems } from "../../contexts/messageGroups";
@@ -10,6 +10,15 @@ import { AutoRetryIndicator } from "./AutoRetryIndicator";
 import { formatToolName, formatPayload } from "../../utils/toolDisplay";
 import { formatElapsed } from "../../utils/format";
 import { getChatScroll, setChatScroll, resolveScrollTop } from "./chatScrollMemory";
+import {
+  copyFailureMessageKey,
+  copyTextToClipboard,
+  type CopyFailureReason,
+} from "../../utils/copyToClipboard";
+
+type CopyFeedback =
+  | { id: string; status: "success" }
+  | { id: string; status: "error"; reason: CopyFailureReason };
 
 interface MessageStreamProps {
   /** Already filtered / time-sliced by the host. */
@@ -86,7 +95,9 @@ function MessageStreamImpl({
   groupExpertActivity = false,
 }: MessageStreamProps) {
   const t = useT();
-  const [copiedId, setCopiedId] = useState<string | null>(null);
+  // #329 — success or error feedback for Copy; never claim success on failure.
+  const [copyFeedback, setCopyFeedback] = useState<CopyFeedback | null>(null);
+  const copyFeedbackTimerRef = useRef<number | null>(null);
   // #219 — audit mode: force every specialist group open (reasoning/tool folds
   // inside stay independent, per issue).
   const [expandAll, setExpandAll] = useState(false);
@@ -222,66 +233,68 @@ function MessageStreamImpl({
     setChatScroll(scrollKey, { scrollTop: node.scrollTop, pinned: isPinnedRef.current });
   };
 
-  const handleCopy = async (id: string, text: string) => {
-    const markCopied = () => {
-      setCopiedId(id);
-      setTimeout(() => setCopiedId((current) => (current === id ? null : current)), 2000);
-    };
-
-    // Modern Clipboard API only works in secure contexts (https / localhost).
-    // When the app is served over plain http (e.g. deployed on an IP/domain),
-    // navigator.clipboard is undefined, so we fall back to execCommand('copy').
-    try {
-      if (navigator.clipboard && window.isSecureContext) {
-        await navigator.clipboard.writeText(text);
-        markCopied();
-        return;
-      }
-    } catch {
-      // fall through to legacy fallback below
-    }
-
-    try {
-      const textarea = document.createElement("textarea");
-      textarea.value = text;
-      textarea.style.position = "fixed";
-      textarea.style.top = "0";
-      textarea.style.left = "0";
-      textarea.style.width = "1px";
-      textarea.style.height = "1px";
-      textarea.style.padding = "0";
-      textarea.style.border = "none";
-      textarea.style.outline = "none";
-      textarea.style.boxShadow = "none";
-      textarea.style.background = "transparent";
-      textarea.setAttribute("readonly", "");
-      document.body.appendChild(textarea);
-      textarea.select();
-      textarea.setSelectionRange(0, text.length);
-      const succeeded = document.execCommand("copy");
-      document.body.removeChild(textarea);
-      if (succeeded) {
-        markCopied();
-      }
-    } catch {
-      // ignore — copy is best-effort
+  const clearCopyFeedbackTimer = () => {
+    if (copyFeedbackTimerRef.current !== null) {
+      window.clearTimeout(copyFeedbackTimerRef.current);
+      copyFeedbackTimerRef.current = null;
     }
   };
 
+  useEffect(() => () => clearCopyFeedbackTimer(), []);
+
+  const scheduleCopyFeedbackClear = (id: string, ms: number) => {
+    clearCopyFeedbackTimer();
+    copyFeedbackTimerRef.current = window.setTimeout(() => {
+      setCopyFeedback((current) => (current?.id === id ? null : current));
+      copyFeedbackTimerRef.current = null;
+    }, ms);
+  };
+
+  const handleCopy = async (id: string, text: string) => {
+    const result = await copyTextToClipboard(text);
+    if (result.ok) {
+      setCopyFeedback({ id, status: "success" });
+      scheduleCopyFeedbackClear(id, 2000);
+      return;
+    }
+    setCopyFeedback({ id, status: "error", reason: result.reason });
+    scheduleCopyFeedbackClear(id, 3000);
+  };
+
+  const copyAnnounce =
+    copyFeedback?.status === "success"
+      ? t("chat.copied")
+      : copyFeedback?.status === "error"
+        ? t(copyFailureMessageKey(copyFeedback.reason))
+        : "";
+
   const copyButtonFor = (message: ChatMessage) => {
-    const isCopied = copiedId === message.id;
+    const fb = copyFeedback?.id === message.id ? copyFeedback : null;
+    const isCopied = fb?.status === "success";
+    const isError = fb?.status === "error";
+    const label = isCopied
+      ? t("chat.copied")
+      : isError
+        ? t(copyFailureMessageKey(fb.reason))
+        : t("chat.aria.copyMessage");
     return (
       <button
-        className={`message-card__copy ${isCopied ? "is-copied" : ""}`}
+        className={`message-card__copy${isCopied ? " is-copied" : ""}${isError ? " is-error" : ""}`}
         onClick={(event) => {
           event.stopPropagation();
           void handleCopy(message.id, message.content || "");
         }}
-        title={isCopied ? t("chat.copied") : t("chat.copy")}
-        aria-label={isCopied ? t("chat.copied") : t("chat.aria.copyMessage")}
+        title={
+          isCopied
+            ? t("chat.copied")
+            : isError
+              ? t(copyFailureMessageKey(fb.reason))
+              : t("chat.copy")
+        }
+        aria-label={label}
         type="button"
       >
-        {isCopied ? <Check size={12} /> : <Copy size={12} />}
+        {isCopied ? <Check size={12} /> : isError ? <AlertCircle size={12} /> : <Copy size={12} />}
       </button>
     );
   };
@@ -528,6 +541,10 @@ function MessageStreamImpl({
       onScroll={handleScroll}
       ref={stackRef}
     >
+      {/* #329 — polite live region for copy success/failure; never false success. */}
+      <span className="sr-only" aria-live="polite" aria-atomic="true">
+        {copyAnnounce}
+      </span>
       {showToolbarCount || hasExpertGroup ? (
         <div className="message-stack__toolbar">
           {showToolbarCount ? <span>{t("chat.messageCount", { count: messages.length })}</span> : <span />}
