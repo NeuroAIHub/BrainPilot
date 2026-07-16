@@ -879,6 +879,26 @@ button {
   outline: none;
 }
 
+/* #317: layout has no effect on an empty corpus — keep selection visible but inert */
+.trace-segmented button:disabled {
+  opacity: 0.48;
+  cursor: not-allowed;
+}
+
+.trace-segmented button.is-active:disabled {
+  opacity: 0.65;
+}
+
+.trace-controls.is-inert {
+  opacity: 0.55;
+  pointer-events: none;
+}
+
+.trace-controls.is-inert .custom-select,
+.trace-controls.is-inert input {
+  cursor: not-allowed;
+}
+
 .trace-refresh-group {
   display: inline-flex;
   height: 30px;
@@ -1315,6 +1335,13 @@ button {
   place-items: center;
   color: var(--color-text-muted);
   font-size: 13px;
+  /* #317: emptyNoNodes is two sentences joined by \n */
+  white-space: pre-line;
+  text-align: center;
+  max-width: 28rem;
+  margin-inline: auto;
+  padding: 0 16px;
+  line-height: 1.5;
 }
 
 .trace-node {
