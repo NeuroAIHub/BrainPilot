@@ -1,16 +1,12 @@
 /**
- * #101: interrupt must cancel the active run and NOT race a second one.
+ * #101 / #327: interrupt must cancel the active run and NOT start a follow-up
+ * provider run to acknowledge the stop.
  *
- * Before the fix, interrupt() aborted the agent (signal only, no wait) and
- * immediately prompted the principal with the interrupt notice. The original
- * prompt()'s run was still in-flight, so the notice prompt hit Pi's "Agent is
- * already processing a prompt" guard, surfaced a RUN_ERROR, and left the agent
- * stuck in `error` — while the original provider stream kept emitting text.
+ * #101: abort waits for the in-flight prompt to settle so we never hit Pi's
+ * "Agent is already processing a prompt" guard.
  *
- * The fix makes MasAgent.abort() await the in-flight prompt's settlement, and
- * interrupt() awaits every abort before notifying the principal. So after an
- * interrupt: no "already processing" error, no RUN_ERROR from the notice run,
- * the agent settles cleanly, and no further old-run content is appended.
+ * #327: whole-session Stop must not prompt the principal solely to say it
+ * stopped — that burned tokens and left Stop/running indicators active.
  */
 import { describe, it, expect } from "vitest";
 import { SessionManager } from "../session-manager.js";
@@ -30,8 +26,7 @@ function gatedPrincipalFactory(observe: {
     const listeners = new Set<(e: PiAgentEvent) => void>();
     let aborted = false;
     // Mirror Pi's single-active-run guard: a second prompt() while one is still
-    // in-flight throws the same error the real SDK does. This is what made the
-    // pre-fix interrupt path surface "Agent is already processing a prompt".
+    // in-flight throws the same error the real SDK does.
     let activeRun = false;
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
@@ -60,28 +55,27 @@ function gatedPrincipalFactory(observe: {
         activeRun = true;
         observe.prompts.push({ agent: agentName, text });
         try {
-        emit({ type: "agent_start" });
-        emit({ type: "turn_start" });
-        emit({ type: "message_start", message: { role: "assistant", content: [] } });
-        if (gated && !text.includes("interrupt")) {
-          // The long, interruptible run: block until aborted.
-          await gate;
-          if (aborted) {
-            // Simulate the real provider stream taking a tick to tear down after
-            // abort — the window in which the pre-fix interrupt path raced a
-            // second prompt while this run's activeRun guard was still set.
-            await new Promise((r) => setTimeout(r, 15));
-            emit({ type: "turn_end" });
-            emit({ type: "agent_end", messages: [], willRetry: false });
-            return;
+          emit({ type: "agent_start" });
+          emit({ type: "turn_start" });
+          emit({ type: "message_start", message: { role: "assistant", content: [] } });
+          if (gated) {
+            // The long, interruptible run: block until aborted.
+            await gate;
+            if (aborted) {
+              // Simulate the real provider stream taking a tick to tear down after
+              // abort — the window in which a raced second prompt would hit activeRun.
+              await new Promise((r) => setTimeout(r, 15));
+              emit({ type: "turn_end" });
+              emit({ type: "agent_end", messages: [], willRetry: false });
+              return;
+            }
           }
-        }
-        emit({
-          type: "message_end",
-          message: { role: "assistant", content: [{ type: "text", text: `ok ${agentName}` }] },
-        });
-        emit({ type: "turn_end" });
-        emit({ type: "agent_end", messages: [], willRetry: false });
+          emit({
+            type: "message_end",
+            message: { role: "assistant", content: [{ type: "text", text: `ok ${agentName}` }] },
+          });
+          emit({ type: "turn_end" });
+          emit({ type: "agent_end", messages: [], willRetry: false });
         } finally {
           activeRun = false;
         }
@@ -104,8 +98,8 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   }
 }
 
-describe("interrupt cancels the active run without racing a second (#101)", () => {
-  it("does not emit RUN_ERROR or an 'already processing' error after interrupt", async () => {
+describe("interrupt cancels the active run without a follow-up notice run (#101 / #327)", () => {
+  it("does not emit RUN_ERROR or start a second principal prompt after interrupt", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const m = new SessionManager({ persist: false, agentFactory: gatedPrincipalFactory(observe) });
     const s = await m.createSession();
@@ -115,14 +109,14 @@ describe("interrupt cancels the active run without racing a second (#101)", () =
     // Start the long run; principal blocks inside prompt().
     await m.sendMessage(s.id, "write a very long report");
     await waitFor(() => observe.prompts.some((p) => p.agent === "principal"));
+    const principalBefore = observe.prompts.filter((p) => p.agent === "principal").length;
 
-    // Stop the whole session. With the fix this awaits the old run's settlement
-    // before prompting the principal with the interrupt notice.
     await m.interrupt(s.id);
+    await new Promise((r) => setTimeout(r, 40));
 
-    // The interrupt-notice run should have fired AND completed.
-    await waitFor(() => observe.prompts.filter((p) => p.text.includes("interrupt")).length > 0);
-    await new Promise((r) => setTimeout(r, 30));
+    // #327: no interrupt-notice prompt / second principal run.
+    expect(observe.prompts.filter((p) => p.agent === "principal").length).toBe(principalBefore);
+    expect(observe.prompts.some((p) => /interrupt|system_notice/i.test(p.text))).toBe(false);
 
     // No run ended in error, and the SDK "already processing" guard never fired.
     const runErrors = events.filter((e) => e.type === "RUN_ERROR");
@@ -134,9 +128,10 @@ describe("interrupt cancels the active run without racing a second (#101)", () =
     );
     expect(alreadyProcessing).toHaveLength(0);
 
-    // The principal settled to a non-error status.
+    // The principal settled to a non-error status; turn is no longer active.
     const principal = m.getSessionState(s.id)?.agents.find((a) => a.name === "principal");
     expect(principal?.status).not.toBe("error");
+    expect(m.getSessionState(s.id)?.runState?.active).toBe(false);
   });
 
   it("abort() resolves only after the interrupted run has settled (RUN_FINISHED emitted)", async () => {
