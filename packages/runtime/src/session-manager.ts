@@ -1710,12 +1710,13 @@ export class SessionManager {
     // unset/empty the factory falls back to Pi's env-based default.
     const providerConfig = await resolveSessionProvider(this.dataRoot, entry.providerRef);
 
+    const sessionCwd = this.workspaceDir(sessionId);
     const session = await this.agentFactory({
       sessionId,
       agentName: name,
       role,
       historyPath: this.historyPath(sessionId, name),
-      cwd: this.workspaceDir(sessionId),
+      cwd: sessionCwd,
       systemTools: agentTools,
       allowedToolNames,
       systemPrompt: await this.loadPersona(
@@ -1725,6 +1726,13 @@ export class SessionManager {
         skillSearchEnabled,
       ),
       skillPaths,
+      // #346: map logical /workspace (and /data, …) onto durable roots so Pi
+      // write/edit/bash do not land on the ephemeral container layer.
+      managedPathRoots: {
+        cwd: sessionCwd,
+        persistentDir: this.persistentDir(),
+        ...(this.sharedDir ? { sharedDir: this.sharedDir } : {}),
+      },
       // #309: when skill_search is off, block generic file tools from the router
       // skill directory (Pi tool_call extension). Always-on skills stay readable.
       blockRouterSkills: !skillSearchEnabled,
