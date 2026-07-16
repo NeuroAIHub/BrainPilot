@@ -13,13 +13,20 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
-import { ComposerInput } from "./ComposerInput";
+import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
 import { shouldShowNoProviderBanner } from "./noProviderBanner";
+import {
+  composerPlaceholderKey,
+  placeholderAvailabilityFromSources,
+  type MentionFile,
+  type MentionPlugin,
+  type SourceStatus,
+} from "./mentionLogic";
 
 /** #305: in-flight attachment upload state for the progress row. */
 type ComposerUploadState = {
@@ -76,6 +83,11 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
+
+  // #316: sources for the `@` mention picker. Loaded here (not in ComposerInput)
+  // so keystroke state stays off this render path; only status flips re-render.
+  const [pluginSource, setPluginSource] = useState<SourceStatus<MentionPlugin>>({ state: "loading" });
+  const [fileSource, setFileSource] = useState<SourceStatus<MentionFile>>({ state: "idle" });
 
   // No provider configured: after the first load resolves, there's no active
   // provider. Surface a persistent banner + CTA so a first-run user isn't left
@@ -160,6 +172,94 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
       cancelled = true;
     };
   }, []);
+
+  // #316: load MCP servers for `@` mention candidates (global, works in draft).
+  useEffect(() => {
+    let cancelled = false;
+    const load = async () => {
+      setPluginSource((prev) => (prev.state === "ready" ? prev : { state: "loading" }));
+      try {
+        const servers = await api.mcpServers.list();
+        if (cancelled) return;
+        setPluginSource({
+          state: "ready",
+          items: servers.map((s) => ({ name: s.name })),
+        });
+      } catch (err) {
+        if (cancelled) return;
+        setPluginSource({
+          state: "error",
+          message: err instanceof Error ? err.message : String(err),
+        });
+      }
+    };
+    void load();
+    // Refresh when provider profiles update is a weak proxy; also re-fetch on
+    // focus so Settings → Tools changes show up after the dialog closes.
+    const onFocus = () => void load();
+    window.addEventListener("focus", onFocus);
+    return () => {
+      cancelled = true;
+      window.removeEventListener("focus", onFocus);
+    };
+  }, []);
+
+  // #316: shallow `/workspace` listing when a sandbox id is available.
+  // Prefer the real session id; fall back to currentSandbox.id (`"local"` in
+  // single-user mode) so draft conversations can still surface files.
+  const sandboxIdForFiles = currentSession?.id ?? currentSandbox?.id ?? null;
+  useEffect(() => {
+    let cancelled = false;
+    if (!sandboxIdForFiles || currentSandbox?.status !== "running") {
+      setFileSource({
+        state: "unavailable",
+        reason: !sandboxIdForFiles ? "no-sandbox" : "not-running",
+      });
+      return () => {
+        cancelled = true;
+      };
+    }
+    const load = async () => {
+      setFileSource({ state: "loading" });
+      try {
+        const entries = await api.sandbox.listFiles(sandboxIdForFiles, "/workspace");
+        if (cancelled) return;
+        setFileSource({
+          state: "ready",
+          items: entries.map((entry) => ({
+            name: entry.name,
+            path: `/workspace/${entry.name}`,
+            type: entry.type,
+          })),
+        });
+      } catch (err) {
+        if (cancelled) return;
+        // Draft + local staging may not expose a listable workspace yet —
+        // surface a prerequisite rather than a hard error.
+        if (isDraft && !currentSession) {
+          setFileSource({ state: "unavailable", reason: "no-session" });
+        } else {
+          setFileSource({
+            state: "error",
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+    };
+    void load();
+    return () => {
+      cancelled = true;
+    };
+  }, [sandboxIdForFiles, currentSandbox?.status, isDraft, currentSession]);
+
+  const mentionSources = useMemo<MentionSources>(
+    () => ({ plugins: pluginSource, files: fileSource }),
+    [pluginSource, fileSource],
+  );
+
+  const composerPlaceholder = t(
+    composerPlaceholderKey(placeholderAvailabilityFromSources(pluginSource, fileSource)),
+  );
 
   // issue #43: the dynamic slash-command list (GET /sessions/:id/commands) is
   // not implemented on the backend yet — fetching it 404'd on every selected
@@ -451,8 +551,9 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
         <form className="composer" aria-label={t("chat.aria.newPrompt")} onSubmit={handleSubmit}>
           <ComposerInput
             sessionId={sessionId}
-            placeholder={t("chat.placeholder")}
+            placeholder={composerPlaceholder}
             ariaLabel={t("chat.srAsk")}
+            mentionSources={mentionSources}
           />
 
           {attachments.length > 0 || uploadState ? (
