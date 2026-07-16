@@ -39,19 +39,14 @@ import { AnalyticsTab } from "./AnalyticsTab";
 import { TimelineTab } from "./TimelineTab";
 import { useT } from "../../i18n/useT";
 import { HIDE_NON_FATAL_AGENT_ERRORS } from "../../contexts/messageFilters";
-
-type AgentTab = "detail" | "analytics" | "timeline";
-const TAB_STORAGE_KEY = "agent-network-active-tab";
-
-function loadActiveTab(): AgentTab {
-  try {
-    const v = localStorage.getItem(TAB_STORAGE_KEY);
-    if (v === "detail" || v === "analytics" || v === "timeline") return v;
-  } catch {
-    /* ignore */
-  }
-  return "detail";
-}
+import { useSessions } from "../../contexts/SessionContext";
+import {
+  type AgentTab,
+  hasAnalyticsData,
+  loadPreferredAgentTab,
+  resolveAgentTabForSession,
+  savePreferredAgentTab,
+} from "./agentPanelTab";
 
 type Selection =
   | { kind: "node"; id: string }
@@ -234,28 +229,30 @@ export function AgentNetwork({
   hiddenErrorsCount,
 }: AgentNetworkProps) {
   const t = useT();
+  const { currentSession } = useSessions();
+  const sessionId = currentSession?.id ?? null;
   const [selection, setSelection] = useState<Selection>(null);
   const [hoverEdgeKey, setHoverEdgeKey] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<AgentTab>(loadActiveTab);
+  // Display tab. User-initiated changes also update preferred storage;
+  // auto-corrections for empty Analytics (#326) do not.
+  const [activeTab, setActiveTab] = useState<AgentTab>(() => loadPreferredAgentTab());
 
-  // Persist active tab across reloads (same pattern as PreferencesContext).
-  useEffect(() => {
-    try {
-      localStorage.setItem(TAB_STORAGE_KEY, activeTab);
-    } catch {
-      /* ignore quota / privacy-mode errors */
+  const selectTab = (tab: AgentTab, source: "user" | "auto" = "user") => {
+    setActiveTab(tab);
+    if (source === "user") {
+      savePreferredAgentTab(tab);
     }
-  }, [activeTab]);
+  };
 
   // Selecting a node/edge always brings the Detail tab forward so the user
   // sees what they clicked (Analytics/Timeline are global, not per-selection).
   const selectNode = (id: string) => {
     setSelection({ kind: "node", id });
-    setActiveTab("detail");
+    selectTab("detail", "user");
   };
   const selectEdge = (key: string) => {
     setSelection({ kind: "edge", key });
-    setActiveTab("detail");
+    selectTab("detail", "user");
   };
 
   // Node hover tooltip: a short delay on show (avoid flicker on quick passes)
@@ -319,6 +316,17 @@ export function AgentNetwork({
   useEffect(() => clearHoverTimers, []);
 
   const edges = useMemo(() => buildEdges(messages), [messages]);
+  const analyticsAvailable = hasAnalyticsData(edges);
+
+  // #326 — on session change (and when hydration fills edges), never leave the
+  // user stuck on empty Analytics from a previous conversation's preference.
+  // Auto-corrections do not rewrite preferred storage, so a later rich session
+  // can still reopen Analytics from the user's last explicit choice.
+  useEffect(() => {
+    const preferred = loadPreferredAgentTab();
+    const resolved = resolveAgentTabForSession(preferred, analyticsAvailable);
+    setActiveTab(resolved);
+  }, [sessionId, analyticsAvailable]);
 
   // Default view: only agents that actually participated in this session.
   // Built-in agents that were not used are listed below as available, rather
@@ -786,16 +794,16 @@ export function AgentNetwork({
               type="button"
               aria-selected={activeTab === tab}
               className={`agent-network__tab ${activeTab === tab ? "agent-network__tab--active" : ""}`}
-              onClick={() => setActiveTab(tab)}
+              onClick={() => selectTab(tab, "user")}
               onKeyDown={(event) => {
                 const order: AgentTab[] = ["detail", "analytics", "timeline"];
                 const idx = order.indexOf(activeTab);
                 if (event.key === "ArrowRight") {
                   event.preventDefault();
-                  setActiveTab(order[(idx + 1) % order.length]);
+                  selectTab(order[(idx + 1) % order.length]!, "user");
                 } else if (event.key === "ArrowLeft") {
                   event.preventDefault();
-                  setActiveTab(order[(idx - 1 + order.length) % order.length]);
+                  selectTab(order[(idx - 1 + order.length) % order.length]!, "user");
                 }
               }}
             >
