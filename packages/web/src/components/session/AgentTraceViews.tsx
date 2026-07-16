@@ -15,6 +15,12 @@ import {
   getStatusLabelKey,
   normalizeStatus,
 } from "./traceLayout";
+import {
+  layoutToggleState,
+  resolveTraceGraphEmpty,
+  traceControlsEffective,
+  traceEmptyLabelKey,
+} from "./traceEmptyState";
 
 export function AgentsPanel() {
   const {
@@ -138,6 +144,13 @@ export function TracePanel() {
     return visibleNodes.find((node) => node.id === selectedNodeId) ?? visibleNodes[0] ?? null;
   }, [selectedNodeId, trace, visibleNodes]);
 
+  // #317: distinguish empty corpus (0/0) from filter/playback zero-results.
+  const controlsEffective = traceControlsEffective(allNodes.length);
+  const emptyReason = resolveTraceGraphEmpty(allNodes.length, visibleNodes.length);
+  const emptyLabelKey = traceEmptyLabelKey(emptyReason);
+  const emptyLabel = emptyLabelKey ? t(emptyLabelKey) : undefined;
+  const layoutToggle = layoutToggleState(direction, controlsEffective);
+
   const handleRefresh = async () => {
     if (!currentSession) return;
     setIsRefreshing(true);
@@ -231,11 +244,23 @@ export function TracePanel() {
             <h2 id="trace-panel-heading">{t("trace.title")}</h2>
           </div>
           <div className="trace-toolbar">
-            <div className="trace-segmented" aria-label={t("trace.aria.layoutDir")}>
-              <button className={direction === "LR" ? "is-active" : ""} onClick={() => setDirection("LR")} type="button">
+            <div className="trace-segmented" role="group" aria-label={t("trace.aria.layoutDir")}>
+              <button
+                type="button"
+                className={layoutToggle.lr.pressed ? "is-active" : ""}
+                aria-pressed={layoutToggle.lr.pressed}
+                disabled={layoutToggle.lr.disabled}
+                onClick={() => setDirection("LR")}
+              >
                 {t("trace.layout.horizontal")}
               </button>
-              <button className={direction === "TB" ? "is-active" : ""} onClick={() => setDirection("TB")} type="button">
+              <button
+                type="button"
+                className={layoutToggle.tb.pressed ? "is-active" : ""}
+                aria-pressed={layoutToggle.tb.pressed}
+                disabled={layoutToggle.tb.disabled}
+                onClick={() => setDirection("TB")}
+              >
                 {t("trace.layout.vertical")}
               </button>
             </div>
@@ -256,12 +281,22 @@ export function TracePanel() {
               <span>{t("trace.created", { time: formatTime(trace.meta.createdAt) })}</span>
             </div>
 
-            <div className="trace-controls">
+            <div className={`trace-controls ${controlsEffective ? "" : "is-inert"}`.trim()}>
               <label className="trace-search">
                 <Search size={14} />
-                <input placeholder={t("trace.searchPlaceholder")} value={query} onChange={(event) => setQuery(event.target.value)} />
+                <input
+                  placeholder={t("trace.searchPlaceholder")}
+                  value={query}
+                  disabled={!controlsEffective}
+                  onChange={(event) => setQuery(event.target.value)}
+                />
                 {query ? (
-                  <button aria-label={t("trace.aria.clearSearch")} onClick={() => setQuery("")} type="button">
+                  <button
+                    aria-label={t("trace.aria.clearSearch")}
+                    onClick={() => setQuery("")}
+                    type="button"
+                    disabled={!controlsEffective}
+                  >
                     <X size={13} />
                   </button>
                 ) : null}
@@ -271,6 +306,7 @@ export function TracePanel() {
                 <CustomSelect
                   ariaLabel={t("trace.aria.statusFilter")}
                   className="trace-control__select"
+                  disabled={!controlsEffective}
                   onChange={setStatusFilter}
                   options={[
                     { label: t("trace.allStatus"), value: "all" },
@@ -287,6 +323,7 @@ export function TracePanel() {
                 <CustomSelect
                   ariaLabel={t("trace.aria.typeFilter")}
                   className="trace-control__select"
+                  disabled={!controlsEffective}
                   onChange={setTypeFilter}
                   options={[
                     { label: t("trace.allTypes"), value: "all" },
@@ -307,7 +344,7 @@ export function TracePanel() {
                   zoom={zoom}
                   onZoomChange={setZoom}
                   fitToken={fitToken}
-                  emptyLabel={t("trace.noMatch")}
+                  emptyLabel={emptyLabel}
                   formatKind={formatNodeKind}
                   zoomLabels={{
                     controls: t("trace.aria.zoomControls"),
