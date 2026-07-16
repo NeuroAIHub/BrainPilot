@@ -186,6 +186,11 @@ describe("two-path skill loading", () => {
       // Hard path guard is armed for the real factory.
       expect(params.blockRouterSkills).toBe(true);
       expect(params.routerSkillsDir).toBe(join(root, "bp_template", "skills-router"));
+      // #346: durable roots for logical /workspace rewrite on the real factory.
+      expect(params.managedPathRoots).toEqual({
+        cwd: join(root, "workspaces", session.id),
+        persistentDir: join(root, "data"),
+      });
       // Builtins still include read (always-on skills remain loadable via read).
       expect(params.allowedToolNames).toContain("read");
     }

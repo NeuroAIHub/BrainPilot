@@ -190,6 +190,18 @@ export type AgentSessionFactory = (params: {
    */
   routerSkillsDir?: string;
   /**
+   * #346: durable roots for logical path rewrite (`/workspace`, `/data`, …).
+   * When set, the real factory registers managed-path-guard so Pi write/edit/
+   * bash map logical prefixes onto the volume instead of the ephemeral
+   * container FS. `cwd` is the session workspace (same as `params.cwd`).
+   * Omitted by the mock factory.
+   */
+  managedPathRoots?: {
+    cwd: string;
+    persistentDir: string;
+    sharedDir?: string;
+  };
+  /**
    * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
    * when an expert was reminded once and STILL did not report back, so the host
    * can write a fallback note into the principal's mailbox (the PI never

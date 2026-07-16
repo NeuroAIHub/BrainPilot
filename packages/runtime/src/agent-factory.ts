@@ -20,6 +20,7 @@ import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
+import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -85,6 +86,21 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   const extensionFactories: unknown[] = [traceReminder];
   if (params.renderAgentStatus) {
     extensionFactories.push(makeAgentStatusExt({ renderStatus: params.renderAgentStatus }));
+  }
+  // #346: rewrite logical /workspace (and /data, …) onto durable volume roots
+  // BEFORE other path guards run, so subsequent handlers see post-rewrite paths.
+  if (params.managedPathRoots) {
+    extensionFactories.push(
+      makeManagedPathGuardExt({
+        roots: {
+          cwd: params.managedPathRoots.cwd,
+          persistentDir: params.managedPathRoots.persistentDir,
+          ...(params.managedPathRoots.sharedDir
+            ? { sharedDir: params.managedPathRoots.sharedDir }
+            : {}),
+        },
+      }),
+    );
   }
   // #309: when skill_search is off, hard-deny file-tool access to skills-router.
   if (params.blockRouterSkills && params.routerSkillsDir) {
