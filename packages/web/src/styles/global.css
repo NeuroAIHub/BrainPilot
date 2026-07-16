@@ -6277,9 +6277,91 @@ button {
 }
 
 /* -----------------------------------------------------------------------
- * Inventory card — on-disk pipeline health. Structurally similar to
- * .kb-env (chip head, headline, metrics) but with a heavier accent so
- * users can distinguish "your KB" from "your Python env" at a glance.
+ * Overall readiness banner (#319) — data consistency vs query readiness.
+ * Green only for ready_to_query; empty stays neutral.
+ * ----------------------------------------------------------------------- */
+.kb-ready {
+  display: grid;
+  gap: 6px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: var(--color-surface-soft);
+  padding: 12px;
+  margin-bottom: 14px;
+}
+
+.kb-ready--ok {
+  border-color: var(--color-success-soft, var(--color-border));
+  background: color-mix(in srgb, var(--color-success-soft, #d1fae5) 35%, var(--color-surface-soft));
+}
+
+.kb-ready--pending {
+  border-color: var(--color-warning-soft, var(--color-border));
+}
+
+.kb-ready--empty {
+  border-color: var(--color-border);
+}
+
+.kb-ready__headline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 13px;
+  line-height: 1.35;
+}
+
+.kb-ready--ok .kb-ready__headline {
+  color: var(--color-success, #059669);
+}
+
+.kb-ready--ok .kb-ready__headline svg {
+  color: var(--color-success, #059669);
+  flex-shrink: 0;
+}
+
+.kb-ready--pending .kb-ready__headline {
+  color: var(--color-warning, #d97706);
+}
+
+.kb-ready--pending .kb-ready__headline svg {
+  color: var(--color-warning, #d97706);
+  flex-shrink: 0;
+}
+
+.kb-ready--empty .kb-ready__headline {
+  color: var(--color-text);
+}
+
+.kb-ready--empty .kb-ready__headline svg {
+  color: var(--color-text-muted);
+  flex-shrink: 0;
+}
+
+.kb-ready__next {
+  margin: 0;
+  font-size: 12px;
+  color: var(--color-text);
+  line-height: 1.4;
+}
+
+.kb-ready__dims {
+  margin: 0;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 4px 8px;
+  font-size: 11px;
+  color: var(--color-text-muted);
+}
+
+.kb-ready__dim-sep {
+  opacity: 0.6;
+}
+
+/* -----------------------------------------------------------------------
+ * Inventory card — on-disk pipeline data consistency. Structurally similar
+ * to .kb-env but never uses "healthy green" for an empty corpus (#319).
  * ----------------------------------------------------------------------- */
 .kb-inv {
   display: grid;
@@ -6291,12 +6373,18 @@ button {
   margin-bottom: 14px;
 }
 
-.kb-inv--healthy {
+/* Legacy alias — some older markup used --healthy for non-empty consistent. */
+.kb-inv--healthy,
+.kb-inv--consistent {
   border-color: var(--color-success-soft, var(--color-border));
 }
 
 .kb-inv--pending {
   border-color: var(--color-warning-soft, var(--color-border));
+}
+
+.kb-inv--empty {
+  border-color: var(--color-border);
 }
 
 .kb-inv__head {
@@ -6345,6 +6433,15 @@ button {
 
 .kb-inv__headline--pending svg {
   color: var(--color-warning, #d97706);
+}
+
+.kb-inv__headline--empty {
+  border-color: var(--color-border);
+  background: transparent;
+}
+
+.kb-inv__headline--empty svg {
+  color: var(--color-text-muted);
 }
 
 /* Four-cell stage strip — a compact per-stage rollup. Each cell is its

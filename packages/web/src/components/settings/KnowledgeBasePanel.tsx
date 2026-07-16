@@ -13,9 +13,19 @@
  *     stderr / stage / msg.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, Database, Loader2, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
+import { AlertTriangle, Check, Database, Info, Loader2, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
 import { useT } from "../../i18n/useT";
 import { api, type KbEnvironment, type KbInventory, type KbInventoryIssue } from "../../utils/api";
+import {
+  deriveKbReadiness,
+  inventoryCardModifier,
+  inventoryHeadlineKey,
+  inventoryHeadlineTone,
+  nextStepKey,
+  overallHeadlineKey,
+  type KbOverallKind,
+  type KbReadiness,
+} from "./kbReadiness";
 
 type Stage = "ocr" | "extract" | "chunk" | "vectorize";
 
@@ -188,10 +198,71 @@ function PipMirrorField({
 }
 
 /**
- * The KB status card — surfaces the four-stage pipeline health independent
- * of any in-flight build. Green when the four ledgers agree; amber when
- * the consistency check spots gaps (new PDFs waiting, fallback rows,
- * chunks not yet vectorised, etc.).
+ * Overall readiness banner — distinguishes "data is consistent" from
+ * "ready to query". Never paints green usable-state for an empty KB or
+ * missing Python env (#319).
+ */
+function ReadinessBanner({
+  readiness,
+  t,
+}: {
+  readiness: KbReadiness;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  const tone = overallBannerTone(readiness.overall);
+  const stepKey = nextStepKey(readiness.nextStep);
+  const Icon =
+    readiness.overall === "ready_to_query"
+      ? Check
+      : readiness.overall === "empty"
+        ? Info
+        : AlertTriangle;
+
+  return (
+    <div
+      className={`kb-ready kb-ready--${tone}`}
+      role="status"
+      aria-live="polite"
+      data-overall={readiness.overall}
+      data-ready-to-query={readiness.readyToQuery ? "true" : "false"}
+    >
+      <div className="kb-ready__headline">
+        <Icon size={16} aria-hidden />
+        <strong>{t(overallHeadlineKey(readiness.overall))}</strong>
+      </div>
+      {stepKey ? <p className="kb-ready__next">{t(stepKey)}</p> : null}
+      <p className="kb-ready__dims">
+        <span className="kb-ready__dim">
+          {t("settings.kb.ready.dim.data")}:{" "}
+          {t(`settings.kb.ready.dim.data.${readiness.dataStatus}`)}
+        </span>
+        <span className="kb-ready__dim-sep" aria-hidden>
+          ·
+        </span>
+        <span className="kb-ready__dim">
+          {t("settings.kb.ready.dim.runtime")}:{" "}
+          {t(
+            readiness.envReady
+              ? "settings.kb.ready.dim.runtime.ready"
+              : "settings.kb.ready.dim.runtime.notReady",
+          )}
+        </span>
+      </p>
+    </div>
+  );
+}
+
+function overallBannerTone(overall: KbOverallKind): "ok" | "pending" | "empty" {
+  if (overall === "ready_to_query") return "ok";
+  if (overall === "empty") return "empty";
+  return "pending";
+}
+
+/**
+ * The KB status card — surfaces four-stage **data consistency** only.
+ * Green/consistent means ledgers agree for a non-empty corpus; empty
+ * knowledge bases use a neutral state so they are never mistaken for
+ * "ready to query" (#319). Runtime readiness lives on ReadinessBanner.
  *
  * `t` and `nowMs` are passed in rather than hooked internally so the parent
  * can share a single "seconds ago" clock tick with all its subcomponents.
@@ -212,7 +283,11 @@ function InventoryCard({
   if (!inventory) return null;
 
   const inv = inventory;
-  const healthy = inv.consistency.healthy;
+  // Data dimension only — do not use raw consistency.healthy for empty KBs.
+  const dataStatus = deriveKbReadiness(inv, null).dataStatus;
+  const cardMod = inventoryCardModifier(dataStatus);
+  const headlineTone = inventoryHeadlineTone(dataStatus);
+  const chipOk = dataStatus === "consistent";
   const secondsAgo = Math.max(0, Math.floor((nowMs - inv.sampledAt) / 1000));
 
   // Per-stage rollup — the four "stage cell" columns at the top. Each cell
@@ -228,6 +303,12 @@ function InventoryCard({
     stageStatus[iss.stage].ok = false;
     stageStatus[iss.stage].count += iss.count;
   }
+  // Empty corpus: stage cells stay neutral (not green "ok").
+  if (dataStatus === "empty") {
+    for (const s of Object.keys(stageStatus) as Array<KbInventoryIssue["stage"]>) {
+      stageStatus[s] = { ok: false, count: 0 };
+    }
+  }
 
   // Left-column value formatter: numbers get their locale-formatted
   // thousands separators for readability. null → em-dash so an absent
@@ -235,10 +316,13 @@ function InventoryCard({
   const fmt = (n: number | null | undefined) =>
     n == null ? t("settings.kb.inv.metric.unavailable") : n.toLocaleString();
 
+  const HeadlineIcon =
+    headlineTone === "ok" ? Check : headlineTone === "empty" ? Info : AlertTriangle;
+
   return (
-    <div className={`kb-inv kb-inv--${healthy ? "healthy" : "pending"}`}>
+    <div className={`kb-inv kb-inv--${cardMod}`}>
       <div className="kb-inv__head">
-        <span className={`sandbox-chip sandbox-chip--${healthy ? "ok" : "off"}`}>
+        <span className={`sandbox-chip sandbox-chip--${chipOk ? "ok" : "off"}`}>
           <Database size={13} />
           {t("settings.kb.inv.title")}
           <i className="sandbox-chip__dot" aria-hidden="true" />
@@ -260,14 +344,10 @@ function InventoryCard({
         </div>
       </div>
 
-      {/* Headline — one-liner summarising green/amber state. */}
-      <div className={`kb-inv__headline kb-inv__headline--${healthy ? "ok" : "pending"}`}>
-        {healthy ? <Check size={16} aria-hidden /> : <AlertTriangle size={16} aria-hidden />}
-        <strong>
-          {healthy
-            ? t("settings.kb.inv.headline.healthy")
-            : t("settings.kb.inv.headline.pending")}
-        </strong>
+      {/* Headline — data consistency only; never "usable" semantics. */}
+      <div className={`kb-inv__headline kb-inv__headline--${headlineTone}`}>
+        <HeadlineIcon size={16} aria-hidden />
+        <strong>{t(inventoryHeadlineKey(dataStatus))}</strong>
       </div>
 
       {/* Four-cell stage strip: each cell = one pipeline stage with its own
@@ -290,7 +370,7 @@ function InventoryCard({
                   style={{ width: st.ok ? "100%" : "40%" }}
                 />
               </div>
-              {!st.ok ? (
+              {!st.ok && st.count > 0 ? (
                 <span className="kb-inv__stage-count">
                   {t("settings.kb.inv.issue.missing", { n: st.count })}
                 </span>
@@ -354,7 +434,7 @@ function InventoryCard({
       {/* Issue drill-down — only rendered on amber runs. Each entry is
           one machine-derived inconsistency; the raw msg is kept as a
           fallback for API consumers, but we translate via the kind here. */}
-      {!healthy && inv.consistency.issues.length ? (
+      {dataStatus === "stale" && inv.consistency.issues.length ? (
         <ul className="kb-inv__issues">
           {inv.consistency.issues.map((iss, i) => (
             <li key={i} className="kb-inv__issue">
@@ -1190,10 +1270,17 @@ export function KnowledgeBasePanel() {
         </div>
       </div>
 
-      {/* Inventory card — surfaces the current KB pipeline health from
-          disk. Rendered before the env card because a user opening this
-          panel most often wants to know "is my KB fresh?" first, and only
-          then "what do I need to install to build more?". */}
+      {/* Overall readiness — separates "ledgers agree" from "ready to
+          query" so an empty/unconfigured KB never looks green-usable. */}
+      {(inventory || env) ? (
+        <ReadinessBanner
+          readiness={deriveKbReadiness(inventory, env)}
+          t={t}
+        />
+      ) : null}
+
+      {/* Inventory card — data consistency of the four pipeline ledgers.
+          Rendered before the env card; runtime readiness is above. */}
       <InventoryCard
         inventory={inventory}
         busy={inventoryBusy}
