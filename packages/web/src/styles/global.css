@@ -3367,6 +3367,12 @@ button {
   color: var(--color-success);
 }
 
+/* #329 — visible failure state (never silent) */
+.message-card__copy.is-error {
+  opacity: 1;
+  color: var(--color-danger, #dc2626);
+}
+
 .message-card__content {
   overflow-wrap: break-word;
   word-break: break-word;
