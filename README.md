@@ -55,11 +55,11 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 - 🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
 
 <p align="center">
-  <img src="assets/readme/brainpilot-overview.svg" alt="BrainPilot multi-agent research system and Graph of Trace" width="100%"/>
+  <img src="assets/readme/brainpilot-overview.png" alt="BrainPilot multi-agent research system and Graph of Trace" width="100%"/>
 </p>
 
 <p align="center">
-  <img src="assets/readme/brainpilot-knowledge-flow-en.svg" alt="BrainPilot domain knowledge, skill, and runtime service architecture" width="100%"/>
+  <img src="assets/readme/brainpilot-knowledge-flow-en.png" alt="BrainPilot domain knowledge, skill, and runtime service architecture" width="100%"/>
 </p>
 
 ---

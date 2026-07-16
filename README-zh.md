@@ -56,11 +56,11 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 - **🚀 快速本地启动** — 简单安装后即可在浏览器中开始使用，降低脑科学智能体系统的部署和使用门槛。
 
 <p align="center">
-  <img src="assets/readme/brainpilot-overview.svg" alt="BrainPilot 多智能体科研系统与 Graph of Trace" width="100%"/>
+  <img src="assets/readme/brainpilot-overview.png" alt="BrainPilot 多智能体科研系统与 Graph of Trace" width="100%"/>
 </p>
 
 <p align="center">
-  <img src="assets/readme/brainpilot-knowledge-flow-zh.svg" alt="BrainPilot 领域知识、科研技能与运行时服务架构" width="100%"/>
+  <img src="assets/readme/brainpilot-knowledge-flow-zh.png" alt="BrainPilot 领域知识、科研技能与运行时服务架构" width="100%"/>
 </p>
 
 ---
