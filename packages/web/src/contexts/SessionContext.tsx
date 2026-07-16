@@ -9,6 +9,14 @@ import { useSSE } from "./SSEContext";
 import { draftStore } from "./draftStore";
 import { defaultFilterRules, isNonFatalAgentErrorMessage, HIDE_NON_FATAL_AGENT_ERRORS } from "./messageFilters";
 import {
+  clearLastSessionId,
+  loadLastSessionId,
+  resolveSessionSelection,
+  saveLastSessionId,
+  shouldAutoStartDraft,
+  type SessionsListStatus,
+} from "./sessionSelection";
+import {
   eventSessionId,
   finalizeAssistant,
   generateUUID,
@@ -266,12 +274,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessions, setSessions] = useState<Session[]>([]);
   const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
   const [isDraft, setIsDraft] = useState(false);
+  // #324 — session-list readiness. Draft auto-open and selection restore must
+  // wait until the first list request has finished; the initial empty in-memory
+  // list is not "no conversations exist".
+  const [sessionsListStatus, setSessionsListStatus] = useState<SessionsListStatus>("idle");
   // Mirror of isDraft for reading inside callbacks that must not re-create when
   // the draft flag flips (e.g. refreshSessions, keyed only on isAuthReady).
   const isDraftRef = useRef(false);
   useEffect(() => {
     isDraftRef.current = isDraft;
   }, [isDraft]);
+  // Mirror of currentSessionId for refreshSessions selection resolve.
+  const currentSessionIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    currentSessionIdRef.current = currentSessionId;
+  }, [currentSessionId]);
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -340,20 +357,36 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!isAuthReady) {
       setSessions([]);
       setCurrentSessionId(null);
+      setIsDraft(false);
+      setSessionsListStatus("idle");
       return;
     }
 
     setIsLoading(true);
+    setSessionsListStatus("loading");
     setError(null);
     try {
       const nextSessions = await api.sessions.list();
       const sorted = [...nextSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       setSessions(sorted);
-      // Don't auto-select an existing session while the user is composing a
-      // draft — that would yank them out of the new conversation.
-      setCurrentSessionId((current) => (isDraftRef.current ? current : current ?? sorted[0]?.id ?? null));
+      // #324 — restore preferred / fallback only after the list is ready.
+      // Never open a draft from the pre-list empty array; preserve intentional drafts.
+      const resolved = resolveSessionSelection({
+        listStatus: "ready",
+        sessions: sorted,
+        preferredId: loadLastSessionId(),
+        currentSessionId: currentSessionIdRef.current,
+        isDraft: isDraftRef.current,
+      });
+      setIsDraft(resolved.isDraft);
+      setCurrentSessionId(resolved.sessionId);
+      if (resolved.sessionId) {
+        saveLastSessionId(resolved.sessionId);
+      }
+      setSessionsListStatus("ready");
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.loadFailed"));
+      setSessionsListStatus("error");
     } finally {
       setIsLoading(false);
     }
@@ -448,6 +481,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     console.log(`[SessionContext] selectSession: ${sessionId}`);
     setIsDraft(false);
     setCurrentSessionId(sessionId);
+    saveLastSessionId(sessionId);
     setCurrentView("chat");
     setRunActive(null); // #99: drop the previous session's turn-active signal
     setTokenUsage(null); // drop the previous session's token totals
@@ -484,7 +518,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       disconnectSession(sessionId);
       setSessions((current) => {
         const next = current.filter((session) => session.id !== sessionId);
-        setCurrentSessionId((currentId) => (currentId === sessionId ? next[0]?.id ?? null : currentId));
+        setCurrentSessionId((currentId) => {
+          if (currentId !== sessionId) return currentId;
+          const fallback = next[0]?.id ?? null;
+          if (fallback) {
+            saveLastSessionId(fallback);
+          } else {
+            clearLastSessionId();
+          }
+          return fallback;
+        });
         return next;
       });
       setMessagesBySession((current) => {
@@ -516,6 +559,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         setSessions((current) => [session, ...current.filter((item) => item.id !== session.id)]);
         setIsDraft(false);
         setCurrentSessionId(session.id);
+        saveLastSessionId(session.id);
         setMessagesBySession((current) => ({ ...current, [session.id]: current[session.id] ?? [] }));
         return session;
       } catch (err) {
@@ -528,11 +572,28 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [currentSandbox],
   );
 
+  // #324 — only auto-open a draft after the session list has confirmed empty.
+  // Sandbox must be running (same gate as before) so the composer can send later.
   useEffect(() => {
-    if (sessions.length === 0 && !isLoading && currentSandbox?.status === "running" && !currentSessionId && !isDraft) {
+    if (
+      shouldAutoStartDraft(
+        sessionsListStatus,
+        sessions.length,
+        currentSessionId,
+        isDraft,
+        currentSandbox?.status === "running",
+      )
+    ) {
       startDraftSession();
     }
-  }, [sessions.length, isLoading, currentSandbox, currentSessionId, isDraft, startDraftSession]);
+  }, [
+    sessionsListStatus,
+    sessions.length,
+    currentSandbox,
+    currentSessionId,
+    isDraft,
+    startDraftSession,
+  ]);
 
   const sendPrompt = useCallback(
     async (content: string, opts: { providerId?: string; modelId?: string; domainResources?: DomainResources } = {}) => {
