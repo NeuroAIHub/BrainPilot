@@ -4,7 +4,7 @@ export default defineMessages(
   {
     // Empty state
     "network.empty":
-      "当前会话还没有 Agent 协作活动。发送一条消息开始任务后，这里会出现 Agent 节点和它们之间的消息流。",
+      "当前会话还没有智能体协作活动。发送一条消息开始任务后，这里会出现智能体节点和它们之间的消息流。",
 
     // Legend
     "network.legend.running": "运行中",
@@ -14,16 +14,16 @@ export default defineMessages(
     "network.legend.delegate": "委派",
       "network.legend.result": "结果",
       "network.legend.counter": "{live} 个参与 · {running} 运行中 · {edges} 条连线 · {msgs} 条消息",
-      "network.available.summary": "{count} 个可用但未参与的 Agent",
+      "network.available.summary": "{count} 个可用但未参与的智能体",
 
     // Aria labels
     "network.aria.legend": "网络图例",
-    "network.aria.viewport": "Agent 协作网络",
+    "network.aria.viewport": "智能体协作网络",
     "network.aria.detail": "选中详情",
-    "network.aria.tabs": "Agent 面板视图",
+    "network.aria.tabs": "智能体面板视图",
     "network.aria.edgeOne": "{from} 向 {to} 发送了 {count} 条消息",
     "network.aria.edgeMany": "{from} 向 {to} 发送了 {count} 条消息",
-    "network.aria.node": "{name} agent（{status}）",
+    "network.aria.node": "{name} 智能体（{status}）",
 
     // Status labels (display)
     "network.status.running": "运行中",
@@ -51,7 +51,7 @@ export default defineMessages(
       "network.detail.currentTask": "当前任务",
       "network.detail.idleWaiting": "空闲 — 等待指令",
       "network.detail.runningTask": "正在处理任务",
-      "network.detail.notSpawnedByPrincipal": "尚未由 Principal 创建",
+      "network.detail.notSpawnedByPrincipal": "尚未由主智能体创建",
     "network.detail.updated": "更新于",
     "network.detail.communication": "通信",
     "network.detail.commCount": "{sent} 已发送 · {received} 已接收",
@@ -68,12 +68,12 @@ export default defineMessages(
     "network.detail.availableTools": "可用工具",
     "network.detail.noMcpTools": "无 MCP 工具",
     "network.detail.displayFilters": "显示筛选",
-    "network.detail.filtersNote": "仅影响该 Agent 在聊天视图中的显示，网络图不受影响。",
+    "network.detail.filtersNote": "仅影响该智能体在聊天视图中的显示，网络图不受影响。",
     // Issue #278 — global (workspace-wide) message-filter section in agent detail.
     "network.detail.globalFilters": "全局消息过滤",
-    "network.globalFilter.hide-non-fatal-agent-errors.label": "折叠 Agent 报错（非致命）",
+    "network.globalFilter.hide-non-fatal-agent-errors.label": "折叠智能体报错（非致命）",
     "network.globalFilter.hide-non-fatal-agent-errors.description":
-      "隐藏 error / warning 级别的系统消息。多数是 Agent 自愈型报错（可重试并已恢复）。fatal 级别不受此规则影响，仍会在聊天中显示。",
+      "隐藏 error / warning 级别的系统消息。多数是智能体自愈型报错（可重试并已恢复）。fatal 级别不受此规则影响，仍会在聊天中显示。",
     "network.globalFilter.hiddenErrors.count": "当前会话已隐藏 {count} 条报错",
     "network.globalFilter.spurious-dot.label": "隐藏空占位消息",
     "network.globalFilter.spurious-dot.description":

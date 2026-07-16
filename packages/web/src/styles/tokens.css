@@ -34,9 +34,11 @@
   --color-code-bg: #f4f5f7;
 
   /* — Text ----------------------------------------------------------------- */
+  /* #321: muted/subtle tuned for WCAG AA on white surfaces (≥4.5:1 for body-
+     sized secondary copy at common sizes). */
   --color-text: #141618;
-  --color-text-muted: #686c73;
-  --color-text-subtle: #9aa0a6;
+  --color-text-muted: #5c6168;
+  --color-text-subtle: #6b7178;
 
   /* — Borders & states ----------------------------------------------------- */
   --color-border: #e6e7e9;
@@ -117,9 +119,10 @@
   --color-surface-elevated: #23262f;
   --color-code-bg: #14161b;
 
+  /* #321: dark-theme secondary text — keep AA against surface (#16181d). */
   --color-text: #f2f3f5;
-  --color-text-muted: #a4aab4;
-  --color-text-subtle: #6f7682;
+  --color-text-muted: #b4bac4;
+  --color-text-subtle: #9aa1ac;
 
   --color-border: #2a2e37;
   --color-border-strong: #3a3f4a;

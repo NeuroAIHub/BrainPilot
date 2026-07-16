@@ -14,7 +14,7 @@ export default defineMessages(
     "chat.toolArgs": "参数",
     "chat.toolResult": "返回",
     "chat.thinking": "思考中…",
-    "chat.heading": "要在 BrainPilot 中研究什么？",
+    "chat.heading": "在 BrainPilot 研究什么？",
     "chat.aria.messages": "对话消息",
     "chat.messageCount": "{count} 条消息",
     "chat.aria.expandThinking": "展开思考过程",
