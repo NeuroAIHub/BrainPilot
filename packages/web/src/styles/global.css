@@ -5596,6 +5596,25 @@ button {
   font-size: 14px;
 }
 
+/* #328 — required markers + field errors for provider form */
+.provider-form__required {
+  color: var(--color-danger, #dc2626);
+  font-weight: 600;
+}
+
+.provider-form__error {
+  display: block;
+  margin-top: 4px;
+  font-size: 12px;
+  line-height: 1.3;
+  color: var(--color-danger, #dc2626);
+}
+
+.provider-form__grid label input[aria-invalid="true"],
+.provider-form__key input[aria-invalid="true"] {
+  border-color: var(--color-danger, #dc2626);
+}
+
 .provider-form__grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
