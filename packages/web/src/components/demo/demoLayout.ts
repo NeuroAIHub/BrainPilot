@@ -24,6 +24,8 @@ export const DEMO_HANDLES_WIDTH = 12;
 /** Default panel widths (px) — the middle preview gets whatever is left. */
 export const DEMO_DEFAULT_CHAT = 340;
 export const DEMO_DEFAULT_RIGHT = 360;
+/** Narrower right rail when Trace/files are empty (#321). */
+export const DEMO_COMPACT_RIGHT = 240;
 
 /**
  * Clamp a dragged panel's proposed width so that:
@@ -59,6 +61,28 @@ export function proposedWidthForEdge(edge: DemoEdge, startWidth: number, deltaX:
 export interface DemoWidths {
   chat: number;
   right: number;
+}
+
+/**
+ * Prefer a wider chat column and compact right rail when the demo has no
+ * Trace nodes and no files — avoids constraining messages beside empty panes (#321).
+ */
+export function preferredDemoWidths(opts: {
+  hasTraceNodes: boolean;
+  hasFiles: boolean;
+  containerWidth?: number;
+}): DemoWidths {
+  const hasSideContent = opts.hasTraceNodes || opts.hasFiles;
+  const right = hasSideContent ? DEMO_DEFAULT_RIGHT : DEMO_COMPACT_RIGHT;
+  const chat = hasSideContent ? DEMO_DEFAULT_CHAT : Math.max(DEMO_DEFAULT_CHAT, 400);
+  const container = opts.containerWidth ?? 0;
+  if (container <= 0) {
+    return { chat, right };
+  }
+  return {
+    chat: resolveDemoResize(chat, right, container),
+    right: resolveDemoResize(right, chat, container),
+  };
 }
 
 export const DEMO_WIDTHS_STORAGE_KEY = "demo-panel-widths";

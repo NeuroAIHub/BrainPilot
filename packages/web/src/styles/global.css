@@ -1806,12 +1806,17 @@ button {
 
 .prompt-home h1 {
   margin: 0;
+  max-width: 22ch;
   color: var(--color-text);
   font-size: var(--fs-28);
   font-weight: 600;
   letter-spacing: -0.02em;
-  line-height: 1.2;
+  line-height: 1.25;
   text-align: center;
+  /* #321 — avoid orphaned punctuation on a final line at 390px */
+  text-wrap: balance;
+  overflow-wrap: anywhere;
+  hyphens: auto;
 }
 
 .composer {
@@ -2016,7 +2021,9 @@ button {
   }
 
   .prompt-home h1 {
-    font-size: 24px;
+    max-width: 16ch;
+    font-size: 22px;
+    line-height: 1.3;
   }
 
   .suggestions {
@@ -4600,13 +4607,43 @@ button {
   color: var(--color-danger);
 }
 
-.file-sidebar__error-text {
+.file-sidebar__error-body {
   flex: 1 1 auto;
   min-width: 0;
+  display: grid;
+  gap: 6px;
+}
+
+.file-sidebar__error-text {
   margin: 0;
   font-size: 12px;
   line-height: 1.4;
   word-break: break-word;
+}
+
+.file-sidebar__error-hint {
+  margin: 0;
+  font-size: 12px;
+  line-height: 1.4;
+  color: var(--color-text-muted);
+}
+
+.file-sidebar__error-cta {
+  justify-self: start;
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.file-sidebar__error--guidance {
+  border-color: color-mix(in srgb, var(--color-accent) 35%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface));
+  color: var(--color-text);
+}
+
+.file-sidebar__error--guidance .file-sidebar__error-text {
+  color: var(--color-text);
+  font-weight: 600;
 }
 
 .file-sidebar__error .icon-button {
@@ -5331,14 +5368,16 @@ button {
   backdrop-filter: blur(12px);
 }
 
+/* #321 — adaptive height: short tabs shrink; long tabs cap and scroll */
 .settings-modal__panel {
   position: absolute;
   top: 50%;
   left: 50%;
   display: grid;
   width: min(1040px, calc(100vw - 64px));
-  height: min(585px, calc(100vh - 64px));
-  aspect-ratio: 16 / 9;
+  height: auto;
+  max-height: min(85vh, calc(100vh - 48px));
+  min-height: min(320px, calc(100vh - 48px));
   grid-template-rows: auto minmax(0, 1fr) auto;
   overflow: hidden;
   transform: translate(-50%, -50%);
@@ -5413,11 +5452,21 @@ button {
   outline: none;
 }
 
+/* #321 — scrollable pane with edge fade so more content is discoverable */
 .settings-content {
   min-width: 0;
   min-height: 0;
-  overflow: auto;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  scrollbar-gutter: stable;
   padding: 18px;
+  mask-image: linear-gradient(
+    to bottom,
+    transparent 0,
+    #000 10px,
+    #000 calc(100% - 14px),
+    transparent 100%
+  );
 }
 
 .settings-section {

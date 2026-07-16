@@ -883,8 +883,27 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         */}
         <div className="file-sidebar__tree" aria-label={t("files.aria.tree")}>
           {error ? (
-            <div className="file-sidebar__error" role="alert">
-              <p className="file-sidebar__error-text">{formatSidebarError(error, t)}</p>
+            <div
+              className={`file-sidebar__error${
+                error === t("files.error.notRunning") ? " file-sidebar__error--guidance" : ""
+              }`}
+              role="alert"
+            >
+              <div className="file-sidebar__error-body">
+                <p className="file-sidebar__error-text">{formatSidebarError(error, t)}</p>
+                {error === t("files.error.notRunning") ? (
+                  <>
+                    <p className="file-sidebar__error-hint">{t("files.error.notRunningHint")}</p>
+                    <button
+                      type="button"
+                      className="file-sidebar__error-cta settings-button settings-button--ghost"
+                      onClick={onClose}
+                    >
+                      {t("files.error.notRunningCta")}
+                    </button>
+                  </>
+                ) : null}
+              </div>
               <IconButton label={t("files.aria.dismissError")} onClick={() => setError(null)}>
                 <X size={14} />
               </IconButton>

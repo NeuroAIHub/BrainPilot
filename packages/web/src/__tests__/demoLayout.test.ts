@@ -1,11 +1,13 @@
 import { describe, expect, it } from "vitest";
 import {
+  DEMO_COMPACT_RIGHT,
   DEMO_DEFAULT_CHAT,
   DEMO_DEFAULT_RIGHT,
   DEMO_HANDLES_WIDTH,
   DEMO_PANEL_MIN,
   DEMO_PREVIEW_MIN,
   parseDemoWidths,
+  preferredDemoWidths,
   proposedWidthForEdge,
   resolveDemoResize,
 } from "../components/demo/demoLayout";
@@ -44,6 +46,25 @@ describe("resolveDemoResize — draggable demo columns", () => {
 
   it("rounds to whole pixels", () => {
     expect(resolveDemoResize(400.6, 360, CONTAINER)).toBe(401);
+  });
+});
+
+describe("preferredDemoWidths (#321)", () => {
+  it("compacts the right rail and widens chat when Trace and files are empty", () => {
+    const w = preferredDemoWidths({ hasTraceNodes: false, hasFiles: false });
+    expect(w.right).toBe(DEMO_COMPACT_RIGHT);
+    expect(w.chat).toBeGreaterThanOrEqual(DEMO_DEFAULT_CHAT);
+  });
+
+  it("keeps default rails when Trace or files have content", () => {
+    expect(preferredDemoWidths({ hasTraceNodes: true, hasFiles: false })).toEqual({
+      chat: DEMO_DEFAULT_CHAT,
+      right: DEMO_DEFAULT_RIGHT,
+    });
+    expect(preferredDemoWidths({ hasTraceNodes: false, hasFiles: true })).toEqual({
+      chat: DEMO_DEFAULT_CHAT,
+      right: DEMO_DEFAULT_RIGHT,
+    });
   });
 });
 

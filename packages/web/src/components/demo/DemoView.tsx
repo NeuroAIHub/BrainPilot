@@ -23,6 +23,7 @@ import {
   DEMO_DEFAULT_CHAT,
   DEMO_DEFAULT_RIGHT,
   loadDemoWidths,
+  preferredDemoWidths,
   proposedWidthForEdge,
   resolveDemoResize,
   saveDemoWidths,
@@ -212,6 +213,21 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   }, [decoded]);
 
   const nodes = bundle?.trace.nodes ?? [];
+
+  // #321 — when Trace/files are empty, give conversation more width by default.
+  useEffect(() => {
+    if (!bundle) return;
+    const hasTrace = (bundle.trace.nodes?.length ?? 0) > 0;
+    const hasFiles = (bundle.files?.length ?? 0) > 0;
+    if (hasTrace || hasFiles) return;
+    const preferred = preferredDemoWidths({
+      hasTraceNodes: false,
+      hasFiles: false,
+      containerWidth: layoutRef.current?.clientWidth ?? 0,
+    });
+    setChatWidth(preferred.chat);
+    setRightWidth(preferred.right);
+  }, [bundle]);
 
   // Build the master timeline (ms). Timestamped bundles use real event/node
   // times; ordered (fallback) bundles synthesize an index-based timeline.
