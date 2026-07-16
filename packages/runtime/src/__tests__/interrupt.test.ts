@@ -161,7 +161,11 @@ describe("whole-session interrupt (#90 / #327)", () => {
         typeof (e as { message?: string }).message === "string" &&
         String((e as { message?: string }).message).includes("中断"),
     );
-    expect(sysAcks.length).toBeGreaterThanOrEqual(1);
+    expect(sysAcks.length).toBe(1);
+    // #330 — stable id for history + SSE hydrate dedupe.
+    const ackId = (sysAcks[0] as { id?: string }).id;
+    expect(typeof ackId).toBe("string");
+    expect(ackId).toMatch(new RegExp(`^interrupt:${s.id}:`));
 
     // Run state settled so the UI can clear Stop immediately.
     const state = m.getSessionState(s.id);

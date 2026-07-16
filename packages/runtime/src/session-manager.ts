@@ -1533,6 +1533,9 @@ export class SessionManager {
       d.reject(new Error("interrupted"));
       entry.pendingInputs.delete(id);
     }
+    // Capture run identity before aborts clear agent state so the interrupt
+    // acknowledgement can carry a stable id for client hydrate dedupe (#330).
+    const interruptEventId = `interrupt:${sessionId}:${entry.activeRunId ?? randomUUID()}`;
     // Abort every target and WAIT for each in-flight run to fully settle (#101)
     // — RUN_FINISHED emitted, status settled, provider stream fenced.
     await Promise.all(targets.map((a) => a!.abort()));
@@ -1543,10 +1546,12 @@ export class SessionManager {
       // the user just stopped.
       await entry.mailbox.clearAll();
       // Deterministic UI/runtime acknowledgement — no model/provider run (#327).
+      // Stable `id` so history rehydrate + SSE ring replay coalesce to one bubble (#330).
       entry.bus.emit(
         ev.systemMessage(sessionId, "info", "⏹️ 用户已中断当前任务，信箱已清空，正在等候进一步指示。", {
           agent: "principal",
           recoverable: true,
+          id: interruptEventId,
         }),
       );
       this.touch(entry);

@@ -224,3 +224,64 @@ describe("message stream idempotency (#314)", () => {
     expect(reasonTwice[0]!.reasoning).toBe("think hard");
   });
 });
+
+describe("interrupt system_message hydrate idempotency (#330)", () => {
+  const interruptMsg = "⏹️ 用户已中断当前任务，信箱已清空，正在等候进一步指示。";
+  const stableId = "interrupt:sess-1:run_abc";
+
+  function interruptEvent(id: string, ts = "2026-07-15T12:05:00.000Z"): WebSocketEvent {
+    return {
+      type: "system_message",
+      id,
+      message: interruptMsg,
+      level: "info",
+      agent: "principal",
+      recoverable: true,
+      _ts: ts,
+    } as WebSocketEvent;
+  }
+
+  it("keeps a single bubble when history and SSE replay the same interrupt id", () => {
+    // Live path folds once; reload path folds history then SSE ring buffer of the
+    // same persisted event — must not stack two interruption status cards.
+    const history = [
+      ...textTriad("asst_partial", ["partial "], { end: false }),
+      {
+        type: "TEXT_MESSAGE_END",
+        messageId: "asst_partial",
+        agentName: "principal",
+        _ts: "2026-07-15T12:04:59.000Z",
+      } as WebSocketEvent,
+      interruptEvent(stableId),
+    ];
+    const once = fold(history);
+    const interruptRows = once.filter((m) => m.kind === "system_message" && m.content.includes("中断"));
+    expect(interruptRows).toHaveLength(1);
+    expect(interruptRows[0]!.id).toBe(stableId);
+
+    // Same stream again (history + SSE replay).
+    const twice = fold([...history, ...history]);
+    const interruptTwice = twice.filter(
+      (m) => m.kind === "system_message" && m.content.includes("中断"),
+    );
+    expect(interruptTwice).toHaveLength(1);
+    expect(interruptTwice[0]!.id).toBe(stableId);
+    // Partial assistant content preserved once.
+    expect(twice.filter((m) => m.id === "asst_partial")).toHaveLength(1);
+    expect(twice.find((m) => m.id === "asst_partial")!.content).toBe("partial ");
+  });
+
+  it("without a stable id, identical interrupt payloads still append (legacy)", () => {
+    // Documents why runtime must emit id — random client ids would double.
+    const bare = {
+      type: "system_message",
+      message: interruptMsg,
+      level: "info",
+      agent: "principal",
+    } as WebSocketEvent;
+    const once = fold([bare]);
+    const twice = fold([bare, bare]);
+    expect(once.filter((m) => m.kind === "system_message")).toHaveLength(1);
+    expect(twice.filter((m) => m.kind === "system_message").length).toBeGreaterThan(1);
+  });
+});
