@@ -31,6 +31,11 @@ import {
 import { computeNodeMs } from "./nodeTimeline";
 import { DemoFileTree } from "./DemoFileTree";
 import { TraceNodeModal } from "./TraceNodeModal";
+import {
+  playbackControlsState,
+  sliderA11y,
+  sliderValueToNodeIndex,
+} from "./demoPlayback";
 
 const TICK_MS = 60;
 /** Full timeline plays in this many ms at 1× regardless of real span. */
@@ -455,9 +460,19 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
 
   // ----- Transport -----
   const stepIndex = revealedNodes.length; // # nodes revealed at the cursor
+  const controls = playbackControlsState(nodes.length, stepIndex);
+  const slider = sliderA11y(stepIndex, nodes.length);
+  const sliderValueText = t(slider.valueTextKey, slider.valueTextVars);
+
+  // Empty Trace: never leave Play stuck on after a zero-node pack/import.
+  useEffect(() => {
+    if (nodes.length === 0 && isPlaying) {
+      setIsPlaying(false);
+    }
+  }, [nodes.length, isPlaying]);
 
   const togglePlay = () => {
-    if (!bundle) {
+    if (!bundle || !controls.active) {
       return;
     }
     if (cursor >= timeline.t1) {
@@ -468,6 +483,9 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   };
 
   const restart = () => {
+    if (!controls.active) {
+      return;
+    }
     setIsPlaying(false);
     setPinnedFile(null);
     setCursor(timeline.t0);
@@ -489,13 +507,16 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   };
 
   const stepNext = () => {
-    if (stepIndex >= nodes.length) {
+    if (!controls.active || stepIndex >= nodes.length) {
       return;
     }
     stepTo(stepIndex); // reveal one more node
   };
 
   const stepPrev = () => {
+    if (!controls.active) {
+      return;
+    }
     if (stepIndex <= 1) {
       setCursor(timeline.t0);
       setIsPlaying(false);
@@ -505,10 +526,12 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
     stepTo(stepIndex - 2);
   };
 
-  const scrub = (value: number) => {
-    setIsPlaying(false);
-    setPinnedFile(null);
-    setCursor(value);
+  /** Step-based scrub: value is revealed node count (0…N), not ms (#320). */
+  const scrubSteps = (revealedCount: number) => {
+    if (!controls.active) {
+      return;
+    }
+    stepTo(sliderValueToNodeIndex(revealedCount));
   };
 
   const selectFile = (path: string) => {
@@ -818,6 +841,7 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
                 zoom={zoom}
                 onZoomChange={setZoom}
                 fitToken={revealedNodes.length}
+                emptyLabel={nodes.length === 0 ? t("demo.trace.empty") : undefined}
                 formatKind={formatNodeKind}
                 zoomLabels={{
                   controls: t("trace.aria.zoomControls"),
@@ -827,36 +851,63 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
                 }}
               />
             </div>
-            <div className="demo-transport">
-              <IconButton label={t("demo.transport.prev")} onClick={stepPrev} disabled={stepIndex <= 1}>
+            <div
+              className={`demo-transport${controls.active ? "" : " demo-transport--empty"}`}
+              data-playback-active={controls.active ? "true" : "false"}
+            >
+              <IconButton
+                label={t("demo.transport.prev")}
+                onClick={stepPrev}
+                disabled={controls.prevDisabled}
+              >
                 <SkipBack size={14} />
               </IconButton>
               <IconButton
                 label={isPlaying ? t("demo.transport.pause") : t("demo.transport.play")}
                 onClick={togglePlay}
+                disabled={controls.playDisabled}
               >
                 {isPlaying ? <Pause size={15} /> : <Play size={15} />}
               </IconButton>
-              <IconButton label={t("demo.transport.next")} onClick={stepNext} disabled={stepIndex >= nodes.length}>
+              <IconButton
+                label={t("demo.transport.next")}
+                onClick={stepNext}
+                disabled={controls.nextDisabled}
+              >
                 <SkipForward size={14} />
               </IconButton>
-              <IconButton label={t("demo.transport.restart")} onClick={restart}>
+              <IconButton
+                label={t("demo.transport.restart")}
+                onClick={restart}
+                disabled={controls.restartDisabled}
+              >
                 <RotateCcw size={13} />
               </IconButton>
               <input
                 className="demo-transport__slider"
                 type="range"
-                min={timeline.t0}
-                max={timeline.t1}
-                step={(timeline.t1 - timeline.t0) / 1000 || 1}
-                value={cursor}
-                onChange={(e) => scrub(Number(e.target.value))}
-                aria-label={t("demo.transport.play")}
+                min={slider.min}
+                max={slider.max}
+                step={1}
+                value={slider.now}
+                onChange={(e) => scrubSteps(Number(e.target.value))}
+                disabled={controls.sliderDisabled}
+                aria-label={t(slider.ariaLabelKey)}
+                aria-valuemin={slider.min}
+                aria-valuemax={slider.max}
+                aria-valuenow={slider.now}
+                aria-valuetext={sliderValueText}
               />
-              <span className="demo-transport__step">{t("demo.transport.step", { index: stepIndex, total: nodes.length })}</span>
+              <span className="demo-transport__step">{sliderValueText}</span>
               <div className="demo-transport__speeds" aria-label={t("demo.transport.speed")}>
                 {SPEEDS.map((s) => (
-                  <button key={s} className={speed === s ? "is-active" : ""} onClick={() => setSpeed(s)} type="button">
+                  <button
+                    key={s}
+                    className={speed === s ? "is-active" : ""}
+                    onClick={() => setSpeed(s)}
+                    type="button"
+                    disabled={controls.speedDisabled}
+                  >
                     {s}×
                   </button>
                 ))}

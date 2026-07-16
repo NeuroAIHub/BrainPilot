@@ -9564,9 +9564,12 @@ button {
   padding: 6px 8px;
 }
 
-/* ---- Compact transport docked at the trace panel footer ---- */
+/* ---- Compact transport docked at the trace panel footer ----
+ * flex-wrap so 1×/2×/4×/8× stay visible at 390px and narrow right panels (#320).
+ */
 .demo-transport {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
   padding: 7px 10px;
@@ -9575,11 +9578,20 @@ button {
   flex-shrink: 0;
 }
 
+.demo-transport--empty {
+  opacity: 0.72;
+}
+
 .demo-transport__slider {
-  flex: 1;
-  min-width: 40px;
+  flex: 1 1 80px;
+  min-width: 64px;
   accent-color: var(--color-accent);
   cursor: pointer;
+}
+
+.demo-transport__slider:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .demo-transport__step {
@@ -9591,6 +9603,8 @@ button {
 
 .demo-transport__speeds {
   display: inline-flex;
+  flex-wrap: wrap;
+  flex-shrink: 0;
   gap: 2px;
   background: var(--color-surface);
   border: 1px solid var(--color-border);
@@ -9608,9 +9622,18 @@ button {
   cursor: pointer;
 }
 
+.demo-transport__speeds button:disabled {
+  cursor: not-allowed;
+  opacity: 0.55;
+}
+
 .demo-transport__speeds button.is-active {
   background: var(--color-accent);
   color: var(--color-accent-contrast);
+}
+
+.demo-transport__speeds button.is-active:disabled {
+  opacity: 0.55;
 }
 
 /* ---- File tree (right-bottom) ---- */
