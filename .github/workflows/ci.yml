@@ -10,6 +10,9 @@ on:
   pull_request:
     branches: [main, testbed]
 
+permissions:
+  contents: read
+
 jobs:
   build-and-test:
     runs-on: ubuntu-latest
