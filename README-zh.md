@@ -43,7 +43,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ## 📖 概览
 
-BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助研究者将宽泛的科学问题转化为结构化、可执行、可检查的研究流程。系统以主研究员（PI）智能体为核心，由它与研究者对话、理解研究目标、规划任务，并协调文献、实验、工程、写作和审查智能体协同工作。BrainPilot 强调人在回路的科研协作范式：研究者始终保留判断权和控制权，而智能体负责处理证据密集、跨领域和重复性的研究任务。系统集成了脑科学领域知识、方法技能、分析流程和科研工具，并通过 Graph of Trace（GoT）记录研究过程，使中间操作、证据来源、生成结论和潜在风险都可以被检查和回溯。
+BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助研究者将宽泛的科学问题转化为结构化、可执行、可检查的研究流程。系统以主研究员（PI）智能体为核心，由它与研究者对话、理解研究目标、规划任务，并协调文献、实验、工程、写作和审查智能体协同工作。BrainPilot 强调人在回路的科研协作范式：研究者始终保留判断权和控制权，而智能体负责处理证据密集、跨领域和重复性的研究任务。系统集成了脑科学领域知识、方法技能、分析流程和科研工具，并通过 [Graph of Trace（GoT）](https://aclanthology.org/2026.acl-demo.29/)记录研究过程，使中间操作、证据来源、生成结论和潜在风险都可以被检查和回溯。
 
 ## ✨ 亮点
 
@@ -51,7 +51,7 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 - **🤝 PI 智能体协调专业智能体团队** — PI 智能体统一理解用户需求、规划任务，并协调文献、实验、工程、写作和审查智能体协同工作。
 - **📚 整合领域知识与科研技能** — 集成脑科学相关知识、研究方法、分析流程、写作规范和工具接口，使智能体能够调用专业知识完成具体科研任务。
 - **🛡️ 审查智能体提升科研可靠性** — 审查科学结论、证据链、引用来源、幻觉风险、遗漏信息和缺乏支撑的推理，帮助研究者发现潜在问题。
-- **🔭 Graph of Trace 展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
+- **🔭 [Graph of Trace](https://aclanthology.org/2026.acl-demo.29/) 展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
 - **🔌 可扩展的科研工具生态** — 支持连接模型、MCP 工具、文献数据库、代码执行环境和自定义科研工具，适配不同研究场景。
 - **🚀 快速本地启动** — 简单安装后即可在浏览器中开始使用，降低脑科学智能体系统的部署和使用门槛。
 
@@ -518,6 +518,29 @@ BrainPilot 是一个 8 包的 TypeScript monorepo：
   archivePrefix={arXiv},
   primaryClass={cs.AI},
   url={https://arxiv.org/abs/2607.15079}
+}
+
+@inproceedings{gao-etal-2026-graph,
+  title = "Graph of Trace: Visualizing Execution Traces of Scientific Agents",
+  author = "Gao, Tianci  and
+    Li, Haoxuan  and
+    Li, Jian He  and
+    Zhao, Tianxiang  and
+    Runze, Shi  and
+    Wang, Weiran  and
+    Wu, Zezhao  and
+    Mi, Lu",
+  editor = "Durrett, Greg  and
+    Jian, Ping",
+  booktitle = "Proceedings of the 64th Annual Meeting of the {A}ssociation for {C}omputational {L}inguistics (Volume 3: System Demonstrations)",
+  month = jul,
+  year = "2026",
+  address = "San Diego, California, United States",
+  publisher = "Association for Computational Linguistics",
+  url = "https://aclanthology.org/2026.acl-demo.29/",
+  doi = "10.18653/v1/2026.acl-demo.29",
+  pages = "297--306",
+  ISBN = "979-8-89176-392-0"
 }
 ```
 
