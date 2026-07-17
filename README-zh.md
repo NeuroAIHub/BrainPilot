@@ -2,7 +2,7 @@
   <img src="assets/banner.png" alt="BrainPilot" width="680"/>
 </p> -->
 
-<h1 align="center"><img src="assets/brand/icon_light.png" alt="BrainPilot 图标" height="46" align="absmiddle"/> BrainPilot</h1>
+<h1 align="center"><img src="assets/brand/icon_light.png" alt="BrainPilot 图标" height="46" align="absmiddle"/> BrainPilot：加速自动脑科学发现的智能体系统</h1>
 
 <p align="center">
 BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它整合专业智能体、领域知识、科研技能和工具接口，帮助研究者覆盖完整科研流程：文献综述、假设细化、实验设计、数据分析、报告撰写和科学结论审查。
@@ -13,7 +13,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square" alt="License: AGPL v3"/></a>
   <a href="https://brainpilot.chat"><img src="https://img.shields.io/badge/Hosted_Demo-brainpilot.chat-0E7490?style=flat-square" alt="在线体验"/></a>
   <a href="https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A"><img src="https://img.shields.io/badge/Slack-加入社区-4A154B?style=flat-square&logo=slack&logoColor=white" alt="加入 BrainPilot Slack"/></a>
-  <a href="#"><img src="https://img.shields.io/badge/Paper-即将公开-lightgrey?style=flat-square" alt="Paper (coming soon)"/></a>
+  <a href="https://arxiv.org/abs/2607.15079"><img src="https://img.shields.io/badge/Paper-arXiv%3A2607.15079-B31B1B?style=flat-square" alt="BrainPilot 技术报告"/></a>
   <a href="https://github.com/NeuroAIHub/BrainPilot/stargazers"><img src="https://img.shields.io/github/stars/NeuroAIHub/BrainPilot?style=flat-square" alt="Stars"/></a>
   <br/>
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript"/>
@@ -29,7 +29,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
   <br/>
   <a href="https://brainpilot.chat/docs">文档</a> ·
   <a href="#-评测结果">评测</a> ·
-  <a href="#-真实研究案例">案例</a> ·
+  <a href="#-精选真实研究案例">案例</a> ·
   <a href="#-快速开始">快速开始</a> ·
   <a href="#-资源与知识库">资源</a> ·
   <a href="#-接入-mcp-服务">MCP</a> ·
@@ -60,39 +60,35 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 </p>
 
 <p align="center">
-  <img src="assets/readme/brainpilot-knowledge-flow-zh.png" alt="BrainPilot 领域知识、科研技能与运行时服务架构" width="100%"/>
+  <img src="assets/readme/brainpilot-system.png" alt="BrainPilot 多智能体系统与 Graph of Trace 架构" width="100%"/>
 </p>
 
 ---
 
 ## 📊 评测结果
 
-### Agents' Last Exam（ALE）
+在 ALE 和 BrainPilotBench-v0 的多项任务上，BrainPilot 达到或接近本次评测中表现最强的
+harness–model 组合。ALE 显示出明确的成本优势，而 BrainPilotBench-v0 揭示了不同 backbone
+下的性能—成本权衡。
 
-在 ALE 的三项脑科学任务上，BrainPilot 搭载 DeepSeek-V4-Pro 分别获得 1.00、0.70 和
-0.09 分。图中实测运行也显示，BrainPilot 的多个配置成本低于 Codex + GPT-5.5 和
-Claude Code + Opus 4.8。T2 的满分为 1.00；T3 不设通过阈值，`F` 表示该次任务失败且没有可评分产物。
-每个单元格均为一次运行的结果。
-
-<p align="center">
-  <img src="assets/readme/evaluation-ale.svg" alt="BrainPilot 在 Agents' Last Exam 三项脑科学任务上的结果" width="100%"/>
-</p>
-
-### BrainPilotBench-v0——阶段性结果
-
-BrainPilotBench-v0 使用任务专属 grader、冻结参考或 held-out 数据评估 Agent 提交的产物，不依赖
-LLM-as-judge。当前图中仅 RSC 对比运行已经完成；
-TOPS-fMRI、运动想象 EEG 与 Sleep-EDF 仍在等待正式结果（`P`），`F` 表示该次运行没有可评分的
-完整产物。最新结果见 [Leaderboard](https://brainpilot.chat/bench#leaderboard)，公开任务数据见
-[Hugging Face](https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public)。
-
-<p align="center">
-  <img src="assets/readme/evaluation-brainpilotbench.png" alt="BrainPilotBench-v0 阶段性评测结果" width="100%"/>
-</p>
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Agents' Last Exam（ALE）</b><br/><br/>
+      在 ALE 的三项脑科学任务上，BrainPilot 搭载 DeepSeek-V4-Pro 分别获得 1.00、0.70 和 0.09 分。在启用领域知识并匹配 backbone 的比较中，BrainPilot 的成本为 Codex 或 Claude Code 的 5–56%。T2 的满分为 1.00；T3 不设通过阈值，<code>F</code> 表示该次任务失败且没有可评分产物。每个单元格均为一次运行的结果。<br/><br/>
+      <img src="assets/readme/evaluation-ale.png" alt="BrainPilot 在 Agents' Last Exam 三项脑科学任务上的结果" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>BrainPilotBench-v0——阶段性结果</b><br/><br/>
+      BrainPilotBench-v0 仍处于阶段性评测，因为当前任务集仅包含四项任务。RSC、TOPS-fMRI、BCI IV 2a 和 Sleep-EDF 的评测均已完成。BrainPilot 在多项任务上达到或接近本次评测中的最佳配置，但不同 backbone 呈现出性能—成本权衡。任务专属 grader 使用冻结参考或 held-out 数据，而非 LLM-as-judge；<code>F</code> 表示该次运行没有可评分的完整产物。<a href="https://brainpilot.chat/bench#leaderboard">查看评测页面</a>，或访问 Hugging Face 上的<a href="https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public">公开任务数据</a>。<br/><br/>
+      <img src="assets/readme/evaluation-brainpilotbench.png" alt="BrainPilotBench-v0 四项已完成任务的阶段性评测结果" width="100%"/>
+    </td>
+  </tr>
+</table>
 
 ---
 
-## 🧪 真实研究案例
+## 🧪 精选真实研究案例
 
 以下案例使用真实脑科学数据，并保留结果的统计边界。
 
@@ -225,6 +221,14 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 
 ## 📚 资源与知识库
 
+<p align="center">
+  <img src="assets/readme/brainpilot-kb-architecture.png" alt="BrainPilot 知识库构建、运行时服务与智能体访问架构" width="100%"/>
+</p>
+
+<p align="center">
+  <img src="assets/readme/brainpilot-kb-stats.png" alt="BrainPilot 技能库与知识库统计" width="100%"/>
+</p>
+
 ### 内置技能库
 
 智能体可以按需调用 **经过验证的领域方法学** —— 无需任何配置。内置技能以 `@brainpilot/skills`
@@ -241,7 +245,7 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 
 - **目录结构** —— `packages/skills/skills/`，两级目录树 `<category>/<skill-name>/SKILL.md`（可选 `references/` 存放可下钻的细节）。
 - **部署时** —— **物化到你的数据目录** `<data-dir>/bp_template/skills/`，一份可编辑的副本；已存在的技能永不会被覆盖。
-- **当前规模** —— 74 个内置技能，分属 21 个细粒度类别，并归入 7 个研究领域。
+- **当前规模** —— 72 个内置技能，覆盖 7 个主流研究领域。
 - **覆盖领域** —— 细胞、分子、遗传与药理；认知与行为；基础方法与基础设施；人类神经影像与电生理；计算建模与理论；文献与报告工具；临床与应用研究。
 
 <details>
@@ -497,6 +501,25 @@ BrainPilot 是一个 8 包的 TypeScript monorepo：
 ## ⭐ Star 趋势
 
 [![Star History Chart](https://api.star-history.com/svg?repos=NeuroAIHub/BrainPilot&type=Date)](https://star-history.com/#NeuroAIHub/BrainPilot&Date)
+
+---
+
+## 📄 引用
+
+```bibtex
+@misc{li2026brainpilotautomatingbraindiscovery,
+  title={BrainPilot: Automating Brain Discovery with Agentic Research},
+  author={Haoxuan Li and Tianci Gao and Jianhe Li and Yang Fan and Runze Shi
+    and Weiran Wang and Tianxiang Zhao and Zezhao Wu and Xiaoyang Jiang
+    and Qihui Zhang and Jia Li and Xiao Xiao and Kai Du and Xiaoxuan Jia
+    and Chao Xie and Lu Mi},
+  year={2026},
+  eprint={2607.15079},
+  archivePrefix={arXiv},
+  primaryClass={cs.AI},
+  url={https://arxiv.org/abs/2607.15079}
+}
+```
 
 ---
 

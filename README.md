@@ -2,7 +2,7 @@
   <img src="assets/banner.png" alt="BrainPilot" width="680"/>
 </p> -->
 
-<h1 align="center"><img src="assets/brand/icon_light.png" alt="BrainPilot icon" height="46" align="absmiddle"/> BrainPilot: Enabling Agentic Research for Brain Science</h1>
+<h1 align="center"><img src="assets/brand/icon_light.png" alt="BrainPilot icon" height="46" align="absmiddle"/> BrainPilot: Automating Brain Discovery with Agentic Research</h1>
 
 <p align="center">
 BrainPilot is an open-source, human-in-the-loop agentic system for brain science that brings together specialist agents, domain knowledge, skills, and tools to help researchers in all scientific stages — review literature, design studies, run analyses, draft reports, and audit scientific claims.
@@ -13,7 +13,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
   <a href="LICENSE"><img src="https://img.shields.io/badge/License-AGPL%20v3-blue.svg?style=flat-square" alt="License: AGPL v3"/></a>
   <a href="https://brainpilot.chat"><img src="https://img.shields.io/badge/Hosted_Demo-brainpilot.chat-0E7490?style=flat-square" alt="Hosted Demo"/></a>
   <a href="https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A"><img src="https://img.shields.io/badge/Slack-Join_Community-4A154B?style=flat-square&logo=slack&logoColor=white" alt="Join the BrainPilot Slack"/></a>
-  <a href="#"><img src="https://img.shields.io/badge/Paper-coming%20soon-lightgrey?style=flat-square" alt="Paper (coming soon)"/></a>
+  <a href="https://arxiv.org/abs/2607.15079"><img src="https://img.shields.io/badge/Paper-arXiv%3A2607.15079-B31B1B?style=flat-square" alt="BrainPilot technical report"/></a>
   <a href="https://github.com/NeuroAIHub/BrainPilot/stargazers"><img src="https://img.shields.io/github/stars/NeuroAIHub/BrainPilot?style=flat-square" alt="Stars"/></a>
   <br/>
   <img src="https://img.shields.io/badge/TypeScript-5-3178C6?style=flat-square&logo=typescript&logoColor=white" alt="TypeScript"/>
@@ -29,7 +29,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
   <br/>
   <a href="https://brainpilot.chat/docs">Docs</a> ·
   <a href="#-evaluation">Evaluation</a> ·
-  <a href="#-research-case-studies">Cases</a> ·
+  <a href="#-selected-research-case-studies">Cases</a> ·
   <a href="#-quick-start">Quick Start</a> ·
   <a href="#-resources--knowledge-base">Resources</a> ·
   <a href="#-connecting-mcp-servers">MCP</a> ·
@@ -59,42 +59,35 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 </p>
 
 <p align="center">
-  <img src="assets/readme/brainpilot-knowledge-flow-en.png" alt="BrainPilot domain knowledge, skill, and runtime service architecture" width="100%"/>
+  <img src="assets/readme/brainpilot-system.png" alt="BrainPilot multi-agent system and Graph of Trace architecture" width="100%"/>
 </p>
 
 ---
 
 ## 📊 Evaluation
 
-### Agents' Last Exam (ALE)
+Across ALE and BrainPilotBench-v0, BrainPilot matched or approached the strongest evaluated
+harness–model configurations on multiple tasks. ALE showed a clear cost advantage, whereas
+BrainPilotBench-v0 revealed a performance–cost trade-off.
 
-Across three neuroscience tasks from ALE, BrainPilot paired with DeepSeek-V4-Pro scored
-1.00, 0.70, and 0.09. The measured runs also show lower observed costs for several
-BrainPilot configurations than Codex + GPT-5.5 and Claude Code + Opus 4.8. T2 has a
-full-credit score of 1.00; T3 has no pass threshold, and `F` denotes a failed task with no
-gradable output. Each cell reports a single run.
-
-<p align="center">
-  <img src="assets/readme/evaluation-ale.svg" alt="BrainPilot results on three neuroscience tasks from Agents' Last Exam" width="100%"/>
-</p>
-
-### BrainPilotBench-v0 — preliminary results
-
-BrainPilotBench-v0 evaluates submitted artifacts with task-specific graders, frozen references
-or held-out data, and no LLM judge.
-The current figure reports completed RSC runs; TOPS-fMRI, motor-imagery EEG, and Sleep-EDF
-comparisons remain pending (`P`). `F` marks runs without a gradable completion. Follow the
-[leaderboard](https://brainpilot.chat/bench#leaderboard) for updated results and access the
-[public task data](https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public) on
-Hugging Face.
-
-<p align="center">
-  <img src="assets/readme/evaluation-brainpilotbench.png" alt="Preliminary BrainPilotBench-v0 results" width="100%"/>
-</p>
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Agents' Last Exam (ALE)</b><br/><br/>
+      On three neuroscience tasks from ALE, BrainPilot paired with DeepSeek-V4-Pro scored 1.00, 0.70, and 0.09. Across matched backbones with domain knowledge, BrainPilot used 5–56% of the cost required by Codex or Claude Code. T2 has a full-credit score of 1.00; T3 has no pass threshold, and <code>F</code> denotes a failed task with no gradable output. Each cell reports a single run.<br/><br/>
+      <img src="assets/readme/evaluation-ale.png" alt="BrainPilot results on three neuroscience tasks from Agents' Last Exam" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>BrainPilotBench-v0 — preliminary results</b><br/><br/>
+      BrainPilotBench-v0 remains preliminary because its current suite contains four tasks. Evaluations are complete for all four—RSC, TOPS-fMRI, BCI IV 2a, and Sleep-EDF. BrainPilot matched or approached the strongest evaluated configurations on multiple tasks, with a performance–cost trade-off across backbones. Task-specific graders use frozen references or held-out data rather than an LLM judge; <code>F</code> marks runs without a gradable completion. <a href="https://brainpilot.chat/bench#leaderboard">View the evaluation page</a> or access the <a href="https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public">public task data</a> on Hugging Face.<br/><br/>
+      <img src="assets/readme/evaluation-brainpilotbench.png" alt="Preliminary BrainPilotBench-v0 results across four completed tasks" width="100%"/>
+    </td>
+  </tr>
+</table>
 
 ---
 
-## 🧪 Research case studies
+## 🧪 Selected research case studies
 
 These cases use real neuroscience data and retain the limits of the evidence.
 
@@ -236,6 +229,14 @@ Globally install the @brainpilot/app npm package, then run brainpilot up and giv
 
 ## 📚 Resources & Knowledge Base
 
+<p align="center">
+  <img src="assets/readme/brainpilot-kb-architecture.png" alt="BrainPilot knowledge-base construction, runtime services, and agent access architecture" width="100%"/>
+</p>
+
+<p align="center">
+  <img src="assets/readme/brainpilot-kb-stats.png" alt="BrainPilot skill-library and knowledge-base statistics" width="100%"/>
+</p>
+
 ### Built-in skills library
 
 Agents can pull in **validated domain methodology** on demand — no configuration needed.
@@ -253,7 +254,7 @@ Skills sources:
 
 - **Layout** — `packages/skills/skills/`, a two-level `<category>/<skill-name>/SKILL.md` tree (optional `references/` for drill-down detail).
 - **At deploy time** — **materialized into your data dir** at `<data-dir>/bp_template/skills/`, a user-editable copy; an existing skill is never overwritten.
-- **Inventory** — 74 bundled skills in 21 fine-grained categories, grouped into 7 broader research domains.
+- **Inventory** — 72 bundled skills across 7 major research domains.
 - **Covered domains** — cellular, molecular, genetics, and pharmacology; cognitive and behavioral research; foundation and infrastructure; human neuroimaging and electrophysiology; computational modeling and theory; literature and reporting; and clinical and applied research.
 
 <details>
@@ -556,6 +557,25 @@ or start a discussion.
 ## ⭐ Star History
 
 [![Star History Chart](https://api.star-history.com/svg?repos=NeuroAIHub/BrainPilot&type=Date)](https://star-history.com/#NeuroAIHub/BrainPilot&Date)
+
+---
+
+## 📄 Citation
+
+```bibtex
+@misc{li2026brainpilotautomatingbraindiscovery,
+  title={BrainPilot: Automating Brain Discovery with Agentic Research},
+  author={Haoxuan Li and Tianci Gao and Jianhe Li and Yang Fan and Runze Shi
+    and Weiran Wang and Tianxiang Zhao and Zezhao Wu and Xiaoyang Jiang
+    and Qihui Zhang and Jia Li and Xiao Xiao and Kai Du and Xiaoxuan Jia
+    and Chao Xie and Lu Mi},
+  year={2026},
+  eprint={2607.15079},
+  archivePrefix={arXiv},
+  primaryClass={cs.AI},
+  url={https://arxiv.org/abs/2607.15079}
+}
+```
 
 ---
 
