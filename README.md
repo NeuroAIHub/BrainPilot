@@ -42,7 +42,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ## 📖 Overview
 
-BrainPilot is an open-source AI research workspace for brain science. It helps researchers turn broad scientific questions into structured, inspectable workflows, from literature review and hypothesis refinement to experiment design, data analysis, writing, and audit. At its center, a Principal Investigator (PI) Agent communicates with the user, plans the work, and coordinates specialist agents including a librarian, experimentalist, engineer, writer, and auditor. BrainPilot is designed for human-in-the-loop scientific work: researchers remain in control, while agents handle evidence-heavy and cross-disciplinary tasks. The system integrates domain knowledge, methodological skills, and research tools, and records the process in a Graph of Trace (GoT) so that intermediate actions, evidence, claims, and potential risks can be inspected.
+BrainPilot is an open-source AI research workspace for brain science. It helps researchers turn broad scientific questions into structured, inspectable workflows, from literature review and hypothesis refinement to experiment design, data analysis, writing, and audit. At its center, a Principal Investigator (PI) Agent communicates with the user, plans the work, and coordinates specialist agents including a librarian, experimentalist, engineer, writer, and auditor. BrainPilot is designed for human-in-the-loop scientific work: researchers remain in control, while agents handle evidence-heavy and cross-disciplinary tasks. The system integrates domain knowledge, methodological skills, and research tools, and records the process in a [Graph of Trace (GoT)](https://aclanthology.org/2026.acl-demo.29/) so that intermediate actions, evidence, claims, and potential risks can be inspected.
 
 ### Highlights
 
@@ -50,7 +50,7 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 - 🤝 PI Agent + specialist agents — the coordinating PI works with a librarian, experimentalist, engineer, writer, and auditor.
 - 📚 Integrated domain knowledge and skills — brings together brain-science knowledge, methodological skills, analysis procedures, writing conventions, and tool interfaces.
 - 🛡️ Auditor Agent for scientific reliability — reviews claims, evidence chains, citations, hallucination risks, omitted information, and unsupported reasoning.
-- 🔭 Traceable research process — represents each session as an inspectable Graph of Trace, making task structure, agent actions, evidence flow, and decision points visible.
+- 🔭 Traceable research process — represents each session as an inspectable [Graph of Trace](https://aclanthology.org/2026.acl-demo.29/), making task structure, agent actions, evidence flow, and decision points visible.
 - 🔌 Extensible research tool ecosystem — connects models, MCP tools, paper databases, code execution environments, and custom research utilities.
 - 🚀 Fast local start — install, launch, and begin working in the browser with minimal setup.
 
@@ -574,6 +574,29 @@ or start a discussion.
   archivePrefix={arXiv},
   primaryClass={cs.AI},
   url={https://arxiv.org/abs/2607.15079}
+}
+
+@inproceedings{gao-etal-2026-graph,
+  title = "Graph of Trace: Visualizing Execution Traces of Scientific Agents",
+  author = "Gao, Tianci  and
+    Li, Haoxuan  and
+    Li, Jian He  and
+    Zhao, Tianxiang  and
+    Runze, Shi  and
+    Wang, Weiran  and
+    Wu, Zezhao  and
+    Mi, Lu",
+  editor = "Durrett, Greg  and
+    Jian, Ping",
+  booktitle = "Proceedings of the 64th Annual Meeting of the {A}ssociation for {C}omputational {L}inguistics (Volume 3: System Demonstrations)",
+  month = jul,
+  year = "2026",
+  address = "San Diego, California, United States",
+  publisher = "Association for Computational Linguistics",
+  url = "https://aclanthology.org/2026.acl-demo.29/",
+  doi = "10.18653/v1/2026.acl-demo.29",
+  pages = "297--306",
+  ISBN = "979-8-89176-392-0"
 }
 ```
 
