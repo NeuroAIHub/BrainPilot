@@ -40,6 +40,13 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ---
 
+## 📰 News
+
+- **2026-07-18** — BrainPilot was showcased at the “Intelligence in the Physical World” Science Forum at WAIC 2026. Follow us for the latest updates.
+- **2026-07-17** — BrainPilot v0.1.0 was released as open source. It is a human-in-the-loop agentic research system for brain science that coordinates specialist agents, domain knowledge, scientific skills, and tools while preserving an inspectable research process through Graph of Trace.
+
+---
+
 ## 📖 Overview
 
 BrainPilot is an open-source AI research workspace for brain science. It helps researchers turn broad scientific questions into structured, inspectable workflows, from literature review and hypothesis refinement to experiment design, data analysis, writing, and audit. At its center, a Principal Investigator (PI) Agent communicates with the user, plans the work, and coordinates specialist agents including a librarian, experimentalist, engineer, writer, and auditor. BrainPilot is designed for human-in-the-loop scientific work: researchers remain in control, while agents handle evidence-heavy and cross-disciplinary tasks. The system integrates domain knowledge, methodological skills, and research tools, and records the process in a [Graph of Trace (GoT)](https://aclanthology.org/2026.acl-demo.29/) so that intermediate actions, evidence, claims, and potential risks can be inspected.
@@ -61,29 +68,6 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 <p align="center">
   <img src="assets/readme/brainpilot-system.png" alt="BrainPilot multi-agent system and Graph of Trace architecture" width="100%"/>
 </p>
-
----
-
-## 📊 Evaluation
-
-Across ALE and BrainPilotBench-v0, BrainPilot matched or approached the strongest evaluated
-harness–model configurations on multiple tasks. ALE showed a clear cost advantage, whereas
-BrainPilotBench-v0 revealed a performance–cost trade-off.
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <b>Agents' Last Exam (ALE)</b><br/><br/>
-      On three neuroscience tasks from ALE, BrainPilot paired with DeepSeek-V4-Pro scored 1.00, 0.70, and 0.09. Across matched backbones with domain knowledge, BrainPilot used 5–56% of the cost required by Codex or Claude Code. T2 has a full-credit score of 1.00; T3 has no pass threshold, and <code>F</code> denotes a failed task with no gradable output. Each cell reports a single run.<br/><br/>
-      <img src="assets/readme/evaluation-ale.png" alt="BrainPilot results on three neuroscience tasks from Agents' Last Exam" width="100%"/>
-    </td>
-    <td width="50%" valign="top">
-      <b>BrainPilotBench-v0 — preliminary results</b><br/><br/>
-      BrainPilotBench-v0 remains preliminary because its current suite contains four tasks. Evaluations are complete for all four—RSC, TOPS-fMRI, BCI IV 2a, and Sleep-EDF. BrainPilot matched or approached the strongest evaluated configurations on multiple tasks, with a performance–cost trade-off across backbones. Task-specific graders use frozen references or held-out data rather than an LLM judge; <code>F</code> marks runs without a gradable completion. <a href="https://brainpilot.chat/bench#leaderboard">View the evaluation page</a> or access the <a href="https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public">public task data</a> on Hugging Face.<br/><br/>
-      <img src="assets/readme/evaluation-brainpilotbench.png" alt="Preliminary BrainPilotBench-v0 results across four completed tasks" width="100%"/>
-    </td>
-  </tr>
-</table>
 
 ---
 
@@ -519,6 +503,29 @@ See [`CONTRIBUTING.md`](CONTRIBUTING.md) for full Docker and release details.
 
 ---
 
+## 📊 Evaluation
+
+Across ALE and BrainPilotBench-v0, BrainPilot matched or approached the strongest evaluated
+harness–model configurations on multiple tasks. ALE showed a clear cost advantage, whereas
+BrainPilotBench-v0 revealed a performance–cost trade-off.
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Agents' Last Exam (ALE)</b><br/><br/>
+      On three neuroscience tasks from ALE, BrainPilot paired with DeepSeek-V4-Pro scored 1.00, 0.70, and 0.09. Across matched backbones with domain knowledge, BrainPilot used 5–56% of the cost required by Codex or Claude Code. T2 has a full-credit score of 1.00; T3 has no pass threshold, and <code>F</code> denotes a failed task with no gradable output. Each cell reports a single run.<br/><br/>
+      <img src="assets/readme/evaluation-ale.png" alt="BrainPilot results on three neuroscience tasks from Agents' Last Exam" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>BrainPilotBench-v0 — preliminary results</b><br/><br/>
+      BrainPilotBench-v0 remains preliminary because its current suite contains four tasks. Evaluations are complete for all four—RSC, TOPS-fMRI, BCI IV 2a, and Sleep-EDF. BrainPilot matched or approached the strongest evaluated configurations on multiple tasks, with a performance–cost trade-off across backbones. Task-specific graders use frozen references or held-out data rather than an LLM judge; <code>F</code> marks runs without a gradable completion. <a href="https://brainpilot.chat/bench#leaderboard">View the evaluation page</a> or access the <a href="https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public">public task data</a> on Hugging Face.<br/><br/>
+      <img src="assets/readme/evaluation-brainpilotbench.png" alt="Preliminary BrainPilotBench-v0 results across four completed tasks" width="100%"/>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## 🤝 Contributing
 
 Contributions are welcome — bug reports, skills, features, and docs all help.
@@ -561,6 +568,8 @@ or start a discussion.
 ---
 
 ## 📄 Citation
+
+If BrainPilot has helped your work, we welcome you to cite our work!
 
 ```bibtex
 @misc{li2026brainpilotautomatingbraindiscovery,
