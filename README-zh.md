@@ -40,6 +40,13 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ---
 
+## 📰 最新动态
+
+- **2026-07-18** — BrainPilot 项目在 2026 世界人工智能大会（WAIC）“实体世界智能科学论坛”上展示，欢迎关注！
+- **2026-07-17** — BrainPilot v0.1.0 正式开源发布。BrainPilot 是一个面向脑科学、人在回路的智能体研究系统，整合专业智能体、领域知识、科研技能和工具，并通过 Graph of Trace 保留可检查的科研过程。
+
+---
+
 
 ## 📖 概览
 
@@ -62,29 +69,6 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 <p align="center">
   <img src="assets/readme/brainpilot-system.png" alt="BrainPilot 多智能体系统与 Graph of Trace 架构" width="100%"/>
 </p>
-
----
-
-## 📊 评测结果
-
-在 ALE 和 BrainPilotBench-v0 的多项任务上，BrainPilot 达到或接近本次评测中表现最强的
-harness–model 组合。ALE 显示出明确的成本优势，而 BrainPilotBench-v0 揭示了不同 backbone
-下的性能—成本权衡。
-
-<table>
-  <tr>
-    <td width="50%" valign="top">
-      <b>Agents' Last Exam（ALE）</b><br/><br/>
-      在 ALE 的三项脑科学任务上，BrainPilot 搭载 DeepSeek-V4-Pro 分别获得 1.00、0.70 和 0.09 分。在启用领域知识并匹配 backbone 的比较中，BrainPilot 的成本为 Codex 或 Claude Code 的 5–56%。T2 的满分为 1.00；T3 不设通过阈值，<code>F</code> 表示该次任务失败且没有可评分产物。每个单元格均为一次运行的结果。<br/><br/>
-      <img src="assets/readme/evaluation-ale.png" alt="BrainPilot 在 Agents' Last Exam 三项脑科学任务上的结果" width="100%"/>
-    </td>
-    <td width="50%" valign="top">
-      <b>BrainPilotBench-v0——阶段性结果</b><br/><br/>
-      BrainPilotBench-v0 仍处于阶段性评测，因为当前任务集仅包含四项任务。RSC、TOPS-fMRI、BCI IV 2a 和 Sleep-EDF 的评测均已完成。BrainPilot 在多项任务上达到或接近本次评测中的最佳配置，但不同 backbone 呈现出性能—成本权衡。任务专属 grader 使用冻结参考或 held-out 数据，而非 LLM-as-judge；<code>F</code> 表示该次运行没有可评分的完整产物。<a href="https://brainpilot.chat/bench#leaderboard">查看评测页面</a>，或访问 Hugging Face 上的<a href="https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public">公开任务数据</a>。<br/><br/>
-      <img src="assets/readme/evaluation-brainpilotbench.png" alt="BrainPilotBench-v0 四项已完成任务的阶段性评测结果" width="100%"/>
-    </td>
-  </tr>
-</table>
 
 ---
 
@@ -465,6 +449,29 @@ GPU 模式（`docker-compose.gpu.yml`）基于私有的 `brainpilot-gpu-base` �
 
 ---
 
+## 📊 评测结果
+
+在 ALE 和 BrainPilotBench-v0 的多项任务上，BrainPilot 达到或接近本次评测中表现最强的
+harness–model 组合。ALE 显示出明确的成本优势，而 BrainPilotBench-v0 揭示了不同 backbone
+下的性能—成本权衡。
+
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <b>Agents' Last Exam（ALE）</b><br/><br/>
+      在 ALE 的三项脑科学任务上，BrainPilot 搭载 DeepSeek-V4-Pro 分别获得 1.00、0.70 和 0.09 分。在启用领域知识并匹配 backbone 的比较中，BrainPilot 的成本为 Codex 或 Claude Code 的 5–56%。T2 的满分为 1.00；T3 不设通过阈值，<code>F</code> 表示该次任务失败且没有可评分产物。每个单元格均为一次运行的结果。<br/><br/>
+      <img src="assets/readme/evaluation-ale.png" alt="BrainPilot 在 Agents' Last Exam 三项脑科学任务上的结果" width="100%"/>
+    </td>
+    <td width="50%" valign="top">
+      <b>BrainPilotBench-v0——阶段性结果</b><br/><br/>
+      BrainPilotBench-v0 仍处于阶段性评测，因为当前任务集仅包含四项任务。RSC、TOPS-fMRI、BCI IV 2a 和 Sleep-EDF 的评测均已完成。BrainPilot 在多项任务上达到或接近本次评测中的最佳配置，但不同 backbone 呈现出性能—成本权衡。任务专属 grader 使用冻结参考或 held-out 数据，而非 LLM-as-judge；<code>F</code> 表示该次运行没有可评分的完整产物。<a href="https://brainpilot.chat/bench#leaderboard">查看评测页面</a>，或访问 Hugging Face 上的<a href="https://huggingface.co/datasets/BrainPilot-Bench/Tasks-Data-Public">公开任务数据</a>。<br/><br/>
+      <img src="assets/readme/evaluation-brainpilotbench.png" alt="BrainPilotBench-v0 四项已完成任务的阶段性评测结果" width="100%"/>
+    </td>
+  </tr>
+</table>
+
+---
+
 ## 🤝 参与贡献
 
 欢迎各种形式的贡献 —— bug 反馈、技能、新功能、文档都有帮助。
@@ -505,6 +512,8 @@ BrainPilot 是一个 8 包的 TypeScript monorepo：
 ---
 
 ## 📄 引用
+
+如果 BrainPilot 对你的工作有所帮助，欢迎引用我们的工作！
 
 ```bibtex
 @misc{li2026brainpilotautomatingbraindiscovery,
