@@ -292,9 +292,8 @@ describe("Hono app — REST forwarding", () => {
     expect(body.hint).toContain("Settings → Providers");
   });
 
-  // #46: /version must report the real package version, not a hardcoded
-  // literal. Assert it matches this package's own package.json so the value
-  // can never drift from the published version again.
+  // #46: /version must report this package's own package.json version so the
+  // endpoint stays in lockstep with every release.
   it("GET /api/version reports the real package version (not a hardcoded literal)", async () => {
     const require = createRequire(import.meta.url);
     const pkg = require("../package.json") as { name: string; version: string };
@@ -306,7 +305,6 @@ describe("Hono app — REST forwarding", () => {
     });
     const res = await app.request("/api/version");
     expect(await res.json()).toEqual({ name: pkg.name, version: pkg.version });
-    expect(pkg.version).not.toBe("0.1.0"); // the old hardcoded drift value
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
