@@ -553,7 +553,7 @@ BrainPilot is an 8-package TypeScript monorepo:
 Questions, ideas, or just want to say hi? Join the BrainPilot community:
 
 - 💬 **[Join the BrainPilot Slack →](https://join.slack.com/t/brainpilot/shared_invite/zt-43pbjtuz5-AiuRez0RIYkzhIsmDQtv8A)**
-- 🪶 **[Join the BrainPilot Feishu group →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=0far82db-f790-412e-9217-58ae67df4313)**
+- 🪶 **[Join the BrainPilot Feishu group →](https://applink.feishu.cn/client/chat/chatter/add_by_link?link_token=9cfp29d1-a51b-49af-a32f-0176e89df731)**
 - 📧 **Contact:** [thu_neuroai@mail.tsinghua.edu.cn](mailto:thu_neuroai@mail.tsinghua.edu.cn)
 
 You can also [open an issue](https://github.com/NeuroAIHub/BrainPilot/issues/new/choose)
