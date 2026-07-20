@@ -224,8 +224,8 @@ npm run bp -- up     # 从源码启动（-- 用于把 flag 透传给 CLI）
 
 - [Awesome Cognitive & Neuroscience Skills](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills)，精选的认知科学与神经科学技能合集
 - [nature-skills](https://github.com/Yuan1z0825/nature-skills)，从 Nature 系列方法中提炼的技能
-- [MNE-Python](https://github.com/mne-tools/mne-python) 与 [pycortex](https://github.com/gallantlab/pycortex)，用 `repo-to-skill` 集成（见下文）
-- [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut)，用于无标记动物姿态估计
+- [Google science skills](https://github.com/google-deepmind/science-skills)，整合了 AlphaGenome、AFDB、UniProt 及 30 余种数据库与工具经验的技能
+- [MNE-Python](https://github.com/mne-tools/mne-python)、[pycortex](https://github.com/gallantlab/pycortex)、[DeepLabCut](https://github.com/DeepLabCut/DeepLabCut)、[fMRIPrep](https://github.com/nipreps/fmriprep)、[netneurotools](https://github.com/netneurolab/netneurotools) 与 [SpikeInterface](https://github.com/SpikeInterface/spikeinterface)，用 `repo-to-skill` 集成（见下文）
 
 - **目录结构** —— `packages/skills/skills/`，两级目录树 `<category>/<skill-name>/SKILL.md`（可选 `references/` 存放可下钻的细节）。
 - **部署时** —— **物化到你的数据目录** `<data-dir>/bp_template/skills/`，一份可编辑的副本；已存在的技能永不会被覆盖。

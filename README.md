@@ -233,8 +233,8 @@ Skills sources:
 
 - [Awesome Cognitive & Neuroscience Skills](https://github.com/NeuroAIHub/awesome_cognitive_and_neuroscience_skills), a curated cognitive-science & neuroscience skill collection
 - [nature-skills](https://github.com/Yuan1z0825/nature-skills), skills distilled from Nature-family methods
-- [MNE-Python](https://github.com/mne-tools/mne-python) and [pycortex](https://github.com/gallantlab/pycortex), integrated with `repo-to-skill` (see below)
-- [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut), markerless animal pose estimation toolbox
+- [Google science skills](https://github.com/google-deepmind/science-skills), skills integrating insights from AlphaGenome, AFDB, UniProt and 30+ other databases and tools
+- [MNE-Python](https://github.com/mne-tools/mne-python), [pycortex](https://github.com/gallantlab/pycortex), [DeepLabCut](https://github.com/DeepLabCut/DeepLabCut), [fMRIPrep](https://github.com/nipreps/fmriprep), [netneurotools](https://github.com/netneurolab/netneurotools) and [SpikeInterface](https://github.com/SpikeInterface/spikeinterface), integrated with `repo-to-skill` (see below)
 
 - **Layout** — `packages/skills/skills/`, a two-level `<category>/<skill-name>/SKILL.md` tree (optional `references/` for drill-down detail).
 - **At deploy time** — **materialized into your data dir** at `<data-dir>/bp_template/skills/`, a user-editable copy; an existing skill is never overwritten.
