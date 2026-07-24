@@ -329,16 +329,30 @@ export function createApp(options: CreateAppOptions): Hono {
       },
       { fetchFn: options.fetchFn, timeoutMs: options.providerProbeTimeoutMs },
     );
-    // #69: persist the probe outcome so a later GET /provider/profiles (card
-    // refresh / reopen) keeps the same health instead of reverting to
-    // "unknown". model_health stays empty this round (per-model probing is
-    // future work). ProbeStatus "error" maps to the HealthStatus "unavailable".
+    // #69/#364: persist both the provider outcome and the model actually used
+    // by the protocol-aware probe. Other configured models remain explicitly
+    // unknown rather than inheriting a result from a model we did not call.
+    // ProbeStatus "error" maps to the HealthStatus "unavailable".
     const healthStatus = result.status === "error" ? "unavailable" : result.status;
+    const checkedAt = Date.now();
+    const testedModel = p.models[0];
+    const modelHealth = p.models.map((model) =>
+      model === testedModel
+        ? {
+            model,
+            status: healthStatus,
+            latencyMs: result.latencyMs,
+            checkedAt,
+            ...(result.message ? { error: result.message } : {}),
+          }
+        : { model, status: "unknown" as const },
+    );
     const saved = await setProfileHealth(dataDir, p.id, {
       healthStatus,
-      healthCheckedAt: Date.now(),
+      healthCheckedAt: checkedAt,
       healthMessage: result.message ?? "",
       healthLatencyMs: result.latencyMs ?? null,
+      modelHealth,
     });
     return c.json(toHttpProfile(saved ?? p, selectedProfileId));
   });
@@ -842,7 +856,21 @@ function toHttpProfile(
     health_checked_at: p.healthCheckedAt,
     health_message: p.healthMessage ?? "",
     health_latency_ms: p.healthLatencyMs ?? null,
-    model_health: [],
+    // #364: always return one row per configured model. Before a model has
+    // actually been probed its status is explicitly unknown; the first model
+    // receives the persisted result from POST .../test.
+    model_health: p.models.map((model) => {
+      const health = p.modelHealth?.find((entry) => entry.model === model);
+      return health
+        ? {
+            model: health.model,
+            status: health.status,
+            latency_ms: health.latencyMs,
+            checked_at: health.checkedAt,
+            error: health.error,
+          }
+        : { model, status: "unknown" };
+    }),
   };
 }
 

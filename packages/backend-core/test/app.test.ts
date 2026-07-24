@@ -730,7 +730,7 @@ describe("Hono app — local config routes", () => {
 
   // #55: the Test button must do a real connectivity probe, not echo unknown.
   describe("#55 provider test endpoint", () => {
-    async function makeProfile(fetchFn: unknown) {
+    async function makeProfile(fetchFn: unknown, models = ["m"]) {
       const dir = await mkdtemp(path.join(tmpdir(), "bp-prov55-"));
       const app = createApp({
         orchestrator: fakeOrchestrator(),
@@ -743,7 +743,7 @@ describe("Hono app — local config routes", () => {
       const created = await app.request("/api/provider/profiles", {
         method: "POST",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ name: "Gw", base_url: "https://gw.example.com/api", api_key: "sk-x", models: ["m"] }),
+        body: JSON.stringify({ name: "Gw", base_url: "https://gw.example.com/api", api_key: "sk-x", models }),
       });
       const { id } = (await created.json()) as { id: string };
       return { app, id };
@@ -764,8 +764,34 @@ describe("Hono app — local config routes", () => {
       const fetchFn = vi.fn(async () => new Response("{}", { status: 200 }));
       const { app, id } = await makeProfile(fetchFn);
       const res = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
-      const body = (await res.json()) as { health_status: string };
+      const body = (await res.json()) as {
+        health_status: string;
+        model_health: Array<{ model: string; status: string; latency_ms?: number; checked_at?: number }>;
+      };
       expect(body.health_status).toBe("healthy");
+      expect(body.model_health).toHaveLength(1);
+      expect(body.model_health[0]).toMatchObject({ model: "m", status: "healthy" });
+      expect(body.model_health[0]!.latency_ms).toBeGreaterThanOrEqual(0);
+      expect(body.model_health[0]!.checked_at).toBeGreaterThan(0);
+    });
+
+    it("marks only the model used by the probe and leaves untested models unknown", async () => {
+      const fetchFn = vi.fn(async (_url: string, _init?: RequestInit) =>
+        new Response("{}", { status: 200 }),
+      );
+      const { app, id } = await makeProfile(fetchFn, ["tested-model", "other-model"]);
+
+      const res = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      const body = (await res.json()) as {
+        model_health: Array<{ model: string; status: string }>;
+      };
+
+      expect(body.model_health).toEqual([
+        expect.objectContaining({ model: "tested-model", status: "healthy" }),
+        { model: "other-model", status: "unknown" },
+      ]);
+      const request = JSON.parse(String(fetchFn.mock.calls[0]?.[1]?.body)) as { model: string };
+      expect(request.model).toBe("tested-model");
     });
 
     it("404s for an unknown profile id", async () => {
@@ -800,10 +826,16 @@ describe("Hono app — local config routes", () => {
         id: string;
         health_status: string;
         health_checked_at?: number;
+        model_health: Array<{ model: string; status: string; error?: string }>;
       }>;
       const fromList = list.find((p) => p.id === id);
       expect(fromList?.health_status).toBe("unavailable");
       expect(fromList?.health_checked_at).toBeGreaterThan(0);
+      expect(fromList?.model_health[0]).toMatchObject({
+        model: "m",
+        status: "unavailable",
+      });
+      expect(fromList?.model_health[0]?.error).toContain("403");
 
       // and the dedicated health endpoint too
       const health = (await (await app.request("/api/provider/profiles/health")).json()) as Array<{

@@ -26,4 +26,18 @@ describe("runningToastLabel (#76)", () => {
   it("falls back to the generic label when no named agent is running", () => {
     expect(runningToastLabel([])).toEqual({ key: "chat.agentThinking" });
   });
+
+  it("shows retry progress in the existing working toast", () => {
+    expect(
+      runningToastLabel(["principal"], "、", {
+        name: "principal",
+        attempt: 2,
+        maxAttempts: 5,
+        delayMs: 4_001,
+      }),
+    ).toEqual({
+      key: "chat.agentRetrying",
+      vars: { name: "principal", attempt: 2, max: 5, sec: 5 },
+    });
+  });
 });

@@ -90,12 +90,103 @@ function gatedPrincipalFactory(observe: {
   };
 }
 
+/**
+ * A Pi-shaped session paused in auto-retry backoff. abort() releases the sleep
+ * and emits the exact terminal event Pi uses for a user-cancelled retry.
+ */
+function retryBackoffFactory(observe: {
+  prompts: Array<{ agent: string; text: string }>;
+}): AgentSessionFactory {
+  return async ({ sessionId, agentName }) => {
+    const listeners = new Set<(e: PiAgentEvent) => void>();
+    let releaseBackoff: (() => void) | undefined;
+    let aborted = false;
+    let streaming = false;
+    const emit = (e: PiAgentEvent) => {
+      for (const listener of listeners) listener(e);
+    };
+    return {
+      sessionId,
+      get isStreaming() {
+        return streaming;
+      },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async prompt(text: string) {
+        streaming = true;
+        aborted = false;
+        observe.prompts.push({ agent: agentName, text });
+        try {
+          emit({ type: "agent_start" });
+          emit({ type: "message_start", message: { role: "assistant", content: [] } });
+          emit({
+            type: "message_end",
+            message: {
+              role: "assistant",
+              content: [],
+              stopReason: "error",
+              errorMessage: "503 service unavailable",
+            },
+          });
+          emit({
+            type: "auto_retry_start",
+            attempt: 1,
+            maxAttempts: 5,
+            delayMs: 2_000,
+            errorMessage: "503 service unavailable",
+          });
+          await new Promise<void>((resolve) => {
+            releaseBackoff = resolve;
+          });
+          if (aborted) {
+            emit({
+              type: "auto_retry_end",
+              success: false,
+              attempt: 1,
+              finalError: "Retry cancelled",
+            });
+          }
+          emit({ type: "agent_end", messages: [], willRetry: false });
+        } finally {
+          streaming = false;
+          releaseBackoff = undefined;
+        }
+      },
+      async abort() {
+        aborted = true;
+        releaseBackoff?.();
+      },
+      dispose() {},
+    };
+  };
+}
+
 async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
   const start = Date.now();
   while (!pred()) {
     if (Date.now() - start > timeoutMs) throw new Error("waitFor timed out");
     await new Promise((r) => setTimeout(r, 5));
   }
+}
+
+async function delegateToExpert(m: SessionManager, sid: string, expert: string): Promise<void> {
+  const entry = (
+    m as unknown as {
+      sessions: Map<string, { mailbox: { write: (msg: unknown) => Promise<unknown> } }>;
+    }
+  ).sessions.get(sid)!;
+  await entry.mailbox.write({
+    fromAgent: "principal",
+    toAgent: expert,
+    msgType: "task_delegate",
+    content: "survey X",
+  });
+  (m as unknown as { wakeAgent: (sessionId: string, name: string) => void }).wakeAgent(
+    sid,
+    expert,
+  );
 }
 
 describe("interrupt cancels the active run without a follow-up notice run (#101 / #327)", () => {
@@ -150,5 +241,79 @@ describe("interrupt cancels the active run without a follow-up notice run (#101 
     await m.interrupt(s.id, "principal");
     const runFinishedAfter = events.filter((e) => e.type === "RUN_FINISHED").length;
     expect(runFinishedAfter).toBeGreaterThan(runFinishedBefore);
+  });
+
+  it("treats Stop during principal retry backoff as aborted, not a provider error", async () => {
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const m = new SessionManager({ persist: false, agentFactory: retryBackoffFactory(observe) });
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (event) => events.push(event));
+
+    await m.sendMessage(s.id, "retry me");
+    await waitFor(() =>
+      events.some(
+        (event) =>
+          event.type === "agent_status_update" &&
+          (event as unknown as { retry?: { attempt: number } }).retry?.attempt === 1,
+      ),
+    );
+    await m.interrupt(s.id);
+
+    const errors = events.filter(
+      (event) =>
+        (event.type === "system_message" &&
+          (event as unknown as { level?: string }).level === "error") ||
+        event.type === "RUN_ERROR",
+    );
+    expect(errors).toHaveLength(0);
+    expect(JSON.stringify(events)).not.toContain("Retry cancelled");
+    expect(observe.prompts.filter((prompt) => prompt.agent === "principal")).toHaveLength(1);
+    expect(m.getSessionState(s.id)?.agents.find((agent) => agent.name === "principal")).toMatchObject({
+      status: "idle",
+      retry: undefined,
+    });
+    expect(m.getSessionState(s.id)?.runState.active).toBe(false);
+    expect(m.getSessionStats(s.id)?.byRun.at(-1)?.status).toBe("aborted");
+  });
+
+  it("does not re-run or escalate a delegated expert stopped during retry backoff", async () => {
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const m = new SessionManager({ persist: false, agentFactory: retryBackoffFactory(observe) });
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (event) => events.push(event));
+
+    await m.ensureAgent(s.id, "librarian");
+    await delegateToExpert(m, s.id, "librarian");
+    await waitFor(() =>
+      events.some(
+        (event) =>
+          event.type === "agent_status_update" &&
+          (event as unknown as { name?: string; retry?: { attempt: number } }).name === "librarian" &&
+          (event as unknown as { retry?: { attempt: number } }).retry?.attempt === 1,
+      ),
+    );
+    await m.interrupt(s.id);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(observe.prompts.filter((prompt) => prompt.agent === "librarian")).toHaveLength(1);
+    expect(
+      events.some(
+        (event) =>
+          event.type === "system_message" &&
+          /正在自动重试|已上报|Retry cancelled/.test(
+            String((event as unknown as { message?: string }).message),
+          ),
+      ),
+    ).toBe(false);
+    expect(m.getSessionState(s.id)?.agents.find((agent) => agent.name === "librarian")).toMatchObject({
+      status: "idle",
+      retry: undefined,
+    });
+    expect(m.getSessionState(s.id)?.runState.active).toBe(false);
+    expect(
+      m.getSessionStats(s.id)?.byRun.find((run) => run.agentName === "librarian")?.status,
+    ).toBe("aborted");
   });
 });

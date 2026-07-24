@@ -158,13 +158,14 @@ describe("AG-UI event union — existing events", () => {
     expect(parseEvent(e).type).toBe("CUSTOM");
   });
 
-  it("round-trips agent_status_update with lastError", () => {
+  it("round-trips agent_status_update with lastError and retry progress", () => {
     const e = {
       type: "agent_status_update",
       name: "librarian",
       status: "error",
       active_run_id: "r1",
       active_tool_executions: ["t1"],
+      retry: { attempt: 2, maxAttempts: 5, delayMs: 4_000 },
       last_error: { message: "x", timestamp: "t", consecutive_count: 2 },
     };
     expect(parseEvent(e).type).toBe("agent_status_update");
