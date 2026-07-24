@@ -28,6 +28,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
   <a href="https://brainpilot.chat/docs">Docs</a> ·
+  <a href="./CHANGELOG.md">Changelog</a> ·
   <a href="#-evaluation">Evaluation</a> ·
   <a href="#-selected-research-case-studies">Cases</a> ·
   <a href="#-quick-start">Quick Start</a> ·
@@ -42,6 +43,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ## 📰 News
 
+- **2026-07-24** — [BrainPilot v0.1.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.1) improves the reliability of queued, timeout-aware user prompts and transient provider retries, with more accurate model-health reporting. See the [changelog](CHANGELOG.md#011---2026-07-24).
 - **2026-07-18** — BrainPilot was showcased at the “Intelligence in the Physical World” Science Forum at WAIC 2026. Follow us for the latest updates.
 - **2026-07-17** — BrainPilot v0.1.0 was released as open source. It is a human-in-the-loop agentic research system for brain science that coordinates specialist agents, domain knowledge, scientific skills, and tools while preserving an inspectable research process through Graph of Trace.
 
