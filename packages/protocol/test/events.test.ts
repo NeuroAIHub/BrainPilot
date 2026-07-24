@@ -11,6 +11,7 @@ import {
   SystemMessageEventSchema,
   UserInputRequestEventSchema,
   UserInputResponseEventSchema,
+  UserInputCancelledEventSchema,
 } from "../src/events.js";
 
 describe("AG-UI event union — NEW events", () => {
@@ -81,6 +82,18 @@ describe("AG-UI event union — NEW events", () => {
     };
     expect(parseEvent(e).type).toBe("user_input_response");
     expect(UserInputResponseEventSchema.parse(e).answer).toBe("a");
+  });
+
+  it("round-trips user_input_cancelled", () => {
+    const e = {
+      type: "user_input_cancelled",
+      session_id: "s1",
+      request_id: "r1",
+      reason: "interrupted",
+    };
+    expect(parseEvent(e).type).toBe("user_input_cancelled");
+    expect(UserInputCancelledEventSchema.parse(e).reason).toBe("interrupted");
+    expect(UserInputCancelledEventSchema.safeParse({ ...e, reason: "unknown" }).success).toBe(false);
   });
 });
 
@@ -180,9 +193,9 @@ describe("discriminated union behavior", () => {
     expect(safeParseEvent(null).success).toBe(false);
   });
 
-  it("AG_UI_EVENT_TYPES has 22 entries matching the union", () => {
-    // 22 type strings (CUSTOM is the shared channel for session_state etc.)
-    expect(new Set(AG_UI_EVENT_TYPES).size).toBe(22);
+  it("AG_UI_EVENT_TYPES has 23 entries matching the union", () => {
+    // 23 type strings (CUSTOM is the shared channel for session_state etc.)
+    expect(new Set(AG_UI_EVENT_TYPES).size).toBe(23);
     // Every catalogued type parses with a minimal-ish payload via the union's
     // option set: spot check that each is a recognized discriminator.
     const optionTypes = new Set(

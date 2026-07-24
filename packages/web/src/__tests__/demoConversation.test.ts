@@ -88,6 +88,24 @@ describe("isDemoConversational (#98 multi-agent transcript)", () => {
         }),
       ),
     ).toBe(false);
+
+    // Cancelled questions remain as read-only lifecycle records but cannot
+    // behave like live prompts in the demo.
+    expect(
+      isDemoConversational(
+        msg({
+          kind: "ask_user",
+          content: "pick one",
+          askUser: {
+            requestId: "req_2",
+            agent: "principal",
+            question: "pick one",
+            status: "cancelled",
+            cancellationReason: "restored",
+          },
+        }),
+      ),
+    ).toBe(true);
   });
 
   it("drops empty text placeholders", () => {
