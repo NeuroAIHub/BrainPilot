@@ -8,9 +8,16 @@
  * task"), matching the runtime's run-active aggregation.
  */
 export interface ToastLabel {
-  key: "chat.agentWorking" | "chat.agentsWorking" | "chat.agentThinking";
+  key: "chat.agentWorking" | "chat.agentsWorking" | "chat.agentThinking" | "chat.agentRetrying";
   /** Interpolation vars; shape matches i18n `TranslateVars` (string|number). */
-  vars?: Record<string, string>;
+  vars?: Record<string, string | number>;
+}
+
+export interface RetryingAgent {
+  name: string;
+  attempt: number;
+  maxAttempts: number;
+  delayMs: number;
 }
 
 /**
@@ -20,7 +27,19 @@ export interface ToastLabel {
 export function runningToastLabel(
   workingAgentNames: readonly string[],
   separator = "、",
+  retryingAgent?: RetryingAgent,
 ): ToastLabel {
+  if (retryingAgent) {
+    return {
+      key: "chat.agentRetrying",
+      vars: {
+        name: retryingAgent.name,
+        attempt: retryingAgent.attempt,
+        max: retryingAgent.maxAttempts,
+        sec: Math.ceil(retryingAgent.delayMs / 1000),
+      },
+    };
+  }
   if (workingAgentNames.length === 1) {
     return { key: "chat.agentWorking", vars: { name: workingAgentNames[0]! } };
   }

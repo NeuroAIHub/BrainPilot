@@ -21,6 +21,11 @@ import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
+import {
+  installBrainPilotRetryClassifier,
+  PROVIDER_MAX_RETRIES,
+  PROVIDER_RETRY_BASE_DELAY_MS,
+} from "./pi-retry.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -36,11 +41,31 @@ export const mockAgentFactory: AgentSessionFactory = async ({ sessionId, agentNa
  */
 export const realAgentFactory: AgentSessionFactory = async (params) => {
   const sdk = (await import("@earendil-works/pi-coding-agent")) as unknown as PiSdk;
-  const { createAgentSession, defineTool, SessionManager, DefaultResourceLoader, getAgentDir } = sdk;
+  const {
+    createAgentSession,
+    defineTool,
+    SessionManager,
+    SettingsManager,
+    DefaultResourceLoader,
+    getAgentDir,
+  } = sdk;
 
   const customTools = params.systemTools.map((t) => adaptTool(defineTool, t));
 
   const agentDir = getAgentDir();
+  const settingsManager = SettingsManager.create(params.cwd, agentDir, {
+    projectTrusted: true,
+  });
+  // #365: Pi performs retries inside the same LLM turn, before any subsequent
+  // tool call can run. Pi increases the fixed 2s base exponentially, yielding
+  // bounded waits of 2s, 4s, 8s, 16s, and 32s.
+  settingsManager.applyOverrides({
+    retry: {
+      enabled: true,
+      maxRetries: PROVIDER_MAX_RETRIES,
+      baseDelayMs: PROVIDER_RETRY_BASE_DELAY_MS,
+    },
+  });
 
   // Target a custom Anthropic-compatible gateway. A per-session providerConfig
   // (from providers.json) wins and isolates its key via setRuntimeApiKey;
@@ -115,6 +140,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
+    settingsManager,
     noSkills: true,
     noContextFiles: true,
     ...(params.skillPaths && params.skillPaths.length > 0
@@ -130,11 +156,16 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     tools: params.allowedToolNames,
     customTools,
     resourceLoader,
+    settingsManager,
     sessionManager: SessionManager.open(params.historyPath),
     ...(model ? { model } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(authStorage ? { authStorage } : {}),
   });
+
+  // #365: Pi's built-in classifier intentionally excludes most HTTP 400s.
+  // Extend it for the narrow, trace-id-only transient shape seen in production.
+  installBrainPilotRetryClassifier(session);
 
   return new RealAgentSession(session);
 };
@@ -204,6 +235,7 @@ interface PiSdk {
     tools?: string[];
     customTools?: unknown[];
     resourceLoader?: unknown;
+    settingsManager?: unknown;
     sessionManager?: unknown;
     model?: unknown;
     modelRegistry?: unknown;
@@ -217,9 +249,21 @@ interface PiSdk {
     execute: (toolCallId: string, params: Record<string, unknown>) => Promise<unknown>;
   }): unknown;
   SessionManager: { open(path: string): unknown; inMemory(cwd?: string): unknown };
+  SettingsManager: {
+    create(
+      cwd: string,
+      agentDir?: string,
+      options?: { projectTrusted?: boolean },
+    ): {
+      applyOverrides(overrides: {
+        retry: { enabled: boolean; maxRetries: number; baseDelayMs: number };
+      }): void;
+    };
+  };
   DefaultResourceLoader: new (opts: {
     cwd: string;
     agentDir: string;
+    settingsManager?: unknown;
     appendSystemPrompt?: string[];
     systemPrompt?: string;
     /** Drop host-global skill auto-discovery (~/.pi/agent/skills, etc.). */

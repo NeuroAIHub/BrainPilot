@@ -164,6 +164,13 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     () => agents.filter((a) => a.status === "running" && a.name !== "trace").map((a) => a.name),
     [agents],
   );
+  // Prefer the principal when multiple provider calls are backing off: this is
+  // the existing user-facing "principal is working" bubble requested by #365.
+  const retryingAgent = useMemo(() => {
+    const working = agents.filter((a) => a.status === "running" && a.name !== "trace" && a.retry);
+    const agent = working.find((a) => a.name === "principal") ?? working[0];
+    return agent?.retry ? { name: agent.name, ...agent.retry } : undefined;
+  }, [agents]);
 
   useEffect(() => {
     let cancelled = false;
@@ -522,7 +529,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             <span className="agent-running-toast__dot" />
             <span className="agent-running-toast__label">
               {(() => {
-                const label = runningToastLabel(workingAgentNames);
+                const label = runningToastLabel(workingAgentNames, "、", retryingAgent);
                 return t(label.key, label.vars);
               })()}
             </span>

@@ -17,6 +17,7 @@
 import {
   CUSTOM_EVENT,
   type AgUiEvent,
+  type AgentRetryState,
   type AgentState,
   type AgentStats,
   type RunStatsStatus,
@@ -111,6 +112,12 @@ export class MasAgent {
   private readonly unsubscribe: () => void;
 
   private _status: AgentStatus = "idle";
+  /** Present only while Pi is sleeping before another provider attempt. */
+  private currentRetry: AgentRetryState | undefined;
+  /** Provider errors are held until Pi either retries successfully or exhausts. */
+  private pendingProviderError: string | undefined;
+  /** True while an explicit BrainPilot interrupt is unwinding the active run. */
+  private abortRequested = false;
   private currentRunId: string | undefined;
   private currentMessageId: string | undefined;
   private inReasoning = false;
@@ -221,21 +228,29 @@ export class MasAgent {
     const s: AgentState = { name: this.name, status: this._status };
     if (this.currentRunId) s.activeRunId = this.currentRunId;
     if (this.activeToolExecutions.size) s.activeToolExecutions = [...this.activeToolExecutions];
+    if (this.currentRetry) s.retry = this.currentRetry;
     if (this.lastError) s.lastError = this.lastError;
     return s;
+  }
+
+  private emitStateUpdate(): void {
+    // The callback publishes the wholesale session_state snapshot; the
+    // standalone event keeps incremental clients live between snapshots.
+    this.opts.onStatusChange?.(this.name, this._status);
+    this.bus.emit(
+      ev.agentStatusUpdate({ sessionId: this.sessionId, runId: this.currentRunId }, this.name, this._status, {
+        activeRunId: this.currentRunId,
+        activeToolExecutions: [...this.activeToolExecutions],
+        retry: this.currentRetry,
+        lastError: this.lastError,
+      }),
+    );
   }
 
   private setStatus(status: AgentStatus): void {
     if (this._status === status) return;
     this._status = status;
-    this.opts.onStatusChange?.(this.name, status);
-    this.bus.emit(
-      ev.agentStatusUpdate({ sessionId: this.sessionId, runId: this.currentRunId }, this.name, status, {
-        activeRunId: this.currentRunId,
-        activeToolExecutions: [...this.activeToolExecutions],
-        lastError: this.lastError,
-      }),
-    );
+    this.emitStateUpdate();
   }
 
   /**
@@ -287,6 +302,9 @@ export class MasAgent {
   private async runPrompt(text: string): Promise<void> {
     this.currentRunId = newRunId();
     this.runStartedAt = Date.now();
+    this.abortRequested = false;
+    this.currentRetry = undefined;
+    this.pendingProviderError = undefined;
     // Snapshot cumulative stats BEFORE any events flow so the eventual delta
     // (`cumulative_after - snapshot`) captures exactly this run's contribution.
     this.runStartSnapshot = cloneAgentStats(this.cumulativeStats);
@@ -295,13 +313,27 @@ export class MasAgent {
     let runOutcome: RunStatsStatus = "ok";
     try {
       await this.session.prompt(text);
+      if (this.abortRequested) {
+        // Pi reports an interrupted retry sleep as auto_retry_end(false,
+        // "Retry cancelled"). An explicit Stop is a lifecycle outcome, not a
+        // provider failure: discard the held attempt error and keep the agent
+        // out of the error/escalation path.
+        this.currentRetry = undefined;
+        this.pendingProviderError = undefined;
+        runOutcome = "aborted";
+      } else if (this.pendingProviderError) {
+        const raw = this.pendingProviderError;
+        this.pendingProviderError = undefined;
+        const { message, details } = normalizeAgentError(raw);
+        this.recordError(message, details, raw);
+        this.setStatus("error");
+      }
       this.bus.emit(
         ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
       );
-      // A run that reached here without an in-stream error (message_end /
-      // auto_retry_end / delta error all flip status to "error") completed
-      // cleanly — clear the error class so the delivery loop's retry counter
-      // resets on the next success.
+      // A run that reached here without an exhausted provider error completed
+      // cleanly (or was intentionally aborted) — clear the error class so the
+      // delivery loop cannot mistake cancellation for a retryable failure.
       if (this._status !== "error") {
         this._lastErrorKind = undefined;
         this.setStatus("idle");
@@ -312,17 +344,30 @@ export class MasAgent {
         runOutcome = "error";
       }
     } catch (err) {
-      const raw = (err as Error)?.message ?? String(err);
-      // issue #45: never surface raw SDK guidance (/login, node_modules paths)
-      // — normalize to a product message / redact local paths before it hits
-      // the event stream, events.jsonl, and lastError.
-      const { message, details } = normalizeAgentError(raw);
-      this.recordError(message, details, raw);
-      this.bus.emit(
-        ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
-      );
-      this.setStatus("error");
-      runOutcome = "error";
+      this.currentRetry = undefined;
+      this.pendingProviderError = undefined;
+      if (this.abortRequested) {
+        // Some session implementations reject prompt() on abort rather than
+        // resolving it. Normalize both forms to the same non-error lifecycle.
+        this.bus.emit(
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+        );
+        this._lastErrorKind = undefined;
+        this.setStatus("idle");
+        runOutcome = "aborted";
+      } else {
+        const raw = (err as Error)?.message ?? String(err);
+        // issue #45: never surface raw SDK guidance (/login, node_modules paths)
+        // — normalize to a product message / redact local paths before it hits
+        // the event stream, events.jsonl, and lastError.
+        const { message, details } = normalizeAgentError(raw);
+        this.recordError(message, details, raw);
+        this.bus.emit(
+          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+        );
+        this.setStatus("error");
+        runOutcome = "error";
+      }
     } finally {
       // Emit the per-run stats delta before clearing run-scoped state so
       // consumers see a stable `runId`. Aborted-mid-run is caught by
@@ -338,9 +383,8 @@ export class MasAgent {
 
   /**
    * Fire the `onRunStats` callback with the run's delta. Called from
-   * `runPrompt`'s finally block for the ok/error path, and from `abort()` for
-   * the aborted path. Idempotent: if no snapshot exists (e.g. abort called
-   * with no run in flight), this is a no-op.
+   * `runPrompt`'s finally block for ok/error/aborted paths. Idempotent: if no
+   * snapshot exists (e.g. abort called with no run in flight), this is a no-op.
    */
   private emitRunStats(status: RunStatsStatus): void {
     if (!this.runStartSnapshot || !this.currentRunId || this.runStartedAt === undefined) return;
@@ -375,6 +419,7 @@ export class MasAgent {
     // "aborted". If runPrompt's finally already fired (race), it will have
     // emitted with status "ok"/"error"; we don't double-emit here.
     const wasLiveRun = Boolean(this.currentRunId);
+    if (wasLiveRun) this.abortRequested = true;
     try {
       await this.session.abort();
     } catch {
@@ -389,19 +434,10 @@ export class MasAgent {
     }
     this.activeToolExecutions.clear();
     this.activeToolCalls.clear();
-    // The `finally` block in runPrompt has already fired `emitRunStats` if the
-    // run reached completion cleanly OR errored. For a genuine abort where the
-    // provider stream was cancelled, `session.prompt()` returns from
-    // `await session.abort()`'s wait path and runPrompt's finally still runs —
-    // so the stats will already have been emitted with `status="ok"` or
-    // `"error"`. We do NOT retroactively rewrite that to "aborted" here — the
-    // spec's status field reflects "how did the run *terminate*", and if the
-    // run reached RUN_FINISHED via the happy path, "ok" is accurate.
-    // If a caller wants to see aborted-mid-run they can key off events.jsonl.
-    // NOTE: `wasLiveRun` is retained (unused today) so a follow-up can add a
-    // dedicated "aborted" RunStats emission if we discover cases where
-    // runPrompt's finally didn't fire but we still want to record the run.
-    void wasLiveRun;
+    // Keep abortRequested true until prompt() has fully unwound so both Pi's
+    // resolving and rejecting abort paths are recorded as "aborted". A future
+    // prompt resets it synchronously at run start.
+    this.abortRequested = false;
   }
 
   stop(): void {
@@ -523,10 +559,13 @@ export class MasAgent {
           | { role?: string; stopReason?: string; errorMessage?: string; usage?: PiUsage }
           | undefined;
         if (msg?.stopReason === "error") {
-          const raw = msg.errorMessage || "provider request failed";
-          const { message, details } = normalizeAgentError(raw);
-          this.recordError(message, details, raw);
-          this.setStatus("error");
+          // #365: Pi decides whether to retry only after message_end. Hold the
+          // error until session.prompt settles so transient attempts do not
+          // produce red bubbles or briefly flip the agent out of "running".
+          this.pendingProviderError = msg.errorMessage || "provider request failed";
+        } else if (msg?.role === "assistant") {
+          // A successful retry supersedes every earlier failed attempt.
+          this.pendingProviderError = undefined;
         }
         // Accumulate real provider token usage for this assistant turn. Pi
         // attaches `usage` to the finalized assistant message; user/tool
@@ -612,37 +651,31 @@ export class MasAgent {
       }
 
       case "auto_retry_start": {
-        // #167: coalesce retry warnings. Instead of a fresh bubble per attempt
-        // (which stacked into N messages during a rate-limit window), emit the
-        // warning with a STABLE id keyed on (agent, run) + an incrementing
-        // attempt count. The web reducer updates the existing bubble in place,
-        // so the user sees one live "retrying (n/N)" line that ticks up.
+        // #365: publish retry progress as live agent state. The web reuses the
+        // existing "principal is working" toast instead of appending a chat
+        // bubble for every failed provider attempt.
         const r = e as Extract<PiAgentEvent, { type: "auto_retry_start" }>;
-        this.bus.emit(
-          ev.systemMessage(
-            this.sessionId,
-            "warning",
-            `⏳ Agent ${this.name} 遇到 API 错误，正在自动重试 (${r.attempt}/${r.maxAttempts})，${
-              r.delayMs / 1000
-            }秒后重试...`,
-            {
-              agent: this.name,
-              recoverable: true,
-              id: `retry-${this.name}-${this.currentRunId ?? "run"}`,
-            },
-          ),
-        );
+        this.currentRetry = {
+          attempt: r.attempt,
+          maxAttempts: r.maxAttempts,
+          delayMs: r.delayMs,
+        };
+        this.emitStateUpdate();
         return;
       }
 
       case "auto_retry_end": {
         const r = e as Extract<PiAgentEvent, { type: "auto_retry_end" }>;
-        if (!r.success) {
-          const raw = r.finalError ?? "retry exhausted";
-          const { message, details } = normalizeAgentError(raw);
-          this.recordError(message, details, raw);
-          this.setStatus("error");
+        this.currentRetry = undefined;
+        if (!r.success && this.abortRequested) {
+          // User Stop during backoff: discard both Pi's "Retry cancelled" and
+          // the provider error held from the failed attempt. runPrompt records
+          // an aborted lifecycle and settles the agent back to idle.
+          this.pendingProviderError = undefined;
+        } else if (!r.success) {
+          this.pendingProviderError = r.finalError ?? this.pendingProviderError ?? "retry exhausted";
         }
+        this.emitStateUpdate();
         return;
       }
 
@@ -680,18 +713,16 @@ export class MasAgent {
         this.inReasoning = false;
         return;
       case "error": {
-        // #63: provider failure streamed mid-message. Route to a visible error
-        // (the message_end handler also catches the finalized stopReason:"error",
-        // but this covers Pi builds that only emit the streaming sub-event).
+        // #63/#365: provider failure streamed mid-message. Hold it until the
+        // prompt settles for the same reason as message_end: Pi may retry it.
+        // This also covers Pi builds that only emit the streaming sub-event.
         const err = amsg as { error?: unknown; reason?: string };
         const raw =
           (err.error as { errorMessage?: string } | undefined)?.errorMessage ??
           (typeof err.error === "string" ? err.error : undefined) ??
           err.reason ??
           "provider request failed";
-        const { message, details } = normalizeAgentError(raw);
-        this.recordError(message, details, raw);
-        this.setStatus("error");
+        this.pendingProviderError = raw;
         return;
       }
       default:
