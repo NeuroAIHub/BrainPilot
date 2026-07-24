@@ -1,6 +1,6 @@
 {
   "name": "@brainpilot/runtime",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "engines": {
     "node": ">=22"
   },
@@ -37,8 +37,8 @@
     "start": "node ./dist/server.js"
   },
   "dependencies": {
-    "@brainpilot/protocol": "^0.1.0",
-    "@brainpilot/skills": "^0.1.0",
+    "@brainpilot/protocol": "^0.1.1",
+    "@brainpilot/skills": "^0.1.1",
     "@earendil-works/pi-coding-agent": "0.80.3",
     "@hono/node-server": "^2.0.10",
     "@modelcontextprotocol/sdk": "^1.0.0",
