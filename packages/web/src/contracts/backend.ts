@@ -210,8 +210,12 @@ export interface AskUserView {
   options?: string[];
   allowFreeText?: boolean;
   timeoutSec?: number;
+  /** Explicit lifecycle state; old replay data defaults to pending. */
+  status?: "pending" | "submitting" | "answered" | "cancelled";
   /** Set once the user has answered, so the card renders as resolved. */
   answer?: string;
+  /** Why a request became unavailable without an answer. */
+  cancellationReason?: "interrupted" | "evicted" | "restored" | "expired" | "agent_destroyed" | "stale";
 }
 
 /** View-model for an auto-retry indicator, surfaced from Pi `auto_retry_start`. */

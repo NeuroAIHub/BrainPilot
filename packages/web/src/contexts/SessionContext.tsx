@@ -725,22 +725,60 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async (requestId: string, answer: string) => {
       const sid = currentSession?.id;
       if (!sid || !requestId) return;
-      // Optimistically resolve the matching ask_user card so the buttons
-      // disable immediately, without waiting for the echoed user_input_response.
+      // Optimistically move to submitting so the composer cannot submit twice,
+      // but do not call it answered until the runtime confirms it.
       setMessagesBySession((current) => {
         const msgs = current[sid] ?? [];
         return {
           ...current,
           [sid]: msgs.map((m) =>
             m.kind === "ask_user" && m.askUser?.requestId === requestId
-              ? { ...m, askUser: { ...m.askUser, answer } }
+              ? { ...m, askUser: { ...m.askUser, answer, status: "submitting" } }
               : m,
           ),
         };
       });
       try {
-        await api.sessions.respondToInput(sid, { requestId, answer });
+        const result = await api.sessions.respondToInput(sid, { requestId, answer });
+        setMessagesBySession((current) => {
+          const msgs = current[sid] ?? [];
+          return {
+            ...current,
+            [sid]: msgs.map((m) => {
+              if (m.kind !== "ask_user" || m.askUser?.requestId !== requestId) return m;
+              // SSE may already have delivered the authoritative terminal event.
+              if (m.askUser.status === "answered" || m.askUser.status === "cancelled") return m;
+              return result.status === "ok"
+                ? { ...m, askUser: { ...m.askUser, answer, status: "answered" } }
+                : {
+                    ...m,
+                    askUser: {
+                      ...m.askUser,
+                      answer: undefined,
+                      status: "cancelled",
+                      cancellationReason: "stale",
+                    },
+                  };
+            }),
+          };
+        });
+        if (result.status === "stale") setError(tg("chat.ask.expired"));
       } catch (err) {
+        // Transport failures are not proof that the request expired. Restore
+        // the picker only if no authoritative SSE terminal event arrived.
+        setMessagesBySession((current) => {
+          const msgs = current[sid] ?? [];
+          return {
+            ...current,
+            [sid]: msgs.map((m) =>
+              m.kind === "ask_user"
+                && m.askUser?.requestId === requestId
+                && m.askUser.status === "submitting"
+                ? { ...m, askUser: { ...m.askUser, answer: undefined, status: "pending" } }
+                : m,
+            ),
+          };
+        });
         setError(err instanceof Error ? err.message : tg("ctx.session.sendFailed"));
       }
     },

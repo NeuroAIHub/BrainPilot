@@ -13,6 +13,7 @@ import type {
   CompactionEndValue,
   CompactionReason,
   CompactionStartValue,
+  UserInputCancellationReason,
 } from "@brainpilot/protocol";
 import { CUSTOM_EVENT } from "@brainpilot/protocol";
 
@@ -146,7 +147,14 @@ export const ev = {
   },
   userInputRequest(
     ctx: Ctx,
-    req: { request_id: string; agent: string; question: string; options?: string[]; allow_free_text?: boolean },
+    req: {
+      request_id: string;
+      agent: string;
+      question: string;
+      options?: string[];
+      allow_free_text?: boolean;
+      timeout_sec?: number;
+    },
   ): AgUiEvent {
     return {
       type: "user_input_request",
@@ -156,6 +164,7 @@ export const ev = {
       question: req.question,
       options: req.options,
       allow_free_text: req.allow_free_text,
+      timeout_sec: req.timeout_sec,
     } as AgUiEvent;
   },
   userInputResponse(ctx: Ctx, res: { request_id: string; answer: string }): AgUiEvent {
@@ -164,6 +173,17 @@ export const ev = {
       ...envelope(ctx),
       request_id: res.request_id,
       answer: res.answer,
+    } as AgUiEvent;
+  },
+  userInputCancelled(
+    ctx: Ctx,
+    cancellation: { request_id: string; reason: UserInputCancellationReason },
+  ): AgUiEvent {
+    return {
+      type: "user_input_cancelled",
+      ...envelope(ctx),
+      request_id: cancellation.request_id,
+      reason: cancellation.reason,
     } as AgUiEvent;
   },
   systemMessage(

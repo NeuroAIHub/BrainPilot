@@ -717,22 +717,35 @@ export const api = {
     async respondToInput(
       sessionId: string,
       payload: { requestId: string; answer: string },
-    ): Promise<{ status: string }> {
+    ): Promise<{ status: "ok" | "stale"; reason?: string }> {
       if (runtimeConfig.useMockBackend) {
         return { status: "ok" };
       }
-      return handleJson<{ status: string }>(
-        await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
-          method: "POST",
-          headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({
-            type: "user_input_response",
-            session_id: sessionId,
-            request_id: payload.requestId,
-            answer: payload.answer,
-          }),
+      const res = await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
+        method: "POST",
+        headers: { ...authHeaders(), "Content-Type": "application/json" },
+        body: JSON.stringify({
+          type: "user_input_response",
+          session_id: sessionId,
+          request_id: payload.requestId,
+          answer: payload.answer,
         }),
-      );
+      });
+      // A stale ask_user response is an expected lifecycle outcome. Preserve
+      // its structured status so the context can close the card explicitly;
+      // all other failures still use the shared error handling.
+      if (res.status === 409) {
+        const body = await res.clone().json().catch(() => null) as
+          | { status?: unknown; reason?: unknown }
+          | null;
+        if (body?.status === "stale") {
+          return {
+            status: "stale",
+            reason: typeof body.reason === "string" ? body.reason : undefined,
+          };
+        }
+      }
+      return handleJson<{ status: "ok" | "stale"; reason?: string }>(res);
     },
 
     async getTrace(sessionId: string): Promise<TraceGraph> {

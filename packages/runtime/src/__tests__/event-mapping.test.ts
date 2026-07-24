@@ -145,15 +145,34 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     it("builds a valid user_input_request event", () => {
       const e = ev.userInputRequest(
         { sessionId: "s1", runId: "run_1" },
-        { request_id: "req_1", agent: "principal", question: "Pick one", options: ["a", "b"], allow_free_text: true },
+        {
+          request_id: "req_1",
+          agent: "principal",
+          question: "Pick one",
+          options: ["a", "b"],
+          allow_free_text: true,
+          timeout_sec: 300,
+        },
       );
       const parsed = parseEvent(e); // throws if invalid against the protocol union
       expect(parsed.type).toBe("user_input_request");
       expect((parsed as any).request_id).toBe("req_1");
       expect((parsed as any).question).toBe("Pick one");
       expect((parsed as any).options).toEqual(["a", "b"]);
+      expect((parsed as any).timeout_sec).toBe(300);
       expect((parsed as any).session_id).toBe("s1");
     });
+  });
+
+  it("builds a valid user_input_cancelled terminal event", () => {
+    const event = ev.userInputCancelled(
+      { sessionId: "s1", runId: "run_1" },
+      { request_id: "req_1", reason: "interrupted" },
+    );
+    const parsed = parseEvent(event);
+    expect(parsed.type).toBe("user_input_cancelled");
+    expect((parsed as any).request_id).toBe("req_1");
+    expect((parsed as any).reason).toBe("interrupted");
   });
 
   it("maps auto_retry failure to a system_message and error status", async () => {

@@ -2,16 +2,16 @@
  * AG-UI event union — the wire contract between Runtime and clients.
  *
  * This file is the single source of truth for the 23-event AG-UI v1 set:
- *   - ~20 existing AG-UI canonical events (UPPERCASE names, emitted by the
+ *   - 19 existing AG-UI canonical events (UPPERCASE names, emitted by the
  *     legacy runtime `events/ag_ui.py`), and
- *   - 3 NEW events from TS_PI_REFACTOR_DESIGN.md §6 (snake_case names):
- *     `system_message`, `user_input_request`, `user_input_response`.
+ *   - 4 BrainPilot events (snake_case names): `system_message`,
+ *     `user_input_request`, `user_input_response`, `user_input_cancelled`.
  *
  * Naming policy: we preserve each event's *wire* `type` string verbatim so the
  * bytes flowing over SSE are unchanged. The existing events keep their
  * AG-UI-canonical UPPERCASE `type` values (TEXT_MESSAGE_START, …) exactly as
- * `legacy/agent_runtime/events/ag_ui.py` emits them; the 3 new events use the
- * snake_case `type` values given in the design doc.
+ * `legacy/agent_runtime/events/ag_ui.py` emits them; BrainPilot extensions use
+ * snake_case `type` values.
  *
  * Field naming: the wire is snake_case (`session_id`, `agent_name`,
  * `tool_call_id`, …). backend.ts camelizes on receipt. This SSOT models the
@@ -460,6 +460,29 @@ export const UserInputResponseEventSchema = z
 export type UserInputResponseEvent = z.infer<typeof UserInputResponseEventSchema>;
 
 /* ------------------------------------------------------------------ *
+ * NEW event 4: user_input_cancelled  (ask_user terminal state)
+ * ------------------------------------------------------------------ */
+
+export const UserInputCancellationReasonSchema = z.enum([
+  "interrupted",
+  "evicted",
+  "restored",
+  "expired",
+  "agent_destroyed",
+]);
+export type UserInputCancellationReason = z.infer<typeof UserInputCancellationReasonSchema>;
+
+export const UserInputCancelledEventSchema = z
+  .object({
+    type: z.literal("user_input_cancelled"),
+    session_id: z.string(),
+    request_id: z.string(),
+    reason: UserInputCancellationReasonSchema,
+  })
+  .passthrough();
+export type UserInputCancelledEvent = z.infer<typeof UserInputCancelledEventSchema>;
+
+/* ------------------------------------------------------------------ *
  * Discriminated union
  * ------------------------------------------------------------------ */
 
@@ -470,7 +493,8 @@ export type UserInputResponseEvent = z.infer<typeof UserInputResponseEventSchema
  * TOOL_CALL_START/ARGS/END/RESULT, REASONING_START/END,
  * REASONING_MESSAGE_START/CONTENT/END, RUN_STARTED/FINISHED/ERROR,
  * MESSAGES_SNAPSHOT, CUSTOM, agent_status_update.
- * New (3): system_message, user_input_request, user_input_response.
+ * New (4): system_message, user_input_request, user_input_response,
+ * user_input_cancelled.
  */
 export const AgUiEventSchema = z.discriminatedUnion("type", [
   // text
@@ -501,6 +525,7 @@ export const AgUiEventSchema = z.discriminatedUnion("type", [
   SystemMessageEventSchema,
   UserInputRequestEventSchema,
   UserInputResponseEventSchema,
+  UserInputCancelledEventSchema,
 ]);
 export type AgUiEvent = z.infer<typeof AgUiEventSchema>;
 
@@ -528,6 +553,7 @@ export const AG_UI_EVENT_TYPES = [
   "system_message",
   "user_input_request",
   "user_input_response",
+  "user_input_cancelled",
 ] as const;
 export type AgUiEventType = (typeof AG_UI_EVENT_TYPES)[number];
 

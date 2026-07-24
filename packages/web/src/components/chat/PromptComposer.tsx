@@ -125,7 +125,11 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   const askTakeover = useMemo(() => {
     for (let i = visibleMessages.length - 1; i >= 0; i--) {
       const m = visibleMessages[i];
-      if (m.kind === "ask_user" && m.askUser && m.askUser.answer === undefined) {
+      if (
+        m.kind === "ask_user"
+        && m.askUser
+        && (m.askUser.status ?? (m.askUser.answer === undefined ? "pending" : "answered")) === "pending"
+      ) {
         return m.askUser;
       }
     }

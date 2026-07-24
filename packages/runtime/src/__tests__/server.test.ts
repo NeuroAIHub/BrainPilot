@@ -165,7 +165,7 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     });
     const { id } = (await created.json()) as { id: string };
 
-    // No outstanding request → stale, but still 200.
+    // No outstanding request → explicit conflict, never a silent 200.
     const res = await a.request(`/sessions/${id}/messages`, {
       method: "POST",
       headers: { "content-type": "application/json" },
@@ -176,8 +176,35 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
         answer: "x",
       }),
     });
-    expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "stale" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toMatchObject({
+      status: "stale",
+      reason: "question_expired",
+    });
+
+    const mismatch = await a.request(`/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "user_input_response",
+        session_id: "another-session",
+        request_id: "req_missing",
+        answer: "x",
+      }),
+    });
+    expect(mismatch.status).toBe(400);
+
+    const empty = await a.request(`/sessions/${id}/messages`, {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        type: "user_input_response",
+        session_id: id,
+        request_id: "req_missing",
+        answer: "   ",
+      }),
+    });
+    expect(empty.status).toBe(400);
   });
 
   it("POST /messages still accepts a normal content body", async () => {

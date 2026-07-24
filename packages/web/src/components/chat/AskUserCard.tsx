@@ -1,4 +1,4 @@
-import { CheckCircle2, HelpCircle } from "lucide-react";
+import { CheckCircle2, HelpCircle, XCircle } from "lucide-react";
 import type { AskUserView } from "../../contracts/backend";
 import { useT } from "../../i18n/useT";
 
@@ -17,7 +17,41 @@ interface AskUserCardProps {
  */
 export function AskUserCard({ view }: AskUserCardProps) {
   const t = useT();
-  const answered = view.answer !== undefined;
+  const status = view.status ?? (view.answer === undefined ? "pending" : "answered");
+  const cancelled = status === "cancelled";
+  const answered = !cancelled && view.answer !== undefined;
+
+  if (status === "submitting") {
+    return (
+      <div className="ask-user ask-user--submitting" data-testid="ask-user" data-request-id={view.requestId}>
+        <div className="ask-user__head">
+          <HelpCircle size={15} className="ask-user__icon" aria-hidden="true" />
+          <span className="ask-user__title">{view.agent}</span>
+        </div>
+        <p className="ask-user__question">{view.question}</p>
+        <p className="ask-user__submitting">{t("chat.ask.submitting", { answer: view.answer ?? "" })}</p>
+      </div>
+    );
+  }
+
+  if (cancelled) {
+    return (
+      <div className="ask-user ask-user--cancelled" data-testid="ask-user" data-request-id={view.requestId}>
+        <div className="ask-user__head">
+          <XCircle size={15} className="ask-user__icon" aria-hidden="true" />
+          <span className="ask-user__title">{view.agent}</span>
+        </div>
+        <p className="ask-user__question">{view.question}</p>
+        <p className="ask-user__cancelled">
+          {t(
+            view.cancellationReason === "expired" || view.cancellationReason === "stale"
+              ? "chat.ask.expired"
+              : "chat.ask.cancelled",
+          )}
+        </p>
+      </div>
+    );
+  }
 
   if (answered) {
     return (
@@ -43,8 +77,8 @@ export function AskUserCard({ view }: AskUserCardProps) {
 
       {view.options && view.options.length > 0 ? (
         <ul className="ask-user__options ask-user__options--record">
-          {view.options.map((option) => (
-            <li key={option} className="ask-user__option-record">
+          {view.options.map((option, index) => (
+            <li key={`${view.requestId}-${index}`} className="ask-user__option-record">
               {option}
             </li>
           ))}

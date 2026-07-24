@@ -35,6 +35,21 @@ export class EventBus {
   }
 
   emit(event: AgUiEvent): void {
+    this.publish(event);
+    if (this.opts.persistPath) void this.enqueuePersist(event).catch(() => {});
+  }
+
+  /**
+   * Persist an event before publishing it. Unlike `emit`, write failures are
+   * propagated to the caller so lifecycle endpoints cannot report success for
+   * an answer that never reached events.jsonl.
+   */
+  async emitDurable(event: AgUiEvent): Promise<void> {
+    if (this.opts.persistPath) await this.enqueuePersist(event);
+    this.publish(event);
+  }
+
+  private publish(event: AgUiEvent): void {
     this.buffer.push(event);
     if (this.buffer.length > this.maxBuffer) this.buffer.shift();
     for (const l of this.listeners) {
@@ -44,18 +59,18 @@ export class EventBus {
         // A misbehaving listener must never break event fan-out.
       }
     }
-    if (this.opts.persistPath) this.persist(event);
   }
 
-  private persist(event: AgUiEvent): void {
+  private enqueuePersist(event: AgUiEvent): Promise<void> {
     const path = this.opts.persistPath!;
-    // Serialize writes to avoid interleaving; swallow IO errors (best-effort).
-    this.writeChain = this.writeChain
-      .then(async () => {
-        await mkdir(dirname(path), { recursive: true });
-        await appendFile(path, JSON.stringify(event) + "\n", "utf8");
-      })
-      .catch(() => {});
+    // Keep the shared chain alive after a failed write, while returning the
+    // unswallowed operation to durable callers.
+    const operation = this.writeChain.then(async () => {
+      await mkdir(dirname(path), { recursive: true });
+      await appendFile(path, JSON.stringify(event) + "\n", "utf8");
+    });
+    this.writeChain = operation.catch(() => {});
+    return operation;
   }
 
   /** Await all pending persistence writes (used by emergencySave). */
