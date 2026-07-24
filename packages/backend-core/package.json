@@ -39,7 +39,7 @@
   "dependencies": {
     "@brainpilot/protocol": "^0.1.0",
     "@brainpilot/runtime": "^0.1.0",
-    "@hono/node-server": "^1.13.0",
+    "@hono/node-server": "^2.0.10",
     "hono": "^4.6.0"
   },
   "optionalDependencies": {
