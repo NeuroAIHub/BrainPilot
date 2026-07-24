@@ -118,6 +118,43 @@ describe("SessionManager.restoreFromDisk", () => {
     expect((await m.listSessions())[0]!.createdAt).toBe("2026-03-01T00:00:00.000Z");
   });
 
+  it("persists a cancellation for an orphaned ask_user request", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-"));
+    const id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";
+    await writeMeta(dataRoot, id, {
+      id,
+      title: "Orphan",
+      createdAt: "2026-03-01T00:00:00.000Z",
+      updatedAt: "2026-03-02T00:00:00.000Z",
+      lastActivityAt: 1771000000000,
+    });
+    await writeFile(
+      join(dataRoot, ".bp", id, "events.jsonl"),
+      `${JSON.stringify({
+        type: "user_input_request",
+        session_id: id,
+        request_id: "req_orphan",
+        agent: "principal",
+        question: "Still there?",
+      })}\n`,
+      "utf8",
+    );
+
+    const m = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+    await m.restoreFromDisk();
+    const history = await m.readEventHistory(id, { limit: 0 });
+    expect(history?.events.filter((event) => event.type === "user_input_cancelled")).toEqual([
+      expect.objectContaining({ request_id: "req_orphan", reason: "restored" }),
+    ]);
+
+    // A second process sees the persisted terminal event and does not append
+    // another cancellation.
+    const m2 = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+    await m2.restoreFromDisk();
+    const history2 = await m2.readEventHistory(id, { limit: 0 });
+    expect(history2?.events.filter((event) => event.type === "user_input_cancelled")).toHaveLength(1);
+  });
+
   it("returns empty when .bp/ does not exist", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-"));
     const m = new SessionManager({

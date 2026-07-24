@@ -160,7 +160,7 @@ export const UserInputResponseBodySchema = z.object({
   type: z.literal("user_input_response"),
   session_id: z.string(),
   request_id: z.string(),
-  answer: z.string(),
+  answer: z.string().trim().min(1).max(10_000),
 });
 
 /**

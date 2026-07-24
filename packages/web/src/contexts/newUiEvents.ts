@@ -72,6 +72,7 @@ export function toAskUserView(event: WebSocketEvent): AskUserView {
     timeoutSec: typeof (e.timeoutSec ?? e.timeout_sec) === "number"
       ? (e.timeoutSec ?? e.timeout_sec) as number
       : undefined,
+    status: "pending",
   };
 }
 
@@ -169,9 +170,10 @@ export function resolveAskUserSubmission(
   rawAnswer: string,
   opts: { answered?: boolean; timedOut?: boolean } = {},
 ): { requestId: string; answer: string } | null {
-  if (opts.answered || opts.timedOut) return null;
+  if (opts.answered || opts.timedOut || !isAskUserOpen(view)) return null;
   const answer = rawAnswer.trim();
   if (!answer || !view.requestId) return null;
+  if (view.allowFreeText === false && !(view.options ?? []).includes(answer)) return null;
   return { requestId: view.requestId, answer };
 }
 
@@ -180,11 +182,11 @@ export function isAskUserOpen(
   view: AskUserView,
   opts: { timedOut?: boolean } = {},
 ): boolean {
-  return view.answer === undefined && !opts.timedOut;
+  const status = view.status ?? (view.answer === undefined ? "pending" : "answered");
+  return status === "pending" && view.answer === undefined && !opts.timedOut;
 }
 
 /** Initial countdown (whole seconds) for an auto-retry from its delayMs. */
 export function autoRetryCountdownSeconds(view: AutoRetryView): number {
   return view.delayMs > 0 ? Math.ceil(view.delayMs / 1000) : 0;
 }
-

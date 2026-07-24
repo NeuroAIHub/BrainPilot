@@ -2980,6 +2980,21 @@ button {
   font-size: 13px;
   color: var(--color-success);
 }
+.ask-user__submitting {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
+.ask-user--cancelled {
+  border-color: var(--color-border);
+  background: var(--color-surface);
+}
+.ask-user--cancelled .ask-user__icon { color: var(--color-text-muted); }
+.ask-user__cancelled {
+  margin: 0;
+  font-size: 13px;
+  color: var(--color-text-muted);
+}
 /* #272 — the stream card is now a record only. Pending options render as a
    static list (interaction moved to the composer takeover below). */
 .ask-user__options--record {

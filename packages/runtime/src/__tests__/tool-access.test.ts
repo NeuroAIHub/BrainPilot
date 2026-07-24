@@ -5,6 +5,7 @@ import {
   systemToolNamesForRole,
   systemToolsForRole,
   builtinToolNamesForRole,
+  createAskUserTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
 import { Mailbox } from "../mailbox.js";
@@ -29,6 +30,31 @@ function deps(name: string): ToolDeps {
 }
 
 describe("tool access control (§9)", () => {
+  it("ask_user validates choices and defaults free text to enabled", async () => {
+    const seen: Array<Record<string, unknown>> = [];
+    const d = deps("principal");
+    d.requestUserInput = async (request) => {
+      seen.push(request);
+      return "A";
+    };
+    const tool = createAskUserTool(d);
+
+    const valid = await tool.execute({ question: " Pick ", options: [" A ", "B"] });
+    expect(valid.isError).toBeUndefined();
+    expect(seen).toEqual([{
+      question: "Pick",
+      options: ["A", "B"],
+      allow_free_text: true,
+    }]);
+    await expect(tool.execute({ question: "Pick", options: ["A", "A"] })).resolves.toMatchObject({
+      isError: true,
+    });
+    await expect(tool.execute({ question: "Pick", allow_free_text: false })).resolves.toMatchObject({
+      isError: true,
+    });
+    await expect(tool.execute({ question: "   " })).resolves.toMatchObject({ isError: true });
+  });
+
   it("principal gets comms + record_trace, not graph mutation tools", () => {
     const names = systemToolNamesForRole("principal", "principal");
     expect(names).toEqual(expect.arrayContaining(["send_message", "create_agent", "destroy_agent", "record_trace"]));

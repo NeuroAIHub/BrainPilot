@@ -29,6 +29,7 @@ import {
   type SessionTokenUsage,
   type TokenUsage,
   type TraceGraph,
+  type UserInputCancellationReason,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import { Mailbox, type MailboxMessage } from "./mailbox.js";
@@ -75,6 +76,31 @@ interface Deferred<T> {
   reject: (reason: Error) => void;
 }
 
+type UserInputPhase = "queued" | "activating" | "active" | "finishing";
+
+interface UserInputEntry {
+  requestId?: string;
+  agent: string;
+  runId?: string;
+  question: string;
+  options?: string[];
+  allowFreeText: boolean;
+  deferred: Deferred<string>;
+  phase: UserInputPhase;
+  activatedAt?: number;
+  deadlineAt?: number;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
+interface UserInputArbiter {
+  active?: UserInputEntry;
+  queue: UserInputEntry[];
+  /** Serializes every activation/answer/cancel transition across await points. */
+  operations: Promise<void>;
+}
+
+export type UserInputAnswerResult = "ok" | "stale" | "invalid" | "persist_failed";
+
 function makeDeferred<T>(): Deferred<T> {
   let resolve!: (value: T) => void;
   let reject!: (reason: Error) => void;
@@ -87,6 +113,9 @@ function makeDeferred<T>(): Deferred<T> {
 
 /** #167 default concurrent-provider-calls cap when nothing is configured. */
 const DEFAULT_MAX_CONCURRENT_AGENTS = 4;
+const DEFAULT_USER_INPUT_TIMEOUT_MS = 5 * 60 * 1000;
+const MAX_OUTSTANDING_USER_INPUTS = 8;
+const MAX_USER_INPUT_ANSWER_LENGTH = 10_000;
 
 /**
  * #256 default upload size cap (1 GiB) when `BP_UPLOAD_MAX_BYTES` is unset.
@@ -251,8 +280,8 @@ interface SessionEntry {
   delegators: Map<string, string>;
   runActive: boolean;
   activeRunId: string | null;
-  /** Outstanding ask_user requests, keyed by request_id (§ ask_user). */
-  pendingInputs: Map<string, Deferred<string>>;
+  /** One visible ask_user plus FIFO requests waiting behind it. */
+  userInputs: UserInputArbiter;
   /** This session's chosen provider/model (resolved against providers.json). */
   providerRef: SessionProviderRef;
   /** Frozen per-session domain-resource mode; never read from global state. */
@@ -321,6 +350,8 @@ export interface SessionManagerOptions {
    * throttling. Tests inject this directly.
    */
   maxConcurrentAgents?: number;
+  /** ask_user display timeout; production default 5 minutes. Tests override. */
+  userInputTimeoutMs?: number;
   /**
    * #256: max upload size in bytes for workspace file writes (both the base64
    * and raw-stream paths). Default 1 GiB; env override `BP_UPLOAD_MAX_BYTES`.
@@ -424,6 +455,7 @@ export class SessionManager {
   private readonly dataRoot: string;
   private readonly agentFactory: AgentSessionFactory;
   private readonly persist: boolean;
+  private readonly userInputTimeoutMs: number;
   private lastActivityAt = 0;
 
   // #76: active mailbox delivery. A delivery loop drains a target agent's inbox
@@ -494,6 +526,12 @@ export class SessionManager {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
+    this.userInputTimeoutMs =
+      typeof opts.userInputTimeoutMs === "number"
+        && Number.isFinite(opts.userInputTimeoutMs)
+        && opts.userInputTimeoutMs > 0
+        ? Math.floor(opts.userInputTimeoutMs)
+        : DEFAULT_USER_INPUT_TIMEOUT_MS;
     this.mcpBridge = opts.mcpBridge ?? null;
     this.maxToolResultTokens =
       opts.maxToolResultTokens ??
@@ -1197,7 +1235,7 @@ export class SessionManager {
       delegators: new Map(),
       runActive: false,
       activeRunId: null,
-      pendingInputs: new Map(),
+      userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       domainResources,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
@@ -1238,6 +1276,10 @@ export class SessionManager {
       // Separate file from usage.json so old sessions without stats.json still
       // rehydrate their token counts.
       await this.loadStats(entry);
+      // A process restart cannot restore the promise that was blocked inside
+      // ask_user. Close any legacy request that has no persisted terminal
+      // event so replay never presents it as live input.
+      if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
     return this.toSession(entry);
   }
@@ -1324,6 +1366,7 @@ export class SessionManager {
   async deleteSession(id: string): Promise<boolean> {
     const e = this.sessions.get(id);
     if (!e) return false;
+    await this.discardUserInputs(e);
     for (const a of e.agents.values()) a.stop();
     e.bus.clear();
     this.sessions.delete(id);
@@ -1339,6 +1382,10 @@ export class SessionManager {
   async evictSession(id: string): Promise<{ evicted: boolean; agentsKilled: number }> {
     const e = this.sessions.get(id);
     if (!e) return { evicted: false, agentsKilled: 0 };
+    // Persist the ask_user terminal state before the bus is flushed/cleared.
+    // The old order cleared the only live Deferred after persistence had
+    // already finished, leaving an unanswered request in replay forever.
+    await this.cancelUserInputs(e, () => true, "evicted", false);
     let killed = 0;
     for (const a of e.agents.values()) {
       a.stop();
@@ -1348,10 +1395,6 @@ export class SessionManager {
     await e.mailbox.flush();
     await e.trace.flush();
     e.bus.clear();
-    for (const [id2, d] of e.pendingInputs) {
-      d.reject(new Error("evicted"));
-      e.pendingInputs.delete(id2);
-    }
     this.sessions.delete(id);
     this.providerSlots.delete(id);
     return { evicted: true, agentsKilled: killed };
@@ -1386,25 +1429,27 @@ export class SessionManager {
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
 
-    // #272: a run blocked on an ask_user (user_input_request) is streaming but
-    // will never settle until the request is answered. If the user types an
-    // ordinary message instead of picking an option, route it as the answer to
-    // the oldest outstanding request rather than returning "already processing"
-    // (which silently drops the message and hangs the session forever). The
-    // frontend now takes over the composer to steer users to the picker, but
-    // this is the defense-in-depth fallback for any path that still sends plain
-    // content (old client, ESC-then-type, direct API caller).
-    const [pendingRequestId] = entry.pendingInputs.keys();
-    if (pendingRequestId !== undefined) {
-      const runId = entry.activeRunId ?? undefined;
-      // Broadcast the user's text as a bubble correlated to the current run, so
-      // SSE replay stays complete (resolveInput emits the user_input_response
-      // echo separately, which resolves the ask_user card).
-      entry.bus.emit(
-        ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
-      );
-      this.resolveInput(sessionId, pendingRequestId, content);
-      return { accepted: true, runId, queued: true };
+    // Defense-in-depth for old clients/direct callers: ordinary text answers
+    // the one visible FIFO head. Queued questions are never addressable.
+    const visibleInput = entry.userInputs.active;
+    if (visibleInput?.phase === "active" && visibleInput.requestId) {
+      const requestId = visibleInput.requestId;
+      const runId = visibleInput.runId;
+      const result = await this.answerInput(sessionId, requestId, content);
+      if (result === "ok") {
+        entry.bus.emit(
+          ev.textMessageChunk(
+            { sessionId, agentName, runId },
+            opts.uuid ?? randomUUID(),
+            content,
+            "user",
+          ),
+        );
+        return { accepted: true, runId, queued: true };
+      }
+      if (result === "invalid" || result === "persist_failed") {
+        return { accepted: false, runId };
+      }
     }
 
     // Concurrent send: the target agent is still streaming its previous run.
@@ -1460,52 +1505,244 @@ export class SessionManager {
     return { accepted: true, runId };
   }
 
-  /**
-   * Ask the terminal user a question on behalf of `agent`. Emits a
-   * `user_input_request` event and returns a promise that resolves when
-   * `resolveInput` is called with the matching request_id, or rejects if the
-   * session is interrupted/evicted. Blocks the calling tool's turn.
-   */
+  /** Queue a user question. Only the FIFO head is persisted and shown. */
   private requestUserInput(
     entry: SessionEntry,
     agent: string,
+    runId: string | undefined,
     req: { question: string; options?: string[]; allow_free_text?: boolean },
   ): Promise<string> {
-    const requestId = `req_${randomUUID()}`;
     const deferred = makeDeferred<string>();
-    entry.pendingInputs.set(requestId, deferred);
-    entry.bus.emit(
-      ev.userInputRequest(
-        { sessionId: entry.id, runId: entry.activeRunId ?? undefined },
-        { request_id: requestId, agent, question: req.question, options: req.options, allow_free_text: req.allow_free_text },
-      ),
-    );
+    const input: UserInputEntry = {
+      agent,
+      runId,
+      question: req.question,
+      options: req.options,
+      allowFreeText: req.allow_free_text !== false,
+      deferred,
+      phase: "queued",
+    };
+    void this.withUserInputLock(entry, async () => {
+      const outstanding = entry.userInputs.queue.length + (entry.userInputs.active ? 1 : 0);
+      if (outstanding >= MAX_OUTSTANDING_USER_INPUTS) {
+        deferred.reject(new Error(
+          `ask_user queue is full (${MAX_OUTSTANDING_USER_INPUTS} outstanding questions); continue without asking again`,
+        ));
+        return;
+      }
+      entry.userInputs.queue.push(input);
+      await this.promoteNextUserInputLocked(entry);
+    }).catch((err) => deferred.reject(err instanceof Error ? err : new Error(String(err))));
     return deferred.promise;
   }
 
-  /**
-   * Resolve an outstanding ask_user request. Returns false when the session or
-   * request_id is unknown/already consumed (stale answer). Pure lookup; never
-   * throws — the server handles 404 for unknown sessions before calling.
-   */
-  resolveInput(sessionId: string, requestId: string, answer: string): boolean {
+  /** Serialize all human-input transitions, including their durable writes. */
+  private withUserInputLock<T>(entry: SessionEntry, operation: () => Promise<T>): Promise<T> {
+    const result = entry.userInputs.operations.then(operation, operation);
+    entry.userInputs.operations = result.then(() => undefined, () => undefined);
+    return result;
+  }
+
+  /** Persist and show the next queued question, if any. Caller holds the lock. */
+  private async promoteNextUserInputLocked(entry: SessionEntry): Promise<void> {
+    while (!entry.userInputs.active && entry.userInputs.queue.length > 0) {
+      const input = entry.userInputs.queue.shift()!;
+      input.phase = "activating";
+      input.requestId = `req_${randomUUID()}`;
+      entry.userInputs.active = input;
+      try {
+        await entry.bus.emitDurable(
+          ev.userInputRequest(
+            { sessionId: entry.id, agentName: input.agent, runId: input.runId },
+            {
+              request_id: input.requestId,
+              agent: input.agent,
+              question: input.question,
+              options: input.options,
+              allow_free_text: input.allowFreeText,
+              timeout_sec: Math.ceil(this.userInputTimeoutMs / 1000),
+            },
+          ),
+        );
+      } catch {
+        entry.userInputs.active = undefined;
+        input.deferred.reject(new Error(
+          "ask_user could not persist the question; continue without the user's answer",
+        ));
+        continue;
+      }
+      input.phase = "active";
+      input.activatedAt = Date.now();
+      input.deadlineAt = input.activatedAt + this.userInputTimeoutMs;
+      this.armUserInputTimer(entry, input);
+      return;
+    }
+  }
+
+  private armUserInputTimer(entry: SessionEntry, input: UserInputEntry): void {
+    this.clearUserInputTimer(input);
+    const delay = Math.max(0, (input.deadlineAt ?? Date.now()) - Date.now());
+    input.timer = setTimeout(() => {
+      if (!input.requestId) return;
+      void this.expireUserInput(entry.id, input.requestId);
+    }, delay);
+    input.timer.unref?.();
+  }
+
+  private clearUserInputTimer(input: UserInputEntry): void {
+    if (input.timer) clearTimeout(input.timer);
+    input.timer = undefined;
+  }
+
+  private validUserInputAnswer(answer: string): boolean {
+    return answer.trim().length > 0 && answer.length <= MAX_USER_INPUT_ANSWER_LENGTH;
+  }
+
+  /** Resolve the currently displayed request and durably record its answer. */
+  async answerInput(sessionId: string, requestId: string, answer: string): Promise<UserInputAnswerResult> {
     const entry = this.sessions.get(sessionId);
-    const deferred = entry?.pendingInputs.get(requestId);
-    if (!entry || !deferred) return false;
-    entry.pendingInputs.delete(requestId);
-    deferred.resolve(answer);
-    // issue #132: persist + broadcast the answer so export/replay preserves the
-    // ask_user Q&A. user_input_request is already emitted in requestUserInput;
-    // without this the response was only used to resolve the promise and never
-    // reached events.jsonl, leaving a gap in the demo replay.
-    entry.bus.emit(
-      ev.userInputResponse(
-        { sessionId: entry.id, runId: entry.activeRunId ?? undefined },
-        { request_id: requestId, answer },
-      ),
+    if (!entry) return "stale";
+    if (!this.validUserInputAnswer(answer)) return "invalid";
+    const normalizedAnswer = answer.trim();
+    return this.withUserInputLock(entry, async () => {
+      const input = entry.userInputs.active;
+      if (!input || input.requestId !== requestId || input.phase !== "active") return "stale";
+      if (!input.allowFreeText && !(input.options ?? []).includes(normalizedAnswer)) return "invalid";
+      input.phase = "finishing";
+      this.clearUserInputTimer(input);
+      try {
+        await entry.bus.emitDurable(
+          ev.userInputResponse(
+            { sessionId: entry.id, agentName: input.agent, runId: input.runId },
+            { request_id: requestId, answer: normalizedAnswer },
+          ),
+        );
+      } catch {
+        input.phase = "active";
+        this.armUserInputTimer(entry, input);
+        return "persist_failed";
+      }
+      entry.userInputs.active = undefined;
+      input.deferred.resolve(normalizedAnswer);
+      this.touch(entry);
+      await this.promoteNextUserInputLocked(entry);
+      return "ok";
+    });
+  }
+
+  private async expireUserInput(sessionId: string, requestId: string): Promise<void> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return;
+    await this.withUserInputLock(entry, async () => {
+      const input = entry.userInputs.active;
+      if (!input || input.requestId !== requestId || input.phase !== "active") return;
+      await this.cancelActiveUserInputLocked(entry, "expired", true);
+    });
+  }
+
+  private userInputError(reason: UserInputCancellationReason): Error {
+    if (reason === "expired") {
+      return new Error(
+        "The user did not answer within 5 minutes. Continue without the answer, use a safe default, or explain that the task cannot proceed. Do not immediately call ask_user again with the same question.",
+      );
+    }
+    return new Error(`ask_user ${reason}`);
+  }
+
+  /** Cancel the visible request and optionally promote the next FIFO item. */
+  private async cancelActiveUserInputLocked(
+    entry: SessionEntry,
+    reason: UserInputCancellationReason,
+    promote: boolean,
+  ): Promise<void> {
+    const input = entry.userInputs.active;
+    if (!input || !input.requestId) return;
+    input.phase = "finishing";
+    this.clearUserInputTimer(input);
+    const event = ev.userInputCancelled(
+      { sessionId: entry.id, agentName: input.agent, runId: input.runId },
+      { request_id: input.requestId, reason },
     );
-    this.touch(entry);
-    return true;
+    try {
+      await entry.bus.emitDurable(event);
+    } catch {
+      // Cancellation must still unblock the Agent. Publish live and retry the
+      // append through the ordinary best-effort path; restore reconciliation
+      // closes the orphan later if storage remains unavailable.
+      entry.bus.emit(event);
+      entry.bus.emit(
+        ev.systemMessage(entry.id, "error", "ask_user 终态写入失败，已在内存中取消。", {
+          agent: input.agent,
+          recoverable: true,
+        }),
+      );
+    }
+    entry.userInputs.active = undefined;
+    input.deferred.reject(this.userInputError(reason));
+    if (promote) await this.promoteNextUserInputLocked(entry);
+  }
+
+  /** Cancel matching active/queued inputs. Queued items were never user-visible. */
+  private cancelUserInputs(
+    entry: SessionEntry,
+    predicate: (input: UserInputEntry) => boolean,
+    reason: UserInputCancellationReason,
+    promote: boolean,
+  ): Promise<void> {
+    return this.withUserInputLock(entry, async () => {
+      const retained: UserInputEntry[] = [];
+      for (const input of entry.userInputs.queue) {
+        if (predicate(input)) input.deferred.reject(this.userInputError(reason));
+        else retained.push(input);
+      }
+      entry.userInputs.queue = retained;
+      const activeMatches = entry.userInputs.active && predicate(entry.userInputs.active);
+      if (activeMatches) await this.cancelActiveUserInputLocked(entry, reason, false);
+      if (promote && !entry.userInputs.active) await this.promoteNextUserInputLocked(entry);
+    });
+  }
+
+  /** Settle every in-memory waiter without persisting; the session is deleted next. */
+  private discardUserInputs(entry: SessionEntry): Promise<void> {
+    return this.withUserInputLock(entry, async () => {
+      const error = new Error("ask_user session_deleted");
+      if (entry.userInputs.active) {
+        this.clearUserInputTimer(entry.userInputs.active);
+        entry.userInputs.active.deferred.reject(error);
+        entry.userInputs.active = undefined;
+      }
+      for (const input of entry.userInputs.queue) input.deferred.reject(error);
+      entry.userInputs.queue = [];
+    });
+  }
+
+  /** Close request events left orphaned by a previous process/container. */
+  private async cancelRestoredOrphanInputs(entry: SessionEntry): Promise<void> {
+    const history = await this.readEventHistory(entry.id, { limit: 0 });
+    if (!history) return;
+    const pending = new Set<string>();
+    for (const event of history.events) {
+      const raw = event as unknown as Record<string, unknown>;
+      const requestId = raw.request_id ?? raw.requestId;
+      if (typeof requestId !== "string" || requestId.length === 0) continue;
+      if (event.type === "user_input_request") pending.add(requestId);
+      if (event.type === "user_input_response" || event.type === "user_input_cancelled") {
+        pending.delete(requestId);
+      }
+    }
+    for (const requestId of pending) {
+      try {
+        await entry.bus.emitDurable(
+          ev.userInputCancelled(
+            { sessionId: entry.id },
+            { request_id: requestId, reason: "restored" },
+          ),
+        );
+      } catch {
+        // Leave the orphan untouched when storage is unavailable so the next
+        // restore can retry instead of claiming a terminal state was durable.
+      }
+    }
   }
 
   /**
@@ -1529,10 +1766,12 @@ export class SessionManager {
     // Reject any pending ask_user FIRST: a prompt blocked awaiting user input
     // would never settle, so abort()'s waitForIdle (#101) must not run before
     // these are unblocked or it would deadlock.
-    for (const [id, d] of entry.pendingInputs) {
-      d.reject(new Error("interrupted"));
-      entry.pendingInputs.delete(id);
-    }
+    await this.cancelUserInputs(
+      entry,
+      (input) => wholeSession || input.agent === agentName,
+      "interrupted",
+      !wholeSession,
+    );
     // Capture run identity before aborts clear agent state so the interrupt
     // acknowledgement can carry a stable id for client hydrate dedupe (#330).
     const interruptEventId = `interrupt:${sessionId}:${entry.activeRunId ?? randomUUID()}`;
@@ -1681,7 +1920,12 @@ export class SessionManager {
         await this.destroyAgent(sessionId, target);
       },
       wakeAgent: (target) => this.wakeAgent(sessionId, target),
-      requestUserInput: (req) => this.requestUserInput(entry, name, req),
+      requestUserInput: (req) => this.requestUserInput(
+        entry,
+        name,
+        entry.agents.get(name)?.state().activeRunId,
+        req,
+      ),
       routerSkillsDir: this.routerSkillsDir,
     };
     const toolToggles = toolTogglesForDomainResources(
@@ -1848,6 +2092,7 @@ export class SessionManager {
     if (!entry) return;
     const agent = entry.agents.get(name);
     if (!agent) return;
+    await this.cancelUserInputs(entry, (input) => input.agent === name, "agent_destroyed", true);
     agent.stop();
     entry.agents.delete(name); // history on disk is kept (§5).
   }
