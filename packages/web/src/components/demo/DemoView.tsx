@@ -71,10 +71,9 @@ function basename(path: string): string {
  *
  * Keep: user prompts; assistant/system plain-text replies from ANY agent;
  * error and system_message bubbles (the agent-attributed warnings/alerts the
- * live Chat shows), plus answered ask_user cards (the question + the user's
- * answer are a user-facing decision point, issue #132 — AskUserCard is a
- * read-only record since #272). Drop: reasoning, tool
- * calls/results, hook diagnostics, the auto_retry card and UNANSWERED ask_user
+ * live Chat shows), plus terminal ask_user cards (answered or cancelled;
+ * AskUserCard is a read-only record since #272). Drop: reasoning, tool
+ * calls/results, hook diagnostics, the auto_retry card and pending ask_user
  * prompts (no meaning in a read-only replay), plus NO-RENDER placeholders and
  * empties.
  */
@@ -82,10 +81,12 @@ export function isDemoConversational(m: ChatMessage): boolean {
   if (m.role === "user") {
     return !!m.content?.trim();
   }
-  // Answered ask_user: keep as a read-only Q&A step. Unanswered prompts have no
-  // meaning in a replay and are dropped.
+  // Terminal ask_user records are meaningful in replay; live pending prompts
+  // are not.
   if (m.kind === "ask_user") {
-    return m.askUser?.answer !== undefined;
+    const status = m.askUser?.status
+      ?? (m.askUser?.answer === undefined ? "pending" : "answered");
+    return status === "answered" || status === "cancelled";
   }
   // Agent-attributed warnings/errors the live Chat surfaces as standalone
   // bubbles. system_message carries its own payload; error carries content.

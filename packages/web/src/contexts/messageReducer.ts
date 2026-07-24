@@ -429,7 +429,39 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       if (!requestId) return existing;
       return existing.map((m) =>
         m.kind === "ask_user" && m.askUser?.requestId === requestId
-          ? { ...m, askUser: { ...m.askUser, answer } }
+          && m.askUser.status !== "cancelled"
+          ? { ...m, askUser: { ...m.askUser, answer, status: "answered" } }
+          : m,
+      );
+    }
+
+    // A cancellation is a persisted terminal state, not a transient error.
+    // It keeps the transcript card read-only and prevents composer takeover.
+    case "user_input_cancelled": {
+      const e = event as Record<string, unknown>;
+      const requestId = String(e.requestId ?? e.request_id ?? "");
+      const rawReason = String(e.reason ?? "expired");
+      const reason = (
+        rawReason === "interrupted"
+          || rawReason === "evicted"
+          || rawReason === "restored"
+          || rawReason === "agent_destroyed"
+          ? rawReason
+          : "expired"
+      ) as "interrupted" | "evicted" | "restored" | "expired" | "agent_destroyed";
+      if (!requestId) return existing;
+      return existing.map((m) =>
+        m.kind === "ask_user" && m.askUser?.requestId === requestId
+          && m.askUser.status !== "answered"
+          ? {
+              ...m,
+              askUser: {
+                ...m.askUser,
+                answer: undefined,
+                status: "cancelled",
+                cancellationReason: reason,
+              },
+            }
           : m,
       );
     }
