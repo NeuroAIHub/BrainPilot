@@ -822,13 +822,21 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
   const agentsRaw = Array.isArray(camelized.agents) ? camelized.agents : [];
   const agents: AgentStatus[] = agentsRaw.map((entry) => {
     const a = asDict(entry);
-    return {
+    const retry = asDict(a.retry);
+    const attempt = optionalNumber(retry.attempt);
+    const maxAttempts = optionalNumber(retry.maxAttempts);
+    const delayMs = optionalNumber(retry.delayMs);
+    const normalized: AgentStatus = {
       name: stringValue(a.name),
       status: stringValue(a.status, "idle"),
       task: stringValue(a.task, ""),
       updatedAt: optionalString(a.updatedAt),
       alive: typeof a.alive === "boolean" ? a.alive : undefined,
     };
+    if (attempt !== undefined && maxAttempts !== undefined && delayMs !== undefined) {
+      normalized.retry = { attempt, maxAttempts, delayMs };
+    }
+    return normalized;
   });
   const out: SessionStateSnapshot = {
     runState: {

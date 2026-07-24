@@ -46,6 +46,14 @@ export type Session = z.infer<typeof SessionSchema>;
 export const AgentStatusEnumSchema = z.enum(["idle", "running", "error", "stopped"]);
 export type AgentStatusEnum = z.infer<typeof AgentStatusEnumSchema>;
 
+/** Live provider retry state for an agent run. */
+export const AgentRetryStateSchema = z.object({
+  attempt: z.number().int().positive(),
+  maxAttempts: z.number().int().positive(),
+  delayMs: z.number().nonnegative(),
+});
+export type AgentRetryState = z.infer<typeof AgentRetryStateSchema>;
+
 /**
  * AgentStatus as exposed in SessionStateSnapshot.agents (backend.ts). `status`
  * is kept open (string) for forward-compat with runtime values beyond the
@@ -57,6 +65,7 @@ export const AgentStatusSchema = z.object({
   task: z.string(),
   updatedAt: z.string().optional(),
   alive: z.boolean().optional(),
+  retry: AgentRetryStateSchema.optional(),
 });
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
@@ -68,6 +77,7 @@ export const AgentStateSchema = z.object({
   status: AgentStatusEnumSchema,
   activeRunId: z.string().optional(),
   activeToolExecutions: z.array(z.string()).optional(),
+  retry: AgentRetryStateSchema.optional(),
   lastError: z
     .object({
       message: z.string(),

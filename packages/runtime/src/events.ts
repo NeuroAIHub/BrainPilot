@@ -121,6 +121,7 @@ export const ev = {
     extra?: {
       activeRunId?: string;
       activeToolExecutions?: string[];
+      retry?: { attempt: number; maxAttempts: number; delayMs: number };
       lastError?: { message: string; timestamp: string; consecutiveCount: number };
     },
   ): AgUiEvent {
@@ -133,6 +134,7 @@ export const ev = {
     if (extra?.activeRunId !== undefined) e.active_run_id = extra.activeRunId;
     if (extra?.activeToolExecutions && extra.activeToolExecutions.length)
       e.active_tool_executions = extra.activeToolExecutions;
+    if (extra?.retry) e.retry = extra.retry;
     if (extra?.lastError) {
       e.last_error = {
         message: extra.lastError.message,

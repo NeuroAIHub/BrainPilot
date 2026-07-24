@@ -20,6 +20,7 @@
  * camelCase view. See backend.ts `AgUiEvent`/`AgUiMessage` for the camel view.
  */
 import { z } from "zod";
+import { AgentRetryStateSchema } from "./domain.js";
 
 /* ------------------------------------------------------------------ *
  * Shared building blocks
@@ -387,6 +388,7 @@ export const AgentStatusUpdateEventSchema = z
     status: AgentRunStatusSchema,
     active_run_id: z.string().optional(),
     active_tool_executions: z.array(z.string()).optional(),
+    retry: AgentRetryStateSchema.optional(),
     last_error: z
       .object({
         message: z.string(),

@@ -11,7 +11,7 @@
  */
 import { promises as fs } from "node:fs";
 import path from "node:path";
-import type { ProviderApi, ProviderAdapter, HealthStatus } from "@brainpilot/protocol";
+import type { ProviderApi, ProviderAdapter, HealthStatus, ModelHealth } from "@brainpilot/protocol";
 import { deriveProviderApi, EXAMPLE_MODEL } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
@@ -154,6 +154,8 @@ export interface StoredProviderProfile {
   healthCheckedAt?: number;
   healthMessage?: string;
   healthLatencyMs?: number | null;
+  /** Per-model result from the protocol-aware probe. */
+  modelHealth?: ModelHealth[];
   createdAt: number;
   updatedAt: number;
 }
@@ -270,6 +272,7 @@ export async function setProfileHealth(
     healthCheckedAt: number;
     healthMessage?: string;
     healthLatencyMs?: number | null;
+    modelHealth?: ModelHealth[];
   },
 ): Promise<StoredProviderProfile | undefined> {
   const file = await readProviders(dataDir);
@@ -279,6 +282,7 @@ export async function setProfileHealth(
   profile.healthCheckedAt = health.healthCheckedAt;
   profile.healthMessage = health.healthMessage ?? "";
   profile.healthLatencyMs = health.healthLatencyMs ?? null;
+  profile.modelHealth = health.modelHealth ?? [];
   await writeProviders(dataDir, file);
   return profile;
 }

@@ -2095,6 +2095,7 @@ export class SessionManager {
         task: entry.tasks.get(a.name) ?? "",
         updatedAt: new Date().toISOString(),
         alive: st.status !== "stopped",
+        retry: st.retry,
       };
       return out;
     });

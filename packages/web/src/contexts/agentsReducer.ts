@@ -23,6 +23,16 @@ import type { AgentStatus, WebSocketEvent } from "../contracts/backend";
  */
 const RETRY_STATUSES = new Set(["retrying", "auto_retry", "auto_retry_start"]);
 
+function retryFromEvent(e: Record<string, unknown>): AgentStatus["retry"] {
+  if (!e.retry || typeof e.retry !== "object") return undefined;
+  const retry = e.retry as Record<string, unknown>;
+  const attempt = Number(retry.attempt);
+  const maxAttempts = Number(retry.maxAttempts ?? retry.max_attempts);
+  const delayMs = Number(retry.delayMs ?? retry.delay_ms);
+  if (![attempt, maxAttempts, delayMs].every(Number.isFinite)) return undefined;
+  return { attempt, maxAttempts, delayMs };
+}
+
 export function reduceAgentsForEvent(
   agents: AgentStatus[],
   event: WebSocketEvent,
@@ -35,15 +45,21 @@ export function reduceAgentsForEvent(
 
   const rawStatus = String(e.status ?? "idle");
   const status = RETRY_STATUSES.has(rawStatus.toLowerCase()) ? "running" : rawStatus;
+  const retry = retryFromEvent(e);
   const updatedAt = typeof e.updatedAt === "string" ? e.updatedAt : new Date().toISOString();
   const alive = status !== "stopped";
 
   const idx = agents.findIndex((a) => a.name === name);
   if (idx === -1) {
-    return [...agents, { name, status, task: "", updatedAt, alive }];
+    return [...agents, { name, status, task: "", updatedAt, alive, retry }];
   }
-  if (agents[idx]!.status === status) return agents; // no-op → stable reference
+  const previousRetry = agents[idx]!.retry;
+  const retryUnchanged =
+    previousRetry?.attempt === retry?.attempt &&
+    previousRetry?.maxAttempts === retry?.maxAttempts &&
+    previousRetry?.delayMs === retry?.delayMs;
+  if (agents[idx]!.status === status && retryUnchanged) return agents; // no-op → stable reference
   const next = agents.slice();
-  next[idx] = { ...agents[idx]!, status, updatedAt, alive };
+  next[idx] = { ...agents[idx]!, status, updatedAt, alive, retry };
   return next;
 }
