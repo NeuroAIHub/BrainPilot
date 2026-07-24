@@ -561,9 +561,15 @@ or start a discussion.
 
 ---
 
-## ⭐ Star History
+## 🌟 Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NeuroAIHub/BrainPilot&type=Date)](https://star-history.com/#NeuroAIHub/BrainPilot&Date)
+<a href="https://www.star-history.com/?type=date&repos=NeuroAIHub%2FBrainPilot">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=NeuroAIHub/BrainPilot&type=date&theme=dark&legend=top-left&sealed_token=2BIvxrhJ2pl6GgQurT4jKTQw5FxvjP-m02Cu3fimVSPBg8BRHFNiCZ8KRt9r9hBSNWyl-MEzNS5ikK6Q6YEm06kydjufxgEC-pyfaySI41ZNA2BRoe1MZA" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=NeuroAIHub/BrainPilot&type=date&legend=top-left&sealed_token=2BIvxrhJ2pl6GgQurT4jKTQw5FxvjP-m02Cu3fimVSPBg8BRHFNiCZ8KRt9r9hBSNWyl-MEzNS5ikK6Q6YEm06kydjufxgEC-pyfaySI41ZNA2BRoe1MZA" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=NeuroAIHub/BrainPilot&type=date&legend=top-left&sealed_token=2BIvxrhJ2pl6GgQurT4jKTQw5FxvjP-m02Cu3fimVSPBg8BRHFNiCZ8KRt9r9hBSNWyl-MEzNS5ikK6Q6YEm06kydjufxgEC-pyfaySI41ZNA2BRoe1MZA" />
+ </picture>
+</a>
 
 ---
 
