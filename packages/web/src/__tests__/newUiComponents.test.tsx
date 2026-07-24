@@ -75,6 +75,40 @@ describe("AskUserCard — structure", () => {
     expect(html).toContain("ask-user--answered");
     expect(html).not.toContain("ask-user__option-record");
   });
+
+  it("renders a cancelled request as a read-only expired record", () => {
+    const html = renderToStaticMarkup(
+      <AskUserCard
+        view={{
+          requestId: "r1",
+          agent: "principal",
+          question: "Pick",
+          status: "cancelled",
+          cancellationReason: "interrupted",
+        }}
+      />,
+    );
+    expect(html).toContain("ask-user--cancelled");
+    expect(html).toContain("chat.ask.cancelled");
+    expect(html).not.toContain("ask-user__pending");
+  });
+
+  it("renders submitting separately from answered", () => {
+    const html = renderToStaticMarkup(
+      <AskUserCard
+        view={{
+          requestId: "r1",
+          agent: "principal",
+          question: "Pick",
+          answer: "A",
+          status: "submitting",
+        }}
+      />,
+    );
+    expect(html).toContain("ask-user--submitting");
+    expect(html).toContain("chat.ask.submitting");
+    expect(html).not.toContain("ask-user--answered");
+  });
 });
 
 describe("AskUserComposer — takeover picker (#272)", () => {
@@ -95,8 +129,7 @@ describe("AskUserComposer — takeover picker (#272)", () => {
     expect(html).toContain("ask-user-composer__submit");
     // #272: no escape hatch — there is no "ignore/dismiss" control.
     expect(html).not.toContain("ask-user-composer__ignore");
-    // #272: the free-text row is ALWAYS present (Codex-style), even when only
-    // options are given, so the user never has to leave the picker.
+    // Free text defaults to enabled when the tool omits the flag.
     expect(html).toContain("ask-user-composer__input");
     expect(html).toContain("ask-user-composer__option--free");
   });
@@ -109,6 +142,24 @@ describe("AskUserComposer — takeover picker (#272)", () => {
       />,
     );
     expect(html).toContain("ask-user-composer__input");
+  });
+
+  it("hides the free-text row when the tool disables it", () => {
+    const html = renderToStaticMarkup(
+      <AskUserComposer
+        view={{
+          requestId: "r4",
+          agent: "principal",
+          question: "Pick",
+          options: ["A", "B"],
+          allowFreeText: false,
+        }}
+        onSubmit={() => {}}
+      />,
+    );
+    expect(html).toContain(">A<");
+    expect(html).not.toContain("ask-user-composer__input");
+    expect(html).not.toContain("ask-user-composer__option--free");
   });
 });
 

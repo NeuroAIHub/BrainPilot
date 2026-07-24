@@ -29,6 +29,7 @@ function makeResponse(init: FetchResponseInit): Response {
       return init.json;
     },
     text: async () => (typeof init.json === "string" ? init.json : JSON.stringify(init.json ?? "")),
+    clone: () => makeResponse(init),
   } as unknown as Response;
 }
 
@@ -115,6 +116,32 @@ describe("api.sessions.create — unwraps the { id, session } envelope (#96)", (
     const out = await api.sessions.create("bare title");
     expect(out.id).toBe("abc");
     expect(out.title).toBe("bare title");
+  });
+});
+
+describe("api.sessions.respondToInput", () => {
+  it("returns the structured stale outcome for an expired question", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      ok: false,
+      status: 409,
+      contentType: "application/json",
+      json: { status: "stale", reason: "question_expired", error: "expired" },
+    }));
+    await expect(api.sessions.respondToInput("s1", { requestId: "r1", answer: "A" })).resolves.toEqual({
+      status: "stale",
+      reason: "question_expired",
+    });
+  });
+
+  it("surfaces a 503 persistence failure so the picker can roll back", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      ok: false,
+      status: 503,
+      contentType: "application/json",
+      json: { error: "Could not save the answer. Please retry." },
+    }));
+    await expect(api.sessions.respondToInput("s1", { requestId: "r1", answer: "A" }))
+      .rejects.toThrow("Could not save the answer. Please retry.");
   });
 });
 

@@ -140,6 +140,11 @@ describe("ask_user mapping + submit + reducer round-trip", () => {
     expect(resolveAskUserSubmission(v, "   ")).toBeNull();
     expect(resolveAskUserSubmission(v, "B", { answered: true })).toBeNull();
     expect(resolveAskUserSubmission(v, "B", { timedOut: true })).toBeNull();
+    expect(resolveAskUserSubmission({ ...v, allowFreeText: false }, "custom")).toBeNull();
+    expect(resolveAskUserSubmission({ ...v, allowFreeText: false }, "A")).toEqual({
+      requestId: "req-42",
+      answer: "A",
+    });
   });
 
   it("a user_input_response resolves the matching card by requestId", () => {
@@ -150,6 +155,7 @@ describe("ask_user mapping + submit + reducer round-trip", () => {
       answer: "A",
     } as WebSocketEvent);
     expect(resolved[0].askUser?.answer).toBe("A");
+    expect(resolved[0].askUser?.status).toBe("answered");
     expect(isAskUserOpen(resolved[0].askUser!)).toBe(false);
     // A non-matching requestId leaves the card open.
     const other = reduceMessagesForEvent(cards, {
@@ -159,6 +165,53 @@ describe("ask_user mapping + submit + reducer round-trip", () => {
     } as WebSocketEvent);
     expect(other[0].askUser?.answer).toBeUndefined();
     expect(isAskUserOpen(other[0].askUser!)).toBe(true);
+  });
+
+  it("a user_input_cancelled event closes the card without an answer", () => {
+    const cards = reduceMessagesForEvent([], event);
+    const cancelled = reduceMessagesForEvent(cards, {
+      type: "user_input_cancelled",
+      requestId: "req-42",
+      reason: "interrupted",
+    } as WebSocketEvent);
+    expect(cancelled[0].askUser).toMatchObject({
+      status: "cancelled",
+      cancellationReason: "interrupted",
+    });
+    expect(cancelled[0].askUser?.answer).toBeUndefined();
+    expect(isAskUserOpen(cancelled[0].askUser!)).toBe(false);
+
+    // A malformed/duplicate later response cannot overwrite the first terminal.
+    const late = reduceMessagesForEvent(cancelled, {
+      type: "user_input_response",
+      requestId: "req-42",
+      answer: "late",
+    } as WebSocketEvent);
+    expect(late[0].askUser?.status).toBe("cancelled");
+  });
+
+  it("an old orphan remains closed after a newer request is answered", () => {
+    let cards = reduceMessagesForEvent([], {
+      ...event,
+      requestId: "req-old",
+    } as WebSocketEvent);
+    cards = reduceMessagesForEvent(cards, {
+      ...event,
+      requestId: "req-new",
+    } as WebSocketEvent);
+    cards = reduceMessagesForEvent(cards, {
+      type: "user_input_response",
+      requestId: "req-new",
+      answer: "A",
+    } as WebSocketEvent);
+    cards = reduceMessagesForEvent(cards, {
+      type: "user_input_cancelled",
+      requestId: "req-old",
+      reason: "restored",
+    } as WebSocketEvent);
+
+    expect(cards.map((card) => card.askUser?.status)).toEqual(["cancelled", "answered"]);
+    expect(cards.some((card) => isAskUserOpen(card.askUser!))).toBe(false);
   });
 });
 

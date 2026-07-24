@@ -112,8 +112,24 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     // ask_user reply branch: resolve the outstanding request.
     const data = parsed.data;
     if ("type" in data && data.type === "user_input_response") {
-      const okResolved = manager.resolveInput(id, data.request_id, data.answer);
-      return c.json({ status: okResolved ? "ok" : "stale" });
+      if (data.session_id !== id) {
+        return c.json({ error: "session_id does not match route" }, 400);
+      }
+      const result = await manager.answerInput(id, data.request_id, data.answer);
+      if (result === "stale") {
+        return c.json(
+          { status: "stale", reason: "question_expired", error: "This question is no longer pending." },
+          409,
+        );
+      }
+      if (result === "invalid") return c.json({ error: "invalid answer" }, 400);
+      if (result === "persist_failed") {
+        return c.json(
+          { status: "retry", reason: "persistence_unavailable", error: "Could not save the answer. Please retry." },
+          503,
+        );
+      }
+      return c.json({ status: "ok" });
     }
 
     // Normal message branch.

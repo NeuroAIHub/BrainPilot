@@ -17,9 +17,8 @@ interface AskUserComposerProps {
  * can't just type an ordinary message into the composer and hang the session.
  *
  * There is NO escape hatch: the user must pick an option or type a free-text
- * answer — the picker cannot be dismissed without answering. A free-text row
- * ("write your own") is ALWAYS offered as the last row, so any answer is
- * expressible without leaving the picker.
+ * answer — the picker cannot be dismissed without answering. When the tool
+ * allows free text, a "write your own" row is offered after the options.
  *
  * Keyboard: ↑/↓ move the highlight, number keys (1..9) jump to an option,
  * Enter submits the highlight (or the free-text value when the free-text row is
@@ -28,11 +27,9 @@ interface AskUserComposerProps {
 export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
   const t = useT();
   const options = useMemo(() => view.options ?? [], [view.options]);
-  // #272 (Codex-style): always offer an inline free-text row as the last row,
-  // so "write your own answer" lives right under the options instead of forcing
-  // the user to ESC back to the composer. It's the last selectable index.
-  const freeTextIndex = options.length;
-  const rowCount = options.length + 1;
+  const allowFreeText = view.allowFreeText !== false;
+  const freeTextIndex = allowFreeText ? options.length : -1;
+  const rowCount = options.length + (allowFreeText ? 1 : 0);
 
   const [active, setActive] = useState(0);
   const [freeText, setFreeText] = useState("");
@@ -54,7 +51,7 @@ export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
   };
 
   const submitActive = () => {
-    if (active === freeTextIndex) {
+    if (allowFreeText && active === freeTextIndex) {
       submit(freeText);
       return;
     }
@@ -64,7 +61,7 @@ export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
 
   const focusRow = (index: number) => {
     setActive(index);
-    if (index === freeTextIndex) {
+    if (allowFreeText && index === freeTextIndex) {
       inputRef.current?.focus();
     } else {
       rootRef.current?.focus();
@@ -84,7 +81,7 @@ export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
     }
     // Number keys jump directly to an option (1-indexed). Ignored while typing
     // in the free-text input (handled by its own onKeyDown below).
-    if (/^[1-9]$/.test(e.key) && active !== freeTextIndex) {
+    if (/^[1-9]$/.test(e.key) && (!allowFreeText || active !== freeTextIndex)) {
       const idx = Number(e.key) - 1;
       if (idx < options.length) {
         e.preventDefault();
@@ -120,7 +117,7 @@ export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
       <div className="ask-user-composer__options">
         {options.map((option, idx) => (
           <button
-            key={option}
+            key={`${view.requestId}-${idx}`}
             type="button"
             role="option"
             aria-selected={active === idx}
@@ -133,32 +130,34 @@ export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
           </button>
         ))}
 
-        <div
-          className={`ask-user-composer__option ask-user-composer__option--free ${
-            active === freeTextIndex ? "is-active" : ""
-          }`}
-          role="option"
-          aria-selected={active === freeTextIndex}
-          onMouseEnter={() => setActive(freeTextIndex)}
-        >
-          <span className="ask-user-composer__num">✎</span>
-          <input
-            ref={inputRef}
-            className="ask-user-composer__input"
-            type="text"
-            value={freeText}
-            placeholder={options.length > 0 ? t("chat.ask.freeTextOption") : t("chat.ask.freeTextPlaceholder")}
-            aria-label={view.question}
-            onFocus={() => setActive(freeTextIndex)}
-            onChange={(e) => setFreeText(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") {
-                e.preventDefault();
-                submit(freeText);
-              }
-            }}
-          />
-        </div>
+        {allowFreeText ? (
+          <div
+            className={`ask-user-composer__option ask-user-composer__option--free ${
+              active === freeTextIndex ? "is-active" : ""
+            }`}
+            role="option"
+            aria-selected={active === freeTextIndex}
+            onMouseEnter={() => setActive(freeTextIndex)}
+          >
+            <span className="ask-user-composer__num">✎</span>
+            <input
+              ref={inputRef}
+              className="ask-user-composer__input"
+              type="text"
+              value={freeText}
+              placeholder={options.length > 0 ? t("chat.ask.freeTextOption") : t("chat.ask.freeTextPlaceholder")}
+              aria-label={view.question}
+              onFocus={() => setActive(freeTextIndex)}
+              onChange={(e) => setFreeText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") {
+                  e.preventDefault();
+                  submit(freeText);
+                }
+              }}
+            />
+          </div>
+        ) : null}
       </div>
 
       <div className="ask-user-composer__foot">
@@ -166,7 +165,7 @@ export function AskUserComposer({ view, onSubmit }: AskUserComposerProps) {
         <button
           type="button"
           className="ask-user-composer__submit"
-          disabled={active === freeTextIndex && !canSubmitFree}
+          disabled={rowCount === 0 || (allowFreeText && active === freeTextIndex && !canSubmitFree)}
           onClick={submitActive}
         >
           <span>{t("chat.ask.submit")}</span>

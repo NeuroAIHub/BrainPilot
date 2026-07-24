@@ -104,10 +104,17 @@ export function createAskUserTool(deps: ToolDeps): SystemTool {
     parameters: {
       type: "object",
       properties: {
-        question: { type: "string", description: "The question to show the user" },
+        question: {
+          type: "string",
+          minLength: 1,
+          maxLength: 4000,
+          description: "The question to show the user",
+        },
         options: {
           type: "array",
-          items: { type: "string" },
+          items: { type: "string", minLength: 1, maxLength: 500 },
+          maxItems: 20,
+          uniqueItems: true,
           description: "Optional choices to offer the user",
         },
         allow_free_text: {
@@ -118,11 +125,33 @@ export function createAskUserTool(deps: ToolDeps): SystemTool {
       required: ["question"],
     },
     execute: async (params: Record<string, unknown>) => {
+      const question = typeof params.question === "string" ? params.question.trim() : "";
+      if (!question || question.length > 4000) {
+        return { ...ok("question must contain 1–4000 characters"), isError: true };
+      }
+      if (params.options !== undefined && !Array.isArray(params.options)) {
+        return { ...ok("options must be an array of strings"), isError: true };
+      }
+      const rawOptions = (params.options as unknown[] | undefined) ?? [];
+      if (rawOptions.length > 20 || rawOptions.some((option) => typeof option !== "string")) {
+        return { ...ok("options must contain at most 20 strings"), isError: true };
+      }
+      const options = rawOptions.map((option) => (option as string).trim());
+      if (options.some((option) => !option || option.length > 500)) {
+        return { ...ok("each option must contain 1–500 characters"), isError: true };
+      }
+      if (new Set(options).size !== options.length) {
+        return { ...ok("options must not contain duplicates"), isError: true };
+      }
+      const allowFreeText =
+        typeof params.allow_free_text === "boolean" ? params.allow_free_text : true;
+      if (!allowFreeText && options.length === 0) {
+        return { ...ok("ask_user needs options when free-text answers are disabled"), isError: true };
+      }
       const answer = await deps.requestUserInput({
-        question: String(params.question ?? ""),
-        options: Array.isArray(params.options) ? (params.options as string[]) : undefined,
-        allow_free_text:
-          typeof params.allow_free_text === "boolean" ? params.allow_free_text : undefined,
+        question,
+        options: options.length > 0 ? options : undefined,
+        allow_free_text: allowFreeText,
       });
       return ok(answer);
     },

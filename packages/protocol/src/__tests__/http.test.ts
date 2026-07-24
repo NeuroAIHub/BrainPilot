@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { SendMessageRequestSchema } from "../http.js";
+import { SendMessageRequestSchema, UserInputResponseBodySchema } from "../http.js";
 
 describe("SendMessageRequestSchema", () => {
   it("accepts a normal send-message body", () => {
@@ -15,6 +15,15 @@ describe("SendMessageRequestSchema", () => {
       answer: "option A",
     });
     expect(r.success).toBe(true);
+  });
+
+  it("rejects an empty user_input_response answer", () => {
+    expect(UserInputResponseBodySchema.safeParse({
+      type: "user_input_response",
+      session_id: "s1",
+      request_id: "r1",
+      answer: "   ",
+    }).success).toBe(false);
   });
 
   it("rejects a body that is neither (no content, no answer)", () => {
