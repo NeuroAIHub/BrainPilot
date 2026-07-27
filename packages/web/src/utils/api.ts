@@ -18,6 +18,8 @@ import {
   normalizeFileContent,
   normalizeFileEntry,
   normalizeMcpServer,
+  normalizeMcpByokStatus,
+  McpByokStatus,
   normalizeProviderProfile,
   normalizeSandbox,
   normalizeSandboxStats,
@@ -914,6 +916,62 @@ export const api = {
       }
       await handleJson<void>(
         await apiFetch(`${API_BASE}/mcp-servers/${name}`, {
+          method: "DELETE",
+          headers: authHeaders(),
+        }),
+      );
+    },
+  },
+
+  // #377: preset BYOK — hosted-only endpoints. Self-hosted builds don't implement
+  // them, so `support()` returns null (rather than throwing) and the Settings UI
+  // falls back to today's behavior. Only `save`/`clear` may throw: by then the
+  // probe has already confirmed the deployment speaks BYOK, so a failure there is
+  // a real error the user needs to see.
+  mcpByok: {
+    /**
+     * `null` = this deployment has no BYOK support. That covers a 404, a 2xx that
+     * isn't JSON (the SPA index.html fallback serves unknown /api paths on some
+     * self-hosted setups), a non-array body, and a network error — none of which
+     * should surface as an error banner on an otherwise-healthy Settings dialog.
+     */
+    async support(): Promise<McpByokStatus[] | null> {
+      if (runtimeConfig.useMockBackend) {
+        return mockBackend.listMcpByok();
+      }
+      try {
+        const res = await apiFetch(`${API_BASE}/mcp-servers/byok`, { headers: authHeaders() });
+        if (!res.ok) return null;
+        if (!(res.headers.get("content-type") || "").includes("application/json")) return null;
+        const raw = (await res.json()) as unknown;
+        if (!Array.isArray(raw)) return null;
+        // A row without a `kind` can't be matched to a preset or addressed on the
+        // PUT/DELETE path, so drop it rather than rendering a dead card.
+        return raw.map(normalizeMcpByokStatus).filter((row) => row.kind !== "");
+      } catch {
+        return null;
+      }
+    },
+
+    async save(kind: string, apiKey: string): Promise<void> {
+      if (runtimeConfig.useMockBackend) {
+        return mockBackend.saveMcpByok(kind, apiKey);
+      }
+      await handleJson<void>(
+        await apiFetch(`${API_BASE}/mcp-servers/byok/${encodeURIComponent(kind)}`, {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify({ apiKey }),
+        }),
+      );
+    },
+
+    async clear(kind: string): Promise<void> {
+      if (runtimeConfig.useMockBackend) {
+        return mockBackend.clearMcpByok(kind);
+      }
+      await handleJson<void>(
+        await apiFetch(`${API_BASE}/mcp-servers/byok/${encodeURIComponent(kind)}`, {
           method: "DELETE",
           headers: authHeaders(),
         }),

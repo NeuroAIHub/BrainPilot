@@ -551,3 +551,95 @@ describe("#206 parseError surfaces { error, details }", () => {
     await expect(api.providers.create(validCreate)).rejects.toThrow("nope");
   });
 });
+
+// #377 — the BYOK endpoints live in the hosted layer only. `support()` must treat
+// their absence as "this deployment has no BYOK" (null) rather than an error, so a
+// self-hosted backend keeps rendering the MCP tab exactly as it does today.
+describe("api.mcpByok.support — absent on self-hosted backends", () => {
+  it("returns the status rows on a hosted backend", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: [
+          { kind: "tavily", presetName: "tavily", configured: true },
+          { kind: "exa", presetName: "exa-search", configured: false },
+        ],
+      }),
+    );
+    const out = await api.mcpByok.support();
+    expect(out).toEqual([
+      { kind: "tavily", presetName: "tavily", configured: true },
+      { kind: "exa", presetName: "exa-search", configured: false },
+    ]);
+  });
+
+  it("returns null on 404 (endpoint not mounted)", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ ok: false, status: 404, json: { error: "not found" } }));
+    expect(await api.mcpByok.support()).toBeNull();
+  });
+
+  it("returns null on 501 and on a network failure", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ ok: false, status: 501, json: {} }));
+    expect(await api.mcpByok.support()).toBeNull();
+    fetchMock.mockRejectedValueOnce(new TypeError("Failed to fetch"));
+    expect(await api.mcpByok.support()).toBeNull();
+  });
+
+  it("returns null when the body is not an array of rows", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: { kinds: ["tavily"] } }),
+    );
+    expect(await api.mcpByok.support()).toBeNull();
+  });
+
+  it("drops malformed rows but keeps the well-formed ones", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: [
+          { kind: "tavily", preset_name: "tavily", configured: true },
+          { configured: true },
+          { kind: "", configured: false },
+        ],
+      }),
+    );
+    // snake_case `preset_name` is accepted alongside camelCase, like the other
+    // normalizers in contracts/backend.
+    expect(await api.mcpByok.support()).toEqual([
+      { kind: "tavily", presetName: "tavily", configured: true },
+    ]);
+  });
+
+  it("coerces a missing/odd `configured` to false", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ contentType: "application/json", json: [{ kind: "tavily" }] }),
+    );
+    expect(await api.mcpByok.support()).toEqual([{ kind: "tavily", presetName: "", configured: false }]);
+  });
+});
+
+describe("api.mcpByok save/clear", () => {
+  it("PUTs the key to the kind-scoped endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 204 }));
+    await api.mcpByok.save("tavily", "tvly-secret");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/mcp-servers/byok/tavily");
+    expect(init.method).toBe("PUT");
+    expect(JSON.parse(init.body)).toEqual({ apiKey: "tvly-secret" });
+  });
+
+  it("percent-encodes the kind in the path", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 204 }));
+    await api.mcpByok.clear("weird kind/x");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("byok/weird%20kind%2Fx");
+    expect(init.method).toBe("DELETE");
+  });
+
+  it("surfaces a rejected key so the UI can show why", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({ ok: false, status: 400, contentType: "application/json", json: { error: "invalid api key" } }),
+    );
+    await expect(api.mcpByok.save("tavily", "nope")).rejects.toThrow("invalid api key");
+  });
+});

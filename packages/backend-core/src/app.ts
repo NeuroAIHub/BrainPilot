@@ -41,6 +41,7 @@ import {
   createMcpServer,
   updateMcpServer,
   deleteMcpServer,
+  isReadOnlyMcpServer,
   type StoredProviderProfile,
   readKbApiConfig,
   writeKbApiConfig,
@@ -390,12 +391,20 @@ export function createApp(options: CreateAppOptions): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid mcp server config", details: parsed.error.issues }, 400);
     }
-    const entry = await updateMcpServer(dataDir, c.req.param("name"), parsed.data);
+    const name = c.req.param("name");
+    if (await isReadOnlyMcpServer(dataDir, name)) {
+      return c.json({ error: `MCP server "${name}" is platform-managed and cannot be edited` }, 403);
+    }
+    const entry = await updateMcpServer(dataDir, name, parsed.data);
     if (!entry) return c.json({ error: "not found" }, 404);
     return c.json(entry);
   });
   api.delete("/mcp-servers/:name", async (c) => {
-    const ok = await deleteMcpServer(dataDir, c.req.param("name"));
+    const name = c.req.param("name");
+    if (await isReadOnlyMcpServer(dataDir, name)) {
+      return c.json({ error: `MCP server "${name}" is platform-managed and cannot be deleted` }, 403);
+    }
+    const ok = await deleteMcpServer(dataDir, name);
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.body(null, 204);
   });

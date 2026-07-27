@@ -199,4 +199,76 @@ describe("MCP Servers CRUD (/api/mcp-servers)", () => {
       mcpServers: { kb: { type: "http", url: "http://host/mcp" } },
     });
   });
+
+  // #377: hosted deployments inject read-only presets (optionally BYOK-annotated)
+  // into the same on-disk file. GET must pass the annotations through so the web UI
+  // can render a BYOK card; PUT/DELETE must refuse, because hiding the buttons in
+  // the UI is a hint and the preset URL can carry the platform's shared key.
+  describe("#377 platform-managed presets", () => {
+    const preset = {
+      type: "http",
+      url: "https://mcp.tavily.com/mcp/?tavilyApiKey=SHARED",
+      readOnly: true,
+      byok: { kind: "tavily", keyParam: "tavilyApiKey" },
+    };
+
+    async function seedPreset() {
+      const { app, dataDir } = await setup();
+      await mkdir(join(dataDir, "bp_template"), { recursive: true });
+      await writeFile(
+        join(dataDir, "bp_template", "mcp_servers.json"),
+        JSON.stringify({ mcpServers: { tavily: preset } }),
+      );
+      return { app, dataDir };
+    }
+
+    it("GET passes readOnly and byok through untouched", async () => {
+      const { app } = await seedPreset();
+      const list = await (await app.request("/api/mcp-servers")).json();
+      expect(list).toEqual([{ name: "tavily", ...preset }]);
+    });
+
+    it("PUT on a read-only preset returns 403 and leaves the file unchanged", async () => {
+      const { app, dataDir } = await seedPreset();
+      const before = await readFile(join(dataDir, "bp_template", "mcp_servers.json"), "utf8");
+      const res = await put(app, "tavily", { type: "http", url: "https://evil.test/mcp" });
+      expect(res.status).toBe(403);
+      expect(await readFile(join(dataDir, "bp_template", "mcp_servers.json"), "utf8")).toBe(before);
+    });
+
+    it("DELETE on a read-only preset returns 403 and leaves the entry in place", async () => {
+      const { app } = await seedPreset();
+      expect((await del(app, "tavily")).status).toBe(403);
+      const list = await (await app.request("/api/mcp-servers")).json();
+      expect(list).toHaveLength(1);
+    });
+
+    it("a name collision with a preset still 409s rather than overwriting it", async () => {
+      const { app } = await seedPreset();
+      const res = await post(app, { name: "tavily", config: { type: "http", url: "https://evil.test/mcp" } });
+      expect(res.status).toBe(409);
+    });
+
+    it("a client cannot mint its own read-only / BYOK entry", async () => {
+      const { app } = await setup();
+      // `readOnly` and `byok` are platform-injected annotations; the config schema
+      // strips them, so a user can't self-lock an entry against their own Delete.
+      const res = await post(app, {
+        name: "mine",
+        config: { type: "http", url: "https://host/mcp", readOnly: true, byok: { kind: "tavily" } },
+      });
+      expect(res.status).toBe(201);
+      const entry = await res.json();
+      expect(entry.readOnly).toBeUndefined();
+      expect(entry.byok).toBeUndefined();
+      expect((await del(app, "mine")).status).toBe(204);
+    });
+
+    it("read-only presets do not block CRUD on ordinary neighbours", async () => {
+      const { app } = await seedPreset();
+      expect((await post(app, { name: "mine", config: { type: "stdio", command: "npx" } })).status).toBe(201);
+      expect((await put(app, "mine", { type: "stdio", command: "node" })).status).toBe(200);
+      expect((await del(app, "mine")).status).toBe(204);
+    });
+  });
 });

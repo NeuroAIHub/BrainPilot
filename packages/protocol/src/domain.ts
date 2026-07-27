@@ -320,6 +320,28 @@ export const SettingsDataSchema = z.object({
 });
 export type SettingsData = z.infer<typeof SettingsDataSchema>;
 
+/**
+ * #377: BYOK annotation on a *preset* MCP server. Hosted deployments inject
+ * presets (e.g. `tavily`) that are metered by an API key: the platform ships a
+ * shared fallback key, and users are encouraged to register their own so usage
+ * bills to them. `kind` is the credential identity the hosted BYOK endpoints are
+ * keyed by (`PUT /api/mcp-servers/byok/:kind`); `keyParam` / `keyHeader` name
+ * the single field the user's key is injected into — exactly one of the two, so
+ * the annotation can never widen into "edit the whole transport".
+ *
+ * Self-hosted builds have no BYOK endpoint and simply ignore the field.
+ */
+export const McpByokInfoSchema = z
+  .object({
+    kind: z.string().trim().min(1),
+    keyParam: z.string().trim().min(1).optional(),
+    keyHeader: z.string().trim().min(1).optional(),
+  })
+  .refine((v) => !(v.keyParam && v.keyHeader), {
+    message: "byok: keyParam and keyHeader are mutually exclusive",
+  });
+export type McpByokInfo = z.infer<typeof McpByokInfoSchema>;
+
 export const McpServerEntrySchema = z.object({
   name: z.string(),
   type: z.enum(["stdio", "http", "sse"]),
@@ -329,6 +351,13 @@ export const McpServerEntrySchema = z.object({
   url: z.string().optional(),
   headers: z.record(z.string(), z.string()).optional(),
   timeout: z.number().optional(),
+  /**
+   * #377: platform-managed entry — the UI must not offer Edit / Delete and must
+   * not surface the raw URL (a hosted preset URL can carry the platform's shared
+   * key). Orthogonal to `byok`: a preset can be read-only without being metered.
+   */
+  readOnly: z.boolean().optional(),
+  byok: McpByokInfoSchema.optional(),
 });
 export type McpServerEntry = z.infer<typeof McpServerEntrySchema>;
 

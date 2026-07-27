@@ -1,7 +1,7 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
+import type { McpByokStatus, McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
@@ -12,6 +12,8 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 import { BuiltinToolsSection } from "./BuiltinToolsSection";
+import { McpByokCard } from "./McpByokCard";
+import { resolveMcpEntryView } from "./mcpPresetView";
 import {
   canSubmitProviderForm,
   providerFieldErrorKey,
@@ -98,6 +100,11 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   const [activeTab, setActiveTab] = useState<SettingsTab>(tabs[0].id);
   const [providers, setProviders] = useState<ProviderProfile[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+  // #377: preset BYOK. `null` = this deployment has no `/api/mcp-servers/byok`
+  // (self-hosted) → presets behave exactly as before, no BYOK cards. An array
+  // (possibly empty) = hosted deployment; each row tells us whether the user
+  // already has a key on file for that `byok.kind`.
+  const [mcpByokStatus, setMcpByokStatus] = useState<McpByokStatus[] | null>(null);
   const [providerForm, setProviderForm] = useState(DEFAULT_PROVIDER_FORM);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [isProviderFormOpen, setIsProviderFormOpen] = useState(false);
@@ -134,13 +141,16 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     setIsLoading(true);
     setError(null);
     try {
-      const [nextProviders, nextMcpServers, healthProfiles] = await Promise.all([
+      const [nextProviders, nextMcpServers, healthProfiles, nextByok] = await Promise.all([
         api.providers.list(),
         api.mcpServers.list(),
         api.providers.health().catch(() => [] as ProviderProfile[]),
+        // Probe never rejects — it resolves to null when unsupported (#377).
+        api.mcpByok.support(),
       ]);
       setProviders(mergeHealth(nextProviders, healthProfiles));
       setMcpServers(nextMcpServers);
+      setMcpByokStatus(nextByok);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("settings.loadFailed"));
     } finally {
@@ -159,16 +169,32 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
 
   const refreshSettingsSilent = async () => {
     try {
-      const [nextProviders, nextMcpServers, healthProfiles] = await Promise.all([
+      const [nextProviders, nextMcpServers, healthProfiles, nextByok] = await Promise.all([
         api.providers.list(),
         api.mcpServers.list(),
         api.providers.health().catch(() => [] as ProviderProfile[]),
+        api.mcpByok.support(),
       ]);
       setProviders(mergeHealth(nextProviders, healthProfiles));
       setMcpServers(nextMcpServers);
+      setMcpByokStatus(nextByok);
     } catch {
       // ignore silent refresh errors
     }
+  };
+
+  /**
+   * #377: re-probe after a BYOK save/clear so the `configured` badge reflects the
+   * write. Also refreshes the server list, because the hosted layer rewrites the
+   * preset URL with the user's key as part of the same operation.
+   */
+  const refreshMcpByok = async () => {
+    const [nextByok, nextMcpServers] = await Promise.all([
+      api.mcpByok.support(),
+      api.mcpServers.list().catch(() => null),
+    ]);
+    setMcpByokStatus(nextByok);
+    if (nextMcpServers) setMcpServers(nextMcpServers);
   };
 
   const testProvider = async (providerId: string) => {
@@ -476,9 +502,23 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   };
 
   const removeMcpServer = async (name: string) => {
-    await api.mcpServers.remove(name);
-    setMcpServers((current) => current.filter((server) => server.name !== name));
+    setError(null);
+    try {
+      await api.mcpServers.remove(name);
+      setMcpServers((current) => current.filter((server) => server.name !== name));
+    } catch (err) {
+      // #377: the backend now 403s on a platform-managed entry. Surface it rather
+      // than rejecting unhandled and leaving the row silently in place.
+      setError(err instanceof Error ? err.message : t("settings.mcp.removeFailed"));
+    }
   };
+
+  /**
+   * #377: what to show as an entry's subtitle. `resolveMcpEntryView` returns null
+   * when the URL must not be shown at all (a managed preset with an unparseable
+   * URL) — that's the only case needing a localized stand-in.
+   */
+  const mcpSubtitle = (subtitle: string | null): string => subtitle ?? t("settings.mcp.presetHiddenUrl");
 
   return (
     <div
@@ -682,21 +722,43 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                   </div>
                 ) : (
                   <div className="settings-list">
-                    {mcpServers.map((server) => (
-                      <article className="settings-list-item" key={server.name}>
-                        <div>
-                          <strong>
-                            {server.name}
-                            <span className={`mcp-transport-chip mcp-transport-chip--${server.type}`}>{server.type}</span>
-                          </strong>
-                          <span>{server.type === "stdio" ? [server.command, ...(server.args || [])].filter(Boolean).join(" ") : server.url}</span>
-                        </div>
-                        <div className="settings-list-item__actions mcp-actions">
-                          <button onClick={() => editMcpServer(server)} type="button">{t("settings.mcp.edit")}</button>
-                          <button onClick={() => void removeMcpServer(server.name)} type="button">{t("settings.mcp.remove")}</button>
-                        </div>
-                      </article>
-                    ))}
+                    {mcpServers.map((server) => {
+                      // #377: platform-managed presets get no Edit / Delete and no raw
+                      // URL; a BYOK card appears only when the deployment actually
+                      // serves the endpoint and advertises this entry's `kind`.
+                      const view = resolveMcpEntryView(server, mcpByokStatus);
+                      return (
+                        <article className="settings-list-item" key={server.name}>
+                          <div>
+                            <strong>
+                              {server.name}
+                              <span className={`mcp-transport-chip mcp-transport-chip--${server.type}`}>{server.type}</span>
+                              {view.managed ? (
+                                <span className="mcp-transport-chip mcp-transport-chip--preset">
+                                  {t("settings.mcp.presetChip")}
+                                </span>
+                              ) : null}
+                            </strong>
+                            <span>{mcpSubtitle(view.subtitle)}</span>
+                          </div>
+                          {view.managed ? (
+                            <span className="mcp-preset-note">{t("settings.mcp.presetManaged")}</span>
+                          ) : (
+                            <div className="settings-list-item__actions mcp-actions">
+                              <button onClick={() => editMcpServer(server)} type="button">{t("settings.mcp.edit")}</button>
+                              <button onClick={() => void removeMcpServer(server.name)} type="button">{t("settings.mcp.remove")}</button>
+                            </div>
+                          )}
+                          {view.byok ? (
+                            <McpByokCard
+                              configured={view.byok.configured}
+                              kind={view.byok.kind}
+                              onChanged={refreshMcpByok}
+                            />
+                          ) : null}
+                        </article>
+                      );
+                    })}
                   </div>
                 )}
                 </section>
