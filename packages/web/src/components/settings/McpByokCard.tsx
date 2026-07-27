@@ -71,7 +71,10 @@ export function McpByokCard({ kind, configured, onChanged }: McpByokCardProps) {
     }
   };
 
-  const inputId = `mcp-byok-${kind}`;
+  // `kind` comes from the hosted preset config, which guarantees nothing about DOM
+  // safety — whitespace in an id is invalid HTML and silently breaks label-click
+  // focusing. Sanitize for the id only; API calls still use `kind` verbatim.
+  const inputId = `mcp-byok-${kind.replace(/[^\w-]/g, "_")}`;
 
   return (
     <form className="mcp-byok" onSubmit={save}>

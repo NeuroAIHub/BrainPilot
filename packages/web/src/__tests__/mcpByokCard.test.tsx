@@ -20,10 +20,10 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-function render(configured: boolean) {
+function render(configured: boolean, kind = "tavily") {
   return renderToStaticMarkup(
     <PreferencesProvider>
-      <McpByokCard configured={configured} kind="tavily" onChanged={() => {}} />
+      <McpByokCard configured={configured} kind={kind} onChanged={() => {}} />
     </PreferencesProvider>,
   );
 }
@@ -57,5 +57,17 @@ describe("McpByokCard — markup", () => {
   it("labels the input (htmlFor/id pair) for a11y", () => {
     const html = render(false);
     expect(html).toContain('for="mcp-byok-tavily"');
+  });
+
+  // `kind` is hosted-supplied and guarantees nothing about DOM safety. An id
+  // containing whitespace is invalid HTML and silently breaks label-click
+  // focusing, so it's sanitized — while the API path keeps `kind` verbatim
+  // (see api.test.ts, which asserts the percent-encoded PUT/DELETE path).
+  it("sanitizes an unsafe kind into a valid id, keeping label and input in sync", () => {
+    const html = render(false, "weird kind/x");
+    expect(html).toContain('id="mcp-byok-weird_kind_x"');
+    expect(html).toContain('for="mcp-byok-weird_kind_x"');
+    // No whitespace or slash leaked into either attribute.
+    expect(html).not.toMatch(/(id|for)="[^"]*[\s/][^"]*"/);
   });
 });
