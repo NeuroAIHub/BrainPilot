@@ -49,7 +49,10 @@ export function resolveMcpEntryView(
   if (server.type === "stdio") {
     subtitle = [server.command, ...(server.args || [])].filter(Boolean).join(" ");
   } else if (!server.url) {
-    subtitle = "";
+    // A managed preset with no url at all is the same situation as an unparseable
+    // one: there is nothing safe to show, so hand the UI null and let it render the
+    // localized "endpoint managed by the platform" stand-in rather than a blank row.
+    subtitle = managed ? null : "";
   } else if (!managed) {
     subtitle = server.url;
   } else {

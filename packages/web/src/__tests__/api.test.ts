@@ -610,6 +610,30 @@ describe("api.mcpByok.support — absent on self-hosted backends", () => {
     ]);
   });
 
+  // #377 review: normalizeMcpByok trims `byok.kind` on the *entry* side, so the
+  // status side must trim too or the two never match and the card silently vanishes.
+  it("trims a padded kind so it still matches the preset's annotation", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: [{ kind: "  tavily  ", presetName: "tavily", configured: true }],
+      }),
+    );
+    expect(await api.mcpByok.support()).toEqual([
+      { kind: "tavily", presetName: "tavily", configured: true },
+    ]);
+  });
+
+  it("drops a whitespace-only kind, not just an empty one", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: [{ kind: "   ", configured: true }, { kind: "\t\n", configured: false }],
+      }),
+    );
+    expect(await api.mcpByok.support()).toEqual([]);
+  });
+
   it("coerces a missing/odd `configured` to false", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({ contentType: "application/json", json: [{ kind: "tavily" }] }),

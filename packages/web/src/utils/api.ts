@@ -945,8 +945,9 @@ export const api = {
         if (!(res.headers.get("content-type") || "").includes("application/json")) return null;
         const raw = (await res.json()) as unknown;
         if (!Array.isArray(raw)) return null;
-        // A row without a `kind` can't be matched to a preset or addressed on the
-        // PUT/DELETE path, so drop it rather than rendering a dead card.
+        // A row without a usable `kind` can't be matched to a preset or addressed
+        // on the PUT/DELETE path, so drop it rather than rendering a dead card.
+        // normalizeMcpByokStatus trims, so a whitespace-only kind lands here as "".
         return raw.map(normalizeMcpByokStatus).filter((row) => row.kind !== "");
       } catch {
         return null;

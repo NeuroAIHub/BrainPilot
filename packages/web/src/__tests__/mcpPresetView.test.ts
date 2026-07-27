@@ -51,8 +51,15 @@ describe("resolveMcpEntryView — read-only presets", () => {
     expect(resolveMcpEntryView(stdio, hosted).subtitle).toBe("npx -y server-fs");
   });
 
-  it("tolerates an http entry with no url at all", () => {
+  it("tolerates a user's own http entry with no url at all", () => {
     expect(resolveMcpEntryView({ name: "x", type: "http" }, hosted).subtitle).toBe("");
+  });
+
+  // A blank subtitle row would look like a rendering bug; null routes it to the
+  // localized "managed by the platform" stand-in instead.
+  it("returns null for a *managed* entry with no url, not an empty string", () => {
+    const view = resolveMcpEntryView({ name: "x", type: "http", readOnly: true }, hosted);
+    expect(view.subtitle).toBeNull();
   });
 });
 

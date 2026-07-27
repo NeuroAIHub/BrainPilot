@@ -718,7 +718,10 @@ export interface McpByokStatus {
 export function normalizeMcpByokStatus(rawValue: unknown): McpByokStatus {
   const raw = asDict(rawValue);
   return {
-    kind: stringValue(raw.kind),
+    // Trimmed to match `normalizeMcpByok`'s handling of `byok.kind` — the two are
+    // compared to decide whether a preset gets a card, so a stray space on either
+    // side would silently fail the match and drop the card.
+    kind: stringValue(raw.kind).trim(),
     presetName: stringValue(raw.presetName ?? raw.preset_name),
     configured: Boolean(raw.configured),
   };
