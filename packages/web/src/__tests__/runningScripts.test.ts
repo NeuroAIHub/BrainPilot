@@ -136,4 +136,21 @@ describe("selectActiveScripts", () => {
     const [row] = selectActiveScripts([partial]);
     expect(row.command).toBe('{"command":"pyt');
   });
+
+  it("uses activeTools as authority and exposes cancellation metadata", () => {
+    const messages = [bashCall({ id: "live" }), bashCall({ id: "stale" })];
+    const result = selectActiveScripts(messages, [{
+      toolCallId: "live",
+      toolName: "bash",
+      startedAt: "2026-07-01T00:00:05.000Z",
+      cancellable: true,
+      status: "stopping",
+    }]);
+    expect(result).toEqual([expect.objectContaining({
+      id: "live",
+      startedAt: "2026-07-01T00:00:00.000Z",
+      cancellable: true,
+      status: "stopping",
+    })]);
+  });
 });

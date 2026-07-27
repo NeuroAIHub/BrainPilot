@@ -41,12 +41,15 @@
     "@xterm/xterm": "^6.0.0",
     "highlight.js": "^11.11.1",
     "html-to-image": "^1.11.13",
+    "katex": "^0.16.47",
     "lucide-react": "^0.468.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
     "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0",
     "typescript": "^5.6.3",
     "vite": "^6.0.0"
   }

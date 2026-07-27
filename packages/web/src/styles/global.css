@@ -2227,10 +2227,16 @@ button {
     border-color var(--ease-standard),
     color var(--ease-standard);
 }
-.running-scripts__stop:hover {
+.running-scripts__stop:hover:not(:disabled) {
   background: var(--color-danger-soft);
   border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
   color: var(--color-danger);
+}
+.running-scripts__stop:disabled {
+  opacity: 0.6;
+}
+.running-scripts__stop--script {
+  align-self: flex-end;
 }
 .running-scripts__list {
   list-style: none;
@@ -3540,6 +3546,18 @@ button {
 .message-card__content img {
   max-width: 100%;
   border-radius: var(--radius-sm);
+}
+
+.message-card__content .katex-display {
+  max-width: 100%;
+  margin: 0.8em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.15em;
+}
+
+.message-card__content .katex {
+  color: inherit;
 }
 
 /* Syntax highlighting */

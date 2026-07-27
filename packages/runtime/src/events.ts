@@ -102,8 +102,27 @@ export const ev = {
   toolCallArgs(ctx: Ctx, toolCallId: string, delta: string): AgUiEvent {
     return { type: "TOOL_CALL_ARGS", ...envelope(ctx), tool_call_id: toolCallId, delta } as AgUiEvent;
   },
-  toolCallEnd(ctx: Ctx, toolCallId: string): AgUiEvent {
-    return { type: "TOOL_CALL_END", ...envelope(ctx), tool_call_id: toolCallId } as AgUiEvent;
+  toolCallEnd(
+    ctx: Ctx,
+    toolCallId: string,
+    terminal?: {
+      status: "completed" | "failed" | "interrupted";
+      durationMs: number;
+      reason?: "user_requested" | "task_interrupted" | "agent_interrupted";
+    },
+  ): AgUiEvent {
+    return {
+      type: "TOOL_CALL_END",
+      ...envelope(ctx),
+      tool_call_id: toolCallId,
+      ...(terminal
+        ? {
+            status: terminal.status,
+            duration_ms: terminal.durationMs,
+            ...(terminal.reason ? { reason: terminal.reason } : {}),
+          }
+        : {}),
+    } as AgUiEvent;
   },
   toolCallResult(ctx: Ctx, toolCallId: string, content: string, isError = false, messageId?: string): AgUiEvent {
     return {
@@ -122,6 +141,14 @@ export const ev = {
     extra?: {
       activeRunId?: string;
       activeToolExecutions?: string[];
+      activeTools?: Array<{
+        toolCallId: string;
+        toolName: string;
+        runId?: string;
+        startedAt: string;
+        cancellable: boolean;
+        status: "running" | "stopping";
+      }>;
       retry?: { attempt: number; maxAttempts: number; delayMs: number };
       lastError?: { message: string; timestamp: string; consecutiveCount: number };
     },
@@ -133,8 +160,9 @@ export const ev = {
       status,
     };
     if (extra?.activeRunId !== undefined) e.active_run_id = extra.activeRunId;
-    if (extra?.activeToolExecutions && extra.activeToolExecutions.length)
+    if (extra?.activeToolExecutions)
       e.active_tool_executions = extra.activeToolExecutions;
+    if (extra?.activeTools) e.active_tools = extra.activeTools;
     if (extra?.retry) e.retry = extra.retry;
     if (extra?.lastError) {
       e.last_error = {

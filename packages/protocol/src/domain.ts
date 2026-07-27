@@ -54,6 +54,17 @@ export const AgentRetryStateSchema = z.object({
 });
 export type AgentRetryState = z.infer<typeof AgentRetryStateSchema>;
 
+/** Authoritative metadata for one tool call that is still executing. */
+export const ActiveToolExecutionSchema = z.object({
+  toolCallId: z.string(),
+  toolName: z.string(),
+  runId: z.string().optional(),
+  startedAt: z.string(),
+  cancellable: z.boolean(),
+  status: z.enum(["running", "stopping"]),
+});
+export type ActiveToolExecution = z.infer<typeof ActiveToolExecutionSchema>;
+
 /**
  * AgentStatus as exposed in SessionStateSnapshot.agents (backend.ts). `status`
  * is kept open (string) for forward-compat with runtime values beyond the
@@ -66,6 +77,10 @@ export const AgentStatusSchema = z.object({
   updatedAt: z.string().optional(),
   alive: z.boolean().optional(),
   retry: AgentRetryStateSchema.optional(),
+  /** Rich replacement for the legacy id-only activeToolExecutions field. */
+  activeTools: z.array(ActiveToolExecutionSchema).optional(),
+  /** Kept for older clients that only consume tool-call ids. */
+  activeToolExecutions: z.array(z.string()).optional(),
 });
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
@@ -77,6 +92,7 @@ export const AgentStateSchema = z.object({
   status: AgentStatusEnumSchema,
   activeRunId: z.string().optional(),
   activeToolExecutions: z.array(z.string()).optional(),
+  activeTools: z.array(ActiveToolExecutionSchema).optional(),
   retry: AgentRetryStateSchema.optional(),
   lastError: z
     .object({

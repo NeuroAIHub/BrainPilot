@@ -197,6 +197,16 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sessions/:id/history", forward("getSessionHistory", { idParam: "id", withQuery: true }));
   api.post("/sessions/:id/messages", forward("sendMessage", { idParam: "id", withBody: true }));
   api.post("/sessions/:id/interrupt", forward("interrupt", { idParam: "id", withBody: true }));
+  api.post("/sessions/:id/tools/:toolCallId/interrupt", async (c) => {
+    const rc = await getClient(c);
+    const upstream = await rc.forward("interruptTool", {
+      params: {
+        id: c.req.param("id") ?? "",
+        toolCallId: c.req.param("toolCallId") ?? "",
+      },
+    });
+    return relay(c, upstream);
+  });
   api.get("/sessions/:id/agents", forward("listAgents", { idParam: "id" }));
   api.post("/sessions/:id/evict", forward("evictSession", { idParam: "id", withBody: true }));
 

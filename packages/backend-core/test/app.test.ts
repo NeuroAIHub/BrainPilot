@@ -58,6 +58,21 @@ describe("Hono app — REST forwarding", () => {
     expect(res.status).toBe(202);
   });
 
+  it("forwards a scoped tool interrupt and preserves the runtime status", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("http://runtime.test/sessions/s%201/tools/tool%2F1/interrupt");
+      expect(init.method).toBe("POST");
+      return new Response('{"interrupted":false,"toolCallId":"tool/1","reason":"timeout"}', {
+        status: 504,
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = createApp({ orchestrator: fakeOrchestrator(), fetchFn: fetchFn as never, serveWeb: false });
+    const response = await app.request("/api/sessions/s%201/tools/tool%2F1/interrupt", { method: "POST" });
+    expect(response.status).toBe(504);
+    expect(await response.json()).toMatchObject({ reason: "timeout" });
+  });
+
   // #47: base64 JSON upload still forwards through the buffered path.
   it("POST /api/sandbox/:id/files (base64 JSON) forwards to writeFile", async () => {
     const fetchFn = vi.fn(async (url: string, init: RequestInit) => {

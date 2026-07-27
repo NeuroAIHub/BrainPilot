@@ -172,6 +172,12 @@ export interface ChatMessage {
   toolResult?: unknown;
   reasoning?: string;
   toolCallId?: string;
+  /** Authoritative tool lifecycle timestamps/status, persisted by runtime. */
+  completedAt?: string;
+  durationMs?: number;
+  toolStatus?: "completed" | "failed" | "interrupted";
+  /** Reducer-internal precedence marker; wire END outranks snapshot fallback. */
+  toolTerminalSource?: "event" | "snapshot";
   // Hook diagnostic event metadata — set when kind === "hook"
   hookFamily?: string;   // "expert_reply" | "principal_trace"
   hookPhase?: string;    // "reset_clean" | "reset_dirty" | "flag_set" | "reminder" | "fallback"
@@ -884,6 +890,26 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
       task: stringValue(a.task, ""),
       updatedAt: optionalString(a.updatedAt),
       alive: typeof a.alive === "boolean" ? a.alive : undefined,
+      activeToolExecutions: Array.isArray(a.activeToolExecutions)
+        ? a.activeToolExecutions.filter((id): id is string => typeof id === "string")
+        : undefined,
+      activeTools: Array.isArray(a.activeTools)
+        ? a.activeTools.flatMap((value) => {
+            const tool = asDict(value);
+            const toolCallId = optionalString(tool.toolCallId);
+            const toolName = optionalString(tool.toolName);
+            const startedAt = optionalString(tool.startedAt);
+            if (!toolCallId || !toolName || !startedAt) return [];
+            return [{
+              toolCallId,
+              toolName,
+              runId: optionalString(tool.runId),
+              startedAt,
+              cancellable: tool.cancellable === true,
+              status: tool.status === "stopping" ? "stopping" as const : "running" as const,
+            }];
+          })
+        : undefined,
     };
     if (attempt !== undefined && maxAttempts !== undefined && delayMs !== undefined) {
       normalized.retry = { attempt, maxAttempts, delayMs };

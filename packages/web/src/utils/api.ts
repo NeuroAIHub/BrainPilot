@@ -662,7 +662,7 @@ export const api = {
       );
     },
 
-    async interrupt(sessionId: string): Promise<{ interrupted: boolean }> {
+    async interrupt(sessionId: string): Promise<{ interrupted: boolean; reason?: "already_idle" }> {
       if (runtimeConfig.useMockBackend) {
         return { interrupted: true };
       }
@@ -670,13 +670,39 @@ export const api = {
       // (RUNTIME_ROUTES.interrupt), NOT /messages — the messages endpoint's body
       // schema rejects {type:"interrupt"} so the agent was never actually
       // stopped. Empty body = interrupt every agent in the session.
-      return handleJson<{ interrupted: boolean }>(
+      return handleJson<{ interrupted: boolean; reason?: "already_idle" }>(
         await apiFetch(`${API_BASE}/sessions/${sessionId}/interrupt`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
           body: JSON.stringify({}),
         }),
       );
+    },
+
+    async interruptTool(
+      sessionId: string,
+      toolCallId: string,
+    ): Promise<{ interrupted: boolean; toolCallId: string; reason?: string }> {
+      if (runtimeConfig.useMockBackend) {
+        return { interrupted: true, toolCallId };
+      }
+      const response = await apiFetch(
+          `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/tools/${encodeURIComponent(toolCallId)}/interrupt`,
+          { method: "POST", headers: authHeaders() },
+        );
+      // A timeout is deliberately HTTP 504 but still has a typed lifecycle
+      // body the UI can turn into an actionable Stop-task fallback.
+      if (response.headers.get("content-type")?.includes("application/json")) {
+        const body = await response.clone().json().catch(() => null) as {
+          interrupted?: unknown;
+          toolCallId?: unknown;
+          reason?: unknown;
+        } | null;
+        if (body && typeof body.interrupted === "boolean" && typeof body.toolCallId === "string") {
+          return body as { interrupted: boolean; toolCallId: string; reason?: string };
+        }
+      }
+      return handleJson(response);
     },
 
     async postMessage(
