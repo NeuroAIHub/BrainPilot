@@ -957,11 +957,15 @@ export function probeKbEnvironment(kbRoot?: string): KbEnvironment {
  * Resolve the KnowledgeBase root. Precedence (must stay in lock-step with
  * `runtime/src/tools/kb/paths.ts::detectKbRoot`, issue #378):
  *   1. `BP_KB_ROOT` env var.
- *   2. Walk up from this module to find a sibling `KnowledgeBase/` (the
- *      git-checkout layout where the tree lives alongside `packages/`).
- *   3. `<cwd>/KnowledgeBase` — but ONLY when it exists. Historically we
- *      returned this unconditionally, which pointed npm-only users at a
- *      non-existent directory and disagreed with the runtime resolver.
+ *   2. Walk up from this module to find a sibling `KnowledgeBase/` whose
+ *      `scripts/build_kb.py` exists — the git-checkout layout where the
+ *      tree lives alongside `packages/`.
+ *   3. `<cwd>/KnowledgeBase` — but ONLY when `scripts/build_kb.py` is
+ *      present there too. The shape check matters: a legacy user with
+ *      only `./KnowledgeBase/vectorstore/` (no scripts) silently falls
+ *      through to step 4 rather than pointing the build pipeline at a KB
+ *      it cannot drive. Runtime server startup logs the winner once so
+ *      the switch to the user-level default is never invisible.
  *   4. `~/.brainpilot/KnowledgeBase` — the single-user default. Same as the
  *      runtime's fallback so both build orchestration and retrieval tools
  *      look in the same place when nothing else is configured.

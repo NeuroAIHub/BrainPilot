@@ -70,19 +70,24 @@ describe("materializeKb — skip conditions", () => {
   });
 
   it("sibling KB (workspace dev) → reason=sibling-kb, no copy", async () => {
-    // The default resolver in this repo returns the sibling KB — force that
-    // path by omitting sourceOverride but providing a clean env + home.
+    // The default resolver walks up to the repo-root KnowledgeBase/ (or
+    // resolves the workspace-linked kb-scripts pkg if `npm pack` was
+    // ever run). Either way, the path does NOT contain
+    // `node_modules/@brainpilot/kb-scripts`, so isPackagedSource returns
+    // false and we get reason=sibling-kb without a copy — regardless of
+    // whether packages/kb-scripts/kb/ happens to exist.
     const home = await freshHome();
     const res = await materializeKb({ env: {}, homeDir: home });
     expect(res.reason).toBe("sibling-kb");
     expect(res.source).not.toBeNull();
+    expect(res.source!.includes(join("node_modules", "@brainpilot", "kb-scripts"))).toBe(false);
     expect(existsSync(res.dest)).toBe(false);
   });
 
   it("sourceOverride pointing at a non-packaged path → reason=sibling-kb", async () => {
     const home = await freshHome();
     // Any random dir that doesn't have `node_modules/@brainpilot/kb-scripts`
-    // in its path and doesn't end with `kb-scripts/kb`.
+    // in its path.
     const bogus = await mkdtemp(join(tmpdir(), "bp-kb-bogus-"));
     const res = await materializeKb({
       env: {},
@@ -90,6 +95,26 @@ describe("materializeKb — skip conditions", () => {
       sourceOverride: bogus,
     });
     expect(res.reason).toBe("sibling-kb");
+  });
+
+  it("workspace-symlinked path ending in kb-scripts/kb is NOT accepted as packaged", async () => {
+    // Regression test for the PR #379 review finding: previously
+    // isPackagedSource accepted any path ending with "kb-scripts/kb",
+    // which misfires in workspace dev after `npm pack` (require.resolve
+    // resolves the symlink to the real path). Tightened classifier
+    // requires the `node_modules/@brainpilot/kb-scripts` substring.
+    const home = await freshHome();
+    const fakeWorkspace = await mkdtemp(join(tmpdir(), "bp-kb-ws-"));
+    const workspaceKb = join(fakeWorkspace, "packages", "kb-scripts", "kb");
+    await mkdir(join(workspaceKb, "scripts"), { recursive: true });
+    await writeFile(join(workspaceKb, "scripts", "build_kb.py"), "# stub\n");
+    const res = await materializeKb({
+      env: {},
+      homeDir: home,
+      sourceOverride: workspaceKb,
+    });
+    expect(res.reason).toBe("sibling-kb");
+    expect(existsSync(res.dest)).toBe(false);
   });
 });
 

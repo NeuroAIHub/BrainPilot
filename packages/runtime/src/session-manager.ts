@@ -627,14 +627,24 @@ export class SessionManager {
 
     try {
       const res = await materializeKb();
-      if (res.reason) {
-        // eslint-disable-next-line no-console
-        console.info(`[kb-scripts] skipped: ${res.reason}`);
-      } else {
+      // Successful copy: always log (rare — first-launch npm installs only).
+      // Skip reasons are logged selectively:
+      //   - `no-source` is the ONE case a user might need to notice (pkg
+      //     missing = the buttons in the UI will fail later).
+      //   - `sibling-kb`, `env-override`, `skip-env` are expected / opt-in;
+      //     silent to avoid noise on every dev / container launch.
+      if (!res.reason) {
         // eslint-disable-next-line no-console
         console.info(
           `[kb-scripts] ${res.copied} copied → ${res.dest}` +
             (res.skipped ? ` (${res.skipped} preserved)` : ""),
+        );
+      } else if (res.reason === "no-source") {
+        // eslint-disable-next-line no-console
+        console.warn(
+          "[kb-scripts] bundled @brainpilot/kb-scripts not found — " +
+            'the KB "Set up Python environment / Models" buttons will fail. ' +
+            "Check the install (npm) or that the Dockerfile stages KnowledgeBase/.",
         );
       }
     } catch (err) {

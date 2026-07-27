@@ -7,8 +7,11 @@ can build a local knowledge base without cloning the repo.
 The `kb/` directory is populated by this package's `prepack` lifecycle hook
 (`scripts/stage.mjs`) from the canonical `KnowledgeBase/` at the BrainPilot
 repo root; it is deliberately absent from git. Every published tarball
-includes `kb/scripts/`, `kb/server/`, `kb/requirements.txt`, `kb/README.md`
-and `kb/.gitignore`.
+includes `kb/scripts/`, `kb/server/`, `kb/requirements.txt` and
+`kb/README.md`. (The `.gitignore` at the KnowledgeBase root is not staged
+— npm strips dotfiles at the package root from tarballs, and the file
+is purely cosmetic in the materialised `~/.brainpilot/KnowledgeBase/`
+which is not a git repo.)
 
 ## How it reaches the user
 

@@ -7,19 +7,12 @@
   "license": "AGPL-3.0-only",
   "type": "module",
   "description": "BrainPilot KnowledgeBase Python scripts + model_server sidecar, materialised into ~/.brainpilot/KnowledgeBase on first launch",
-  "main": "./dist/index.js",
-  "types": "./dist/index.d.ts",
-  "exports": {
-    ".": {
-      "types": "./dist/index.d.ts",
-      "default": "./dist/index.js"
-    },
-    "./package.json": "./package.json"
-  },
   "files": [
-    "dist",
     "kb"
   ],
+  "exports": {
+    "./package.json": "./package.json"
+  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
@@ -29,8 +22,7 @@
     "access": "public"
   },
   "scripts": {
-    "build": "tsc -b",
-    "typecheck": "tsc -b",
+    "build": "node ./scripts/stage.mjs",
     "prepack": "node ./scripts/stage.mjs"
   }
 }

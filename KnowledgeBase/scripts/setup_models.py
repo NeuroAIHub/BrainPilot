@@ -121,11 +121,17 @@ class _RepoProgressReporter:
         self.total_bytes: int = 0
         self.done_bytes: int = 0
         # Speed tracking (EWMA over ~1s windows).
-        self._last_emit_ts: float = time.monotonic()
+        self._start_ts: float = time.monotonic()
+        self._last_emit_ts: float = self._start_ts
         self._last_emit_bytes: int = 0
         self._speed_bps: float = 0.0
         self._last_percent: int = -1
         self._current_file: str = ""
+        # Populated by _ReportingTqdm.set_postfix_str; kept separate from
+        # `_current_file` so HF's aggregate-rate postfix never overwrites
+        # the real per-file description. Surfaced in NDJSON events for
+        # forward compatibility, but never used as the bar's file label.
+        self._postfix: str = ""
 
     # ---- called from _emit_progress or on file transitions ----------
     def _maybe_emit(self, force: bool = False) -> None:
@@ -219,7 +225,16 @@ class _RepoProgressReporter:
             # methods here so callers get the interface they expect,
             # while keeping the NDJSON emit path (not stderr) as the
             # progress channel.
-            _tqdm_lock = threading.RLock()
+            #
+            # Locking convention MIRRORS tqdm's own: the lock lives at
+            # class attribute `_lock`, lazily created by `get_lock()`.
+            # tqdm.contrib.concurrent.ensure_lock does
+            #     old = getattr(cls, "_lock", None)
+            #     lock = old or cls.get_lock(); cls.set_lock(lock); yield
+            #     if old is None: del cls._lock
+            # so `set_lock` MUST write to `_lock` (not any other name) or
+            # ensure_lock will AttributeError on `del cls._lock` at exit
+            # — a bug worse than the one this shim exists to fix.
 
             # Some HF paths peek at .disable before doing anything else.
             # An explicit False keeps the shim active.
@@ -280,57 +295,86 @@ class _RepoProgressReporter:
             # ---- tqdm compatibility shims (#378 part 2) --------------
             @classmethod
             def get_lock(cls):
-                # tqdm.contrib.concurrent.ensure_lock calls this as a
-                # classmethod when snapshot_download uses thread_map.
-                # A process-wide RLock is sufficient — the bar objects
-                # are all bookkeeping into the same reporter.
-                return cls._tqdm_lock
+                # Copies tqdm's own implementation: lazily create `_lock`
+                # on the class. tqdm.contrib.concurrent.ensure_lock will
+                # `del cls._lock` at context exit, so the attribute name
+                # MUST be `_lock` — anything else and ensure_lock throws
+                # AttributeError on the way out (worse than the original
+                # bug this shim addresses).
+                if not hasattr(cls, "_lock"):
+                    cls._lock = threading.RLock()
+                return cls._lock
 
             @classmethod
             def set_lock(cls, lock) -> None:
-                cls._tqdm_lock = lock
+                cls._lock = lock
 
             def set_postfix_str(self, s: str = "",
                                 refresh: bool = True) -> None:
                 # huggingface_hub._set_aggregate_rate_postfix stitches an
-                # aggregate rate line onto the outer bar via this call.
-                # Surface it into `_current_file` so it flows through the
-                # normal throttled emit path (and shows up in the UI).
-                if s and (not reporter._current_file
-                          or s not in reporter._current_file):
-                    reporter._current_file = s
+                # aggregate rate line ("12.3MB/s") onto the outer bar via
+                # this call. Keep it OUT of `_current_file` — that field
+                # is used as the per-file label in NDJSON messages, and
+                # overwriting it with the rate line makes the UI oscillate
+                # between the real filename and the rate string. Store it
+                # separately for forward-compat + emit; the msg already
+                # carries speed via `_fmt_bytes(self._speed_bps)/s`, so
+                # this is decoration, not signal.
+                if s:
+                    reporter._postfix = s
                 if refresh:
                     reporter._maybe_emit(force=True)
 
             @property
             def format_dict(self):
-                # Same caller reads .format_dict to format its postfix.
-                # We provide the minimum keys tqdm's internal callers
-                # consume; unknown keys are ignored.
-                elapsed = max(
-                    0.0, time.monotonic() - reporter._last_emit_ts + 0.001
-                )
+                # tqdm's real `format_dict` returns ~15 keys. Its own
+                # `format_meter` unpacks the dict as **kwargs, so a
+                # MISSING key TypeErrors — exactly the class of failure
+                # this shim exists to prevent. We provide every key the
+                # public tqdm API documents, filling with tqdm's own
+                # defaults (see tqdm/std.py::tqdm.format_dict).
+                now = time.monotonic()
+                elapsed = max(0.0, now - reporter._start_ts)
                 return {
                     "n": reporter.done_bytes,
                     "total": reporter.total_bytes,
                     "elapsed": elapsed,
-                    "rate": reporter._speed_bps or None,
+                    # tqdm returns None (not 0) when no rate is known,
+                    # matching the sentinel behaviour of its own bar.
+                    "rate": reporter._speed_bps if reporter._speed_bps > 0 else None,
+                    "prefix": reporter._current_file or "",
+                    "postfix": reporter._postfix or None,
                     "unit": "B",
                     "unit_scale": True,
-                    "prefix": "",
+                    "unit_divisor": 1024,
+                    "ncols": None,
+                    "nrows": None,
+                    "initial": 0,
+                    "colour": None,
+                    "ascii": None,
+                    "bar_format": None,
+                    "dynamic_ncols": False,
+                    "smoothing": 0.3,
+                    "miniters": 1,
+                    "mininterval": 0.1,
+                    "maxinterval": 10.0,
                 }
 
             def clear(self, nolock: bool = False) -> None:
                 # tqdm.clear() would wipe an ANSI bar; we don't own an
-                # ANSI channel, so just force-refresh the NDJSON emit so
-                # the UI keeps ticking.
-                reporter._maybe_emit(force=True)
+                # ANSI channel, so do nothing. Deliberately NOT a
+                # force-emit — tqdm calls clear+display on every refresh,
+                # and force-emit resets `_last_emit_ts` without updating
+                # `_speed_bps` (EWMA needs elapsed>0.01), which would
+                # permanently freeze the rate/ETA computation.
+                pass
 
             def display(self, msg: str | None = None,
                         pos: int | None = None) -> None:
-                # Same idea as clear(): never touch stderr; just nudge
-                # the throttled emitter.
-                reporter._maybe_emit(force=True)
+                # Same reasoning as clear(): tqdm's display() writes to
+                # stderr, which we don't own. NDJSON events already ship
+                # via `update()`; nothing to do here.
+                pass
 
             def reset(self, total: int | float | None = None) -> None:
                 if total is not None:

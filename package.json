@@ -22,7 +22,7 @@
     "docs:build": "npm run build -w @brainpilot/docs",
     "docs:check": "npm run check:secrets -w @brainpilot/docs && npm run typecheck -w @brainpilot/docs",
     "docs:dev": "npm run dev -w @brainpilot/docs --",
-    "typecheck": "tsc -b packages/protocol packages/skills packages/kb-scripts packages/runtime packages/backend-core packages/cli packages/client-cli",
+    "typecheck": "tsc -b packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
     "test": "vitest run",
     "test:watch": "vitest",
     "bp": "node packages/cli/dist/bin.js",

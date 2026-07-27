@@ -152,11 +152,18 @@ async function copyTreeSkipExisting(
  * the fallback resolver will prefer that sibling anyway — creating a
  * duplicate at ~/.brainpilot/KnowledgeBase would silently mask it and
  * confuse future edits.
+ *
+ * The check REQUIRES `node_modules/@brainpilot/kb-scripts` in the path.
+ * We previously also accepted any path ending in `kb-scripts/kb`, but
+ * that misfires in workspace dev: `require.resolve` resolves symlinks
+ * to the real path (`packages/kb-scripts/kb/...`), which would then be
+ * accepted as "packaged" and clobber the user home from a checkout that
+ * had once run `npm pack`. Requiring `node_modules` explicitly means a
+ * consuming install (flat or nested) still hits, and workspace symlinks
+ * do not.
  */
 function isPackagedSource(source: string): boolean {
-  const nm = join("node_modules", "@brainpilot", "kb-scripts");
-  const pkgSuffix = join("kb-scripts", "kb");
-  return source.includes(nm) || source.endsWith(pkgSuffix);
+  return source.includes(join("node_modules", "@brainpilot", "kb-scripts"));
 }
 
 /**

@@ -6,10 +6,14 @@
  *   1. `BP_KB_ROOT` env var — highest-priority override, set by the
  *      backend/CLI when running from a non-default install layout.
  *   2. Sibling `KnowledgeBase/` reachable by walking up from this
- *      module (the git-checkout layout).
- *   3. `<cwd>/KnowledgeBase` — but ONLY when it exists (the "ran from
- *      repo root" case). Falls through otherwise so npm-only users are
- *      not silently pointed at a non-existent directory.
+ *      module, whose `scripts/build_kb.py` exists (the git-checkout
+ *      layout with the actual pipeline in place).
+ *   3. `<cwd>/KnowledgeBase` — but ONLY when `scripts/build_kb.py` is
+ *      present there. A legacy user with only leftover data dirs
+ *      (`vectorstore/`, `models/`, …) at that path falls through to
+ *      step 4 so retrieval doesn't lock onto a KB the build pipeline
+ *      can't rebuild. Runtime server startup logs the winner once so
+ *      this fallthrough is never silent.
  *   4. `~/.brainpilot/KnowledgeBase` — single-user default for installed
  *      packages with no env override.
  *

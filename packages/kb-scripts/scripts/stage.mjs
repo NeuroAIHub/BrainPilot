@@ -52,4 +52,17 @@ for (const entry of ["scripts", "server", "requirements.txt", "README.md"]) {
   await cp(from, to, { recursive: true, filter: keep });
 }
 
+// Post-condition: the tarball is worthless without the entry script. A
+// filter regression that dropped `scripts/build_kb.py` would otherwise
+// ship an empty-shell package and land users right back on #378. Fail
+// the pack loudly here so it never reaches the registry.
+const canary = join(dst, "scripts", "build_kb.py");
+if (!existsSync(canary)) {
+  console.error(
+    `[kb-scripts:stage] post-condition failed — ${canary} is missing after staging. ` +
+      "Refusing to produce an empty kb-scripts tarball.",
+  );
+  process.exit(2);
+}
+
 console.log(`[kb-scripts:stage] staged ${dst} from ${src}`);
