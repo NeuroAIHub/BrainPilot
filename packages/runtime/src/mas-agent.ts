@@ -17,6 +17,7 @@
 import {
   CUSTOM_EVENT,
   type AgUiEvent,
+  type ActiveToolExecution,
   type AgentRetryState,
   type AgentState,
   type AgentStats,
@@ -45,6 +46,12 @@ import {
 } from "./domain-resources.js";
 
 export type AgentStatus = "idle" | "running" | "error" | "stopped";
+export type ToolInterruptResult = {
+  interrupted: boolean;
+  reason?: "already_finished" | "not_cancellable" | "timeout";
+};
+
+const TOOL_INTERRUPT_TIMEOUT_MS = 10_000;
 
 /** Zeroed token counters — the identity element for accumulation. */
 export function emptyTokenUsage(): TokenUsage {
@@ -122,8 +129,18 @@ export class MasAgent {
   private currentMessageId: string | undefined;
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
-  /** Correlates end events with start args without emitting those args again. */
-  private activeToolCalls = new Map<string, { toolName: string; args: Record<string, unknown> }>();
+  /** Runtime authority for live tools; chat events are only its persisted projection. */
+  private activeToolCalls = new Map<string, {
+    toolName: string;
+    args: Record<string, unknown>;
+    startedAt: number;
+    status: "running" | "stopping";
+    cancellable: boolean;
+    interruptionReason?: "user_requested" | "task_interrupted" | "agent_interrupted";
+    completion: Promise<void>;
+    complete: () => void;
+  }>();
+  private toolInterrupts = new Map<string, Promise<ToolInterruptResult>>();
   private lastError: AgentState["lastError"];
   /**
    * Cumulative real token usage for THIS agent across every assistant turn,
@@ -227,7 +244,8 @@ export class MasAgent {
   state(): AgentState {
     const s: AgentState = { name: this.name, status: this._status };
     if (this.currentRunId) s.activeRunId = this.currentRunId;
-    if (this.activeToolExecutions.size) s.activeToolExecutions = [...this.activeToolExecutions];
+    s.activeToolExecutions = [...this.activeToolExecutions];
+    s.activeTools = this.activeTools();
     if (this.currentRetry) s.retry = this.currentRetry;
     if (this.lastError) s.lastError = this.lastError;
     return s;
@@ -241,16 +259,131 @@ export class MasAgent {
       ev.agentStatusUpdate({ sessionId: this.sessionId, runId: this.currentRunId }, this.name, this._status, {
         activeRunId: this.currentRunId,
         activeToolExecutions: [...this.activeToolExecutions],
+        activeTools: this.activeTools(),
         retry: this.currentRetry,
         lastError: this.lastError,
       }),
     );
   }
 
+  private activeTools(): ActiveToolExecution[] {
+    return [...this.activeToolCalls.entries()].map(([toolCallId, tool]) => ({
+      toolCallId,
+      toolName: tool.toolName,
+      ...(this.currentRunId ? { runId: this.currentRunId } : {}),
+      startedAt: new Date(tool.startedAt).toISOString(),
+      cancellable: tool.cancellable,
+      status: tool.status,
+    }));
+  }
+
+  hasActiveTools(): boolean {
+    return this.activeToolCalls.size > 0;
+  }
+
+  hasTool(toolCallId: string): boolean {
+    return this.activeToolCalls.has(toolCallId);
+  }
+
+  interruptTool(toolCallId: string): Promise<ToolInterruptResult> {
+    const inflight = this.toolInterrupts.get(toolCallId);
+    if (inflight) return inflight;
+    const tool = this.activeToolCalls.get(toolCallId);
+    if (!tool) return Promise.resolve({ interrupted: false, reason: "already_finished" });
+    if (!tool.cancellable || !this.session.interruptTool) {
+      return Promise.resolve({ interrupted: false, reason: "not_cancellable" });
+    }
+    const operation = (async (): Promise<ToolInterruptResult> => {
+      tool.status = "stopping";
+      tool.interruptionReason = "user_requested";
+      this.emitStateUpdate();
+      if (!this.session.interruptTool!(toolCallId)) {
+        tool.status = "running";
+        tool.interruptionReason = undefined;
+        this.emitStateUpdate();
+        return { interrupted: false, reason: "already_finished" };
+      }
+      let timer: ReturnType<typeof setTimeout> | undefined;
+      const settled = await Promise.race([
+        tool.completion.then(() => true),
+        new Promise<false>((resolve) => {
+          timer = setTimeout(() => resolve(false), TOOL_INTERRUPT_TIMEOUT_MS);
+        }),
+      ]);
+      if (timer) clearTimeout(timer);
+      return settled
+        ? { interrupted: true }
+        : { interrupted: false, reason: "timeout" };
+    })().finally(() => this.toolInterrupts.delete(toolCallId));
+    this.toolInterrupts.set(toolCallId, operation);
+    return operation;
+  }
+
   private setStatus(status: AgentStatus): void {
     if (this._status === status) return;
     this._status = status;
     this.emitStateUpdate();
+  }
+
+  private finishTool(
+    ctx: { sessionId: string; agentName: string; runId?: string },
+    toolCallId: string,
+    toolName: string,
+    result: unknown,
+    isError: boolean,
+  ): void {
+    const started = this.activeToolCalls.get(toolCallId);
+    if (!started) return; // terminal event already claimed
+    const durationMs = Math.max(0, Date.now() - started.startedAt);
+    const interrupted = started.interruptionReason !== undefined;
+    const status = interrupted ? "interrupted" : isError ? "failed" : "completed";
+    const resultStr = interrupted
+      ? started.interruptionReason === "user_requested"
+        ? "Command interrupted by user"
+        : "Command interrupted because the task was stopped"
+      : typeof result === "string"
+        ? result
+        : safeStringify(result);
+
+    this.activeToolExecutions.delete(toolCallId);
+    this.activeToolCalls.delete(toolCallId);
+    this.bus.emit(
+      ev.toolCallEnd(ctx, toolCallId, {
+        status,
+        durationMs,
+        reason: started.interruptionReason,
+      }),
+    );
+    this.bus.emit(
+      ev.toolCallResult(ctx, toolCallId, resultStr, interrupted || isError, `tool-result:${toolCallId}`),
+    );
+    started.complete();
+    this.emitStateUpdate();
+
+    const usage = domainResourceUsageOnSuccess(
+      started.toolName,
+      started.args,
+      interrupted || isError,
+      result,
+    );
+    if (usage) this.bus.emit(ev.custom(ctx, CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE, usage));
+    if (isError && !interrupted) {
+      this.bus.emit(
+        ev.systemMessage(this.sessionId, "warning", `❌ ${toolName} 执行失败`, {
+          agent: this.name,
+          details: resultStr,
+          recoverable: true,
+        }),
+      );
+    }
+  }
+
+  private finishDanglingTools(reason?: "task_interrupted" | "agent_interrupted"): void {
+    const ctx = { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId };
+    for (const [toolCallId, tool] of [...this.activeToolCalls]) {
+      if (reason) tool.interruptionReason ??= reason;
+      this.finishTool(ctx, toolCallId, tool.toolName, "Tool ended without a terminal event", true);
+    }
   }
 
   /**
@@ -313,6 +446,7 @@ export class MasAgent {
     let runOutcome: RunStatsStatus = "ok";
     try {
       await this.session.prompt(text);
+      this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
       if (this.abortRequested) {
         // Pi reports an interrupted retry sleep as auto_retry_end(false,
         // "Retry cancelled"). An explicit Stop is a lifecycle outcome, not a
@@ -344,6 +478,7 @@ export class MasAgent {
         runOutcome = "error";
       }
     } catch (err) {
+      this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
       this.currentRetry = undefined;
       this.pendingProviderError = undefined;
       if (this.abortRequested) {
@@ -420,6 +555,11 @@ export class MasAgent {
     // emitted with status "ok"/"error"; we don't double-emit here.
     const wasLiveRun = Boolean(this.currentRunId);
     if (wasLiveRun) this.abortRequested = true;
+    for (const tool of this.activeToolCalls.values()) {
+      tool.status = "stopping";
+      tool.interruptionReason ??= "task_interrupted";
+    }
+    if (this.activeToolCalls.size > 0) this.emitStateUpdate();
     try {
       await this.session.abort();
     } catch {
@@ -432,8 +572,7 @@ export class MasAgent {
     } catch {
       /* prompt() is error-isolated; nothing to surface */
     }
-    this.activeToolExecutions.clear();
-    this.activeToolCalls.clear();
+    this.finishDanglingTools("task_interrupted");
     // Keep abortRequested true until prompt() has fully unwound so both Pi's
     // resolving and rejecting abort paths are recorded as "aborted". A future
     // prompt resets it synchronously at run start.
@@ -443,8 +582,7 @@ export class MasAgent {
   stop(): void {
     this.unsubscribe();
     this.session.dispose();
-    this.activeToolExecutions.clear();
-    this.activeToolCalls.clear();
+    this.finishDanglingTools("agent_interrupted");
     this.setStatus("stopped");
   }
 
@@ -597,7 +735,17 @@ export class MasAgent {
           typeof t.args === "object" && t.args !== null && !Array.isArray(t.args)
             ? (t.args as Record<string, unknown>)
             : {};
-        this.activeToolCalls.set(t.toolCallId, { toolName: t.toolName, args });
+        let complete!: () => void;
+        const completion = new Promise<void>((resolve) => (complete = resolve));
+        this.activeToolCalls.set(t.toolCallId, {
+          toolName: t.toolName,
+          args,
+          startedAt: Date.now(),
+          status: "running",
+          cancellable: t.toolName === "bash" && typeof this.session.interruptTool === "function",
+          completion,
+          complete,
+        });
         // Usage-stats: count *invocation attempts* on start. If Pi ever calls
         // start-without-end (hard abort mid-prep), the invocation still counts —
         // matches "attempted N times" semantics on the wire.
@@ -612,41 +760,19 @@ export class MasAgent {
         if (usage) {
           this.bus.emit(ev.custom(ctx, CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE, usage));
         }
+        this.emitStateUpdate();
         return;
       }
 
       case "tool_execution_end": {
         const t = e as Extract<PiAgentEvent, { type: "tool_execution_end" }>;
-        this.activeToolExecutions.delete(t.toolCallId);
         const started = this.activeToolCalls.get(t.toolCallId);
-        this.activeToolCalls.delete(t.toolCallId);
         // Usage-stats: `errors` is additive to `tools`, never subtracted.
         if (t.isError) {
           this.cumulativeStats.errors[t.toolName] =
             (this.cumulativeStats.errors[t.toolName] ?? 0) + 1;
         }
-        this.bus.emit(ev.toolCallEnd(ctx, t.toolCallId));
-        const resultStr = typeof t.result === "string" ? t.result : safeStringify(t.result);
-        this.bus.emit(ev.toolCallResult(ctx, t.toolCallId, resultStr, t.isError));
-        const usage = domainResourceUsageOnSuccess(
-          started?.toolName ?? t.toolName,
-          started?.args ?? {},
-          t.isError,
-          t.result,
-        );
-        if (usage) {
-          this.bus.emit(ev.custom(ctx, CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE, usage));
-        }
-        // §7 L1: surface tool errors as system_message.
-        if (t.isError) {
-          this.bus.emit(
-            ev.systemMessage(this.sessionId, "warning", `❌ ${t.toolName} 执行失败`, {
-              agent: this.name,
-              details: resultStr,
-              recoverable: true,
-            }),
-          );
-        }
+        if (started) this.finishTool(ctx, t.toolCallId, t.toolName, t.result, t.isError);
         return;
       }
 

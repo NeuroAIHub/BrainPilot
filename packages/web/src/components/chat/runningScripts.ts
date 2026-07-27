@@ -1,4 +1,5 @@
 import type { ChatMessage } from "../../contracts/backend";
+import type { ActiveToolExecution } from "@brainpilot/protocol";
 
 /**
  * "Running script" panel data model (pure, no React).
@@ -64,6 +65,9 @@ export interface ActiveScript {
   id: string;
   agent: string;
   command: string;
+  startedAt: string;
+  cancellable: boolean;
+  status: "running" | "stopping";
 }
 
 /**
@@ -72,16 +76,29 @@ export interface ActiveScript {
  * bash calls — is filtered out. Callers can trigger the panel purely off
  * `result.length > 0`.
  */
-export function selectActiveScripts(messages: ChatMessage[]): ActiveScript[] {
+export function selectActiveScripts(
+  messages: ChatMessage[],
+  activeTools?: ActiveToolExecution[],
+): ActiveScript[] {
+  const authority = activeTools === undefined
+    ? undefined
+    : new Map(activeTools.map((tool) => [tool.toolCallId, tool]));
   const out: ActiveScript[] = [];
   for (const m of messages) {
     if (m.kind !== "tool") continue;
     if (!m.streaming) continue;
     if (!isBashTool(m.toolName)) continue;
+    const tool = authority?.get(m.id);
+    if (authority && !tool) continue;
     out.push({
       id: m.id,
       agent: m.agent ?? "principal",
       command: extractCommand(m.toolInput),
+      // TOOL_CALL_START._ts (stored as createdAt) is the display authority;
+      // activeTools only decides whether/how the live execution can stop.
+      startedAt: m.createdAt,
+      cancellable: tool?.cancellable ?? false,
+      status: tool?.status ?? "running",
     });
   }
   return out;

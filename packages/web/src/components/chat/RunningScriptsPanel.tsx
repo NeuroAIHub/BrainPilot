@@ -1,5 +1,6 @@
 import { ChevronDown, Square } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
+import type { ActiveToolExecution } from "@brainpilot/protocol";
 import type { ChatMessage } from "../../contracts/backend";
 import { useT } from "../../i18n/useT";
 import { formatElapsed } from "../../utils/format";
@@ -7,7 +8,11 @@ import { selectActiveScripts } from "./runningScripts";
 
 interface Props {
   messages: ChatMessage[];
-  onStop: () => void;
+  activeTools?: ActiveToolExecution[];
+  onStopScript: (toolCallId: string) => void;
+  onStopTask: () => void;
+  isStoppingTask?: boolean;
+  stoppingToolIds?: ReadonlySet<string>;
 }
 
 /**
@@ -25,24 +30,16 @@ interface Props {
  * this been going" affordance. `role="status"` (no `aria-live`) so the
  * once-a-second tick doesn't spam screen readers with elapsed digits.
  */
-export function RunningScriptsPanel({ messages, onStop }: Props) {
+export function RunningScriptsPanel({
+  messages,
+  activeTools,
+  onStopScript,
+  onStopTask,
+  isStoppingTask = false,
+  stoppingToolIds = new Set(),
+}: Props) {
   const t = useT();
-  const scripts = useMemo(() => selectActiveScripts(messages), [messages]);
-
-  // New scripts get a stamp the first render they appear in; finished ones
-  // are pruned so a re-appearing tool-call-id (shouldn't happen, but be
-  // defensive) restarts its clock cleanly.
-  const startedAt = useRef<Map<string, number>>(new Map());
-  useEffect(() => {
-    const now = performance.now();
-    const live = new Set(scripts.map((s) => s.id));
-    for (const id of live) {
-      if (!startedAt.current.has(id)) startedAt.current.set(id, now);
-    }
-    for (const id of startedAt.current.keys()) {
-      if (!live.has(id)) startedAt.current.delete(id);
-    }
-  }, [scripts]);
+  const scripts = useMemo(() => selectActiveScripts(messages, activeTools), [messages, activeTools]);
 
   // Tick once a second while at least one script is in flight so the
   // per-script elapsed advances without needing external state.
@@ -61,8 +58,8 @@ export function RunningScriptsPanel({ messages, onStop }: Props) {
 
   if (scripts.length === 0) return null;
 
-  const now = performance.now();
-  const starts = Array.from(startedAt.current.values());
+  const now = Date.now();
+  const starts = scripts.map((script) => Date.parse(script.startedAt)).filter(Number.isFinite);
   const oldest = starts.length > 0 ? Math.min(...starts) : now;
 
   return (
@@ -85,19 +82,21 @@ export function RunningScriptsPanel({ messages, onStop }: Props) {
               // Don't toggle the <details> when clicking Stop.
               e.stopPropagation();
               e.preventDefault();
-              onStop();
+              onStopTask();
             }}
+            disabled={isStoppingTask}
             aria-label={t("chat.aria.stop")}
             title={t("chat.aria.stop")}
           >
             <Square size={10} fill="currentColor" />
-            <span>{t("chat.stop")}</span>
+            <span>{isStoppingTask ? t("chat.stoppingTask") : t("chat.stopTask")}</span>
           </button>
         </summary>
         <ul className="running-scripts__list">
           {scripts.map((s) => {
-            const start = startedAt.current.get(s.id);
-            const elapsed = start === undefined ? "" : formatElapsed(now - start);
+            const start = Date.parse(s.startedAt);
+            const elapsed = Number.isFinite(start) ? formatElapsed(Math.max(0, now - start)) : "";
+            const stopping = s.status === "stopping" || stoppingToolIds.has(s.id);
             return (
               <li className="running-scripts__item" key={s.id}>
                 <div className="running-scripts__item-head">
@@ -108,6 +107,17 @@ export function RunningScriptsPanel({ messages, onStop }: Props) {
                 <pre className="running-scripts__cmd">
                   {s.command || t("chat.runningScripts.pending")}
                 </pre>
+                {s.cancellable ? (
+                  <button
+                    className="running-scripts__stop running-scripts__stop--script"
+                    type="button"
+                    disabled={stopping || isStoppingTask}
+                    onClick={() => onStopScript(s.id)}
+                  >
+                    <Square size={10} fill="currentColor" />
+                    <span>{stopping ? t("chat.stoppingScript") : t("chat.stopScript")}</span>
+                  </button>
+                ) : null}
               </li>
             );
           })}

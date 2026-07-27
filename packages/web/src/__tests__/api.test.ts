@@ -262,6 +262,20 @@ describe("api.sessions.interrupt — hits the interrupt route, not /messages (#9
   });
 });
 
+describe("api.sessions.interruptTool", () => {
+  it("POSTs to the scoped tool resource", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      contentType: "application/json",
+      json: { interrupted: true, toolCallId: "tool/a" },
+    }));
+    const result = await api.sessions.interruptTool("session 1", "tool/a");
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toMatch(/\/sessions\/session%201\/tools\/tool%2Fa\/interrupt$/);
+    expect((init as RequestInit).method).toBe("POST");
+    expect(result.interrupted).toBe(true);
+  });
+});
+
 // #305: uploadFile uses XHR (for upload.onprogress). FakeXHR records the last
 // request and completes via settle() so tests can inspect method/headers/body
 // and drive progress / abort / status.

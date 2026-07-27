@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { mergeRehydratedMessages } from "../contexts/SessionContext";
+import { mergeRehydratedMessages, reconcileActiveTools } from "../contexts/SessionContext";
 import type { ChatMessage } from "../contracts/backend";
 
 function msg(id: string, content = id): ChatMessage {
@@ -36,5 +36,17 @@ describe("mergeRehydratedMessages (#194-B1)", () => {
     const merged = mergeRehydratedMessages(live, history);
     expect(merged.map((m) => m.id)).toEqual(["a", "b"]);
     expect(merged.find((m) => m.id === "a")!.content).toBe("canonical");
+  });
+
+  it("never resurrects a terminal live tool from an older history start", () => {
+    const live = [{ ...msg("tool"), kind: "tool" as const, streaming: false, durationMs: 2000 }];
+    const history = [{ ...msg("tool"), kind: "tool" as const, streaming: true }];
+    expect(mergeRehydratedMessages(live, history)[0]).toMatchObject({ streaming: false, durationMs: 2000 });
+  });
+
+  it("closes streaming tools absent from authoritative activeTools", () => {
+    const messages = [{ ...msg("stale"), kind: "tool" as const, streaming: true }];
+    const reconciled = reconcileActiveTools(messages, [{ activeTools: [] }], "2026-01-01T00:00:03.000Z");
+    expect(reconciled[0]).toMatchObject({ streaming: false, durationMs: 3000 });
   });
 });

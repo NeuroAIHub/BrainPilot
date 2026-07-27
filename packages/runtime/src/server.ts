@@ -147,7 +147,20 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const agent = parsed.success ? parsed.data.agent : undefined;
     await manager.ensureLoaded(id);
     const interrupted = await manager.interrupt(id, agent);
-    return c.json({ interrupted });
+    return c.json({
+      interrupted,
+      scope: agent ? "agent" : "session",
+      ...(!interrupted ? { reason: "already_idle" as const } : {}),
+    });
+  });
+
+  app.post("/sessions/:id/tools/:toolCallId/interrupt", async (c) => {
+    const id = c.req.param("id");
+    const toolCallId = c.req.param("toolCallId");
+    await manager.ensureLoaded(id);
+    const result = await manager.interruptTool(id, toolCallId);
+    const body = { ...result, toolCallId };
+    return c.json(body, result.reason === "timeout" ? 504 : 200);
   });
 
   app.get("/sessions/:id/agents", async (c) => {

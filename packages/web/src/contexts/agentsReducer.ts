@@ -48,18 +48,24 @@ export function reduceAgentsForEvent(
   const retry = retryFromEvent(e);
   const updatedAt = typeof e.updatedAt === "string" ? e.updatedAt : new Date().toISOString();
   const alive = status !== "stopped";
+  const activeToolExecutions = Array.isArray(e.activeToolExecutions)
+    ? e.activeToolExecutions.filter((id): id is string => typeof id === "string")
+    : undefined;
+  const activeTools = Array.isArray(e.activeTools)
+    ? e.activeTools as AgentStatus["activeTools"]
+    : undefined;
 
   const idx = agents.findIndex((a) => a.name === name);
   if (idx === -1) {
-    return [...agents, { name, status, task: "", updatedAt, alive, retry }];
+    return [...agents, { name, status, task: "", updatedAt, alive, retry, activeToolExecutions, activeTools }];
   }
   const previousRetry = agents[idx]!.retry;
   const retryUnchanged =
     previousRetry?.attempt === retry?.attempt &&
     previousRetry?.maxAttempts === retry?.maxAttempts &&
     previousRetry?.delayMs === retry?.delayMs;
-  if (agents[idx]!.status === status && retryUnchanged) return agents; // no-op → stable reference
+  if (agents[idx]!.status === status && retryUnchanged && activeTools === undefined) return agents;
   const next = agents.slice();
-  next[idx] = { ...agents[idx]!, status, updatedAt, alive, retry };
+  next[idx] = { ...agents[idx]!, status, updatedAt, alive, retry, activeToolExecutions, activeTools };
   return next;
 }

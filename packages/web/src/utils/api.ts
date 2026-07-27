@@ -677,6 +677,21 @@ export const api = {
       );
     },
 
+    async interruptTool(
+      sessionId: string,
+      toolCallId: string,
+    ): Promise<{ interrupted: boolean; toolCallId: string; reason?: string }> {
+      if (runtimeConfig.useMockBackend) {
+        return { interrupted: true, toolCallId };
+      }
+      return handleJson(
+        await apiFetch(
+          `${API_BASE}/sessions/${encodeURIComponent(sessionId)}/tools/${encodeURIComponent(toolCallId)}/interrupt`,
+          { method: "POST", headers: authHeaders() },
+        ),
+      );
+    },
+
     async postMessage(
       sessionId: string,
       payload: { content: string; uuid: string; timestamp: string; type?: string },

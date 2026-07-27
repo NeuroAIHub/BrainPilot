@@ -87,6 +87,9 @@ interface SessionContextValue {
    *  error — the composer uses this to restore the draft so input isn't lost. */
   sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources }) => Promise<boolean>;
   interruptCurrent: () => Promise<void>;
+  interruptTool: (toolCallId: string) => Promise<void>;
+  isInterrupting: boolean;
+  interruptingToolIds: ReadonlySet<string>;
   /**
    * 修正6 — answer an ask_user (user_input_request) card. Optimistically
    * resolves the card locally and posts a user_input_response to the runtime.
@@ -190,9 +193,65 @@ export function mergeRehydratedMessages(
   history: ChatMessage[],
 ): ChatMessage[] {
   if (existing.length === 0) return history;
-  const historyIds = new Set(history.map((m) => m.id));
-  const extra = existing.filter((m) => !historyIds.has(m.id));
-  return [...history, ...extra];
+  const liveById = new Map(existing.map((m) => [m.id, m]));
+  const merged = history.map((saved) => {
+    const live = liveById.get(saved.id);
+    if (!live) return saved;
+    liveById.delete(saved.id);
+    // A terminal projection is monotonic: an older history START must never
+    // resurrect a tool already ended by the live SSE tail (and vice versa).
+    const eventTerminals = [live, saved].filter(
+      (message) => message.streaming === false && message.toolTerminalSource === "event",
+    );
+    const eventTerminal = eventTerminals.sort(
+      (a, b) => Date.parse(b.completedAt ?? "") - Date.parse(a.completedAt ?? ""),
+    )[0];
+    const terminal = eventTerminal
+      ?? (live.streaming === false ? live : saved.streaming === false ? saved : undefined);
+    if (!terminal) return saved;
+    return {
+      ...saved,
+      ...terminal,
+      streaming: false,
+      completedAt: terminal.completedAt ?? live.completedAt ?? saved.completedAt,
+      durationMs: terminal.durationMs ?? live.durationMs ?? saved.durationMs,
+      toolStatus: terminal.toolStatus ?? live.toolStatus ?? saved.toolStatus,
+      toolTerminalSource: terminal.toolTerminalSource ?? live.toolTerminalSource ?? saved.toolTerminalSource,
+    };
+  });
+  return [...merged, ...liveById.values()];
+}
+
+/** Close stale tool cards using the session snapshot as lifecycle authority. */
+export function reconcileActiveTools(
+  messages: ChatMessage[],
+  agents: Array<Record<string, unknown>>,
+  at = new Date().toISOString(),
+): ChatMessage[] {
+  if (!agents.some((agent) => Array.isArray(agent.activeTools))) return messages;
+  const active = new Set<string>();
+  for (const agent of agents) {
+    if (!Array.isArray(agent.activeTools)) continue;
+    for (const value of agent.activeTools) {
+      if (!value || typeof value !== "object") continue;
+      const id = (value as Record<string, unknown>).toolCallId;
+      if (typeof id === "string") active.add(id);
+    }
+  }
+  let changed = false;
+  const next = messages.map((message) => {
+    if (message.kind !== "tool" || !message.streaming || active.has(message.id)) return message;
+    changed = true;
+    const duration = Date.parse(at) - Date.parse(message.createdAt);
+    return {
+      ...message,
+      streaming: false,
+      completedAt: at,
+      durationMs: Math.max(0, Number.isFinite(duration) ? duration : 0),
+      toolTerminalSource: "snapshot" as const,
+    };
+  });
+  return changed ? next : messages;
 }
 
 function foldSessionHistory(events: unknown[], sessionId: string): {
@@ -223,6 +282,12 @@ function foldSessionHistory(events: unknown[], sessionId: string): {
               ? agent.updatedAt
               : new Date().toISOString(),
           alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
+          activeToolExecutions: Array.isArray(agent.activeToolExecutions)
+            ? agent.activeToolExecutions.filter((id): id is string => typeof id === "string")
+            : undefined,
+          activeTools: Array.isArray(agent.activeTools)
+            ? agent.activeTools as AgentStatus["activeTools"]
+            : undefined,
         }));
       }
       const usage = parseTokenUsageValue(v.tokenUsage);
@@ -292,6 +357,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
+  const [isInterrupting, setIsInterrupting] = useState(false);
+  const interruptingRef = useRef(false);
+  const interruptingToolsRef = useRef<Set<string>>(new Set());
+  const [interruptingToolIds, setInterruptingToolIds] = useState<ReadonlySet<string>>(new Set());
   const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<"chat" | "agents" | "trace">("chat");
@@ -687,7 +756,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const interruptCurrent = useCallback(
     async () => {
-      if (!currentSession) return;
+      if (!currentSession || interruptingRef.current) return;
       const sid = currentSession.id;
       // #90: NOT optimistic. Wait for the interrupt to actually land before
       // touching the UI — the old code optimistically forced every agent idle
@@ -697,6 +766,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // a failed interrupt leaves the true (still-running) state visible via the
       // authoritative SSE session_state stream.
       try {
+        interruptingRef.current = true;
+        setIsInterrupting(true);
         const { interrupted } = await api.sessions.interrupt(sid);
         if (!interrupted) {
           // Nothing was running to interrupt (or the session is gone). Surface it
@@ -716,10 +787,48 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         });
       } catch (err) {
         setError(err instanceof Error ? err.message : tg("ctx.session.interruptFailed"));
+      } finally {
+        interruptingRef.current = false;
+        setIsInterrupting(false);
       }
     },
     [currentSession],
   );
+
+  const interruptTool = useCallback(async (toolCallId: string) => {
+    const sid = currentSession?.id;
+    if (!sid || interruptingToolsRef.current.has(toolCallId)) return;
+    interruptingToolsRef.current.add(toolCallId);
+    setInterruptingToolIds((current) => new Set(current).add(toolCallId));
+    try {
+      const result = await api.sessions.interruptTool(sid, toolCallId);
+      if (!result.interrupted) {
+        setError(result.reason ?? tg("ctx.session.interruptFailed"));
+        return;
+      }
+      // Persistence has completed before HTTP success. Close immediately if
+      // SSE delivery is delayed; the authoritative END timestamp wins later.
+      setMessagesBySession((current) => ({
+        ...current,
+        [sid]: (current[sid] ?? []).map((message) => {
+          if (message.id !== toolCallId || !message.streaming) return message;
+          return {
+            ...message,
+            streaming: false,
+          };
+        }),
+      }));
+    } catch (err) {
+      setError(err instanceof Error ? err.message : tg("ctx.session.interruptFailed"));
+    } finally {
+      interruptingToolsRef.current.delete(toolCallId);
+      setInterruptingToolIds((current) => {
+        const next = new Set(current);
+        next.delete(toolCallId);
+        return next;
+      });
+    }
+  }, [currentSession]);
 
   const respondToInput = useCallback(
     async (requestId: string, answer: string) => {
@@ -928,6 +1037,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           task: String(agent.task ?? ""),
           updatedAt: typeof agent.updatedAt === "string" ? agent.updatedAt : new Date().toISOString(),
           alive: typeof agent.alive === "boolean" ? agent.alive : undefined,
+          activeToolExecutions: Array.isArray(agent.activeToolExecutions)
+            ? agent.activeToolExecutions.filter((id): id is string => typeof id === "string")
+            : undefined,
+          activeTools: Array.isArray(agent.activeTools)
+            ? agent.activeTools as AgentStatus["activeTools"]
+            : undefined,
         }));
         setAgents(nextAgents);
         // #99: feed the whole-turn timer. runState.active is the authoritative
@@ -1078,6 +1193,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }
         const before = messages;
         messages = reduceMessagesForEvent(messages, event);
+        if (event.type === "CUSTOM" && event.name === "session_state") {
+          const value = (event.value ?? {}) as Record<string, unknown>;
+          const agentsRaw = Array.isArray(value.agents)
+            ? value.agents as Array<Record<string, unknown>>
+            : [];
+          const at = typeof value.lastActivityTs === "string"
+            ? value.lastActivityTs
+            : new Date().toISOString();
+          messages = reconcileActiveTools(messages, agentsRaw, at);
+        }
         countHiddenAdds(before, messages, sid);
       }
       return { ...current, [sid]: messages };
@@ -1192,6 +1317,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       deleteSession,
       sendPrompt,
       interruptCurrent,
+      interruptTool,
+      isInterrupting,
+      interruptingToolIds,
       respondToInput,
       refreshSessions,
       refreshMessages,
@@ -1227,6 +1355,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       deleteSession,
       sendPrompt,
       interruptCurrent,
+      interruptTool,
+      isInterrupting,
+      interruptingToolIds,
       respondToInput,
       refreshSessions,
       refreshMessages,

@@ -431,6 +431,13 @@ function MessageStreamImpl({
       // #84: render a friendly tool name (mcp__server__tool → server · tool) and
       // un-escaped payloads. The raw name stays in `title` for debugging/copy.
       const friendly = t("chat.toolPrefix", { name: formatToolName(step.toolName) });
+      const lifecycle = step.streaming
+        ? ""
+        : step.toolStatus && step.durationMs !== undefined
+          ? ` · ${t(`chat.toolStatus.${step.toolStatus}`)} · ${formatElapsed(step.durationMs)}`
+          : step.durationMs !== undefined
+            ? ` · ${formatElapsed(step.durationMs)}`
+            : "";
       const input = formatPayload(step.toolInput);
       const result = formatPayload(step.toolResult);
       return (
@@ -438,7 +445,7 @@ function MessageStreamImpl({
           <details>
             <summary title={step.toolName || undefined}>
               {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
-              {friendly}
+              {friendly}{lifecycle}
             </summary>
             {input ? (
               <div className="activity-step__io">
