@@ -685,11 +685,16 @@ function normalizeMcpByok(rawValue: unknown): McpByokInfo | undefined {
   const raw = asDict(rawValue);
   const kind = stringValue(raw.kind).trim();
   if (!kind) return undefined;
-  const keyParam = optionalString(raw.keyParam ?? raw.key_param);
-  const keyHeader = optionalString(raw.keyHeader ?? raw.key_header);
-  // Mutually exclusive per the protocol schema; if both arrive, keyParam wins so
-  // the UI shows one credential field instead of guessing.
-  return { kind, keyParam, keyHeader: keyParam ? undefined : keyHeader };
+  const keyParam = optionalString(raw.keyParam ?? raw.key_param)?.trim() || undefined;
+  const keyHeader = optionalString(raw.keyHeader ?? raw.key_header)?.trim() || undefined;
+  // Mirror McpByokInfoSchema: accepting both would hide a hosted contract bug by
+  // silently guessing which injection point should win.
+  if (keyParam && keyHeader) return undefined;
+  return {
+    kind,
+    ...(keyParam ? { keyParam } : {}),
+    ...(keyHeader ? { keyHeader } : {}),
+  };
 }
 
 export function normalizeMcpServer(rawValue: unknown): McpServerEntry {

@@ -46,7 +46,12 @@ export function resolveMcpEntryView(
     server.byok && byokStatus ? byokStatus.find((row) => row.kind === server.byok!.kind) ?? null : null;
 
   let subtitle: string | null;
-  if (server.type === "stdio") {
+  if (server.type === "stdio" && managed) {
+    // The backend deliberately removes command/args/env from managed entries:
+    // any of them can carry a shared credential. Use the same localized stand-in
+    // as a managed HTTP entry whose endpoint cannot be shown safely.
+    subtitle = null;
+  } else if (server.type === "stdio") {
     subtitle = [server.command, ...(server.args || [])].filter(Boolean).join(" ");
   } else if (!server.url) {
     // A managed preset with no url at all is the same situation as an unparseable

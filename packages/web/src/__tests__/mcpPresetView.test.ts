@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { resolveMcpEntryView } from "../components/settings/mcpPresetView";
 import { translate } from "../i18n/translate";
-import type { McpByokStatus, McpServerEntry } from "../contracts/backend";
+import { normalizeMcpServer, type McpByokStatus, type McpServerEntry } from "../contracts/backend";
 
 // #377 — Settings → MCP must treat hosted presets differently from a user's own
 // entries: read-only (no Edit / Delete, no raw URL) and optionally BYOK-capable.
@@ -51,6 +51,11 @@ describe("resolveMcpEntryView — read-only presets", () => {
     expect(resolveMcpEntryView(stdio, hosted).subtitle).toBe("npx -y server-fs");
   });
 
+  it("uses the managed stand-in for a read-only stdio entry whose transport is redacted", () => {
+    const stdio: McpServerEntry = { name: "internal", type: "stdio", readOnly: true };
+    expect(resolveMcpEntryView(stdio, hosted).subtitle).toBeNull();
+  });
+
   it("tolerates a user's own http entry with no url at all", () => {
     expect(resolveMcpEntryView({ name: "x", type: "http" }, hosted).subtitle).toBe("");
   });
@@ -60,6 +65,32 @@ describe("resolveMcpEntryView — read-only presets", () => {
   it("returns null for a *managed* entry with no url, not an empty string", () => {
     const view = resolveMcpEntryView({ name: "x", type: "http", readOnly: true }, hosted);
     expect(view.subtitle).toBeNull();
+  });
+});
+
+describe("normalizeMcpServer — BYOK protocol constraints", () => {
+  it("trims the credential injection field", () => {
+    expect(normalizeMcpServer({
+      name: "tavily",
+      type: "http",
+      byok: { kind: " tavily ", keyParam: " tavilyApiKey " },
+    }).byok).toEqual({ kind: "tavily", keyParam: "tavilyApiKey" });
+  });
+
+  it("treats a whitespace-only injection field as absent", () => {
+    expect(normalizeMcpServer({
+      name: "tavily",
+      type: "http",
+      byok: { kind: "tavily", keyParam: "   " },
+    }).byok).toEqual({ kind: "tavily" });
+  });
+
+  it("drops metadata that specifies both mutually-exclusive injection fields", () => {
+    expect(normalizeMcpServer({
+      name: "bad",
+      type: "http",
+      byok: { kind: "bad", keyParam: "token", keyHeader: "Authorization" },
+    }).byok).toBeUndefined();
   });
 });
 

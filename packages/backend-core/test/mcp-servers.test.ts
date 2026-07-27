@@ -201,9 +201,9 @@ describe("MCP Servers CRUD (/api/mcp-servers)", () => {
   });
 
   // #377: hosted deployments inject read-only presets (optionally BYOK-annotated)
-  // into the same on-disk file. GET must pass the annotations through so the web UI
-  // can render a BYOK card; PUT/DELETE must refuse, because hiding the buttons in
-  // the UI is a hint and the preset URL can carry the platform's shared key.
+  // into the same on-disk file. GET must retain only the safe display metadata the
+  // web UI needs; PUT/DELETE must refuse, because hiding the buttons in the UI is a
+  // hint and the stored transport can carry the platform's shared credentials.
   describe("#377 platform-managed presets", () => {
     const preset = {
       type: "http",
@@ -222,10 +222,70 @@ describe("MCP Servers CRUD (/api/mcp-servers)", () => {
       return { app, dataDir };
     }
 
-    it("GET passes readOnly and byok through untouched", async () => {
-      const { app } = await seedPreset();
+    it("GET keeps BYOK metadata but exposes only the managed endpoint's origin", async () => {
+      const { app, dataDir } = await seedPreset();
       const list = await (await app.request("/api/mcp-servers")).json();
-      expect(list).toEqual([{ name: "tavily", ...preset }]);
+      expect(list).toEqual([{
+        name: "tavily",
+        type: "http",
+        url: "https://mcp.tavily.com",
+        readOnly: true,
+        byok: { kind: "tavily", keyParam: "tavilyApiKey" },
+      }]);
+      expect(JSON.stringify(list)).not.toContain("SHARED");
+      expect(JSON.stringify(list)).not.toContain("tavilyApiKey=SHARED");
+
+      // Redaction is an HTTP-boundary concern. The runtime still needs the full
+      // transport on disk to call the preset with the platform fallback key.
+      const stored = await readFile(join(dataDir, "bp_template", "mcp_servers.json"), "utf8");
+      expect(stored).toContain("tavilyApiKey=SHARED");
+    });
+
+    it("GET strips every managed transport field that can carry a credential", async () => {
+      const { app, dataDir } = await setup();
+      await mkdir(join(dataDir, "bp_template"), { recursive: true });
+      await writeFile(
+        join(dataDir, "bp_template", "mcp_servers.json"),
+        JSON.stringify({
+          mcpServers: {
+            internal: {
+              type: "stdio",
+              command: "runner",
+              args: ["--token", "ARGS_SECRET"],
+              env: { API_KEY: "ENV_SECRET" },
+              headers: { Authorization: "Bearer HEADER_SECRET" },
+              readOnly: true,
+              byok: { kind: "internal", keyHeader: "Authorization", extraSecret: "METADATA_SECRET" },
+            },
+          },
+        }),
+      );
+
+      const list = await (await app.request("/api/mcp-servers")).json();
+      expect(list).toEqual([{
+        name: "internal",
+        type: "stdio",
+        readOnly: true,
+        byok: { kind: "internal", keyHeader: "Authorization" },
+      }]);
+      expect(JSON.stringify(list)).not.toMatch(/ARGS_SECRET|ENV_SECRET|HEADER_SECRET|METADATA_SECRET/);
+    });
+
+    it("GET omits an invalid managed URL instead of echoing it", async () => {
+      const { app, dataDir } = await setup();
+      await mkdir(join(dataDir, "bp_template"), { recursive: true });
+      await writeFile(
+        join(dataDir, "bp_template", "mcp_servers.json"),
+        JSON.stringify({
+          mcpServers: {
+            broken: { type: "http", url: "not-a-url?token=SECRET", readOnly: true },
+          },
+        }),
+      );
+
+      const list = await (await app.request("/api/mcp-servers")).json();
+      expect(list).toEqual([{ name: "broken", type: "http", readOnly: true }]);
+      expect(JSON.stringify(list)).not.toContain("SECRET");
     });
 
     it("PUT on a read-only preset returns 403 and leaves the file unchanged", async () => {
