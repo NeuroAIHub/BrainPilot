@@ -190,6 +190,71 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(agent.status).toBe("error");
   });
 
+  it("keeps transient retry attempts out of error bubbles and exposes live retry state", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((e) => captured.push(e));
+    let listener: ((event: any) => void) | undefined;
+    const session = {
+      sessionId: "s-retry",
+      isStreaming: false,
+      subscribe(next: (event: any) => void) {
+        listener = next;
+        return () => {};
+      },
+      async prompt() {
+        listener?.({ type: "message_start", message: { role: "assistant", content: [] } });
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [], stopReason: "error", errorMessage: "503 unavailable" },
+        });
+        listener?.({
+          type: "auto_retry_start",
+          attempt: 1,
+          maxAttempts: 5,
+          delayMs: 2_000,
+          errorMessage: "503 unavailable",
+        });
+        listener?.({ type: "message_start", message: { role: "assistant", content: [] } });
+        listener?.({
+          type: "message_update",
+          message: { role: "assistant", content: [] },
+          assistantMessageEvent: { type: "text_delta", delta: "recovered" },
+        });
+        listener?.({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "recovered" }], stopReason: "stop" },
+        });
+        listener?.({ type: "auto_retry_end", success: true, attempt: 1 });
+      },
+      async abort() {},
+      dispose() {},
+    };
+    const agent = new MasAgent({
+      sessionId: "s-retry",
+      name: "principal",
+      role: "principal",
+      session,
+      bus,
+    });
+
+    await agent.prompt("hello");
+
+    for (const event of captured) expect(() => parseEvent(event)).not.toThrow();
+    const retry = captured.find(
+      (event) =>
+        event.type === "agent_status_update" &&
+        (event as unknown as { retry?: { attempt: number } }).retry?.attempt === 1,
+    );
+    expect(retry).toBeDefined();
+    expect(
+      captured.filter(
+        (event) => event.type === "system_message" && (event as any).level === "error",
+      ),
+    ).toHaveLength(0);
+    expect(agent.status).toBe("idle");
+  });
+
   // Pi's compaction lifecycle used to be silently suppressed. It now surfaces on
   // the AG-UI CUSTOM channel (name:"compaction") + a friendly system_message so
   // clients see auto-compaction rather than a mid-run context reset.

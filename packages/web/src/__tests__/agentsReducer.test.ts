@@ -55,6 +55,22 @@ describe("reduceAgentsForEvent (#70)", () => {
     expect(out[0]!.status).toBe("running");
   });
 
+  it("stores retry progress and clears it on the next ordinary status update", () => {
+    const retrying = reduceAgentsForEvent(
+      [],
+      {
+        type: "agent_status_update",
+        name: "principal",
+        status: "running",
+        retry: { attempt: 2, maxAttempts: 5, delayMs: 4_000 },
+      } as unknown as WebSocketEvent,
+    );
+    expect(retrying[0]!.retry).toEqual({ attempt: 2, maxAttempts: 5, delayMs: 4_000 });
+
+    const cleared = reduceAgentsForEvent(retrying, ev("principal", "running"));
+    expect(cleared[0]!.retry).toBeUndefined();
+  });
+
   it("merges multiple agents independently", () => {
     let agents: AgentStatus[] = [];
     agents = reduceAgentsForEvent(agents, ev("principal", "running"));

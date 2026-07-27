@@ -13,6 +13,7 @@
  *   - contains "[[error]]": emits an agent-level failure (auto_retry then end).
  */
 import type { IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
+import { PROVIDER_MAX_RETRIES } from "./pi-retry.js";
 
 export interface MockSessionConfig {
   sessionId: string;
@@ -78,7 +79,7 @@ export class MockAgentSession implements IAgentSession {
       this.emit({
         type: "auto_retry_start",
         attempt: 1,
-        maxAttempts: 3,
+        maxAttempts: PROVIDER_MAX_RETRIES,
         delayMs: 0,
         errorMessage: "mock API error",
       });
