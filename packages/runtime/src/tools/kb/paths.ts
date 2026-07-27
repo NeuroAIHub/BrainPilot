@@ -1,13 +1,17 @@
 /**
  * Resolve the KnowledgeBase directory layout from a single root.
  *
- * Priority for the root:
- *   1. `BP_KB_ROOT` env var (set by the backend/CLI when running from
- *      a non-default install layout)
- *   2. `<repo>/KnowledgeBase` — when the runtime is checked out from git
- *      next to the KnowledgeBase tree
- *   3. `~/.brainpilot/KnowledgeBase` — single-user default for installed
- *      packages with no env override
+ * Priority for the root (must stay in lock-step with
+ * `backend-core/src/kb-builder.ts::findKbRoot`, issue #378):
+ *   1. `BP_KB_ROOT` env var — highest-priority override, set by the
+ *      backend/CLI when running from a non-default install layout.
+ *   2. Sibling `KnowledgeBase/` reachable by walking up from this
+ *      module (the git-checkout layout).
+ *   3. `<cwd>/KnowledgeBase` — but ONLY when it exists (the "ran from
+ *      repo root" case). Falls through otherwise so npm-only users are
+ *      not silently pointed at a non-existent directory.
+ *   4. `~/.brainpilot/KnowledgeBase` — single-user default for installed
+ *      packages with no env override.
  *
  * Every retrieval/search tool calls `resolveKbPaths()` lazily so the user
  * can change `BP_KB_ROOT` between server restarts without rebuilding.
@@ -45,15 +49,21 @@ function detectKbRoot(): string {
   if (env && env.trim()) return resolve(env.trim());
 
   // Try a sibling KnowledgeBase relative to the runtime package. Walk up to a
-  // bounded depth so we don't escape to /.
+  // bounded depth so we don't escape to /. Check for `build_kb.py` (matches
+  // the shape check backend-core uses so both resolvers agree; #378).
   let dir = HERE;
   for (let i = 0; i < 8; i++) {
     const candidate = join(dir, "KnowledgeBase");
-    if (existsSync(join(candidate, "scripts", "_common.py"))) return candidate;
+    if (existsSync(join(candidate, "scripts", "build_kb.py"))) return candidate;
     const parent = dirname(dir);
     if (parent === dir) break;
     dir = parent;
   }
+
+  // "Ran from repo root" case: honour only when the tree is really there.
+  // Kept in lock-step with backend-core/src/kb-builder.ts (#378).
+  const cwdKb = join(process.cwd(), "KnowledgeBase");
+  if (existsSync(join(cwdKb, "scripts", "build_kb.py"))) return cwdKb;
 
   return join(homedir(), ".brainpilot", "KnowledgeBase");
 }

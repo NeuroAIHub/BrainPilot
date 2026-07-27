@@ -55,6 +55,7 @@ import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/ag
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
+import { materializeKb } from "./materialize-kb.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import { isWindows } from "./platform.js";
@@ -480,6 +481,7 @@ export class SessionManager {
   // `materializeSkills`).
   private readonly routerSkillsDir: string;
   private skillsMaterialized = false;
+  private kbMaterialized = false;
 
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
   private readonly memWatchdog: MemWatchdog | null;
@@ -604,6 +606,40 @@ export class SessionManager {
     } catch (err) {
       // eslint-disable-next-line no-console
       console.error(`[skills] failed to materialize built-in skills: ${(err as Error).message}`);
+    }
+  }
+
+  /**
+   * Materialize the KnowledgeBase Python scripts + model_server sidecar
+   * bundled with `@brainpilot/kb-scripts` into `~/.brainpilot/KnowledgeBase/`
+   * (Part 3's unified fallback location), so npm-only users can use the
+   * "Set up Python environment" / "Set up Models" buttons out of the box.
+   * See issue #378.
+   *
+   * Best-effort — like {@link ensureSkillsMaterialized}. A skipped
+   * copy (BP_KB_ROOT set / sibling KB present / test env override) is
+   * logged and treated as success; only real errors are surfaced.
+   * Idempotent — runs at most once per manager.
+   */
+  async ensureKbMaterialized(): Promise<void> {
+    if (this.kbMaterialized) return;
+    this.kbMaterialized = true;
+
+    try {
+      const res = await materializeKb();
+      if (res.reason) {
+        // eslint-disable-next-line no-console
+        console.info(`[kb-scripts] skipped: ${res.reason}`);
+      } else {
+        // eslint-disable-next-line no-console
+        console.info(
+          `[kb-scripts] ${res.copied} copied → ${res.dest}` +
+            (res.skipped ? ` (${res.skipped} preserved)` : ""),
+        );
+      }
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error(`[kb-scripts] failed to materialize: ${(err as Error).message}`);
     }
   }
 

@@ -335,6 +335,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
   // ever ran. Best-effort (the method swallows its own errors).
   await manager.ensureSkillsMaterialized();
 
+  // Same lifecycle for the KnowledgeBase Python scripts (issue #378 Part 1) —
+  // populate ~/.brainpilot/KnowledgeBase/ so npm-installed users' "Set up
+  // Python environment" / "Set up Models" buttons find setup_env.py /
+  // setup_models.py / build_kb.py / model_server.py without a repo clone.
+  // Skipped when BP_KB_ROOT is set or a git-checkout sibling KB is present.
+  await manager.ensureKbMaterialized();
+
   const port =
     opts.port ??
     (process.env.PORT ? Number(process.env.PORT) : undefined) ??

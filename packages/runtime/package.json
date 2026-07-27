@@ -37,6 +37,7 @@
     "start": "node ./dist/server.js"
   },
   "dependencies": {
+    "@brainpilot/kb-scripts": "^0.1.1",
     "@brainpilot/protocol": "^0.1.1",
     "@brainpilot/skills": "^0.1.1",
     "@earendil-works/pi-coding-agent": "0.80.3",

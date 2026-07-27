@@ -26,6 +26,7 @@ from __future__ import annotations
 import argparse
 import os
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -204,6 +205,26 @@ class _RepoProgressReporter:
         reporter = self
 
         class _ReportingTqdm:
+            # tqdm-compatibility surface (issue #378 part 2). Newer tqdm
+            # (>=4.68) and huggingface_hub (>=1.24) call methods on the
+            # bar object that a plain class doesn't have — get_lock /
+            # set_lock (via tqdm.contrib.concurrent.ensure_lock when
+            # snapshot_download uses thread_map), set_postfix_str /
+            # format_dict (via huggingface_hub._xet_progress_reporting),
+            # plus clear/display for good measure. Without these, HF's
+            # progress callback throws AttributeError on every chunk,
+            # flooding stderr and stalling the UI progress bar. Downloads
+            # still complete because the errors are non-fatal in the
+            # callback, but the noise is user-visible. We shim the
+            # methods here so callers get the interface they expect,
+            # while keeping the NDJSON emit path (not stderr) as the
+            # progress channel.
+            _tqdm_lock = threading.RLock()
+
+            # Some HF paths peek at .disable before doing anything else.
+            # An explicit False keeps the shim active.
+            disable = False
+
             # Signature is deliberately liberal — huggingface_hub /
             # tqdm.contrib.concurrent pass a wide range of kwargs.
             def __init__(self, *args, **kwargs):
@@ -255,6 +276,61 @@ class _RepoProgressReporter:
 
             def close(self) -> None:
                 pass
+
+            # ---- tqdm compatibility shims (#378 part 2) --------------
+            @classmethod
+            def get_lock(cls):
+                # tqdm.contrib.concurrent.ensure_lock calls this as a
+                # classmethod when snapshot_download uses thread_map.
+                # A process-wide RLock is sufficient — the bar objects
+                # are all bookkeeping into the same reporter.
+                return cls._tqdm_lock
+
+            @classmethod
+            def set_lock(cls, lock) -> None:
+                cls._tqdm_lock = lock
+
+            def set_postfix_str(self, s: str = "",
+                                refresh: bool = True) -> None:
+                # huggingface_hub._set_aggregate_rate_postfix stitches an
+                # aggregate rate line onto the outer bar via this call.
+                # Surface it into `_current_file` so it flows through the
+                # normal throttled emit path (and shows up in the UI).
+                if s and (not reporter._current_file
+                          or s not in reporter._current_file):
+                    reporter._current_file = s
+                if refresh:
+                    reporter._maybe_emit(force=True)
+
+            @property
+            def format_dict(self):
+                # Same caller reads .format_dict to format its postfix.
+                # We provide the minimum keys tqdm's internal callers
+                # consume; unknown keys are ignored.
+                elapsed = max(
+                    0.0, time.monotonic() - reporter._last_emit_ts + 0.001
+                )
+                return {
+                    "n": reporter.done_bytes,
+                    "total": reporter.total_bytes,
+                    "elapsed": elapsed,
+                    "rate": reporter._speed_bps or None,
+                    "unit": "B",
+                    "unit_scale": True,
+                    "prefix": "",
+                }
+
+            def clear(self, nolock: bool = False) -> None:
+                # tqdm.clear() would wipe an ANSI bar; we don't own an
+                # ANSI channel, so just force-refresh the NDJSON emit so
+                # the UI keeps ticking.
+                reporter._maybe_emit(force=True)
+
+            def display(self, msg: str | None = None,
+                        pos: int | None = None) -> None:
+                # Same idea as clear(): never touch stderr; just nudge
+                # the throttled emitter.
+                reporter._maybe_emit(force=True)
 
             def reset(self, total: int | float | None = None) -> None:
                 if total is not None:
