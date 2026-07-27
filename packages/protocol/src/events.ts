@@ -146,6 +146,9 @@ export const ToolCallEndEventSchema = z
   .object({
     type: z.literal("TOOL_CALL_END"),
     tool_call_id: z.string(),
+    status: z.enum(["completed", "failed", "interrupted"]).optional(),
+    duration_ms: z.number().nonnegative().optional(),
+    reason: z.enum(["user_requested", "task_interrupted", "agent_interrupted"]).optional(),
     ...envelope,
   })
   .passthrough();

@@ -2227,10 +2227,16 @@ button {
     border-color var(--ease-standard),
     color var(--ease-standard);
 }
-.running-scripts__stop:hover {
+.running-scripts__stop:hover:not(:disabled) {
   background: var(--color-danger-soft);
   border-color: color-mix(in srgb, var(--color-danger) 40%, var(--color-border));
   color: var(--color-danger);
+}
+.running-scripts__stop:disabled {
+  opacity: 0.6;
+}
+.running-scripts__stop--script {
+  align-self: flex-end;
 }
 .running-scripts__list {
   list-style: none;

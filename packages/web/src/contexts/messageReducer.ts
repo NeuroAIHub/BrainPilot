@@ -137,6 +137,12 @@ function finalizeStreamMessage(msg: ChatMessage): ChatMessage {
   return { ...rest, streaming: false };
 }
 
+function eventTimestamp(event: WebSocketEvent): string {
+  const raw = (event as Record<string, unknown>)._ts;
+  if (typeof raw === "string" && Number.isFinite(Date.parse(raw))) return raw;
+  return new Date().toISOString();
+}
+
 /**
  * Apply an AG-UI canonical event to the running messages array. Events are
  * keyed by `messageId` / `toolCallId`; START emits a placeholder, CONTENT
@@ -281,7 +287,7 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           id,
           role: "assistant",
           content: `Tool: ${event.toolCallName ?? "unknown"}`,
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent,
           streaming: true,
           kind: "tool",
@@ -310,7 +316,36 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
     case "TOOL_CALL_END": {
       const id = event.toolCallId;
       if (!id) return existing;
-      return existing.map((m) => (m.id === id ? finalizeStreamMessage(m) : m));
+      const raw = event as Record<string, unknown>;
+      const completedAt = eventTimestamp(event);
+      return existing.map((m) => {
+        if (m.id !== id) return m;
+        if (
+          m.toolTerminalSource === "event"
+          && m.completedAt
+          && Number.isFinite(Date.parse(m.completedAt))
+          && Date.parse(completedAt) <= Date.parse(m.completedAt)
+        ) {
+          return finalizeStreamMessage(m);
+        }
+        const explicit = typeof raw.durationMs === "number"
+          ? raw.durationMs
+          : typeof raw.duration_ms === "number"
+            ? raw.duration_ms
+            : undefined;
+        const derived = Date.parse(completedAt) - Date.parse(m.createdAt);
+        const durationMs = Math.max(0, Number.isFinite(explicit) ? explicit! : Number.isFinite(derived) ? derived : 0);
+        const status = raw.status;
+        return finalizeStreamMessage({
+          ...m,
+          completedAt,
+          durationMs,
+          toolTerminalSource: "event",
+          ...(status === "completed" || status === "failed" || status === "interrupted"
+            ? { toolStatus: status }
+            : {}),
+        });
+      });
     }
 
     case "TOOL_CALL_RESULT": {
