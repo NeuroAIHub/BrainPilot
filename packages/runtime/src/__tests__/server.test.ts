@@ -39,6 +39,23 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect(body.memRatio).toBeNull();
   });
 
+  it("returns a truthful terminal response for an unknown tool call", async () => {
+    const a = app();
+    const created = await a.request("/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ title: "Tools" }),
+    });
+    const { id } = await created.json() as { id: string };
+    const response = await a.request(`/sessions/${id}/tools/missing/interrupt`, { method: "POST" });
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({
+      interrupted: false,
+      toolCallId: "missing",
+      reason: "already_finished",
+    });
+  });
+
   it("full session lifecycle over HTTP", async () => {
     const a = app();
     // create

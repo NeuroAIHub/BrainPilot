@@ -223,6 +223,31 @@ describe("message stream idempotency (#314)", () => {
     expect(reasonTwice[0]!.content).toBe("think hard");
     expect(reasonTwice[0]!.reasoning).toBe("think hard");
   });
+
+  it("hydrates authoritative tool start/end time and terminal status", () => {
+    const messages = fold([
+      {
+        type: "TOOL_CALL_START",
+        toolCallId: "timed",
+        toolCallName: "bash",
+        _ts: "2026-07-15T12:00:00.000Z",
+      } as WebSocketEvent,
+      {
+        type: "TOOL_CALL_END",
+        toolCallId: "timed",
+        status: "interrupted",
+        durationMs: 4_100,
+        _ts: "2026-07-15T12:00:04.200Z",
+      } as WebSocketEvent,
+    ]);
+    expect(messages[0]).toMatchObject({
+      createdAt: "2026-07-15T12:00:00.000Z",
+      completedAt: "2026-07-15T12:00:04.200Z",
+      durationMs: 4_100,
+      toolStatus: "interrupted",
+      streaming: false,
+    });
+  });
 });
 
 describe("interrupt system_message hydrate idempotency (#330)", () => {

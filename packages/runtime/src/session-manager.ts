@@ -447,6 +447,8 @@ function formatBytes(n: number): string {
 
 export class SessionManager {
   private readonly sessions = new Map<string, SessionEntry>();
+  /** Coalesce repeated Stop task requests into one lifecycle operation. */
+  private readonly sessionInterrupts = new Map<string, Promise<boolean>>();
   /**
    * In-flight `restoreOne` promises, keyed by session id. Guards against a
    * refreshed UI firing `state` + `sse` (+ `messages`) near-simultaneously and
@@ -1805,10 +1807,39 @@ export class SessionManager {
    * Do NOT prompt the principal solely to acknowledge the interruption (#327).
    */
   async interrupt(sessionId: string, agentName?: string): Promise<boolean> {
+    const key = `${sessionId}:${agentName ?? "*"}`;
+    const inflight = this.sessionInterrupts.get(key);
+    if (inflight) return inflight;
+    const operation = this.performInterrupt(sessionId, agentName)
+      .finally(() => this.sessionInterrupts.delete(key));
+    this.sessionInterrupts.set(key, operation);
+    return operation;
+  }
+
+  private async performInterrupt(sessionId: string, agentName?: string): Promise<boolean> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return false;
     const wholeSession = agentName === undefined;
     const targets = agentName ? [entry.agents.get(agentName)].filter(Boolean) : [...entry.agents.values()];
+    const hasPendingInput = Boolean(entry.userInputs.active || entry.userInputs.queue.length > 0);
+    const hasTargetInput = agentName !== undefined && (
+      entry.userInputs.active?.agent === agentName
+      || entry.userInputs.queue.some((input) => input.agent === agentName)
+    );
+    const hasTargetActivity = targets.some((agent) =>
+      agent!.status === "running" || agent!.hasActiveTools()
+    );
+    const hasDelivery = [...this.deliveryLoops].some((key) =>
+      key.startsWith(`${sessionId}:`) && (!agentName || key === `${sessionId}:${agentName}`)
+    );
+    if (
+      !hasTargetActivity
+      && !hasDelivery
+      && !hasTargetInput
+      && !(wholeSession && (entry.runActive || hasPendingInput))
+    ) {
+      return false;
+    }
     // Reject any pending ask_user FIRST: a prompt blocked awaiting user input
     // would never settle, so abort()'s waitForIdle (#101) must not run before
     // these are unblocked or it would deadlock.
@@ -1842,7 +1873,22 @@ export class SessionManager {
       this.touch(entry);
       this.emitSessionState(entry);
     }
+    await entry.bus.flush();
     return targets.length > 0;
+  }
+
+  /** Interrupt exactly one currently executing, locally-cancellable tool. */
+  async interruptTool(
+    sessionId: string,
+    toolCallId: string,
+  ): Promise<{ interrupted: boolean; reason?: "already_finished" | "not_cancellable" | "timeout" }> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return { interrupted: false, reason: "already_finished" };
+    const owner = [...entry.agents.values()].find((agent) => agent.hasTool(toolCallId));
+    if (!owner) return { interrupted: false, reason: "already_finished" };
+    const result = await owner.interruptTool(toolCallId);
+    await entry.bus.flush();
+    return result;
   }
 
   /** Test/diagnostic accessor: number of queued messages in `agent`'s inbox. */
@@ -2387,6 +2433,8 @@ export class SessionManager {
         updatedAt: new Date().toISOString(),
         alive: st.status !== "stopped",
         retry: st.retry,
+        activeToolExecutions: st.activeToolExecutions,
+        activeTools: st.activeTools,
       };
       return out;
     });

@@ -79,7 +79,13 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const uploading = uploadState != null;
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const activeTools = useMemo(
+    () => agents.some((agent) => agent.activeTools !== undefined)
+      ? agents.flatMap((agent) => agent.activeTools ?? [])
+      : undefined,
+    [agents],
+  );
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
@@ -143,8 +149,8 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // we don't render a duplicate. When no scripts are running (e.g. the agent
   // is thinking or streaming text), the toast keeps its own Stop.
   const hasActiveScripts = useMemo(
-    () => selectActiveScripts(visibleMessages).length > 0,
-    [visibleMessages],
+    () => selectActiveScripts(visibleMessages, activeTools).length > 0,
+    [visibleMessages, activeTools],
   );
 
   // Agents whose run is still active. Threaded to MessageStream so a folded
@@ -538,11 +544,12 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                 className="agent-running-toast__stop"
                 type="button"
                 onClick={() => void interruptCurrent()}
+                disabled={isInterrupting}
                 aria-label={t("chat.aria.stop")}
                 title={t("chat.aria.stop")}
               >
                 <Square size={10} fill="currentColor" />
-                <span>{t("chat.stop")}</span>
+                <span>{isInterrupting ? t("chat.stoppingTask") : t("chat.stopTask")}</span>
               </button>
             )}
           </div>
@@ -550,7 +557,11 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
 
         <RunningScriptsPanel
           messages={visibleMessages}
-          onStop={() => void interruptCurrent()}
+          activeTools={activeTools}
+          onStopScript={(id) => void interruptTool(id)}
+          onStopTask={() => void interruptCurrent()}
+          isStoppingTask={isInterrupting}
+          stoppingToolIds={interruptingToolIds}
         />
 
         {askTakeover ? (

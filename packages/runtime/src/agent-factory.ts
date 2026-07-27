@@ -43,14 +43,13 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   const sdk = (await import("@earendil-works/pi-coding-agent")) as unknown as PiSdk;
   const {
     createAgentSession,
+    createBashToolDefinition,
     defineTool,
     SessionManager,
     SettingsManager,
     DefaultResourceLoader,
     getAgentDir,
   } = sdk;
-
-  const customTools = params.systemTools.map((t) => adaptTool(defineTool, t));
 
   const agentDir = getAgentDir();
   const settingsManager = SettingsManager.create(params.cwd, agentDir, {
@@ -66,6 +65,20 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
       baseDelayMs: PROVIDER_RETRY_BASE_DELAY_MS,
     },
   });
+
+  // Override Pi's built-in bash with the public factory so each invocation
+  // gets a tool-local signal. Aborting this signal ends only that command;
+  // Pi receives the error result and continues the current model turn.
+  const bashControllers = new Map<string, AbortController>();
+  const officialBash = createBashToolDefinition(params.cwd, {
+    commandPrefix: settingsManager.getShellCommandPrefix(),
+    shellPath: settingsManager.getShellPath(),
+  });
+  const cancellableBash = wrapCancellableBash(officialBash, bashControllers);
+  const customTools = [
+    ...params.systemTools.map((t) => adaptTool(defineTool, t)),
+    ...(params.allowedToolNames.includes("bash") ? [cancellableBash] : []),
+  ];
 
   // Target a custom Anthropic-compatible gateway. A per-session providerConfig
   // (from providers.json) wins and isolates its key via setRuntimeApiKey;
@@ -167,8 +180,48 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // Extend it for the narrow, trace-id-only transient shape seen in production.
   installBrainPilotRetryClassifier(session);
 
-  return new RealAgentSession(session);
+  return new RealAgentSession(session, bashControllers);
 };
+
+type BashDefinition = ReturnType<PiSdk["createBashToolDefinition"]>;
+
+/** Preserve Pi's official Bash behavior while adding tool-local cancellation. */
+export function wrapCancellableBash(
+  officialBash: BashDefinition,
+  controllers: Map<string, AbortController>,
+): BashDefinition {
+  return {
+    ...officialBash,
+    async execute(
+      toolCallId: string,
+      args: Record<string, unknown>,
+      runSignal: AbortSignal | undefined,
+      onUpdate?: (update: unknown) => void,
+      context?: unknown,
+    ): Promise<unknown> {
+      const controller = new AbortController();
+      controllers.set(toolCallId, controller);
+      try {
+        const signal = runSignal
+          ? AbortSignal.any([runSignal, controller.signal])
+          : controller.signal;
+        return await officialBash.execute(toolCallId, args, signal, onUpdate, context);
+      } catch (error) {
+        if (controller.signal.aborted && !runSignal?.aborted) {
+          const partialOutput = error instanceof Error ? error.message.trim() : String(error).trim();
+          throw new Error(
+            partialOutput
+              ? `${partialOutput}\nCommand interrupted by user`
+              : "Command interrupted by user",
+          );
+        }
+        throw error;
+      } finally {
+        controllers.delete(toolCallId);
+      }
+    },
+  };
+}
 
 export function selectFactory(): AgentSessionFactory {
   return isMockMode() ? mockAgentFactory : realAgentFactory;
@@ -199,7 +252,10 @@ function adaptTool(defineTool: PiSdk["defineTool"], tool: SystemTool): unknown {
 
 /** Thin adapter implementing IAgentSession over the real Pi AgentSession. */
 class RealAgentSession implements IAgentSession {
-  constructor(private readonly s: PiSession) {}
+  constructor(
+    private readonly s: PiSession,
+    private readonly bashControllers: Map<string, AbortController>,
+  ) {}
   get sessionId(): string {
     return this.s.sessionId;
   }
@@ -214,6 +270,12 @@ class RealAgentSession implements IAgentSession {
   }
   abort(): Promise<void> {
     return this.s.abort();
+  }
+  interruptTool(toolCallId: string): boolean {
+    const controller = this.bashControllers.get(toolCallId);
+    if (!controller || controller.signal.aborted) return false;
+    controller.abort();
+    return true;
   }
   dispose(): void {
     this.s.dispose();
@@ -230,6 +292,20 @@ interface PiSession {
   dispose(): void;
 }
 interface PiSdk {
+  createBashToolDefinition(
+    cwd: string,
+    options: { commandPrefix?: string; shellPath?: string },
+  ): {
+    name: string;
+    execute(
+      toolCallId: string,
+      args: Record<string, unknown>,
+      signal: AbortSignal | undefined,
+      onUpdate?: (update: unknown) => void,
+      context?: unknown,
+    ): Promise<unknown>;
+    [key: string]: unknown;
+  };
   createAgentSession(opts: {
     cwd?: string;
     tools?: string[];
@@ -258,6 +334,8 @@ interface PiSdk {
       applyOverrides(overrides: {
         retry: { enabled: boolean; maxRetries: number; baseDelayMs: number };
       }): void;
+      getShellCommandPrefix(): string | undefined;
+      getShellPath(): string | undefined;
     };
   };
   DefaultResourceLoader: new (opts: {

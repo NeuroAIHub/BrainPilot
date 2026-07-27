@@ -203,8 +203,18 @@ export type InterruptRequest = z.infer<typeof InterruptRequestSchema>;
 
 export const InterruptResponseSchema = z.object({
   interrupted: z.boolean(),
+  scope: z.enum(["session", "agent", "tool"]).optional(),
+  toolCallId: z.string().optional(),
+  reason: z.enum(["already_idle", "already_finished", "not_cancellable", "timeout"]).optional(),
 });
 export type InterruptResponse = z.infer<typeof InterruptResponseSchema>;
+
+export const InterruptToolResponseSchema = z.object({
+  interrupted: z.boolean(),
+  toolCallId: z.string(),
+  reason: z.enum(["already_finished", "not_cancellable", "timeout"]).optional(),
+});
+export type InterruptToolResponse = z.infer<typeof InterruptToolResponseSchema>;
 
 /* ------------------------------------------------------------------ *
  * POST /sessions/:id/files  (#47 — upload a file into the workspace)
@@ -292,6 +302,7 @@ export const RUNTIME_ROUTES = {
    */
   getSessionHistory: { method: "GET", path: "/sessions/:id/history" },
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },
+  interruptTool: { method: "POST", path: "/sessions/:id/tools/:toolCallId/interrupt" },
   listAgents: { method: "GET", path: "/sessions/:id/agents" },
   evictSession: { method: "POST", path: "/sessions/:id/evict" },
   /**

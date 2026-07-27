@@ -9,6 +9,7 @@ import { EventBus } from "../event-bus.js";
 import { MasAgent } from "../mas-agent.js";
 import { MockAgentSession } from "../mock-agent.js";
 import { ev } from "../events.js";
+import type { IAgentSession, PiAgentEvent } from "../types.js";
 
 /**
  * Event mapping: drive a MasAgent over the MockAgentSession (which emits real
@@ -92,6 +93,69 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(types).toContain("TOOL_CALL_RESULT");
     const result = captured.find((e) => e.type === "TOOL_CALL_RESULT") as { content: string };
     expect(result.content).toBe("pong");
+    const end = captured.find((e) => e.type === "TOOL_CALL_END") as {
+      status: string; duration_ms: number;
+    };
+    expect(end.status).toBe("completed");
+    expect(end.duration_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("coalesces local bash interruption and lets the same turn continue", async () => {
+    class ControlledSession implements IAgentSession {
+      readonly sessionId = "local-bash";
+      readonly listeners = new Set<(event: PiAgentEvent) => void>();
+      interruptCount = 0;
+      private settle!: () => void;
+      subscribe(listener: (event: PiAgentEvent) => void) {
+        this.listeners.add(listener);
+        return () => this.listeners.delete(listener);
+      }
+      private emit(event: PiAgentEvent) { for (const listener of this.listeners) listener(event); }
+      prompt(): Promise<void> {
+        this.emit({ type: "agent_start" });
+        this.emit({ type: "tool_execution_start", toolCallId: "bash-1", toolName: "bash", args: { command: "sleep 60" } });
+        return new Promise<void>((resolve) => { this.settle = resolve; });
+      }
+      interruptTool(id: string): boolean {
+        if (id !== "bash-1" || this.interruptCount > 0) return false;
+        this.interruptCount += 1;
+        queueMicrotask(() => {
+          this.emit({ type: "tool_execution_end", toolCallId: id, toolName: "bash", result: "Command interrupted", isError: true });
+          this.emit({ type: "message_start", message: { role: "assistant", content: [] } });
+          this.emit({ type: "message_update", message: { role: "assistant", content: [] }, assistantMessageEvent: { type: "text_delta", delta: "Stopped the script." } });
+          this.emit({ type: "message_end", message: { role: "assistant", content: [{ type: "text", text: "Stopped the script." }] } });
+          this.emit({ type: "agent_end", messages: [] });
+          this.settle();
+        });
+        return true;
+      }
+      abort() { return Promise.resolve(); }
+      dispose() {}
+      get isStreaming() { return true; }
+    }
+
+    const bus = new EventBus();
+    const events: AgUiEvent[] = [];
+    bus.subscribe((event) => events.push(event));
+    const session = new ControlledSession();
+    const agent = new MasAgent({ sessionId: session.sessionId, name: "principal", role: "principal", session, bus });
+    const run = agent.prompt("run it");
+    const [first, second] = await Promise.all([
+      agent.interruptTool("bash-1"),
+      agent.interruptTool("bash-1"),
+    ]);
+    await run;
+
+    expect(first).toEqual({ interrupted: true });
+    expect(second).toEqual({ interrupted: true });
+    expect(session.interruptCount).toBe(1);
+    const ends = events.filter((event) => event.type === "TOOL_CALL_END") as Array<Record<string, unknown>>;
+    const results = events.filter((event) => event.type === "TOOL_CALL_RESULT") as Array<Record<string, unknown>>;
+    expect(ends).toHaveLength(1);
+    expect(ends[0]).toMatchObject({ status: "interrupted", reason: "user_requested" });
+    expect(results).toHaveLength(1);
+    expect(results[0]).toMatchObject({ message_id: "tool-result:bash-1", is_error: true, content: "Command interrupted by user" });
+    expect(events.some((event) => event.type === "TEXT_MESSAGE_CONTENT")).toBe(true);
   });
 
   it("emits content-free domain tool, skill search, and successful skill load events", async () => {

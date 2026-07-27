@@ -15,6 +15,17 @@ import {
 } from "../src/events.js";
 
 describe("AG-UI event union — NEW events", () => {
+  it("accepts enhanced TOOL_CALL_END while keeping legacy END valid", () => {
+    expect(parseEvent({ type: "TOOL_CALL_END", tool_call_id: "t1" }).type).toBe("TOOL_CALL_END");
+    expect(parseEvent({
+      type: "TOOL_CALL_END",
+      tool_call_id: "t1",
+      status: "interrupted",
+      duration_ms: 4100,
+      reason: "user_requested",
+      _ts: "2026-07-27T00:00:00.000Z",
+    })).toMatchObject({ status: "interrupted", duration_ms: 4100 });
+  });
   it("round-trips system_message (all four levels)", () => {
     for (const level of ["info", "warning", "error", "fatal"] as const) {
       const e = {

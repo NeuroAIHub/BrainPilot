@@ -22,6 +22,7 @@ import {
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
 import { resolveKbPaths } from "./tools/kb/paths.js";
+import { ev } from "./events.js";
 
 export function createServer(opts: SessionManagerOptions & { manager?: SessionManager } = {}): {
   app: Hono;
@@ -148,7 +149,20 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const agent = parsed.success ? parsed.data.agent : undefined;
     await manager.ensureLoaded(id);
     const interrupted = await manager.interrupt(id, agent);
-    return c.json({ interrupted });
+    return c.json({
+      interrupted,
+      scope: agent ? "agent" : "session",
+      ...(!interrupted ? { reason: "already_idle" as const } : {}),
+    });
+  });
+
+  app.post("/sessions/:id/tools/:toolCallId/interrupt", async (c) => {
+    const id = c.req.param("id");
+    const toolCallId = c.req.param("toolCallId");
+    await manager.ensureLoaded(id);
+    const result = await manager.interruptTool(id, toolCallId);
+    const body = { ...result, toolCallId };
+    return c.json(body, result.reason === "timeout" ? 504 : 200);
   });
 
   app.get("/sessions/:id/agents", async (c) => {
@@ -263,6 +277,12 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
       // Replay buffered events, then live-subscribe.
       for (const e of manager.recentEvents(id)) send(e);
       const unsub = manager.subscribe(id, send);
+      // A reconnect must end with a fresh authority frame; the ring may have
+      // evicted the tool-start state after a long stream of partial events.
+      const currentState = manager.getSessionState(id);
+      if (currentState) {
+        send(ev.custom({ sessionId: id }, "session_state", currentState));
+      }
       s.onAbort(() => {
         closed = true;
         unsub?.();
