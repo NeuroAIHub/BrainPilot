@@ -28,6 +28,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
   <a href="./README.md">English</a> | <a href="./README-zh.md">简体中文</a>
   <br/>
   <a href="https://brainpilot.chat/docs">文档</a> ·
+  <a href="./CHANGELOG.md">更新日志</a> ·
   <a href="#-评测结果">评测</a> ·
   <a href="#-精选真实研究案例">案例</a> ·
   <a href="#-快速开始">快速开始</a> ·
@@ -42,6 +43,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ## 📰 最新动态
 
+- **2026-07-24** — [BrainPilot v0.1.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.1) 提升了排队与超时提问、模型服务临时故障重试及模型健康状态记录的可靠性。详情见[更新日志](CHANGELOG.md#011---2026-07-24)。
 - **2026-07-18** — BrainPilot 项目在 2026 世界人工智能大会（WAIC）“实体世界智能科学论坛”上展示，欢迎关注！
 - **2026-07-17** — BrainPilot v0.1.0 正式开源发布。BrainPilot 是一个面向脑科学、人在回路的智能体研究系统，整合专业智能体、领域知识、科研技能和工具，并通过 Graph of Trace 保留可检查的科研过程。
 
