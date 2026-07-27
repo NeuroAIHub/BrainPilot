@@ -3548,6 +3548,18 @@ button {
   border-radius: var(--radius-sm);
 }
 
+.message-card__content .katex-display {
+  max-width: 100%;
+  margin: 0.8em 0;
+  overflow-x: auto;
+  overflow-y: hidden;
+  padding-block: 0.15em;
+}
+
+.message-card__content .katex {
+  color: inherit;
+}
+
 /* Syntax highlighting */
 .message-card__content .hljs-keyword {
   color: var(--color-code-keyword);
