@@ -188,6 +188,57 @@ describe("domain schemas", () => {
     });
   });
 
+  describe("#377 preset BYOK annotation", () => {
+    const base = { name: "tavily", type: "http" as const, url: "https://mcp.tavily.com/mcp/" };
+
+    it("accepts an entry with readOnly + byok and keeps the fields", () => {
+      const parsed = McpServerEntrySchema.parse({
+        ...base,
+        readOnly: true,
+        byok: { kind: "tavily", keyParam: "tavilyApiKey" },
+      });
+      expect(parsed.readOnly).toBe(true);
+      expect(parsed.byok).toEqual({ kind: "tavily", keyParam: "tavilyApiKey" });
+    });
+
+    it("accepts a header-based key and a bare kind", () => {
+      expect(
+        McpServerEntrySchema.safeParse({ ...base, byok: { kind: "k", keyHeader: "X-Api-Key" } }).success,
+      ).toBe(true);
+      expect(McpServerEntrySchema.safeParse({ ...base, byok: { kind: "k" } }).success).toBe(true);
+    });
+
+    it("rejects keyParam and keyHeader together — one injection point only", () => {
+      expect(
+        McpServerEntrySchema.safeParse({
+          ...base,
+          byok: { kind: "k", keyParam: "p", keyHeader: "H" },
+        }).success,
+      ).toBe(false);
+    });
+
+    it("rejects an empty kind — the hosted endpoints are keyed by it", () => {
+      expect(McpServerEntrySchema.safeParse({ ...base, byok: { kind: "  " } }).success).toBe(false);
+      expect(McpServerEntrySchema.safeParse({ ...base, byok: {} }).success).toBe(false);
+    });
+
+    it("leaves both fields optional so today's entries still validate", () => {
+      const parsed = McpServerEntrySchema.parse(base);
+      expect(parsed.readOnly).toBeUndefined();
+      expect(parsed.byok).toBeUndefined();
+    });
+
+    it("strips readOnly / byok from a client-supplied *config* — they're platform-only", () => {
+      const parsed = McpServerConfigSchema.parse({
+        type: "http",
+        url: "https://host/mcp",
+        readOnly: true,
+        byok: { kind: "tavily" },
+      });
+      expect(parsed).toEqual({ type: "http", url: "https://host/mcp" });
+    });
+  });
+
   describe("#207 EXAMPLE_MODEL", () => {
     it("is a non-empty Claude example string shared across packages", () => {
       expect(typeof EXAMPLE_MODEL).toBe("string");

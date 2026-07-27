@@ -19,6 +19,7 @@ import type {
   TokenUsage,
   SettingsData,
   McpServerEntry,
+  McpByokInfo,
   ModelHealth,
   ProviderProfile,
   ProviderApi,
@@ -44,6 +45,7 @@ export type {
   TokenUsage,
   SettingsData,
   McpServerEntry,
+  McpByokInfo,
   ModelHealth,
   ProviderProfile,
   ProviderApi,
@@ -679,6 +681,28 @@ export function serializeSettings(data: Partial<SettingsData>): Record<string, s
 }
 
 
+/**
+ * #377: BYOK annotation on a preset entry. Dropped when malformed — a preset whose
+ * `byok.kind` is missing has nothing to key the hosted endpoints by, so it should
+ * render as a plain read-only preset rather than a BYOK card wired to `undefined`.
+ */
+function normalizeMcpByok(rawValue: unknown): McpByokInfo | undefined {
+  if (!rawValue || typeof rawValue !== "object") return undefined;
+  const raw = asDict(rawValue);
+  const kind = stringValue(raw.kind).trim();
+  if (!kind) return undefined;
+  const keyParam = optionalString(raw.keyParam ?? raw.key_param)?.trim() || undefined;
+  const keyHeader = optionalString(raw.keyHeader ?? raw.key_header)?.trim() || undefined;
+  // Mirror McpByokInfoSchema: accepting both would hide a hosted contract bug by
+  // silently guessing which injection point should win.
+  if (keyParam && keyHeader) return undefined;
+  return {
+    kind,
+    ...(keyParam ? { keyParam } : {}),
+    ...(keyHeader ? { keyHeader } : {}),
+  };
+}
+
 export function normalizeMcpServer(rawValue: unknown): McpServerEntry {
   const raw = asDict(rawValue);
   return {
@@ -690,11 +714,35 @@ export function normalizeMcpServer(rawValue: unknown): McpServerEntry {
     url: optionalString(raw.url),
     headers: asOptionalRecord(raw.headers),
     timeout: optionalNumber(raw.timeout),
+    readOnly: raw.readOnly === true || raw.read_only === true ? true : undefined,
+    byok: normalizeMcpByok(raw.byok),
+  };
+}
+
+/** #377: one row of `GET /api/mcp-servers/byok` (hosted deployments only). */
+export interface McpByokStatus {
+  kind: string;
+  presetName: string;
+  configured: boolean;
+}
+
+export function normalizeMcpByokStatus(rawValue: unknown): McpByokStatus {
+  const raw = asDict(rawValue);
+  return {
+    // Trimmed to match `normalizeMcpByok`'s handling of `byok.kind` — the two are
+    // compared to decide whether a preset gets a card, so a stray space on either
+    // side would silently fail the match and drop the card.
+    kind: stringValue(raw.kind).trim(),
+    presetName: stringValue(raw.presetName ?? raw.preset_name),
+    configured: Boolean(raw.configured),
   };
 }
 
 export function serializeMcpConfig(config: Omit<McpServerEntry, "name">): Record<string, unknown> {
-  return Object.fromEntries(Object.entries(config).filter(([, value]) => value !== undefined && value !== ""));
+  // #377: `readOnly` / `byok` are platform-injected annotations, never client
+  // input — the backend strips them anyway, but don't pretend to send them.
+  const { readOnly: _readOnly, byok: _byok, ...transport } = config;
+  return Object.fromEntries(Object.entries(transport).filter(([, value]) => value !== undefined && value !== ""));
 }
 
 function normalizeModelHealth(raw: RawModelHealth | undefined): ModelHealth {

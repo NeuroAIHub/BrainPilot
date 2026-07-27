@@ -650,6 +650,18 @@ export async function readMcpServers(dataDir: string): Promise<Array<{ name: str
   return Object.entries(servers).map(([name, spec]) => ({ name, ...spec }));
 }
 
+/**
+ * #377: true when the stored entry is a platform-managed preset (`readOnly: true`).
+ * Hosted deployments inject presets into the same on-disk file, so the CRUD routes
+ * have to refuse edits/deletes server-side — hiding the buttons in the UI is a
+ * hint, not enforcement, and the preset URL can carry the platform's shared key.
+ * An absent entry is *not* read-only: the caller still needs its own 404.
+ */
+export async function isReadOnlyMcpServer(dataDir: string, name: string): Promise<boolean> {
+  const servers = await readMcpServersRaw(dataDir);
+  return servers[name]?.readOnly === true;
+}
+
 export async function createMcpServer(
   dataDir: string,
   name: string,
