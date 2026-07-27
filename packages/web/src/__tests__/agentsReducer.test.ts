@@ -33,6 +33,31 @@ describe("reduceAgentsForEvent (#70)", () => {
     expect(reduceAgentsForEvent(prev, ev("principal", "running"))).toBe(prev);
   });
 
+  it("returns the same reference when repeated activeTools content is unchanged", () => {
+    const activeTools = [{
+      toolCallId: "t1",
+      toolName: "bash",
+      startedAt: "2026-07-27T00:00:00.000Z",
+      cancellable: true,
+      status: "running" as const,
+    }];
+    const prev: AgentStatus[] = [{
+      name: "principal",
+      status: "running",
+      task: "",
+      activeTools,
+      activeToolExecutions: ["t1"],
+    }];
+    const event = {
+      type: "agent_status_update",
+      name: "principal",
+      status: "running",
+      activeTools: activeTools.map((tool) => ({ ...tool })),
+      activeToolExecutions: ["t1"],
+    } as unknown as WebSocketEvent;
+    expect(reduceAgentsForEvent(prev, event)).toBe(prev);
+  });
+
   it("ignores non agent_status_update events (same reference)", () => {
     const prev: AgentStatus[] = [
       { name: "principal", status: "idle", task: "", updatedAt: "t0", alive: true },

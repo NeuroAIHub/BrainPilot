@@ -274,6 +274,19 @@ describe("api.sessions.interruptTool", () => {
     expect((init as RequestInit).method).toBe("POST");
     expect(result.interrupted).toBe(true);
   });
+
+  it("returns the typed timeout body from HTTP 504", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      ok: false,
+      status: 504,
+      contentType: "application/json",
+      json: { interrupted: false, toolCallId: "tool-1", reason: "timeout" },
+    }));
+    await expect(api.sessions.interruptTool("s1", "tool-1")).resolves.toMatchObject({
+      interrupted: false,
+      reason: "timeout",
+    });
+  });
 });
 
 // #305: uploadFile uses XHR (for upload.onprogress). FakeXHR records the last

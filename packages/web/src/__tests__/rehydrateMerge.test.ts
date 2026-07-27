@@ -38,6 +38,12 @@ describe("mergeRehydratedMessages (#194-B1)", () => {
     expect(merged.find((m) => m.id === "a")!.content).toBe("canonical");
   });
 
+  it("keeps complete persisted assistant content when a finalized SSE tail is truncated", () => {
+    const live = [{ ...msg("answer", "tail only"), streaming: false, kind: "text" as const }];
+    const history = [{ ...msg("answer", "complete answer from persisted history"), streaming: false, kind: "text" as const }];
+    expect(mergeRehydratedMessages(live, history)[0]!.content).toBe("complete answer from persisted history");
+  });
+
   it("never resurrects a terminal live tool from an older history start", () => {
     const live = [{ ...msg("tool"), kind: "tool" as const, streaming: false, durationMs: 2000 }];
     const history = [{ ...msg("tool"), kind: "tool" as const, streaming: true }];

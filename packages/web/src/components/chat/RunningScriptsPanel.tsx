@@ -73,7 +73,7 @@ export function RunningScriptsPanel({
           <ChevronDown size={14} className="running-scripts__chevron" aria-hidden="true" />
           <span className="running-scripts__label">
             {t("chat.runningScripts.count", { count: scripts.length })}
-            {` · ${formatElapsed(now - oldest)}`}
+            {` · ${formatElapsed(Math.max(0, now - oldest))}`}
           </span>
           <button
             className="running-scripts__stop"

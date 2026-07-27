@@ -198,14 +198,17 @@ export function mergeRehydratedMessages(
     const live = liveById.get(saved.id);
     if (!live) return saved;
     liveById.delete(saved.id);
+    if (saved.kind !== "tool") return saved;
     // A terminal projection is monotonic: an older history START must never
     // resurrect a tool already ended by the live SSE tail (and vice versa).
     const eventTerminals = [live, saved].filter(
       (message) => message.streaming === false && message.toolTerminalSource === "event",
     );
-    const eventTerminal = eventTerminals.sort(
-      (a, b) => Date.parse(b.completedAt ?? "") - Date.parse(a.completedAt ?? ""),
-    )[0];
+    const terminalTime = (message: ChatMessage): number => {
+      const parsed = Date.parse(message.completedAt ?? "");
+      return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+    };
+    const eventTerminal = eventTerminals.sort((a, b) => terminalTime(b) - terminalTime(a))[0];
     const terminal = eventTerminal
       ?? (live.streaming === false ? live : saved.streaming === false ? saved : undefined);
     if (!terminal) return saved;
@@ -768,8 +771,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       try {
         interruptingRef.current = true;
         setIsInterrupting(true);
-        const { interrupted } = await api.sessions.interrupt(sid);
+        const { interrupted, reason } = await api.sessions.interrupt(sid);
         if (!interrupted) {
+          if (reason === "already_idle") return;
           // Nothing was running to interrupt (or the session is gone). Surface it
           // rather than pretending the task stopped.
           setError(tg("ctx.session.interruptFailed"));
@@ -803,7 +807,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       const result = await api.sessions.interruptTool(sid, toolCallId);
       if (!result.interrupted) {
-        setError(result.reason ?? tg("ctx.session.interruptFailed"));
+        if (result.reason === "already_finished") return;
+        setError(
+          result.reason === "not_cancellable"
+            ? tg("ctx.session.toolNotCancellable")
+            : result.reason === "timeout"
+              ? tg("ctx.session.toolInterruptTimeout")
+              : tg("ctx.session.interruptFailed"),
+        );
         return;
       }
       // Persistence has completed before HTTP success. Close immediately if

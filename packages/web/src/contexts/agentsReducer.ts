@@ -33,6 +33,26 @@ function retryFromEvent(e: Record<string, unknown>): AgentStatus["retry"] {
   return { attempt, maxAttempts, delayMs };
 }
 
+function sameActiveTools(a: AgentStatus["activeTools"], b: AgentStatus["activeTools"]): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  if (a.length !== b.length) return false;
+  return a.every((tool, index) => {
+    const other = b[index];
+    return !!other
+      && tool.toolCallId === other.toolCallId
+      && tool.toolName === other.toolName
+      && tool.runId === other.runId
+      && tool.startedAt === other.startedAt
+      && tool.cancellable === other.cancellable
+      && tool.status === other.status;
+  });
+}
+
+function sameStrings(a: string[] | undefined, b: string[] | undefined): boolean {
+  if (a === undefined || b === undefined) return a === b;
+  return a.length === b.length && a.every((value, index) => value === b[index]);
+}
+
 export function reduceAgentsForEvent(
   agents: AgentStatus[],
   event: WebSocketEvent,
@@ -64,7 +84,12 @@ export function reduceAgentsForEvent(
     previousRetry?.attempt === retry?.attempt &&
     previousRetry?.maxAttempts === retry?.maxAttempts &&
     previousRetry?.delayMs === retry?.delayMs;
-  if (agents[idx]!.status === status && retryUnchanged && activeTools === undefined) return agents;
+  if (
+    agents[idx]!.status === status
+    && retryUnchanged
+    && sameActiveTools(agents[idx]!.activeTools, activeTools)
+    && sameStrings(agents[idx]!.activeToolExecutions, activeToolExecutions)
+  ) return agents;
   const next = agents.slice();
   next[idx] = { ...agents[idx]!, status, updatedAt, alive, retry, activeToolExecutions, activeTools };
   return next;

@@ -331,6 +331,7 @@ export class MasAgent {
     toolName: string,
     result: unknown,
     isError: boolean,
+    emitFailureWarning = true,
   ): void {
     const started = this.activeToolCalls.get(toolCallId);
     if (!started) return; // terminal event already claimed
@@ -367,7 +368,7 @@ export class MasAgent {
       result,
     );
     if (usage) this.bus.emit(ev.custom(ctx, CUSTOM_EVENT.DOMAIN_RESOURCE_USAGE, usage));
-    if (isError && !interrupted) {
+    if (isError && !interrupted && emitFailureWarning) {
       this.bus.emit(
         ev.systemMessage(this.sessionId, "warning", `❌ ${toolName} 执行失败`, {
           agent: this.name,
@@ -382,7 +383,9 @@ export class MasAgent {
     const ctx = { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId };
     for (const [toolCallId, tool] of [...this.activeToolCalls]) {
       if (reason) tool.interruptionReason ??= reason;
-      this.finishTool(ctx, toolCallId, tool.toolName, "Tool ended without a terminal event", true);
+      // Reconciliation is intentionally quiet: the run has already ended and
+      // this synthetic terminal exists to prevent a stale card from reviving.
+      this.finishTool(ctx, toolCallId, tool.toolName, "Tool ended without a terminal event", true, false);
     }
   }
 

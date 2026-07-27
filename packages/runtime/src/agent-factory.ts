@@ -195,18 +195,25 @@ export function wrapCancellableBash(
     async execute(
       toolCallId: string,
       args: Record<string, unknown>,
-      runSignal: AbortSignal,
+      runSignal: AbortSignal | undefined,
       onUpdate?: (update: unknown) => void,
       context?: unknown,
     ): Promise<unknown> {
       const controller = new AbortController();
       controllers.set(toolCallId, controller);
       try {
-        const signal = AbortSignal.any([runSignal, controller.signal]);
+        const signal = runSignal
+          ? AbortSignal.any([runSignal, controller.signal])
+          : controller.signal;
         return await officialBash.execute(toolCallId, args, signal, onUpdate, context);
       } catch (error) {
-        if (controller.signal.aborted && !runSignal.aborted) {
-          throw new Error("Command interrupted by user");
+        if (controller.signal.aborted && !runSignal?.aborted) {
+          const partialOutput = error instanceof Error ? error.message.trim() : String(error).trim();
+          throw new Error(
+            partialOutput
+              ? `${partialOutput}\nCommand interrupted by user`
+              : "Command interrupted by user",
+          );
         }
         throw error;
       } finally {
@@ -293,7 +300,7 @@ interface PiSdk {
     execute(
       toolCallId: string,
       args: Record<string, unknown>,
-      signal: AbortSignal,
+      signal: AbortSignal | undefined,
       onUpdate?: (update: unknown) => void,
       context?: unknown,
     ): Promise<unknown>;

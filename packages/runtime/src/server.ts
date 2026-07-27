@@ -21,6 +21,7 @@ import {
   WriteFileRequestSchema,
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
+import { ev } from "./events.js";
 
 export function createServer(opts: SessionManagerOptions & { manager?: SessionManager } = {}): {
   app: Hono;
@@ -275,6 +276,12 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
       // Replay buffered events, then live-subscribe.
       for (const e of manager.recentEvents(id)) send(e);
       const unsub = manager.subscribe(id, send);
+      // A reconnect must end with a fresh authority frame; the ring may have
+      // evicted the tool-start state after a long stream of partial events.
+      const currentState = manager.getSessionState(id);
+      if (currentState) {
+        send(ev.custom({ sessionId: id }, "session_state", currentState));
+      }
       s.onAbort(() => {
         closed = true;
         unsub?.();

@@ -14,7 +14,7 @@ describe("cancellable Pi bash wrapper", () => {
     ) => new Promise((_resolve, reject) => {
       expect(onUpdate).toBe(update);
       expect(receivedContext).toBe(context);
-      signal.addEventListener("abort", () => reject(new Error("Command aborted")), { once: true });
+      signal.addEventListener("abort", () => reject(new Error("line one\nCommand aborted")), { once: true });
     }));
     const controllers = new Map<string, AbortController>();
     const wrapped = wrapCancellableBash({ name: "bash", execute }, controllers);
@@ -23,10 +23,22 @@ describe("cancellable Pi bash wrapper", () => {
 
     expect(controllers.has("tool-1")).toBe(true);
     controllers.get("tool-1")!.abort();
-    await expect(pending).rejects.toThrow("Command interrupted by user");
+    await expect(pending).rejects.toThrow("line one\nCommand aborted\nCommand interrupted by user");
     expect(runSignal.signal.aborted).toBe(false);
     expect(controllers.has("tool-1")).toBe(false);
     expect(execute).toHaveBeenCalledWith("tool-1", { command: "sleep 60" }, expect.any(AbortSignal), update, context);
+  });
+
+  it("supports Pi invoking a tool without a run signal", async () => {
+    const controllers = new Map<string, AbortController>();
+    const execute = async (_id: string, _args: Record<string, unknown>, signal?: AbortSignal) =>
+      new Promise((_resolve, reject) => {
+        signal?.addEventListener("abort", () => reject(new Error("partial")), { once: true });
+      });
+    const wrapped = wrapCancellableBash({ name: "bash", execute }, controllers);
+    const pending = wrapped.execute("tool-no-signal", {}, undefined);
+    controllers.get("tool-no-signal")!.abort();
+    await expect(pending).rejects.toThrow("partial\nCommand interrupted by user");
   });
 
   it("preserves task-abort errors instead of relabelling them as a user script stop", async () => {
