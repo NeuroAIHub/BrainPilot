@@ -72,7 +72,8 @@ brainpilot/
 
 The npm path is a local process. It does **not** create a Docker sandbox. Agents read and write under the session workspace inside the data directory, so choose that directory carefully and avoid pointing BrainPilot at private folders you do not want agents to inspect.
 
-For stronger process isolation, use Docker deployment instead of the npm local process.
+For stronger process isolation, use [Docker deployment](./docker) instead of the npm local
+process.
 
 ## Run From Source
 

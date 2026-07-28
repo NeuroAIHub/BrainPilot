@@ -8,11 +8,14 @@
 #   2) 已装 NVIDIA Container Toolkit 并 `nvidia-ctk runtime configure` 接入 docker。
 #      没装时本 override 的 devices 段会让 docker compose 报错——这是预期，无 GPU 就别用本文件。
 #
-# 镜像:brainpilot-sandbox-gpu 由 `bash scripts/release-build.sh sandbox-gpu` 构建，
-#       它 FROM 独立的 brainpilot-gpu-base（见 scripts/release-gpu-base.sh）。
+# 镜像可由 `bash scripts/release-build.sh sandbox-gpu` 本地构建，也可通过
+# BP_SANDBOX_IMAGE_GPU 指向官方 GHCR/阿里云 ACR 镜像。两者都基于独立发布的
+# brainpilot-gpu-base（见 scripts/release-gpu-base.sh）。
 services:
   sandbox:
-    image: brainpilot-sandbox-gpu:latest
+    build:
+      target: gpu
+    image: ${BP_SANDBOX_IMAGE_GPU:-brainpilot-sandbox-gpu:latest}
     deploy:
       resources:
         reservations:
