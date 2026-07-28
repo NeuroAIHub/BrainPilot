@@ -6487,6 +6487,104 @@ button {
   color: var(--color-warning);
 }
 
+/* #377 — platform-managed preset: chip beside the name, note where the
+ * Edit/Delete buttons would otherwise sit. */
+.mcp-transport-chip--preset {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+}
+
+.mcp-preset-note {
+  justify-self: end;
+  color: var(--color-text-subtle);
+  font-size: 12px;
+}
+
+/* #377 — BYOK card. Spans both columns of `.settings-list-item`'s grid so it
+ * drops below the name/actions row without restructuring the list item. */
+.mcp-byok {
+  display: grid;
+  gap: 8px;
+  grid-column: 1 / -1;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface-soft);
+  padding: 10px 12px;
+}
+
+.mcp-byok__head {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.mcp-byok__head svg {
+  color: var(--color-text-subtle);
+}
+
+.mcp-byok__badge {
+  border: 1px solid var(--color-success-soft);
+  border-radius: 999px;
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  padding: 1px 8px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.mcp-byok__desc {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.mcp-byok__row {
+  display: grid;
+  align-items: end;
+  gap: 10px;
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.mcp-byok__field {
+  display: grid;
+  min-width: 0;
+  gap: 4px;
+}
+
+.mcp-byok__label {
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.mcp-byok__actions {
+  display: flex;
+  gap: 8px;
+}
+
+.mcp-byok__actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.mcp-byok__msg {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+}
+
+.mcp-byok__msg--error {
+  color: var(--color-danger, var(--color-warning));
+}
+
+@media (max-width: 640px) {
+  .mcp-byok__row {
+    grid-template-columns: 1fr;
+  }
+}
+
 /* ── Knowledge Base panel (Settings › Knowledge Base) ───────────── */
 
 .kb-panel__title {

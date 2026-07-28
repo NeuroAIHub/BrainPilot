@@ -4,6 +4,7 @@ import {
   FileContent,
   FileEntry,
   McpServerEntry,
+  McpByokStatus,
   ProviderCreate,
   ProviderProfile,
   ProviderUpdate,
@@ -66,7 +67,21 @@ let mockMcpServers: McpServerEntry[] = [
     command: "npx",
     args: ["-y", "@modelcontextprotocol/server-filesystem", "/workspace"],
   },
+  // #377: a platform-managed preset with a BYOK annotation, so the read-only +
+  // "bring your own key" UI is reachable in mock/demo mode. The URL stands in for
+  // a hosted preset carrying the platform's shared key — which is exactly why the
+  // UI must not render it.
+  {
+    name: "tavily",
+    type: "http",
+    url: "https://mcp.tavily.com/mcp/?tavilyApiKey=PLATFORM_SHARED_KEY",
+    readOnly: true,
+    byok: { kind: "tavily", keyParam: "tavilyApiKey" },
+  },
 ];
+
+/** #377: mock BYOK store, keyed by `byok.kind`. */
+let mockMcpByokKeys: Record<string, string> = {};
 
 let mockProviders: ProviderProfile[] = [
   {
@@ -522,6 +537,28 @@ export const mockBackend = {
   async removeMcpServer(name: string): Promise<void> {
     await wait();
     mockMcpServers = mockMcpServers.filter((item) => item.name !== name);
+  },
+
+  async listMcpByok(): Promise<McpByokStatus[]> {
+    await wait();
+    return mockMcpServers
+      .filter((item) => item.byok)
+      .map((item) => ({
+        kind: item.byok!.kind,
+        presetName: item.name,
+        configured: Boolean(mockMcpByokKeys[item.byok!.kind]),
+      }));
+  },
+
+  async saveMcpByok(kind: string, apiKey: string): Promise<void> {
+    await wait();
+    mockMcpByokKeys = { ...mockMcpByokKeys, [kind]: apiKey };
+  },
+
+  async clearMcpByok(kind: string): Promise<void> {
+    await wait();
+    const { [kind]: _dropped, ...rest } = mockMcpByokKeys;
+    mockMcpByokKeys = rest;
   },
 
   async listProviders(): Promise<ProviderProfile[]> {

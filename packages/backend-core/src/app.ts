@@ -19,6 +19,7 @@ import { Hono } from "hono";
 import { serveStatic } from "@hono/node-server/serve-static";
 import {
   RUNTIME_ROUTES,
+  McpByokInfoSchema,
   McpServerConfigSchema,
   ProviderProfileCreateSchema,
   ProviderProfileUpdateSchema,
@@ -41,6 +42,7 @@ import {
   createMcpServer,
   updateMcpServer,
   deleteMcpServer,
+  isReadOnlyMcpServer,
   type StoredProviderProfile,
   readKbApiConfig,
   writeKbApiConfig,
@@ -369,7 +371,8 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---- MCP Servers CRUD (disk-backed: bp_template/mcp_servers.json) ----
   api.get("/mcp-servers", async (c) => {
-    return c.json(await readMcpServers(dataDir));
+    const servers = await readMcpServers(dataDir);
+    return c.json(servers.map(toHttpMcpServer));
   });
   api.post("/mcp-servers", async (c) => {
     const body = await safeJson(c);
@@ -400,12 +403,20 @@ export function createApp(options: CreateAppOptions): Hono {
     if (!parsed.success) {
       return c.json({ error: "invalid mcp server config", details: parsed.error.issues }, 400);
     }
-    const entry = await updateMcpServer(dataDir, c.req.param("name"), parsed.data);
+    const name = c.req.param("name");
+    if (await isReadOnlyMcpServer(dataDir, name)) {
+      return c.json({ error: `MCP server "${name}" is platform-managed and cannot be edited` }, 403);
+    }
+    const entry = await updateMcpServer(dataDir, name, parsed.data);
     if (!entry) return c.json({ error: "not found" }, 404);
     return c.json(entry);
   });
   api.delete("/mcp-servers/:name", async (c) => {
-    const ok = await deleteMcpServer(dataDir, c.req.param("name"));
+    const name = c.req.param("name");
+    if (await isReadOnlyMcpServer(dataDir, name)) {
+      return c.json({ error: `MCP server "${name}" is platform-managed and cannot be deleted` }, 403);
+    }
+    const ok = await deleteMcpServer(dataDir, name);
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.body(null, 204);
   });
@@ -830,6 +841,44 @@ async function safeJson(c: import("hono").Context): Promise<Record<string, unkno
 function maskKey(key: string): string {
   if (!key) return "";
   return key.length <= 8 ? "****" : `${key.slice(0, 4)}…${key.slice(-4)}`;
+}
+
+/**
+ * Stored MCP entry -> browser-safe HTTP shape.
+ *
+ * A platform-managed preset can contain a shared credential anywhere in its
+ * transport (URL userinfo/query/path, headers, stdio args, or env). The SPA only
+ * needs an endpoint host plus the preset/BYOK annotations, so managed entries
+ * cross the HTTP boundary through a strict allowlist. The full transport remains
+ * untouched on disk for the runtime.
+ */
+function toHttpMcpServer(
+  entry: { name: string } & Record<string, unknown>,
+): Record<string, unknown> {
+  if (entry.readOnly !== true) return entry;
+
+  const safe: Record<string, unknown> = {
+    name: entry.name,
+    type: entry.type,
+    readOnly: true,
+  };
+
+  if (typeof entry.timeout === "number") safe.timeout = entry.timeout;
+
+  const byok = McpByokInfoSchema.safeParse(entry.byok);
+  if (byok.success) safe.byok = byok.data;
+
+  if ((entry.type === "http" || entry.type === "sse") && typeof entry.url === "string") {
+    try {
+      const url = new URL(entry.url);
+      if (url.protocol === "http:" || url.protocol === "https:") safe.url = url.origin;
+    } catch {
+      // Invalid managed URLs are omitted: echoing the raw value could disclose a
+      // credential, while the UI already has a localized managed-endpoint fallback.
+    }
+  }
+
+  return safe;
 }
 
 /** Stored profile → masked HTTP shape the SPA's normalizeProviderProfile reads. */
