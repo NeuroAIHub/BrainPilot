@@ -1,0 +1,28 @@
+{
+  "name": "@brainpilot/kb-scripts",
+  "version": "0.1.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "BrainPilot KnowledgeBase Python scripts + model_server sidecar, materialised into ~/.brainpilot/KnowledgeBase on first launch",
+  "files": [
+    "kb"
+  ],
+  "exports": {
+    "./package.json": "./package.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/kb-scripts"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "scripts": {
+    "build": "node ./scripts/stage.mjs",
+    "prepack": "node ./scripts/stage.mjs"
+  }
+}

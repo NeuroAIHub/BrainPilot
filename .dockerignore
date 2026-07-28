@@ -16,3 +16,16 @@ brainpilot
 npm-debug.log
 *.log
 .DS_Store
+
+# KnowledgeBase artefacts — the Dockerfile COPYs KnowledgeBase/ so
+# stage.mjs can populate packages/kb-scripts/kb/ (issue #378 Part 1),
+# but the user-data / model-weight / venv / chunk dirs would balloon the
+# build context to multi-GB. Only ship what stage.mjs actually consumes.
+KnowledgeBase/.venv
+KnowledgeBase/models
+KnowledgeBase/source
+KnowledgeBase/chunks
+KnowledgeBase/vectorstore
+KnowledgeBase/scripts/__pycache__
+**/__pycache__
+*.pyc

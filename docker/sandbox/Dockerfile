@@ -30,8 +30,15 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY scripts ./scripts
 COPY packages ./packages
+# KnowledgeBase/ is the SSOT for the Python pipeline; @brainpilot/kb-scripts's
+# `prepack` hook mirrors it into packages/kb-scripts/kb/ at pack time. Docker
+# images don't go through `npm pack`, so we do the same copy explicitly here —
+# otherwise the runtime's materialize-kb hook has no source. See issue #378
+# Part 1 + PR #379 review.
+COPY KnowledgeBase ./KnowledgeBase
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
-    && npm ci
+    && npm ci \
+    && node packages/kb-scripts/scripts/stage.mjs
 # sandbox runs only the runtime server — build just its project chain
 # (protocol ← runtime), not the whole monorepo (web/cli/backend-core).
 RUN npx tsc -b packages/runtime

@@ -13,6 +13,7 @@
     "packages/client-cli",
     "packages/web",
     "packages/skills",
+    "packages/kb-scripts",
     "packages/docs"
   ],
   "scripts": {
@@ -29,7 +30,7 @@
     "version:check": "node scripts/sync-versions.js --check",
     "release:build": "npm run build",
     "release:dry": "npm publish --workspaces --if-present --dry-run --access public",
-    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/skills --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
+    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/skills --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

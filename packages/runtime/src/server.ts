@@ -21,6 +21,7 @@ import {
   WriteFileRequestSchema,
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
+import { resolveKbPaths } from "./tools/kb/paths.js";
 import { ev } from "./events.js";
 
 export function createServer(opts: SessionManagerOptions & { manager?: SessionManager } = {}): {
@@ -354,6 +355,25 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
   // first agent on — including a pure `docker compose up` where no CLI scaffold
   // ever ran. Best-effort (the method swallows its own errors).
   await manager.ensureSkillsMaterialized();
+
+  // Same lifecycle for the KnowledgeBase Python scripts (issue #378 Part 1) —
+  // populate ~/.brainpilot/KnowledgeBase/ so npm-installed users' "Set up
+  // Python environment" / "Set up Models" buttons find setup_env.py /
+  // setup_models.py / build_kb.py / model_server.py without a repo clone.
+  // Skipped when BP_KB_ROOT is set or a git-checkout sibling KB is present.
+  await manager.ensureKbMaterialized();
+
+  // Log the resolved KB root once so a silent fall-through to the user-level
+  // default (or a stale BP_KB_ROOT) is visible in the boot log. Reviewers
+  // asked for this on #379 — the Part 3 precedence is fine but its silent
+  // switches were the whole reason the two resolvers had drifted apart.
+  try {
+    const kb = resolveKbPaths();
+    // eslint-disable-next-line no-console
+    console.info(`[kb] resolved root: ${kb.root}${process.env.BP_KB_ROOT?.trim() ? " (via BP_KB_ROOT)" : ""}`);
+  } catch {
+    // never let a diagnostic log block startup
+  }
 
   const port =
     opts.port ??

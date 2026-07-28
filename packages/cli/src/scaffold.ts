@@ -24,7 +24,7 @@
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { join } from "node:path";
-import { materializeSkills } from "@brainpilot/runtime";
+import { materializeKb, materializeSkills } from "@brainpilot/runtime";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { dataPaths, type DataPaths } from "./paths.js";
 
@@ -311,6 +311,22 @@ export async function scaffold(
       if (res.copied > 0) created.push(`${p.bpTemplateSkills} (+${res.copied} skill files)`);
     } catch {
       /* skills are a convenience — never block scaffolding on them */
+    }
+
+    // ⑦ Same lifecycle for the KnowledgeBase Python scripts (issue #378
+    //    Part 1). Populates ~/.brainpilot/KnowledgeBase/ so the web UI's
+    //    "Set up Python environment" / "Set up Models" buttons find the
+    //    scripts on a fresh npm install. Best-effort; skipped internally
+    //    when BP_KB_ROOT is set or a git-checkout sibling KB is present.
+    //    Reuses the BP_SKIP_SKILL_COPY gate — one knob covers every
+    //    convenience copy the CLI test suite wants to elide.
+    try {
+      const res = await materializeKb();
+      if (res.copied > 0) {
+        created.push(`${res.dest} (+${res.copied} kb-script files)`);
+      }
+    } catch {
+      /* kb-scripts are a convenience — never block scaffolding on them */
     }
   }
 

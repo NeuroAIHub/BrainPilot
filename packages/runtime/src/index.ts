@@ -80,6 +80,17 @@ export { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
 export type { MaterializeSkillsResult } from "./materialize-skills.js";
 
+export {
+  materializeKb,
+  resolveBundledKbDir,
+  defaultUserKbDir,
+} from "./materialize-kb.js";
+export type {
+  MaterializeKbResult,
+  MaterializeKbOptions,
+  MaterializeKbSkipReason,
+} from "./materialize-kb.js";
+
 export { isWindows, isMacOS, isLinux, gracefulSignalsSupported } from "./platform.js";
 
 export type {

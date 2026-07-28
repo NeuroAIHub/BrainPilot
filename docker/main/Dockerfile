@@ -17,8 +17,16 @@ WORKDIR /app
 COPY package.json package-lock.json tsconfig.base.json ./
 COPY scripts ./scripts
 COPY packages ./packages
+# KnowledgeBase/ is the SSOT for the Python pipeline; @brainpilot/kb-scripts's
+# `prepack` hook mirrors this dir into packages/kb-scripts/kb/ at pack time.
+# Docker images don't go through `npm pack`, so we do the same copy explicitly
+# here — otherwise the materialize-kb hook has no source and the "Set up
+# Python environment" button in the web UI fails inside the container. See
+# issue #378 Part 1 and PR #379 review.
+COPY KnowledgeBase ./KnowledgeBase
 RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi \
-    && npm ci
+    && npm ci \
+    && node packages/kb-scripts/scripts/stage.mjs
 # `npm run build` runs `--workspaces`, which already builds @brainpilot/web (tsc -b && vite build).
 RUN npm run build
 
