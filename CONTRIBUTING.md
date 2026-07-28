@@ -228,8 +228,9 @@ bash scripts/release-push.sh                                        # all images
 bash scripts/release-push.sh --image sandbox-gpu --registry acr,intranet
 ```
 
-The GPU image is ~6 GB; pushing to public registries may time out, so
-`--registry acr,intranet` is often preferable for it.
+The GPU image is approximately 10 GB unpacked. Reused layers make subsequent pushes much
+smaller, but the first publication can take time. Use a registry endpoint in the build server's
+region (for example, an ACR VPC endpoint) when available.
 
 ## Reporting Bugs
 

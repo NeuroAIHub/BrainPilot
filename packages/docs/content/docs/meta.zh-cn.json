@@ -3,6 +3,7 @@
   "pages": [
     "getting-started",
     "installation",
+    "docker",
     "providers",
     "mcp",
     "skills-knowledge-base",

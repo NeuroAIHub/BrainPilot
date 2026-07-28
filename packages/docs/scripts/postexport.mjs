@@ -49,6 +49,7 @@ async function main() {
     'index.html',
     'getting-started.html',
     'installation.html',
+    'docker.html',
     'providers.html',
     'mcp.html',
     'skills-knowledge-base.html',
@@ -57,6 +58,7 @@ async function main() {
     'static.json',
     'zh-cn/index.html',
     'zh-cn/getting-started.html',
+    'zh-cn/docker.html',
   ];
 
   let ok = true;

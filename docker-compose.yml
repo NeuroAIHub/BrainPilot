@@ -6,16 +6,16 @@ services:
       context: .
       dockerfile: docker/sandbox/Dockerfile
       # Default to the CPU stage. The sandbox Dockerfile is multi-stage and its
-      # last stage is `gpu` (FROM a private ghcr base); a targetless build would
-      # resolve to that last stage and fail with 403 for users without private
-      # ghcr access. GPU users opt in via docker-compose.gpu.yml (prebuilt image).
+      # last stage is `gpu`; a targetless build would therefore install the much
+      # larger GPU environment. GPU users opt in via docker-compose.gpu.yml.
       target: cpu
       args:
         HTTP_PROXY: ${HTTP_PROXY:-}
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
         APT_MIRROR: ${APT_MIRROR:-}
-    image: brainpilot-sandbox:latest
+    # Set BP_SANDBOX_IMAGE to use an official GHCR/ACR image without retagging.
+    image: ${BP_SANDBOX_IMAGE:-brainpilot-sandbox:latest}
     environment:
       - PORT=${BP_SANDBOX_PORT:-8081}
       - AGENT_RUNTIME_PORT=${BP_SANDBOX_PORT:-8081}

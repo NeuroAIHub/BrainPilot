@@ -43,6 +43,7 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ## 📰 News
 
+- **2026-07-28** — [BrainPilot v0.1.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.2) improves tool lifecycle, managed MCP BYOK, npm knowledge-base setup, math rendering, and onboarding, and adds official CPU/GPU sandbox distribution through GHCR and mainland China ACR. See the [changelog](CHANGELOG.md#012---2026-07-28).
 - **2026-07-24** — [BrainPilot v0.1.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.1) improves the reliability of queued, timeout-aware user prompts and transient provider retries, with more accurate model-health reporting. See the [changelog](CHANGELOG.md#011---2026-07-24).
 - **2026-07-18** — BrainPilot was showcased at the “Intelligence in the Physical World” Science Forum at WAIC 2026. Follow us for the latest updates.
 - **2026-07-17** — BrainPilot v0.1.0 was released as open source. It is a human-in-the-loop agentic research system for brain science that coordinates specialist agents, domain knowledge, scientific skills, and tools while preserving an inspectable research process through Graph of Trace.
@@ -450,15 +451,27 @@ docker compose up -d --build
 
 Open <http://localhost:9001> (or your `BP_MAIN_PORT`). Stop with `docker compose down`.
 
-The default build targets the **CPU** sandbox stage — no GPU or private image access required.
-GPU mode (`docker-compose.gpu.yml`) builds on a private `brainpilot-gpu-base` image reserved for
-internal users; it is not pullable without ghcr access and is not needed for the CPU default path.
+The default source build targets the **CPU** sandbox stage. GPU mode uses
+`docker-compose.gpu.yml` and requires an NVIDIA GPU, driver, and NVIDIA Container Toolkit.
+
+Official `linux/amd64` sandbox images are also available anonymously. Pin the release tag in
+production; `latest` follows the newest release.
+
+| Variant | Global | Mainland China |
+| --- | --- | --- |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2` |
+
+These are runtime sandbox images, not standalone web applications. Use them with the BrainPilot
+main process or hosted cloud layer. See the bilingual [Docker deployment guide](packages/docs/content/docs/docker.mdx)
+for prebuilt-image Compose commands, GPU verification, dynamic/cloud configuration, upgrades,
+and the Docker security boundary.
 
 <details>
 <summary><b>Sandbox dependencies, deployment modes &amp; memory budget</b></summary>
 
 **Customizing sandbox dependencies.** The `brainpilot-sandbox` image ships a lightweight
-baseline (Node + runtime only).
+baseline (Node + Python + runtime).
 
 - Add Python, system packages, or global npm tools by editing `docker/sandbox/extra-deps.sh` (worked examples included).
 - Then rebuild: `docker compose build sandbox`.

@@ -43,6 +43,7 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ## 📰 最新动态
 
+- **2026-07-28** — [BrainPilot v0.1.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.2) 完善工具生命周期、托管 MCP BYOK、npm 知识库脚本、数学公式渲染和新手引导，并通过 GHCR 与中国大陆 ACR 正式发布 CPU/GPU 沙箱镜像。详见[更新日志](CHANGELOG.md#012---2026-07-28)。
 - **2026-07-24** — [BrainPilot v0.1.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.1) 提升了排队与超时提问、模型服务临时故障重试及模型健康状态记录的可靠性。详情见[更新日志](CHANGELOG.md#011---2026-07-24)。
 - **2026-07-18** — BrainPilot 项目在 2026 世界人工智能大会（WAIC）“实体世界智能科学论坛”上展示，欢迎关注！
 - **2026-07-17** — BrainPilot v0.1.0 正式开源发布。BrainPilot 是一个面向脑科学、人在回路的智能体研究系统，整合专业智能体、领域知识、科研技能和工具，并通过 Graph of Trace 保留可检查的科研过程。
@@ -421,14 +422,24 @@ docker compose up -d --build
 
 打开 <http://localhost:9001>（或你的 `BP_MAIN_PORT`）。停止用 `docker compose down`。
 
-默认构建使用 **CPU** 沙箱 stage —— 无需 GPU,也无需私有镜像访问权限。
-GPU 模式（`docker-compose.gpu.yml`）基于私有的 `brainpilot-gpu-base` 镜像,仅供内部用户使用;
-没有 ghcr 访问权限无法拉取,CPU 默认路径也不需要它。
+默认源码构建使用 **CPU** 沙箱 stage。GPU 模式使用 `docker-compose.gpu.yml`，宿主机需要
+NVIDIA GPU、驱动和 NVIDIA Container Toolkit。
+
+官方 `linux/amd64` 沙箱镜像支持匿名拉取。生产环境请固定版本标签；`latest` 会跟随最近一次发布。
+
+| 版本 | 全球 | 中国大陆 |
+| --- | --- | --- |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2` |
+
+这些是 runtime 沙箱镜像，不是独立的 Web 应用，需要配合 BrainPilot main 进程或云端托管层使用。
+预构建镜像的 Compose 命令、GPU 验证、动态/云端配置、升级方式和 Docker 安全边界，详见双语
+[Docker 部署手册](packages/docs/content/docs/docker.zh-cn.mdx)。
 
 <details>
 <summary><b>沙箱依赖、部署模式与内存预算</b></summary>
 
-**自定义沙箱依赖。** `brainpilot-sandbox` 镜像默认是一个轻量基线（仅 Node + 运行时）。
+**自定义沙箱依赖。** `brainpilot-sandbox` 镜像默认是一个轻量基线（Node + Python + runtime）。
 
 - 要添加 Python、系统包或全局 npm 工具，编辑 `docker/sandbox/extra-deps.sh`（内含范例）。
 - 然后重建：`docker compose build sandbox`。
@@ -438,7 +449,23 @@ GPU 模式（`docker-compose.gpu.yml`）基于私有的 `brainpilot-gpu-base` �
 | 模式 | 沙箱拓扑 | 选择方式 | 本仓库 |
 |------|----------|----------|--------|
 | `static` | 1 个共享 `main` + 1 个固定 `sandbox`，单用户 | 设置 `BP_RUNTIME_URL` | ✅ 已发布 |
-| `dynamic` | 共享 `main` + 经 docker.sock 按用户拉起的 sandbox | `BP_ORCHESTRATOR=docker` | 🚧 仅骨架 |
+| `dynamic` | 共享 `main` + 经 docker.sock 按用户拉起的 sandbox | `BP_ORCHESTRATOR=docker` + `BP_DYNAMIC=1` | ✅ 已发布 |
+
+**如何选择。** 单用户或共享同一 workspace 的可信小团队使用 `static`；这是 `docker compose up`
+的默认拓扑。每位用户需要独立 sandbox 时使用 `dynamic`：`main` 会在首次请求时创建用户容器，后续
+请求复用，并在空闲后回收。
+
+```bash
+docker build -f docker/sandbox/Dockerfile -t brainpilot-sandbox:latest .
+docker compose -f docker-compose.dynamic.yml up
+```
+
+关键环境变量见 [`docker-compose.dynamic.yml`](docker-compose.dynamic.yml)：
+`BP_ORCHESTRATOR=docker`、`BP_DYNAMIC=1`、`BP_SANDBOX_IMAGE`、`BP_DATA_DIR`、
+`BP_DYNAMIC_PORT_MIN`/`MAX` 和 `BP_DYNAMIC_IDLE_MS`。
+
+动态模式依赖前置认证网关写入可信的 `X-BP-User`。如果请求没有该 header，自托管部署会回退到
+单个 `local` 沙箱。
 
 **内存预算（`BP_MEM_LIMIT_MB`，可选）。** 对内存受限的容器：
 

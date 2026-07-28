@@ -1,0 +1,170 @@
+---
+title: Docker 部署
+description: 使用源码构建或官方 CPU、GPU 沙箱镜像运行 BrainPilot。
+---
+
+## 什么时候使用 Docker
+
+npm 安装是最简单的单用户方案。如果你需要可复现的运行环境、更强的进程隔离、GPU 依赖，或希望为
+托管服务中的每位用户分配独立沙箱，请使用 Docker。
+
+| 模式 | 主进程 | 沙箱 | 适用场景 |
+| --- | --- | --- | --- |
+| npm | 本机 | 本机进程 | 单个可信用户 |
+| 静态 Compose | 容器 | 一个固定容器 | 自托管单用户部署 |
+| 动态 / 云端 | 共享容器 | 每位用户一个容器 | 位于认证网关后的服务 |
+
+官方 `sandbox` 镜像包含 BrainPilot runtime 和科研环境，但它不是独立的 Web 应用。BrainPilot main
+进程或云端托管层会通过 runtime API 连接该镜像。
+
+## 官方沙箱镜像
+
+生产环境请固定版本标签。`latest` 会跟随最近一次发布，测试时方便，但下次发布后内容会变化。当前
+镜像平台为 `linux/amd64`。
+
+| 版本 | 全球（GHCR） | 中国大陆（阿里云 ACR） |
+| --- | --- | --- |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2` |
+
+两组地址都支持匿名拉取。中国大陆用户优先使用 ACR，其他地区优先使用 GHCR。
+
+```bash title="全球"
+docker pull ghcr.io/neuroaihub/brainpilot-sandbox:0.1.2
+docker pull ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.1.2
+```
+
+```bash title="中国大陆"
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2
+```
+
+CPU 镜像包含 Node.js、Python、pip、curl 和 BrainPilot runtime。GPU 镜像额外包含 CUDA 12.4、
+PyTorch 2.6.0 和已发布的 GPU 科学计算基础环境。
+
+## 静态单用户部署
+
+克隆仓库并创建本地环境文件：
+
+```bash
+git clone https://github.com/NeuroAIHub/BrainPilot.git
+cd BrainPilot
+cp .env.example .env
+```
+
+在 `.env` 中设置模型服务密钥；如果只做无密钥冒烟测试，可设置 `BP_MOCK=1`。构建并启动默认 CPU
+部署：
+
+```bash
+docker compose up -d --build
+docker compose ps
+```
+
+打开 `http://localhost:9001`。运行数据保存在 `BP_DATA_DIR` 下，默认是 `./brainpilot`。使用
+`docker compose down` 停止服务不会删除该数据目录。
+
+### 使用预构建 CPU 沙箱
+
+如果不想重新构建 CPU 沙箱，可以设置完整镜像地址并先行拉取。只构建 main 镜像，然后在不重新构建
+沙箱的情况下启动 Compose：
+
+```bash
+export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+docker compose pull sandbox
+docker compose build main
+docker compose up -d --no-build
+```
+
+中国大陆以外的机器可将 ACR 地址替换为 GHCR 地址。
+
+## GPU 部署
+
+宿主机必须满足以下条件：
+
+1. 安装 NVIDIA GPU 和可用驱动，`nvidia-smi` 能正常执行。
+2. 安装 Docker Engine。
+3. 安装 NVIDIA Container Toolkit，并完成 Docker runtime 配置。
+
+启动 BrainPilot 前，先确认 Docker 能看到 GPU：
+
+```bash
+docker run --rm --gpus all nvidia/cuda:12.4.1-base-ubuntu22.04 nvidia-smi
+```
+
+如果从源码构建，使用 GPU override；它会选择 Dockerfile 的 `gpu` stage：
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
+```
+
+如果使用官方预构建 GPU 沙箱：
+
+```bash
+export BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml pull sandbox
+docker compose build main
+docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --no-build
+```
+
+验证 PyTorch 是否能识别 GPU：
+
+```bash
+docker run --rm --gpus all --entrypoint python \
+  brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2 \
+  -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
+```
+
+## 动态部署与云端部署
+
+动态模式通过宿主机 Docker daemon 为每位用户启动一个沙箱。构建共享 main 服务，并指定固定版本的
+沙箱镜像：
+
+```bash
+export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+docker pull "$BP_SANDBOX_IMAGE"
+docker compose -f docker-compose.dynamic.yml up -d --build
+```
+
+BrainPilot 云端托管层可以分别指定 CPU 和 GPU 镜像：
+
+```dotenv
+BP_SANDBOX_IMAGE_CPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2
+```
+
+修改后先拉取新镜像，再按云端部署流程滚动更新。根据编排器策略，已经存在的用户容器可能会继续使用
+旧镜像，直到被回收或重建。
+
+## 安全边界
+
+Docker 能提供实用的进程和文件系统隔离，但默认 Docker 容器并不是严格的多租户安全边界。
+
+- 将 `/var/run/docker.sock` 视为等同宿主机 root 权限。
+- 动态模式前必须有认证网关。网关应覆盖客户端传来的 `X-BP-User`，不能直接信任它。
+- 为每位用户分配独立宿主机数据目录，不要挂载无关的宿主机路径。
+- 不可信工作负载应运行在专用宿主机上；威胁模型需要时增加 gVisor、Kata 或 microVM 等隔离层，
+  并单独验证 GPU 兼容性。
+- 生产环境固定版本标签或镜像摘要，有计划地升级。
+
+## 更新镜像
+
+拉取新的固定版本标签，更新对应环境变量，再重建受影响的容器：
+
+```bash
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+docker compose up -d --no-build --force-recreate sandbox
+```
+
+除非确实要删除 Compose 管理的卷，否则不要使用 `docker compose down -v`。
+
+## 常见问题
+
+- **`manifest unknown`**：确认仓库路径和版本标签是否正确。
+- **`denied` 或 `unauthorized`**：确认使用的是上面列出的公网地址。带 `-vpc` 的 ACR 地址只适用于
+  已接入指定阿里云 VPC 的机器。
+- **GPU 无法识别**：先运行独立 CUDA `nvidia-smi` 测试，再检查 NVIDIA Container Toolkit 和
+  Docker runtime 配置。
+- **main 无法连接 sandbox**：检查 `docker compose ps` 和 `docker compose logs sandbox`，确认
+  runtime 的 8081 端口健康检查正常。
+- **中国大陆拉取缓慢**：用 ACR 地址替换 GHCR 地址。
+
