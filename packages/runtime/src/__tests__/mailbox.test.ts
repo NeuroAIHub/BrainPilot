@@ -138,6 +138,50 @@ describe("Mailbox", () => {
       expect(mb.count("principal")).toBe(1);
     });
 
+    it("does not mix task delegations from different senders", async () => {
+      const mb = new Mailbox("b-senders");
+      await mb.write({ fromAgent: "principal", toAgent: "engineer", content: "p1", msgType: "task_delegate" });
+      await mb.write({ fromAgent: "principal", toAgent: "engineer", content: "p2", msgType: "task_delegate" });
+      await mb.write({ fromAgent: "experimentalist", toAgent: "engineer", content: "e1", msgType: "task_delegate" });
+
+      const first = await mb.readBatch("engineer", 3, 1_000_000);
+      expect(first.map((m) => `${m.fromAgent}:${m.content}`)).toEqual([
+        "principal:p1",
+        "principal:p2",
+      ]);
+      const second = await mb.readBatch("engineer", 3, 1_000_000);
+      expect(second.map((m) => `${m.fromAgent}:${m.content}`)).toEqual([
+        "experimentalist:e1",
+      ]);
+    });
+
+    it("does not mix a direct user task with an agent delegation", async () => {
+      const mb = new Mailbox("b-user-sender");
+      await mb.write({ fromAgent: "user", toAgent: "engineer", content: "u1", msgType: "user_message" });
+      await mb.write({ fromAgent: "experimentalist", toAgent: "engineer", content: "e1", msgType: "task_delegate" });
+
+      expect((await mb.readBatch("engineer")).map((m) => m.content)).toEqual(["u1"]);
+      expect((await mb.readBatch("engineer")).map((m) => m.content)).toEqual(["e1"]);
+    });
+
+    it("keeps downstream results separate from a newly queued task", async () => {
+      const mb = new Mailbox("b-result-then-task");
+      await mb.write({ fromAgent: "engineer", toAgent: "experimentalist", content: "old result", msgType: "result_deliver" });
+      await mb.write({ fromAgent: "principal", toAgent: "experimentalist", content: "new task", msgType: "task_delegate" });
+
+      expect((await mb.readBatch("experimentalist")).map((m) => m.content)).toEqual(["old result"]);
+      expect((await mb.readBatch("experimentalist")).map((m) => m.content)).toEqual(["new task"]);
+    });
+
+    it("keeps a new task separate from an older queued result", async () => {
+      const mb = new Mailbox("b-task-then-result");
+      await mb.write({ fromAgent: "principal", toAgent: "experimentalist", content: "new task", msgType: "task_delegate" });
+      await mb.write({ fromAgent: "engineer", toAgent: "experimentalist", content: "old result", msgType: "result_deliver" });
+
+      expect((await mb.readBatch("experimentalist")).map((m) => m.content)).toEqual(["new task"]);
+      expect((await mb.readBatch("experimentalist")).map((m) => m.content)).toEqual(["old result"]);
+    });
+
     it("returns empty for an empty inbox", async () => {
       const mb = new Mailbox("b4");
       expect(await mb.readBatch("principal")).toEqual([]);

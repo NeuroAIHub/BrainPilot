@@ -117,6 +117,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     role: params.role,
     name: params.agentName,
     onUnreplied: params.onUnreplied ?? (() => {}),
+    getDelegator: params.getDelegator ?? (() => "principal"),
   });
   // #97: inject a fresh team-status block at the top of every turn, but only for
   // the agent the host supplied a renderer for (the principal). The `context`

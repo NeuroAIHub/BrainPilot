@@ -48,6 +48,7 @@ import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
   personaFor,
   withLanguageDirective,
+  withCoreCoordinationProtocols,
   withPersistentRootDirective,
   withSharedRootDirective,
 } from "./personas.js";
@@ -275,8 +276,8 @@ interface SessionEntry {
    * (the `fromAgent` of the most recent `task_delegate` it drained). When a
    * delegated run fails or ends silently, the escalation note is routed to this
    * real delegator (supporting chains like auditor→engineer) instead of always
-   * the principal. Cleared on a clean delivery so a stale delegator never targets
-   * an unrelated later run; falls back to `principal` when absent/unreachable.
+   * the principal. Preserved while an expert waits on a peer and overwritten by
+   * the next delegated/user task; falls back to `principal` when absent.
    */
   delegators: Map<string, string>;
   runActive: boolean;
@@ -1189,6 +1190,7 @@ export class SessionManager {
       // #309: skill_search toggle off — hide router teaching only.
       filtered = withoutRouterSkillInstructions(selected);
     }
+    filtered = withCoreCoordinationProtocols(filtered, name, role);
     let persona = withLanguageDirective(filtered);
     // #257: tell working agents (not the passive trace recorder) where the
     // shared cross-session persistent root lives, by absolute path, so they can
@@ -2012,6 +2014,7 @@ export class SessionManager {
         await this.destroyAgent(sessionId, target);
       },
       wakeAgent: (target) => this.wakeAgent(sessionId, target),
+      getDelegator: () => this.delegatorFor(entry, name),
       requestUserInput: (req) => this.requestUserInput(
         entry,
         name,
@@ -2078,6 +2081,7 @@ export class SessionManager {
       // was reminded once and still didn't report back, so the principal never
       // dead-waits on a silent expert.
       onUnreplied: (agentName) => this.writeFallbackToDelegator(entry, agentName),
+      getDelegator: () => this.delegatorFor(entry, name),
       // #97: only the principal gets the live team-status block injected each
       // turn (it is the coordinator). Other roles run without it.
       renderAgentStatus:
@@ -2262,11 +2266,14 @@ export class SessionManager {
       // they never overwrite a real delegator recorded on the original task.
       const delegated = [...msgs].reverse().find((m) => m.msgType === "task_delegate");
       if (delegated) entry.delegators.set(name, delegated.fromAgent);
+      else if (msgs.some((m) => m.msgType === "user_message")) entry.delegators.delete(name);
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
       // #167: cap concurrent provider calls across experts in this session.
-      await this.withProviderSlot(sessionId, () => agent.prompt(this.renderEnvelopes(msgs, name)));
+      await this.withProviderSlot(sessionId, () =>
+        agent.prompt(this.renderEnvelopes(entry, msgs, name)),
+      );
 
       // #97 error path. A delegated run that ended in `error` is handled here
       // (the trace-reminder extension bails on an errored run, leaving the host
@@ -2278,7 +2285,6 @@ export class SessionManager {
         return; // escalated — nothing more to drain for this agent
       }
       entry.deliveryErrors.delete(name); // clean run → reset the streak
-      entry.delegators.delete(name); // and forget the delegator (task done)
     }
   }
 
@@ -2395,26 +2401,25 @@ export class SessionManager {
    * each message and why. User-origin messages declare `<source type="user"/>`;
    * agent-origin ones name the sender.
    *
-   * 意图一·触发点2 (Pi-native hooks): when the PRINCIPAL receives a message from
-   * another agent (not the user — i.e. an expert reporting back), append a single
-   * static line nudging it to record_trace any real decision it makes while
-   * processing the reply. Stateless, loop-free (at most one line per delivery).
+   * Trace reminders are handled centrally by the event-driven extension; the
+   * envelope carries routing context only and never injects another reminder.
    */
-  private renderEnvelopes(msgs: readonly MailboxMessage[], toAgent: string): string {
+  private renderEnvelopes(
+    entry: SessionEntry,
+    msgs: readonly MailboxMessage[],
+    toAgent: string,
+  ): string {
+    const replyTo = this.delegatorFor(entry, toAgent);
     const body = msgs
       .map((m) => {
         const source =
           m.msgType === "user_message"
             ? `<source type="user" />`
             : `<source type="agent" name="${m.fromAgent}" />`;
-        return `<message_envelope>\n  ${source}\n  <type>${m.msgType}</type>\n</message_envelope>\n${m.content}`;
+        return `<message_envelope>\n  ${source}\n  <type>${m.msgType}</type>\n  <reply_to>${replyTo}</reply_to>\n</message_envelope>\n${m.content}`;
       })
       .join("\n\n");
 
-    const fromAgent = msgs.some((m) => m.msgType !== "user_message");
-    if (toAgent === "principal" && fromAgent) {
-      return `${body}\n\n[提醒：处理完这些消息后，如有实质决策请调用 record_trace 记录。]`;
-    }
     return body;
   }
 

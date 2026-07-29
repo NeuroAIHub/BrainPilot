@@ -96,7 +96,9 @@ export class Mailbox {
    * `maxMessages`, stopping early once including the next message would push the
    * accumulated content past `maxChars` — except the first message is always
    * taken (an oversized message ships alone rather than stranding). Remaining
-   * messages stay queued in order for the next turn. FIFO preserved.
+   * messages stay queued in order for the next turn. FIFO preserved. A batch is
+   * either task-bearing (one agent/user sender) or result-bearing, never both;
+   * this keeps a new task from being conflated with an older downstream result.
    */
   async readBatch(
     agent: string,
@@ -107,8 +109,22 @@ export class Mailbox {
     if (box.length === 0) return [];
     const take: MailboxMessage[] = [];
     let chars = 0;
+    let taskSender: string | undefined;
     for (const m of box) {
       if (take.length >= maxMessages) break;
+      const sender =
+        m.msgType === "task_delegate"
+          ? m.fromAgent
+          : m.msgType === "user_message"
+            ? "user"
+            : undefined;
+      if (take.length > 0) {
+        if (taskSender !== undefined && sender !== taskSender) break;
+        if (taskSender === undefined && sender !== undefined) break;
+      }
+      if (sender !== undefined) {
+        taskSender = sender;
+      }
       const next = chars + m.content.length;
       // Always take the first; otherwise respect the char budget.
       if (take.length > 0 && next > maxChars) break;

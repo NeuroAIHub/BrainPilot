@@ -204,6 +204,53 @@ describe("expert delegation (#76)", () => {
     await waitFor(() => m.getSessionState(s.id)?.runState.active === false);
   });
 
+  it("returns nested expert work through the real delegation chain", async () => {
+    const observe = newObserve();
+    const factory = scriptedFactory(
+      {
+        principal: {
+          onPrompt: (text) =>
+            text.includes("CHAIN")
+              ? { tool: "send_message", args: { to: "experimentalist", content: "top-level task" } }
+              : undefined,
+        },
+        experimentalist: {
+          onPrompt: (text) => {
+            if (text.includes("top-level task")) {
+              return { tool: "send_message", args: { to: "engineer", content: "child task" } };
+            }
+            if (text.includes("child result")) {
+              return { tool: "send_message", args: { to: "principal", content: "chain complete" } };
+            }
+            return undefined;
+          },
+        },
+        engineer: {
+          onPrompt: (text) =>
+            text.includes("child task")
+              ? { tool: "send_message", args: { to: "experimentalist", content: "child result" } }
+              : undefined,
+        },
+      },
+      observe,
+    );
+    const m = new SessionManager({ persist: false, agentFactory: factory });
+    const s = await m.createSession();
+
+    await m.sendMessage(s.id, "please CHAIN this");
+
+    await waitFor(() =>
+      observe.prompts.some((p) => p.agent === "principal" && p.text.includes("chain complete")),
+    );
+    const engineerPrompt = observe.prompts.find((p) => p.agent === "engineer");
+    const parentResume = observe.prompts.find(
+      (p) => p.agent === "experimentalist" && p.text.includes("child result"),
+    );
+    expect(engineerPrompt?.text).toContain('name="experimentalist"');
+    expect(parentResume?.text).toContain('name="engineer"');
+    expect(parentResume?.text).toContain("<reply_to>principal</reply_to>");
+  });
+
   it("keeps runState.active true while the delegated expert runs", async () => {
     const observe = newObserve();
     // Librarian holds its turn until released, so we can observe active=true

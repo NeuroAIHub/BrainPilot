@@ -206,10 +206,12 @@ export type AgentSessionFactory = (params: {
   /**
    * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
    * when an expert was reminded once and STILL did not report back, so the host
-   * can write a fallback note into the principal's mailbox (the PI never
-   * dead-waits). Omitted by the mock factory.
+   * can write a fallback note to the real delegator (falling back to PI), so
+   * the sender never dead-waits. Omitted by the mock factory.
    */
   onUnreplied?: (agentName: string) => void;
+  /** Resolve the sender of this agent's currently executing delegated task. */
+  getDelegator?: () => string;
   /**
    * #97: compute a fresh "team status" block to inject at the top of every turn
    * (via the agent-status extension's Pi `context` hook). Called once per turn;

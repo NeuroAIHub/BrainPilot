@@ -32,6 +32,8 @@ export interface ToolDeps {
    * its run, instead of sitting unread in an idle agent's inbox.
    */
   wakeAgent: (name: string) => void;
+  /** Sender of this agent's currently executing task; defaults to Principal. */
+  getDelegator?: () => string;
   /** Ask the terminal user a question; resolves with their answer. Blocks the turn. */
   requestUserInput: (req: {
     question: string;
@@ -55,20 +57,21 @@ function ok(text: string): { content: [{ type: "text"; text: string }] } {
 export function createSendMessageTool(deps: ToolDeps): SystemTool {
   return {
     name: "send_message",
-    description: "Send a message to another agent (e.g. principal or an expert).",
+    description:
+      "Send a concise task or result to another agent; return results to the current reply_to agent and include relevant workspace file paths.",
     parameters: {
       type: "object",
       properties: {
         content: { type: "string", description: "Message body" },
-        to: { type: "string", description: "Target agent name", default: "principal" },
-        msg_type: { type: "string", enum: ["result_deliver", "task_delegate"] },
+        to: { type: "string", description: "Target agent name" },
       },
-      required: ["content"],
+      required: ["content", "to"],
     },
     execute: async (params: Record<string, unknown>) => {
-      const to = (params.to as string) ?? "principal";
+      const delegator = deps.getDelegator?.() ?? "principal";
+      const to = String(params.to ?? delegator);
       const content = String(params.content ?? "");
-      const msgType = (params.msg_type as MsgType) ?? deriveMsgType(deps.fromAgent, to);
+      const msgType = deriveMsgType(deps.fromAgent, to, delegator);
       await deps.ensureAgent(to);
       try {
         await deps.mailbox.write({ fromAgent: deps.fromAgent, toAgent: to, content, msgType });
@@ -91,8 +94,10 @@ export function createSendMessageTool(deps: ToolDeps): SystemTool {
   };
 }
 
-function deriveMsgType(from: string, to: string): MsgType {
-  if (to === "principal") return "result_deliver";
+export function deriveMsgType(from: string, to: string, delegator = "principal"): MsgType {
+  if (from !== "principal" && (to === delegator || to === "principal")) {
+    return "result_deliver";
+  }
   return "task_delegate";
 }
 
@@ -476,20 +481,20 @@ export const BUILTIN_TOOL_CONFIG: Record<string, string[]> = {
   // read/write/bash, contradicting its own prompt.
   principal: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   trace: ["read"],
-  expert: ["read", "grep", "find"],
-  _default: ["read", "grep", "find"],
+  expert: ["read", "write", "grep", "find"],
+  _default: ["read", "write", "grep", "find"],
 };
 
 /**
  * Per-agent-name builtin overrides, keyed by name (not role). Authoring agents
- * need write/edit + a shell; the read-only researcher keeps the lean default.
+ * need write/edit + a shell; the research specialist keeps a lean no-shell set.
  * Falls through to BUILTIN_TOOL_CONFIG by role when a name has no entry.
  */
 export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   engineer: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
-  librarian: ["read", "grep", "find", "glob"],
+  librarian: ["read", "write", "grep", "find", "glob"],
   // Auditor: read-only inspection + `write` for its own audit report. NO `edit`
   // (must not modify other agents' artefacts). `bash` is included for
   // grep/awk/jq/diff style filesystem inspection — its read-only discipline is

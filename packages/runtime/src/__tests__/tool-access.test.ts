@@ -6,6 +6,7 @@ import {
   systemToolsForRole,
   builtinToolNamesForRole,
   createAskUserTool,
+  createSendMessageTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
 import { Mailbox } from "../mailbox.js";
@@ -30,6 +31,21 @@ function deps(name: string): ToolDeps {
 }
 
 describe("tool access control (§9)", () => {
+  it("send_message derives result/task direction from the live delegator", async () => {
+    const d = deps("engineer");
+    d.getDelegator = () => "experimentalist";
+    const tool = createSendMessageTool(d);
+
+    expect((tool.parameters.required as string[])).toEqual(["content", "to"]);
+    await tool.execute({ to: "experimentalist", content: "completed" });
+    await tool.execute({ to: "writer", content: "please polish" });
+    await tool.execute({ to: "principal", content: "authorization needed" });
+
+    expect(d.mailbox.peek("experimentalist")[0]!.msgType).toBe("result_deliver");
+    expect(d.mailbox.peek("writer")[0]!.msgType).toBe("task_delegate");
+    expect(d.mailbox.peek("principal")[0]!.msgType).toBe("result_deliver");
+  });
+
   it("ask_user validates choices and defaults free text to enabled", async () => {
     const seen: Array<Record<string, unknown>> = [];
     const d = deps("principal");
@@ -132,16 +148,16 @@ describe("tool access control (§9)", () => {
     expect(w).not.toContain("bash");
   });
 
-  it("librarian stays read-only (no write/bash)", () => {
+  it("librarian can save handoffs but cannot run a shell", () => {
     const lib = builtinToolNamesForRole("expert", "librarian");
     expect(lib).toContain("read");
-    expect(lib).not.toContain("write");
+    expect(lib).toContain("write");
     expect(lib).not.toContain("bash");
   });
 
-  it("unknown experts fall back to the lean role default", () => {
+  it("unknown experts can save handoffs with the lean role default", () => {
     expect(builtinToolNamesForRole("expert", "statistician").sort()).toEqual(
-      ["find", "grep", "read"].sort(),
+      ["find", "grep", "read", "write"].sort(),
     );
   });
 
