@@ -106,7 +106,8 @@ describe("SessionManager (mock mode)", () => {
 
     // Principal is a non-trace agent — should have system tools.
     const principalTools = seenTools[0]!;
-    expect(principalTools).toContain("send_message");
+    expect(principalTools).toContain("dispatch_task");
+    expect(principalTools).toContain("complete_task");
     expect(principalTools).toContain("ask_user");
   });
 
@@ -132,7 +133,7 @@ describe("SessionManager (mock mode)", () => {
     expect(PERSONAS.principal).toContain("## Incremental planning for heavy work");
     expect(PERSONAS.principal).toContain("dry run, smoke test, tiny dataset");
     expect(PERSONAS.engineer).toContain("## High-impact action gate");
-    expect(PERSONAS.engineer).toContain('send_message(to="<reply_to>"');
+    expect(PERSONAS.engineer).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(PERSONAS.engineer).toContain("## Execution discipline");
     expect(PERSONAS.engineer).toContain("Prefer writing new outputs inside the session workspace");
     expect(PERSONAS.experimentalist).toContain("## High-impact action gate");

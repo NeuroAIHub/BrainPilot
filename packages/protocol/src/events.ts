@@ -290,6 +290,7 @@ export type CustomEvent = z.infer<typeof CustomEventSchema>;
  * - `session_heartbeat` — liveness timestamp.
  * - `trace_node` — a Graph-of-Trace node was created/updated (#79); `value` is
  *   `{ op: "created" | "updated", node: TraceNode }`.
+ * - `task_state` — flat task-ledger snapshot or one created/completed/cancelled edge.
  * - `compaction` — Pi SDK auto/manual context compaction lifecycle. `value` is
  *   `CompactionStartValue | CompactionEndValue`. Emitted verbatim from the
  *   Pi `compaction_start` / `compaction_end` events (mas-agent.ts) so clients
@@ -301,10 +302,33 @@ export const CUSTOM_EVENT = {
   SESSION_TITLE: "session_title",
   SESSION_HEARTBEAT: "session_heartbeat",
   TRACE_NODE: "trace_node",
+  TASK_STATE: "task_state",
   COMPACTION: "compaction",
   /** Auditable, content-free domain tool / skill usage edge. */
   DOMAIN_RESOURCE_USAGE: "domain_resource_usage",
 } as const;
+
+export const TaskStatusSchema = z.enum(["pending", "completed", "cancelled"]);
+export type TaskStatus = z.infer<typeof TaskStatusSchema>;
+
+export const TaskRecordSchema = z.object({
+  id: z.string(),
+  seq: z.number().int().positive(),
+  created_by: z.string(),
+  assigned_to: z.string(),
+  content: z.string(),
+  status: TaskStatusSchema,
+  reply: z.string().optional(),
+  created_at: z.number().nonnegative(),
+  completed_at: z.number().nonnegative().optional(),
+}).strict();
+export type TaskRecord = z.infer<typeof TaskRecordSchema>;
+
+export const TaskStateValueSchema = z.discriminatedUnion("op", [
+  z.object({ op: z.literal("snapshot"), tasks: z.array(TaskRecordSchema) }).strict(),
+  z.object({ op: z.enum(["created", "completed", "cancelled"]), task: TaskRecordSchema }).strict(),
+]);
+export type TaskStateValue = z.infer<typeof TaskStateValueSchema>;
 
 /**
  * Normalized resource-use event. Queries, skill bodies, tool results, and

@@ -33,7 +33,7 @@ export interface AgentStatusLine {
   name: string;
   /** Authoritative status: idle | running | error | stopped. */
   status: string;
-  /** Inbound messages still queued unread in this agent's inbox. */
+  /** Durable task events still queued for this agent. */
   unread: number;
 }
 
@@ -60,7 +60,7 @@ export function renderAgentStatusBlock(lines: readonly AgentStatusLine[]): strin
       const parts: string[] = [];
       if (l.status !== "idle") parts.push(`status=${l.status}`);
       if (l.unread > 0) {
-        parts.push(`${l.unread} pending message${l.unread === 1 ? "" : "s"}`);
+        parts.push(`${l.unread} pending task event${l.unread === 1 ? "" : "s"}`);
       }
       return `- ${l.name}: ${parts.join(", ")}`;
     })

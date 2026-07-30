@@ -2,13 +2,13 @@
  * BrainPilot system tools (§9 decision 1) — defined as plain `SystemTool`
  * objects (name + JSON-schema params + execute closure). The real agent
  * factory wraps these with Pi's `defineTool`; the mock invokes `execute`
- * directly. Closures capture session context (mailbox, trace, manager).
+ * directly. Closures capture session context (task ledger, trace, manager).
  *
  * Per-agent access control (§9, ported from legacy `agent_tool_config`) is
  * applied by `toolsForRole` — each role only receives its allowed tools.
  */
 import type { AgentRole, SystemTool } from "../types.js";
-import { MailboxFullError, type Mailbox, type MsgType } from "../mailbox.js";
+import { TaskQueueFullError, type TaskRecord } from "../task-ledger.js";
 import type { GraphOfTrace } from "../trace.js";
 import { createSkillSearchTool } from "./skill-search.js";
 import {
@@ -20,20 +20,20 @@ import { isToolEnabled, type ToolToggles } from "../tool-toggles.js";
 export interface ToolDeps {
   sessionId: string;
   fromAgent: string;
-  mailbox: Mailbox;
   trace: GraphOfTrace;
+  dispatchTask: (to: string, content: string) => Promise<TaskRecord>;
+  completeTask: (taskId: string, reply: string) => Promise<TaskRecord>;
+  dispatchTrace: (content: string) => Promise<void>;
   /** Ensure an agent exists (auto-create/resurrect). */
   ensureAgent: (name: string) => Promise<void>;
   /** Destroy an agent (memory only; history kept). */
   destroyAgent: (name: string) => Promise<void>;
   /**
-   * Wake a target agent to consume its mailbox (#76). Fire-and-forget: kicks a
-   * serial delivery loop on the target so a delivered message actually starts
+   * Wake a target agent to consume task notifications. Fire-and-forget: kicks a
+   * serial delivery loop on the target so a committed task actually starts
    * its run, instead of sitting unread in an idle agent's inbox.
    */
   wakeAgent: (name: string) => void;
-  /** Sender of this agent's currently executing task; defaults to Principal. */
-  getDelegator?: () => string;
   /** Ask the terminal user a question; resolves with their answer. Blocks the turn. */
   requestUserInput: (req: {
     question: string;
@@ -54,51 +54,66 @@ function ok(text: string): { content: [{ type: "text"; text: string }] } {
   return { content: [{ type: "text", text }] };
 }
 
-export function createSendMessageTool(deps: ToolDeps): SystemTool {
+export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
   return {
-    name: "send_message",
+    name: "dispatch_task",
     description:
-      "Send a concise task or result to another agent; return results to the current reply_to agent and include relevant workspace file paths.",
+      "Create an independent task for another agent. Returns a stable task ID; include all context and relevant workspace file paths.",
     parameters: {
       type: "object",
       properties: {
-        content: { type: "string", description: "Message body" },
+        content: { type: "string", minLength: 1, description: "Self-contained task and acceptance criteria" },
         to: { type: "string", description: "Target agent name" },
       },
       required: ["content", "to"],
     },
     execute: async (params: Record<string, unknown>) => {
-      const delegator = deps.getDelegator?.() ?? "principal";
-      const to = String(params.to ?? delegator);
-      const content = String(params.content ?? "");
-      const msgType = deriveMsgType(deps.fromAgent, to, delegator);
+      const to = String(params.to ?? "").trim();
+      const content = String(params.content ?? "").trim();
+      if (!to || !content) return { ...ok("to and content are required"), isError: true };
+      if (to === deps.fromAgent) return { ...ok("cannot dispatch a task to yourself"), isError: true };
+      if (to === "trace") return { ...ok("cannot dispatch user tasks to the trace agent"), isError: true };
       await deps.ensureAgent(to);
       try {
-        await deps.mailbox.write({ fromAgent: deps.fromAgent, toAgent: to, content, msgType });
+        const task = await deps.dispatchTask(to, content);
+        deps.wakeAgent(to);
+        return ok(`task ${task.id} dispatched to ${to}`);
       } catch (err) {
-        // #76 backpressure: the target inbox is full. Signal a failed tool call
-        // (isError) so the sending agent sees the rejection and backs off,
-        // rather than silently dropping the message or growing the inbox.
-        if (err instanceof MailboxFullError) {
-          return { ...ok(`cannot deliver to ${to}: ${err.message}`), isError: true };
+        if (err instanceof TaskQueueFullError) {
+          return { ...ok(`cannot dispatch to ${to}: ${err.message}`), isError: true };
         }
-        throw err;
+        return { ...ok(`cannot dispatch task: ${(err as Error).message}`), isError: true };
       }
-      // #76: actively wake the target so it consumes the inbox and runs. This is
-      // fire-and-forget — the sending agent's turn returns immediately ("you
-      // never poll", per the A2A persona); the target's run proceeds in its own
-      // delivery loop. Without this the message is written but never read.
-      deps.wakeAgent(to);
-      return ok(`delivered to ${to}`);
     },
   };
 }
 
-export function deriveMsgType(from: string, to: string, delegator = "principal"): MsgType {
-  if (from !== "principal" && (to === delegator || to === "principal")) {
-    return "result_deliver";
-  }
-  return "task_delegate";
+export function createCompleteTaskTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "complete_task",
+    description:
+      "Complete one task assigned to you and return its result to the task creator. Include conclusions and relevant workspace file paths; if blocked, explain why.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", minLength: 1, description: "Exact ID from assigned_to_me" },
+        reply: { type: "string", minLength: 1, description: "Result, limitations, and artifact paths" },
+      },
+      required: ["task_id", "reply"],
+    },
+    execute: async (params: Record<string, unknown>) => {
+      const taskId = String(params.task_id ?? "").trim();
+      const reply = String(params.reply ?? "").trim();
+      if (!taskId || !reply) return { ...ok("task_id and reply are required"), isError: true };
+      try {
+        const task = await deps.completeTask(taskId, reply);
+        deps.wakeAgent(task.created_by);
+        return ok(`task ${task.id} completed for ${task.created_by}`);
+      } catch (err) {
+        return { ...ok(`cannot complete task: ${(err as Error).message}`), isError: true };
+      }
+    },
+  };
 }
 
 export function createAskUserTool(deps: ToolDeps): SystemTool {
@@ -216,7 +231,7 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
     execute: async (params: Record<string, unknown>) => {
       // §10 (legacy parity): record_trace does NOT mutate the graph directly.
       // Instead it dispatches a [Trace Event] envelope into the trace agent's
-      // mailbox; the trace agent — a real Pi AgentSession — receives it and
+      // durable internal queue; the trace agent receives it and
       // calls create_trace_node / update_trace_node / add_trace_relation as the
       // editor. This keeps the trace agent's status authentically live in the
       // Agents panel (otherwise it would be a permanently-dormant placeholder)
@@ -241,16 +256,9 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       // "idle/running" in the Agents panel.
       await deps.ensureAgent("trace");
       try {
-        await deps.mailbox.write({
-          fromAgent: deps.fromAgent,
-          toAgent: "trace",
-          content: envelope,
-          msgType: "trace_event",
-        });
+        await deps.dispatchTrace(envelope);
       } catch (err) {
-        if (err instanceof MailboxFullError) {
-          return { ...ok(`cannot deliver to trace: ${err.message}`), isError: true };
-        }
+        if (err instanceof TaskQueueFullError) return { ...ok(`cannot deliver to trace: ${err.message}`), isError: true };
         throw err;
       }
       // Fire-and-forget: kick the trace agent's delivery loop so the envelope
@@ -384,7 +392,8 @@ export function allSystemTools(
 ): Map<string, SystemTool> {
   // Always-on tools (comms, orchestration, trace primitives).
   const tools: SystemTool[] = [
-    createSendMessageTool(deps),
+    createDispatchTaskTool(deps),
+    createCompleteTaskTool(deps),
     createAskUserTool(deps),
     createCreateAgentTool(deps),
     createDestroyAgentTool(deps),
@@ -420,7 +429,8 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // not in <available_skills>). Trace is deliberately excluded: it is a
   // graph-only recorder, not a domain reasoner.
   principal: [
-    "send_message",
+    "dispatch_task",
+    "complete_task",
     "create_agent",
     "destroy_agent",
     "record_trace",
@@ -431,7 +441,8 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   ],
   trace: ["create_trace_node", "update_trace_node", "add_trace_relation", "get_trace_graph"],
   expert: [
-    "send_message",
+    "dispatch_task",
+    "complete_task",
     "record_trace",
     "skill_search",
     "get_domain_knowledge_local",
@@ -443,7 +454,8 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // the local KB tools are included so an audit can resolve a methodology
   // skill referenced in a draft and verify a cited claim against the KB.
   auditor: [
-    "send_message",
+    "dispatch_task",
+    "complete_task",
     "record_trace",
     "skill_search",
     "get_domain_knowledge_local",
@@ -451,7 +463,8 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   ],
   // Writer: needs ask_user to present format/style options before drafting.
   writer: [
-    "send_message",
+    "dispatch_task",
+    "complete_task",
     "record_trace",
     "ask_user",
     "skill_search",
@@ -460,7 +473,8 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   ],
   // Default for any other expert-like agent.
   _default: [
-    "send_message",
+    "dispatch_task",
+    "complete_task",
     "record_trace",
     "skill_search",
     "get_domain_knowledge_local",

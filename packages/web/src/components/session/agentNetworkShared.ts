@@ -2,7 +2,7 @@
  * Shared pure helpers, types, and the static agent catalog for the Agent
  * Network view. Extracted from `AgentNetwork.tsx` so the new sub-views
  * (`AnalyticsTab`, `TimelineTab`, `GlobalOverview`, `NodeTooltip`) can reuse
- * the SAME derivation logic — in particular the `send_message` tool-name
+ * the SAME derivation logic — in particular the `dispatch_task` tool-name
  * matching and edge building, which previously lived only in the component
  * and is the single source of truth for "who talked to whom".
  * ------------------------------------------------------------------------ */
@@ -43,7 +43,8 @@ export const AGENT_PROFILES: Record<string, AgentProfile> = {
     description: "profile.principal.desc",
     accent: "info",
     defaultTools: [
-      "send_message",
+      "dispatch_task",
+      "complete_task",
       "create_agent",
       "destroy_agent",
       "record_trace",
@@ -56,7 +57,7 @@ export const AGENT_PROFILES: Record<string, AgentProfile> = {
     role: "profile.librarian.role",
     description: "profile.librarian.desc",
     accent: "info",
-    defaultTools: ["send_message", "record_trace", "search_web", "fetch_url"],
+    defaultTools: ["dispatch_task", "complete_task", "record_trace", "search_web", "fetch_url"],
   },
   trace: {
     displayName: "Trace Agent",
@@ -77,28 +78,28 @@ export const AGENT_PROFILES: Record<string, AgentProfile> = {
     role: "profile.experimentalist.role",
     description: "profile.experimentalist.desc",
     accent: "success",
-    defaultTools: ["Read", "Write", "Grep", "Bash", "send_message"],
+    defaultTools: ["Read", "Write", "Grep", "Bash", "dispatch_task", "complete_task"],
   },
   engineer: {
     displayName: "Engineer",
     role: "profile.engineer.role",
     description: "profile.engineer.desc",
     accent: "success",
-    defaultTools: ["Read", "Write", "Grep", "Bash", "send_message"],
+    defaultTools: ["Read", "Write", "Grep", "Bash", "dispatch_task", "complete_task"],
   },
   writer: {
     displayName: "Writer",
     role: "profile.writer.role",
     description: "profile.writer.desc",
     accent: "warning",
-    defaultTools: ["Read", "Write", "Grep", "Bash", "send_message"],
+    defaultTools: ["Read", "Write", "Grep", "Bash", "dispatch_task", "complete_task"],
   },
   auditor: {
     displayName: "Auditor",
     role: "profile.auditor.role",
     description: "profile.auditor.desc",
     accent: "danger",
-    defaultTools: ["Read", "Grep", "Bash", "Write", "send_message", "record_trace"],
+    defaultTools: ["Read", "Grep", "Bash", "Write", "dispatch_task", "complete_task", "record_trace"],
   },
   user: {
     displayName: "You",
@@ -114,7 +115,7 @@ export const DEFAULT_PROFILE: AgentProfile = {
   role: "profile.default.role",
   description: "profile.default.desc",
   accent: "neutral",
-  defaultTools: ["send_message", "record_trace", "search_web", "fetch_url"],
+  defaultTools: ["dispatch_task", "complete_task", "record_trace", "search_web", "fetch_url"],
 };
 
 export function getAgentProfile(name: string): AgentProfile {
@@ -182,19 +183,19 @@ export function safeParseJson(input: unknown): Record<string, unknown> | null {
 }
 
 /**
- * Tool name matcher — accepts both the bare SDK name (`send_message`) and the
+ * Tool name matcher — accepts both the bare SDK name (`dispatch_task`) and the
  * MCP-namespaced name as it actually appears in JSONL / AG-UI snapshots
- * (`mcp__builtin__send_message`, or any future `mcp__<server>__send_message`).
+ * (`mcp__builtin__dispatch_task`, or any future namespaced variant).
  */
-export function isSendMessageTool(toolName?: string): boolean {
+export function isDispatchTaskTool(toolName?: string): boolean {
   if (!toolName) return false;
-  if (toolName === "send_message") return true;
+  if (toolName === "dispatch_task") return true;
   // MCP convention: `mcp__<server>__<tool>` — match the trailing tool name.
-  return toolName.endsWith("__send_message") || toolName.endsWith(":send_message");
+  return toolName.endsWith("__dispatch_task") || toolName.endsWith(":dispatch_task");
 }
 
 export function getMessageEdge(message: ChatMessage): AgentEdgeMessage | null {
-  if (message.kind !== "tool" || !isSendMessageTool(message.toolName)) {
+  if (message.kind !== "tool" || !isDispatchTaskTool(message.toolName)) {
     return null;
   }
   const args = safeParseJson(message.toolInput);
@@ -207,21 +208,14 @@ export function getMessageEdge(message: ChatMessage): AgentEdgeMessage | null {
     return null;
   }
   // Filter out messages to/from 'trace' — trace is an internal system agent
-  // that should only be interacted with via record_trace tool, not send_message.
-  // Any send_message involving trace is likely a mistake and should not appear
+  // that should only be interacted with via record_trace tool, not dispatch_task.
+  // Any dispatch_task involving trace is a rejected call and should not appear
   // as a collaboration edge in the Agent Network graph.
   if (from === "trace" || to === "trace") {
     return null;
   }
   const content = typeof args.content === "string" ? args.content : "";
-  // The wire format uses `type` (e.g. "task_delegate" / "task_result"); accept
-  // legacy `msg_type` as a fallback for older sessions.
-  const msgTypeRaw =
-    typeof args.type === "string" && args.type
-      ? args.type
-      : typeof args.msg_type === "string"
-        ? args.msg_type
-        : undefined;
+  const msgTypeRaw = "task_delegate";
   return {
     id: message.id,
     from,

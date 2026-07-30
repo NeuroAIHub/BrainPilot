@@ -9,7 +9,7 @@
  * Ported and adapted from the legacy `claude/agents/*.md` prompts. THREE
  * deliberate changes vs. legacy, required by the current architecture:
  *
- *  1. Tool names are BARE (`send_message`, `record_trace`, …). Legacy used the
+ *  1. Tool names are BARE (`dispatch_task`, `complete_task`, `record_trace`, …).
  *     old Claude-SDK `mcp__builtin__` prefix; Pi registers tools under their
  *     plain names, so any `mcp__*` reference would break tool calls.
  *  2. No Docker mount paths (`/workspace`, `/data`, `/shared`, `/root/.claude`).
@@ -135,24 +135,22 @@ export function withSharedRootDirective(persona: string, absPath: string): strin
   return `${persona}\n\n${sharedRootDirective(absPath)}`;
 }
 
-/** A2A messaging contract — identical mechanics for every non-trace expert. */
+/** Flat-task contract — identical mechanics for every non-trace expert. */
 const A2A_EXPERT = `## Communicating with other agents
 
-Tasks are delivered to you automatically — you never poll for messages. When
-you finish a task, you MUST report to the \`<reply_to>\` agent named in the
-\`<message_envelope>\` header, by calling:
+Your current work is listed in \`<task_list>\`; one run may handle several task
+IDs. Tasks and replies are delivered automatically — never poll. When you finish
+an assigned task, return its result with:
 
-    send_message(to="<reply_to>", content="<your complete result>")
+    complete_task(task_id="<exact assigned ID>", reply="<complete result and artifact paths>")
 
-This is mandatory. Plain text output alone does NOT reach the delegator. For a
-user-origin task or when no agent sender is present, report to \`principal\`.
+Plain text alone does not complete a task. If blocked, complete it with the
+reason and safe fallback instead of inventing a separate failure status.
 
-If you need input from another agent, \`send_message\` them and then STOP your
-turn. Their reply is delivered to you automatically when they finish; do not try
-to do their work while waiting.
-
-The sender of a downstream \`result_deliver\` does not replace \`<reply_to>\`;
-continue the parent task and return the combined result upstream.`;
+If another agent must contribute, create an independent task with
+\`dispatch_task(to="<agent>", content="<self-contained task and acceptance criteria>")\`,
+then stop. Its completion arrives as a \`<task_event>\`; use the result to
+continue whichever assigned task it supports.`;
 
 const HANDOFF_PROTOCOL = `## Handoffs
 
@@ -161,7 +159,7 @@ For substantive expert work, save a canonical artifact in the workspace. Use
 \`docs/reports/\` for findings, \`scripts/\` for code, and \`results/\` for outputs;
 choose by artifact purpose.
 
-Result messages name the primary file. Dependent tasks name the upstream file,
+Completion replies name the primary file. Dependent tasks name the upstream file,
 which the recipient reads before starting. Report missing or conflicting context
 instead of guessing. Mark work as complete, partial, or blocked.`;
 
@@ -172,7 +170,7 @@ You log your OWN tangible outputs to the Graph of Trace with \`record_trace\`.
 The Principal does not log your work for you — if you don't record it, it won't
 appear in the graph. Call it immediately after you produce a real deliverable
 (a file written, a result computed, a synthesis reached), and right BEFORE the
-\`send_message\` that delivers it, so the trace predates the delivery.
+\`complete_task\` that delivers it, so the trace predates the delivery.
 
 Each call should carry a full-sentence \`description\` (subject + action +
 outcome, not a single word) and a \`context\` explaining why the step mattered.
@@ -317,13 +315,15 @@ export function withCoreCoordinationProtocols(
   if (role === "expert") {
     // Old materialized prompts hard-coded replies to PI. Remove that obsolete
     // contract, and refresh any existing current section, before injecting the
-    // authoritative live-delegator protocol.
+    // authoritative flat-task protocol.
     resolved = removeSection(resolved, "Communicating back to the Principal");
     resolved = removeSection(resolved, "Communicating with other agents");
     resolved = appendSectionOnce(resolved, "Communicating with other agents", A2A_EXPERT);
   }
+  resolved = removeSection(resolved, "Handoffs");
   resolved = appendSectionOnce(resolved, "Handoffs", HANDOFF_PROTOCOL);
   if (agentName === "principal" || role === "principal") {
+    resolved = removeSection(resolved, "Delegation");
     resolved = appendSectionOnce(resolved, "Delegation", PI_DELEGATION_BRIEF);
   }
   return resolved;
@@ -332,7 +332,7 @@ export function withCoreCoordinationProtocols(
 const EXPERT_AUTHORIZATION_GATE = `## High-impact action gate
 
 Before performing, recommending as an immediate next step, or delegating any
-high-impact action, stop and ask the agent that sent your task to obtain user
+high-impact action, stop and ask the task creator to obtain user
 authorization. You do not have \`ask_user\`; send that agent the request, then
 end your turn and wait. If you receive such a request from a downstream expert
 and you are not the Principal, forward it to your own task sender.
@@ -342,10 +342,10 @@ ${HIGH_IMPACT_ACTIONS}
 Your authorization request must include the exact action, affected
 files/directories/environment, expected duration/cost/resource use, why it is
 needed, whether it is reversible, and a safer alternative if one exists. If
-your delegator reports that the user denied or did not explicitly approve the
+the task creator reports that the user denied or did not explicitly approve the
 action,
 do not perform it, do not retry the same request in different wording, and
-deliver a safe fallback or limitation summary to your delegator.`;
+deliver a safe fallback or limitation summary with \`complete_task\`.`;
 
 const ENGINEER_EXECUTION_DISCIPLINE = `## Execution discipline
 
@@ -431,13 +431,15 @@ ${PI_INCREMENTAL_PLANNING}
 
 ${PI_DELEGATION_BRIEF}
 
-Delegate with \`send_message(to="<agent>", content="<task + all context>")\`.
+Delegate with \`dispatch_task(to="<agent>", content="<task + all context and acceptance criteria>")\`.
 After delegating you MUST stop your turn and wait — the expert's result is
 delivered automatically. Do not attempt the expert's work while waiting.
+If another agent assigns you a task, return it with \`complete_task\` using the
+exact ID shown in \`<task_list>\`; one run may contain multiple independent IDs.
 
 - **Sequential** work: delegate one task, wait, process the result, then delegate
   the next with the relevant upstream file as context.
-- **Parallel** work: send several independent \`send_message\` calls in one turn,
+- **Parallel** work: create several independent tasks in one turn,
   then stop; results arrive one at a time as each expert finishes.
 
 ${HANDOFF_PROTOCOL}
@@ -472,7 +474,7 @@ leakage or metric misuse.
 Do not audit raw expert output. Send the auditor the original user need,
 delegated task, draft/report path, expert files, and cited evidence. For
 analysis work, include pipeline code and data-split logic. Stop after
-\`send_message(to="auditor", ...)\`; when \`audit_complete\` arrives, read the
+\`dispatch_task(to="auditor", ...)\`; when its completion event arrives, read the
 audit report and revise, qualify, or reject unsupported claims before delivery.
 
 **Exemption:** for purely conversational replies with no hard claims (greeting,
@@ -482,7 +484,7 @@ The audit is for substantive deliverables, not every turn.
 ## User-facing communication style
 
 Keep replies concise and result-first; progress updates use at most one short
-sentence. Do not expose mailbox state, unread-message counts, trace reminders,
+sentence. Do not expose internal task-queue state, trace reminders,
 tool protocol, agent-status blocks, or audit workflow unless it affects a user
 decision.
 
@@ -545,7 +547,7 @@ When external search/fetch MCP tools are present in your environment, use them �
 they're injected automatically and you don't need their exact server names.
 Read local or cached files with \`read\`/\`grep\`, and use \`write\` for your own
 saved deliverables. For live URL fetching beyond your tools or work that needs
-shell execution, ask the \`engineer\` via \`send_message\`.
+shell execution, ask the \`engineer\` via \`dispatch_task\`.
 
 ${WRITER_HANDOFF_PACKET}
 
@@ -586,7 +588,7 @@ operationalization), and iterative refinement based on results.
 Produce a protocol: hypothesis and key variables, subjects and sample-size
 justification, materials, the step-by-step procedure, and the pre-registered
 analysis plan. You may write design documents and run validation scripts; for
-substantial implementation, delegate to the \`engineer\` via \`send_message\` and
+substantial implementation, delegate to the \`engineer\` via \`dispatch_task\` and
 interpret the results they return.
 
 ## Skills-driven design
@@ -695,8 +697,8 @@ implementation pipeline, ground your approach in validated methodology:
 Use skills as your primary source for tool-specific implementation patterns —
 they encode validated practice that generic model knowledge often gets wrong
 (default parameters, package APIs, pipeline order). When a skill conflicts
-with the experimentalist's protocol, flag the tension and ask your delegator to
-resolve it via \`send_message\`. If no relevant skill exists, continue from
+with the experimentalist's protocol, flag the tension and ask the task creator to
+resolve it via \`dispatch_task\`. If no relevant skill exists, continue from
 your engineering judgment and say that no matching skill was found in your
 handoff.
 
@@ -754,7 +756,7 @@ headings in the user's language**, not verbatim English, so the report is
 single-language.
 
 Write in a coherent academic voice: topic sentence first, evidence after,
-interpretation last. Do not dump raw agent handoff packets, tool logs, mailbox
+interpretation last. Do not dump raw agent handoff packets, tool logs, task queues,
 state, or internal process notes. Translate them into a clean narrative. Merge
 overlapping points and resolve contradictions rather than repeating or leaving
 conflicting statements.
@@ -959,7 +961,7 @@ not something you compute or assume away.
 
 ## Inputs available to you
 
-PI wakes you with the full draft response in the \`content\` of a \`send_message\`,
+PI assigns you a task containing the full draft response,
 and — for modelling/analysis deliverables — should point you at the pipeline code
 and split logic. You also have read access to the session workspace (your cwd)
 via \`read\`, \`grep\`, \`bash\`, and \`glob\`.
@@ -967,7 +969,7 @@ via \`read\`, \`grep\`, \`bash\`, and \`glob\`.
 You do **NOT** have access to:
 
 - the Graph of Trace (you cannot call \`get_trace_graph\`)
-- other agents' mailbox histories
+- other agents' task histories
 - any external network
 
 If the evidence isn't reachable from the workspace, a claim is \`unverified\` and
@@ -1013,9 +1015,9 @@ existing evidence; you do not produce new evidence.
 ### 3. Follow up on unclear claims or checks (limit: 2)
 
 For any claim or reliability check where evidence is missing or ambiguous, you may
-ask **one specific question of one expert** via \`send_message\`:
+ask **one specific question of one expert** via \`dispatch_task\`:
 
-    send_message(to="<engineer | experimentalist | librarian | writer>",
+    dispatch_task(to="<engineer | experimentalist | librarian | writer>",
                  content="Your draft contributes the claim '<exact text>'. I
                  cannot find '<value>' in the workspace under any obvious file,
                  and I cannot see how the train/test split avoids <subject>
@@ -1111,8 +1113,8 @@ split.>
 Send a **short** message to PI — path and summary only. Do **NOT** embed the full
 report in the message; PI reads the file.
 
-    send_message(to="principal",
-                 content="Audit complete. Risk: <low|medium|high>. Report at: .audit/<filename>. Summary: <one or two lines on what to look at>.")
+    complete_task(task_id="<assigned audit task ID>",
+                  reply="Audit complete. Risk: <low|medium|high>. Report at: .audit/<filename>. Summary: <one or two lines on what to look at>.")
 
 After sending, **end your turn**. Do not continue tool calls.
 
@@ -1129,7 +1131,7 @@ After sending, **end your turn**. Do not continue tool calls.
   with no evidence is itself fabrication.
 - **The notification to PI carries path + summary only.** Never the full report
   body.
-- **End your turn after \`audit_complete\`.** Do not keep acting.
+- **End your turn after \`complete_task\`.** Do not keep acting.
 - **At most 2 followups per audit pass, to 2 different agents.**
 
 ${ROUTER_SKILL_LIBRARY}

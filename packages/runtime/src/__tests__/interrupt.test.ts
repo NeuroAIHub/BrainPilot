@@ -1,16 +1,16 @@
 /**
- * #90 / #327: whole-session Stop must interrupt + clear mailboxes without a
+ * #90 / #327: whole-session Stop must interrupt + pause task notifications without a
  * follow-up model run solely to acknowledge the stop.
  *
  * The frontend Stop button calls POST /sessions/:id/interrupt with no agent,
  * meaning "interrupt the whole session". That must:
- *   - clear ALL mailboxes so a queued message can't re-wake a stopped agent;
+ *   - retain but pause task notifications so queued work cannot re-wake a stopped agent;
  *   - emit one deterministic system_message acknowledgement;
  *   - settle runActive so the UI can clear Stop immediately;
  *   - NOT prompt the principal (no extra provider tokens for "I stopped").
  *
  * A targeted interrupt(id, agent) keeps its narrow contract: abort just that
- * agent, leave mailboxes and the principal alone.
+ * agent, leave durable task state and the principal alone.
  */
 import { describe, it, expect } from "vitest";
 import { SessionManager } from "../session-manager.js";
@@ -101,14 +101,14 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 describe("whole-session interrupt (#90 / #327)", () => {
-  it("clears all mailboxes so a queued message can't re-wake a stopped agent", async () => {
+  it("pauses without deleting task notifications and resumes on the next user turn", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = scriptedFactory(
       {
         principal: {
           onPrompt: (t) =>
             t.includes("DELEGATE")
-              ? { tool: "send_message", args: { to: "librarian", content: "work" } }
+              ? { tool: "dispatch_task", args: { to: "librarian", content: "work" } }
               : undefined,
         },
         librarian: {},
@@ -125,13 +125,19 @@ describe("whole-session interrupt (#90 / #327)", () => {
     // Second delegation while librarian is busy: this message QUEUES (wakeAgent
     // bails because the delivery loop is already running).
     await m.sendMessage(s.id, "please DELEGATE again");
-    await waitFor(() => m.mailboxCount(s.id, "librarian") === 1);
+    await waitFor(() => m.taskNotificationCount(s.id, "librarian") === 1);
 
     // Stop the whole session.
     await m.interrupt(s.id);
 
-    // The queued message is gone — it will not re-wake librarian.
-    expect(m.mailboxCount(s.id, "librarian")).toBe(0);
+    // The event remains durable but cannot re-wake librarian while paused.
+    expect(m.taskNotificationCount(s.id, "librarian")).toBe(1);
+    const beforeResume = observe.prompts.filter((prompt) => prompt.agent === "librarian").length;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(observe.prompts.filter((prompt) => prompt.agent === "librarian")).toHaveLength(beforeResume);
+
+    await m.sendMessage(s.id, "resume");
+    await waitFor(() => observe.prompts.filter((prompt) => prompt.agent === "librarian").length > beforeResume);
   });
 
   it("does not prompt the principal after stop; emits one system acknowledgement (#327)", async () => {
@@ -179,7 +185,7 @@ describe("whole-session interrupt (#90 / #327)", () => {
         principal: {
           onPrompt: (t) =>
             t.includes("DELEGATE")
-              ? { tool: "send_message", args: { to: "librarian", content: "work" } }
+              ? { tool: "dispatch_task", args: { to: "librarian", content: "work" } }
               : undefined,
         },
         librarian: {},

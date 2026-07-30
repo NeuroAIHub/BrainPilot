@@ -25,6 +25,9 @@ function fakePi() {
     fire(ev: string, e?: unknown) {
       for (const fn of handlers[ev] || []) fn(e);
     },
+    async fireAsync(ev: string, e?: unknown) {
+      for (const fn of handlers[ev] || []) await fn(e);
+    },
     sent,
   };
 }
@@ -43,7 +46,8 @@ function runOnce(
     role,
     name: deps?.name ?? role,
     onUnreplied: deps?.onUnreplied ?? (() => {}),
-    getDelegator: deps?.getDelegator ?? (() => "principal"),
+    hasPendingTasks: deps?.hasPendingTasks ?? (() => role === "expert"),
+    claimTaskReminder: deps?.claimTaskReminder,
   })(pi as never);
   pi.fire("agent_start");
   calls.forEach((call, index) => {
@@ -77,7 +81,7 @@ describe("trace-reminder: event-driven trace gating", () => {
   it("sending a task counts as delegation", () => {
     expect(runOnce("principal", [
       "bash",
-      { name: "send_message", args: { to: "engineer" } },
+      { name: "dispatch_task", args: { to: "engineer" } },
     ]).kinds).toEqual(["trace"]);
   });
 
@@ -87,40 +91,40 @@ describe("trace-reminder: event-driven trace gating", () => {
   });
 });
 
-describe("trace-reminder: replies follow the real delegator", () => {
-  const delegatedByExperimentalist = {
+describe("trace-reminder: flat task activity", () => {
+  const pendingEngineerTask = {
     name: "engineer",
-    getDelegator: () => "experimentalist",
+    hasPendingTasks: () => true,
   };
 
   it("read-only expert work asks for a reply but not a trace", () => {
-    expect(runOnce("expert", ["read"], delegatedByExperimentalist).kinds).toEqual(["reply"]);
+    expect(runOnce("expert", ["read"], pendingEngineerTask).kinds).toEqual(["reply"]);
   });
 
-  it("a message to a peer enters a legitimate waiting state", () => {
+  it("dispatching a peer task counts as progress", () => {
     expect(runOnce("expert", [
-      { name: "send_message", args: { to: "writer" } },
-    ], delegatedByExperimentalist).kinds).toEqual([]);
+      { name: "dispatch_task", args: { to: "writer" } },
+    ], pendingEngineerTask).kinds).toEqual(["trace"]);
   });
 
   it("substantive work before a peer request still requires trace, not reply", () => {
     expect(runOnce("expert", [
       "write",
-      { name: "send_message", args: { to: "writer" } },
-    ], delegatedByExperimentalist).kinds).toEqual(["trace"]);
+      { name: "dispatch_task", args: { to: "writer" } },
+    ], pendingEngineerTask).kinds).toEqual(["trace"]);
   });
 
-  it("a result to the delegator satisfies reply but still needs trace", () => {
+  it("complete_task satisfies the task but still needs trace", () => {
     expect(runOnce("expert", [
-      { name: "send_message", args: { to: "experimentalist" } },
-    ], delegatedByExperimentalist).kinds).toEqual(["trace"]);
+      { name: "complete_task", args: { task_id: "task_000001" } },
+    ], pendingEngineerTask).kinds).toEqual(["trace"]);
   });
 
-  it("a traced result to the delegator needs no reminder", () => {
+  it("a traced completion needs no reminder", () => {
     expect(runOnce("expert", [
       "record_trace",
-      { name: "send_message", args: { to: "experimentalist" } },
-    ], delegatedByExperimentalist).kinds).toEqual([]);
+      { name: "complete_task", args: { task_id: "task_000001" } },
+    ], pendingEngineerTask).kinds).toEqual([]);
   });
 
   it("trace agent is never nudged", () => {
@@ -129,14 +133,33 @@ describe("trace-reminder: replies follow the real delegator", () => {
 });
 
 describe("trace-reminder: one follow-up maximum", () => {
+  it("awaits the durable reminder claim before sending the follow-up", async () => {
+    const pi = fakePi();
+    let release!: (claimed: boolean) => void;
+    const claimed = new Promise<boolean>((resolve) => { release = resolve; });
+    makeTraceReminderExt({
+      role: "expert",
+      name: "engineer",
+      hasPendingTasks: () => true,
+      claimTaskReminder: () => claimed,
+      onUnreplied: () => {},
+    })(pi as never);
+    pi.fire("agent_start");
+    const ending = pi.fireAsync("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(pi.sent).toEqual([]);
+    release(true);
+    await ending;
+    expect(kindsOf(pi.sent)).toEqual(["reply"]);
+  });
+
   it("keeps state across the follow-up and does not inject a second reminder", () => {
     const fallback = vi.fn();
     const pi = fakePi();
     makeTraceReminderExt({
       role: "expert",
       name: "engineer",
-      getDelegator: () => "experimentalist",
       onUnreplied: fallback,
+      hasPendingTasks: () => true,
     })(pi as never);
 
     pi.fire("agent_start");
@@ -146,7 +169,7 @@ describe("trace-reminder: one follow-up maximum", () => {
     expect(kindsOf(pi.sent)).toEqual(["merged"]);
 
     // The internally-triggered follow-up still fails to reply. It falls back to
-    // the delegator without injecting a second model message.
+    // the task creator without injecting a second model message.
     pi.fire("agent_start");
     pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
     expect(kindsOf(pi.sent)).toEqual(["merged"]);
@@ -159,8 +182,8 @@ describe("trace-reminder: one follow-up maximum", () => {
     makeTraceReminderExt({
       role: "expert",
       name: "engineer",
-      getDelegator: () => "experimentalist",
       onUnreplied: fallback,
+      hasPendingTasks: () => true,
     })(pi as never);
 
     pi.fire("agent_start");
@@ -170,10 +193,10 @@ describe("trace-reminder: one follow-up maximum", () => {
     pi.fire("agent_start");
     pi.fire("tool_execution_start", {
       toolCallId: "s",
-      toolName: "send_message",
-      args: { to: "experimentalist" },
+      toolName: "complete_task",
+      args: { task_id: "task_000001" },
     });
-    pi.fire("tool_execution_end", { toolCallId: "s", toolName: "send_message", isError: false });
+    pi.fire("tool_execution_end", { toolCallId: "s", toolName: "complete_task", isError: false });
     pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
     expect(kindsOf(pi.sent)).toEqual(["reply"]);
     expect(fallback).not.toHaveBeenCalled();
@@ -200,7 +223,7 @@ describe("trace-reminder: failures and message envelope", () => {
   });
 
   it("every reminder is wrapped in a strip-able system-message marker", () => {
-    const { sent } = runOnce("expert", ["read"]);
+    const { sent } = runOnce("expert", ["read"], { hasPendingTasks: () => true });
     expect(sent).toHaveLength(1);
     expect(sent[0]!.deliverAs).toBe("followUp");
     expect(sent[0]!.content).toMatch(

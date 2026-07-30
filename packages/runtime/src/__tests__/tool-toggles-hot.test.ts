@@ -23,7 +23,7 @@ import { MockAgentSession } from "../mock-agent.js";
 import type { AgentSessionFactory } from "../types.js";
 
 // Persist writes are fire-and-forget; on afterEach an ENOTEMPTY can race the
-// still-in-flight bus/mailbox flush. Give the writes a beat to settle, then
+// still-in-flight bus/task-ledger flush. Give the writes a beat to settle, then
 // retry rm a few times before giving up.
 async function rmRetry(path: string): Promise<void> {
   for (let i = 0; i < 5; i++) {
@@ -46,7 +46,7 @@ async function finish(m: SessionManager): Promise<void> {
 /**
  * A spying factory that records every `allowedToolNames` list it saw, then
  * defers to the real MockAgentSession so the rest of the SessionManager
- * pipeline (session_state, mailbox, etc.) behaves normally.
+ * pipeline (session_state, task ledger, etc.) behaves normally.
  */
 function makeSpyingFactory(): {
   factory: AgentSessionFactory;
@@ -123,7 +123,8 @@ describe("tool_toggles hot-read on ensureAgent", () => {
 
     // Comms / orchestration primitives stay put — the toggles must not
     // affect always-on tools.
-    expect(secondPrincipal).toContain("send_message");
+    expect(secondPrincipal).toContain("dispatch_task");
+    expect(secondPrincipal).toContain("complete_task");
     expect(secondPrincipal).toContain("create_agent");
 
     await finish(m);

@@ -9,7 +9,7 @@
  *   - `lastDurationMs`: the last settled whole-turn duration.
  *
  * The settle window debounces the true→false→true flap that happens when a hook
- * / system message / queued mailbox delivery re-wakes an agent right after a
+ * / system message / queued task event re-wakes an agent right after a
  * turn momentarily ends — that mid-flap false must NOT end the turn.
  */
 import { useEffect, useReducer, useRef, useState } from "react";

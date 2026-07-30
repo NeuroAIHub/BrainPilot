@@ -179,7 +179,7 @@ const mockTraceGraph: TraceGraph = {
       childIds: ["qc"],
       createdAt: "2026-05-10T02:22:30.000Z",
       timestamp: { createdAt: "2026-05-10T02:22:30.000Z", startedAt: "2026-05-10T02:22:40.000Z" },
-      toolCalls: ["create_agent", "send_message"],
+      toolCalls: ["create_agent", "dispatch_task"],
     },
     {
       id: "qc",

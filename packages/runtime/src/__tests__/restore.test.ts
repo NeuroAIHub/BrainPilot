@@ -8,7 +8,7 @@
  * The `startServer` integration test in server.test.ts asserts the same
  * behavior end-to-end via `GET /sessions` after boot.
  */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { mkdtemp, mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -189,6 +189,23 @@ describe("SessionManager.restoreFromDisk", () => {
     });
     const restored = await m.restoreFromDisk();
     expect(restored).toEqual(["dddddddd-dddd-dddd-dddd-dddddddddddd"]);
+  });
+
+  it("skips a corrupt task ledger without overwriting it or leaving a partial session", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-corrupt-task-"));
+    const id = "abababab-abab-abab-abab-abababababab";
+    await writeMeta(dataRoot, id, { id, title: "Corrupt tasks" });
+    const taskPath = join(dataRoot, ".bp", id, "tasks.json");
+    const corrupt = '{"next_task_seq":1,"tasks":[';
+    await writeFile(taskPath, corrupt, "utf8");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const m = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+
+    expect(await m.restoreFromDisk()).toEqual([]);
+    expect(m.getSession(id)).toBeUndefined();
+    expect(await readFile(taskPath, "utf8")).toBe(corrupt);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("invalid task ledger"));
+    warn.mockRestore();
   });
 
   it("backfills missing timestamp fields without crashing", async () => {

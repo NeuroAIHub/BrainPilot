@@ -24,7 +24,7 @@ describe("evicted-session rediscovery + revival (#223)", () => {
 
   afterEach(async () => {
     // Evict every live session first so agent threads stop and their persist
-    // write-chain (mailbox/trace/usage) is flushed before we remove the dir —
+    // write-chain (task ledger/trace/usage) is flushed before we remove the dir —
     // otherwise a background write races `rm` and throws ENOTEMPTY.
     for (const s of await m.listSessions()) await m.evictSession(s.id);
     await rm(dataRoot, { recursive: true, force: true });

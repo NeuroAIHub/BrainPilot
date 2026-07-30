@@ -4,6 +4,7 @@ import {
   AgUiEventSchema,
   CompactionCustomValueSchema,
   CUSTOM_EVENT,
+  TaskStateValueSchema,
   DomainResourceUsageValueSchema,
   isAgUiEvent,
   parseEvent,
@@ -271,6 +272,22 @@ describe("discriminated union behavior", () => {
       value,
     });
     expect((wrapped as { name?: string }).name).toBe("domain_resource_usage");
+  });
+
+  it("CUSTOM task_state reuses snapshot and incremental AG-UI shapes", () => {
+    const task = {
+      id: "task_000001",
+      seq: 1,
+      created_by: "principal",
+      assigned_to: "engineer",
+      content: "implement",
+      status: "pending" as const,
+      created_at: 1,
+    };
+    expect(TaskStateValueSchema.parse({ op: "snapshot", tasks: [task] })).toEqual({ op: "snapshot", tasks: [task] });
+    expect(TaskStateValueSchema.parse({ op: "created", task })).toEqual({ op: "created", task });
+    expect(CUSTOM_EVENT.TASK_STATE).toBe("task_state");
+    expect(TaskStateValueSchema.safeParse({ op: "failed", task }).success).toBe(false);
   });
 
   it("passthrough keeps forward-compat extras", () => {

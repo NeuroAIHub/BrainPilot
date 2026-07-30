@@ -47,7 +47,7 @@ function trackingFactory(peak: { current: number; max: number }, gate: { release
           // The principal delegates to 5 experts, then all block on the gate.
           if (agentName === "principal" && text.includes("GO")) {
             for (const name of ["a1", "a2", "a3", "a4", "a5"]) {
-              const tool = toolMap.get("send_message");
+              const tool = toolMap.get("dispatch_task");
               if (tool) {
                 await tool.execute({ to: name, content: "work" });
               }

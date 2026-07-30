@@ -1,6 +1,5 @@
 /** Event-driven reminders for trace capture, expert replies, and PI delegation. */
 import type { AgentRole } from "../types.js";
-import { deriveMsgType } from "../tools/system-tools.js";
 
 interface ToolStartLike {
   toolCallId?: string;
@@ -18,7 +17,7 @@ interface PiExtensionApi {
   on(event: "agent_start", handler: () => void): void;
   on(event: "tool_execution_start", handler: (e: ToolStartLike) => void): void;
   on(event: "tool_execution_end", handler: (e: ToolEndLike) => void): void;
-  on(event: "agent_end", handler: (e: AgentEndLike) => void): void;
+  on(event: "agent_end", handler: (e: AgentEndLike) => void | Promise<void>): void;
   sendUserMessage(content: string, options?: { deliverAs?: "steer" | "followUp" }): void;
 }
 
@@ -41,9 +40,9 @@ function endedInError(e: AgentEndLike): boolean {
 export interface TraceReminderDeps {
   role: AgentRole;
   name: string;
-  onUnreplied: (agentName: string) => void;
-  /** Dynamic because a live agent may receive tasks from different peers. */
-  getDelegator?: () => string;
+  onUnreplied: (agentName: string) => void | Promise<void>;
+  hasPendingTasks?: () => boolean;
+  claimTaskReminder?: (agentName: string) => Promise<boolean>;
 }
 
 /** Successful calls in this set only inspect or coordinate; they do not arm trace. */
@@ -72,13 +71,13 @@ const TRACE_REMINDER = SYS(
 );
 const REPLY_REMINDER = SYS(
   "reply",
-  "Return the result to the current <reply_to> agent with send_message. " +
+  "Act on the pending assigned task: complete_task with its exact ID, or dispatch_task if another agent must contribute. " +
     "If the work produced a substantive artifact or decision, record it first with record_trace.",
 );
 const MERGED_REMINDER = SYS(
   "merged",
-  "Before finishing, record the substantive milestone with record_trace and return the result " +
-    "to the current <reply_to> agent with send_message.",
+  "Before finishing, record the substantive milestone with record_trace and complete the pending task " +
+    "with complete_task using its exact ID.",
 );
 const DELEGATE_REMINDER = SYS(
   "delegate",
@@ -96,7 +95,7 @@ interface RunState {
   delegated: boolean;
   traceWorthy: boolean;
   didSubstantiveWork: boolean;
-  waitingOnPeer: boolean;
+  dispatched: boolean;
   reminded: boolean;
 }
 
@@ -107,7 +106,7 @@ function freshState(): RunState {
     delegated: false,
     traceWorthy: false,
     didSubstantiveWork: false,
-    waitingOnPeer: false,
+    dispatched: false,
     reminded: false,
   };
 }
@@ -123,7 +122,6 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
     let continuingFollowUp = false;
     const pending = new Map<string, ToolStartLike>();
 
-    const delegator = (): string => deps.getDelegator?.() ?? "principal";
     const callKey = (e: { toolCallId?: string; toolName: string }): string =>
       e.toolCallId ?? e.toolName;
 
@@ -146,27 +144,22 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       if (e.isError) return;
 
       const tool = e.toolName.toLowerCase();
-      const args = start?.args ?? {};
+      void start;
       if (tool === "record_trace" || tool.startsWith("create_trace")) {
         state.traced = true;
         return;
       }
 
-      if (tool === "send_message") {
-        const currentDelegator = delegator();
-        const to = String(args.to ?? currentDelegator);
-        const msgType = deriveMsgType(deps.name, to, currentDelegator);
-        if (deps.role === "expert" && msgType === "result_deliver" && to === currentDelegator) {
-          state.replied = true;
-        }
-        if (deps.role === "expert" && to !== currentDelegator) {
-          state.waitingOnPeer = true;
-        }
-        if (deps.role === "principal" && msgType === "task_delegate" && to !== deps.name) {
-          state.delegated = true;
-          state.traceWorthy = true;
-        }
-        if (msgType === "result_deliver" && to === currentDelegator) state.traceWorthy = true;
+      if (tool === "complete_task") {
+        state.replied = true;
+        state.traceWorthy = true;
+        return;
+      }
+
+      if (tool === "dispatch_task") {
+        state.dispatched = true;
+        state.delegated = true;
+        state.traceWorthy = true;
         return;
       }
 
@@ -176,7 +169,7 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       }
     });
 
-    pi.on("agent_end", (e) => {
+    pi.on("agent_end", async (e) => {
       if (deps.role === "trace") return;
       if (endedInError(e)) {
         state = freshState();
@@ -185,9 +178,18 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       }
 
       const needTrace = state.traceWorthy && !state.traced;
-      const needReply = deps.role === "expert" && !state.replied && !state.waitingOnPeer;
+      const needReply =
+        (deps.hasPendingTasks?.() ?? false) &&
+        !state.replied &&
+        !state.dispatched;
       const needDelegate =
         deps.role === "principal" && state.didSubstantiveWork && !state.delegated;
+
+      const sendReminder = (reminder: string): void => {
+        state.reminded = true;
+        continuingFollowUp = true;
+        pi.sendUserMessage(reminder, { deliverAs: "followUp" });
+      };
 
       if (!state.reminded && (needTrace || needReply || needDelegate)) {
         let reminder: string;
@@ -197,15 +199,19 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
         else if (needDelegate) reminder = DELEGATE_REMINDER;
         else reminder = TRACE_REMINDER;
 
-        state.reminded = true;
-        continuingFollowUp = true;
-        pi.sendUserMessage(reminder, { deliverAs: "followUp" });
+        if (needReply && deps.claimTaskReminder) {
+          const claimed = await deps.claimTaskReminder(deps.name);
+          if (claimed) sendReminder(reminder);
+          else await deps.onUnreplied(deps.name);
+        } else {
+          sendReminder(reminder);
+        }
         return;
       }
 
       // One reminder is the hard limit. If an expert still did not return its
-      // result, notify the real delegator through the host fallback.
-      if (state.reminded && needReply) deps.onUnreplied(deps.name);
+      // task, notify its creator through the host fallback.
+      if (state.reminded && needReply) await deps.onUnreplied(deps.name);
       state = freshState();
       continuingFollowUp = false;
     });

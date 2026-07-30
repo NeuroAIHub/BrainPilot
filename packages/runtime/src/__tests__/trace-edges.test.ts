@@ -3,12 +3,12 @@
  *
  * After the legacy-parity rewrite, `record_trace` does NOT mutate the graph
  * directly. It dispatches a `[Trace Event]` envelope into the trace agent's
- * mailbox; the trace agent (a real Pi AgentSession) is the editor that calls
+ * internal event queue; the trace agent (a real Pi AgentSession) is the editor that calls
  * `create_trace_node` / `update_trace_node` / `add_trace_relation`. These tests
  * pin down the host-side plumbing — independent of the Pi-native reminder hooks
  * which only load under the real factory (verified separately per design §7/T2):
  *   - the principal calling `record_trace` causes a trace agent to be spawned
- *     and a `trace_event` envelope to land in its mailbox;
+ *     and a trace event to reach its durable queue;
  *   - when the trace agent runs and calls `create_trace_node` consecutively,
  *     the resulting nodes are chained into a connected DAG via the
  *     `getLastNodeId()` fallback (visible edges, not orphan dots);

@@ -2,7 +2,7 @@
 
 **BrainPilot** is an open-source, single-user multi-agent collaboration platform
 built with TypeScript + the [Pi SDK](https://pi.dev) — a Principal agent
-coordinating specialist agents over a file-based mailbox, served as a Hono
+coordinating specialist agents through a durable flat task ledger, served as a Hono
 backend + React SPA. It runs as a local process; **no Docker required**.
 
 This package (`@brainpilot/app`) is the CLI. It installs the `brainpilot`

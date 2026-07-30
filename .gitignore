@@ -4,7 +4,11 @@
 claude/settings.json
 claude/settings.local.json
 # Documentation (auto-generated, user-specific)
-docs/
+# Root docs are generated/user-specific except reviewed design plans.
+docs/*
+!docs/plan/
+docs/plan/*
+!docs/plan/task-ledger.md
 !packages/docs/
 !packages/docs/**
 plans/

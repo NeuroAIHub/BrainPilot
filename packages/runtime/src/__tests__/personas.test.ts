@@ -45,7 +45,8 @@ describe("personas", () => {
 
   it("principal persona is delegation-oriented and names the experts", () => {
     const p = PERSONAS.principal!;
-    expect(p).toContain("send_message");
+    expect(p).toContain("dispatch_task");
+    expect(p).toContain("complete_task");
     expect(p).toContain("ask_user");
     expect(p).toContain("librarian");
     expect(p).toContain("engineer");
@@ -88,10 +89,10 @@ describe("personas", () => {
     expect(PERSONAS.trace!).not.toContain("skill_search");
   });
 
-  it("expert personas carry the send_message-back contract", () => {
+  it("expert personas carry the flat task completion contract", () => {
     for (const name of ["librarian", "engineer", "experimentalist", "writer", "auditor"]) {
-      expect(PERSONAS[name], name).toContain('send_message(to="<reply_to>"');
-      expect(PERSONAS[name], name).toContain("downstream `result_deliver`");
+      expect(PERSONAS[name], name).toContain('complete_task(task_id="<exact assigned ID>"');
+      expect(PERSONAS[name], name).toContain("one run may handle several task");
     }
   });
 
@@ -117,7 +118,7 @@ describe("personas", () => {
     }
   });
 
-  it("upgrades legacy expert overrides to the live reply_to contract", () => {
+  it("upgrades legacy expert overrides to the flat task contract", () => {
     const legacy = `# Custom expert
 
 ## Communicating back to the Principal
@@ -131,7 +132,7 @@ Keep this section.`;
     expect(resolved).not.toContain("Communicating back to the Principal");
     expect(resolved).not.toContain('send_message(to="principal")');
     expect(resolved.match(/^## Communicating with other agents$/gm)).toHaveLength(1);
-    expect(resolved).toContain('send_message(to="<reply_to>"');
+    expect(resolved).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(resolved).toContain("## Local rules");
   });
 
@@ -150,7 +151,7 @@ Keep this section.`;
 Stale local routing rule.`;
     const resolved = withCoreCoordinationProtocols(stale, "custom", "expert");
     expect(resolved).not.toContain("Stale local routing rule");
-    expect(resolved).toContain("<reply_to>");
+    expect(resolved).toContain("<task_list>");
   });
 
   it("principal persona requires a pre-delivery audit for hard claims", () => {
@@ -176,7 +177,7 @@ Stale local routing rule.`;
     const pi = PERSONAS.principal!;
     const writer = PERSONAS.writer!;
     expect(pi).toContain("User-facing communication style");
-    expect(pi).toContain("unread-message counts");
+    expect(pi).toContain("internal task-queue state");
     expect(pi).toContain("agent-status blocks");
     expect(pi).toContain("Never claim");
     expect(pi).toContain("offered options");
@@ -244,7 +245,7 @@ Stale local routing rule.`;
   it("personaFor falls back to a generic expert persona for unknown agents", () => {
     const p = personaFor("statistician", "expert");
     expect(p).toContain("statistician");
-    expect(p).toContain('send_message(to="<reply_to>"');
+    expect(p).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(p).not.toContain("mcp__builtin__");
   });
 

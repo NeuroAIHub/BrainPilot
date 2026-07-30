@@ -174,15 +174,10 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 async function delegateToExpert(m: SessionManager, sid: string, expert: string): Promise<void> {
   const entry = (
     m as unknown as {
-      sessions: Map<string, { mailbox: { write: (msg: unknown) => Promise<unknown> } }>;
+      sessions: Map<string, { taskLedger: { dispatch: (from: string, to: string, content: string) => Promise<unknown> } }>;
     }
   ).sessions.get(sid)!;
-  await entry.mailbox.write({
-    fromAgent: "principal",
-    toAgent: expert,
-    msgType: "task_delegate",
-    content: "survey X",
-  });
+  await entry.taskLedger.dispatch("principal", expert, "survey X");
   (m as unknown as { wakeAgent: (sessionId: string, name: string) => void }).wakeAgent(
     sid,
     expert,

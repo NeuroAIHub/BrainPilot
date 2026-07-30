@@ -39,6 +39,11 @@ export class EventBus {
     if (this.opts.persistPath) void this.enqueuePersist(event).catch(() => {});
   }
 
+  /** Publish to live listeners and the replay ring without appending history. */
+  emitEphemeral(event: AgUiEvent): void {
+    this.publish(event);
+  }
+
   /**
    * Persist an event before publishing it. Unlike `emit`, write failures are
    * propagated to the caller so lifecycle endpoints cannot report success for

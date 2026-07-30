@@ -4,22 +4,22 @@ import { SessionManager } from "../session-manager.js";
 import { mockAgentFactory } from "../agent-factory.js";
 
 /**
- * End-to-end orchestration in mock mode: a principal's send_message tool must
- * deliver into the target expert's mailbox, and the expert must be
+ * End-to-end orchestration in mock mode: a principal's dispatch_task tool must
+ * create a task and wake the target expert, which must be
  * auto-created. The mock agent invokes the real (access-filtered) system tool.
  */
-describe("orchestration: send_message delivers via mailbox", () => {
-  it("principal send_message -> expert mailbox + auto-create", async () => {
+describe("orchestration: dispatch_task creates and delivers a task", () => {
+  it("principal dispatch_task -> task event + auto-create", async () => {
     const m = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
     const s = await m.createSession();
 
     const events: AgUiEvent[] = [];
     m.subscribe(s.id, (e) => events.push(e));
 
-    // Drive the principal to call send_message(to=librarian).
+    // Drive the principal to call dispatch_task(to=librarian).
     await m.sendMessage(
       s.id,
-      'delegate [[tool:send_message {"content":"please research X","to":"librarian"}]]',
+      'delegate [[tool:dispatch_task {"content":"please research X","to":"librarian"}]]',
     );
 
     await waitFor(() => events.some((e) => e.type === "TOOL_CALL_RESULT"));
@@ -31,7 +31,7 @@ describe("orchestration: send_message delivers via mailbox", () => {
     expect(agents).toContain("librarian");
 
     const result = events.find((e) => e.type === "TOOL_CALL_RESULT") as { content: string };
-    expect(result.content).toContain("delivered to librarian");
+    expect(result.content).toContain("dispatched to librarian");
   });
 });
 
