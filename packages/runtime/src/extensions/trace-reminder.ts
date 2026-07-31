@@ -91,7 +91,6 @@ const PI_MERGED_REMINDER = SYS(
 
 interface RunState {
   traced: boolean;
-  replied: boolean;
   delegated: boolean;
   traceWorthy: boolean;
   didSubstantiveWork: boolean;
@@ -102,7 +101,6 @@ interface RunState {
 function freshState(): RunState {
   return {
     traced: false,
-    replied: false,
     delegated: false,
     traceWorthy: false,
     didSubstantiveWork: false,
@@ -151,7 +149,6 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       }
 
       if (tool === "complete_task") {
-        state.replied = true;
         state.traceWorthy = true;
         return;
       }
@@ -180,7 +177,6 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       const needTrace = state.traceWorthy && !state.traced;
       const needReply =
         (deps.hasPendingTasks?.() ?? false) &&
-        !state.replied &&
         !state.dispatched;
       const needDelegate =
         deps.role === "principal" && state.didSubstantiveWork && !state.delegated;

@@ -117,6 +117,40 @@ async function delegateToExpert(
 }
 
 describe("delivery error path (#97)", () => {
+  it("preserves a completed child result when its creator has a fatal delivery error", async () => {
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const factory = factoryWith(
+      { librarian: { outcome: (n) => (n === 1 ? "401 invalid api key" : null) } },
+      observe,
+    );
+    const m = new SessionManager({ persist: false, agentFactory: factory });
+    const s = await m.createSession();
+    const entry = (m as unknown as {
+      sessions: Map<string, { taskLedger: {
+        dispatch: (from: string, to: string, content: string) => Promise<{ id: string }>;
+        complete: (id: string, assignee: string, reply: string) => Promise<unknown>;
+      } }>;
+      wakeAgent: (sid: string, name: string) => void;
+    });
+    const live = entry.sessions.get(s.id)!;
+    const child = await live.taskLedger.dispatch("librarian", "writer", "research child");
+    await live.taskLedger.complete(child.id, "writer", "child result at docs/report.md");
+
+    await m.ensureAgent(s.id, "librarian");
+    entry.wakeAgent(s.id, "librarian");
+    await waitFor(() => observe.prompts.some((prompt) => prompt.agent === "librarian"));
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(m.taskNotificationCount(s.id, "librarian")).toBe(1);
+    expect(observe.prompts.filter((prompt) => prompt.agent === "librarian")).toHaveLength(1);
+
+    await m.sendMessage(s.id, "resume delivery");
+    await waitFor(() => observe.prompts.filter((prompt) => prompt.agent === "librarian").length === 2);
+    await waitFor(() => m.taskNotificationCount(s.id, "librarian") === 0);
+    expect(observe.prompts.filter((prompt) => prompt.agent === "librarian")[1]!.text)
+      .toContain("child result at docs/report.md");
+  });
+
   it("bounds principal notification failures, preserves the event, and resumes on user input", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = factoryWith(

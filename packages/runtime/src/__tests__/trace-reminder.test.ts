@@ -114,17 +114,23 @@ describe("trace-reminder: flat task activity", () => {
     ], pendingEngineerTask).kinds).toEqual(["trace"]);
   });
 
-  it("complete_task satisfies the task but still needs trace", () => {
+  it("completing one task still reminds when another assignment remains pending", () => {
     expect(runOnce("expert", [
       { name: "complete_task", args: { task_id: "task_000001" } },
-    ], pendingEngineerTask).kinds).toEqual(["trace"]);
+    ], pendingEngineerTask).kinds).toEqual(["merged"]);
+  });
+
+  it("completing the final task only needs trace", () => {
+    expect(runOnce("expert", [
+      { name: "complete_task", args: { task_id: "task_000001" } },
+    ], { ...pendingEngineerTask, hasPendingTasks: () => false }).kinds).toEqual(["trace"]);
   });
 
   it("a traced completion needs no reminder", () => {
     expect(runOnce("expert", [
       "record_trace",
       { name: "complete_task", args: { task_id: "task_000001" } },
-    ], pendingEngineerTask).kinds).toEqual([]);
+    ], { ...pendingEngineerTask, hasPendingTasks: () => false }).kinds).toEqual([]);
   });
 
   it("trace agent is never nudged", () => {
@@ -179,11 +185,12 @@ describe("trace-reminder: one follow-up maximum", () => {
   it("a reply during the follow-up satisfies the chain without another reminder", () => {
     const fallback = vi.fn();
     const pi = fakePi();
+    let hasPending = true;
     makeTraceReminderExt({
       role: "expert",
       name: "engineer",
       onUnreplied: fallback,
-      hasPendingTasks: () => true,
+      hasPendingTasks: () => hasPending,
     })(pi as never);
 
     pi.fire("agent_start");
@@ -196,6 +203,7 @@ describe("trace-reminder: one follow-up maximum", () => {
       toolName: "complete_task",
       args: { task_id: "task_000001" },
     });
+    hasPending = false;
     pi.fire("tool_execution_end", { toolCallId: "s", toolName: "complete_task", isError: false });
     pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
     expect(kindsOf(pi.sent)).toEqual(["reply"]);

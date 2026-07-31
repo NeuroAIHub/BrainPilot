@@ -125,13 +125,14 @@ describe("whole-session interrupt (#90 / #327)", () => {
     // Second delegation while librarian is busy: this message QUEUES (wakeAgent
     // bails because the delivery loop is already running).
     await m.sendMessage(s.id, "please DELEGATE again");
-    await waitFor(() => m.taskNotificationCount(s.id, "librarian") === 1);
+    await waitFor(() => m.taskNotificationCount(s.id, "librarian") === 2);
+    const beforeStop = m.taskNotificationCount(s.id, "librarian");
 
     // Stop the whole session.
     await m.interrupt(s.id);
 
     // The event remains durable but cannot re-wake librarian while paused.
-    expect(m.taskNotificationCount(s.id, "librarian")).toBe(1);
+    expect(m.taskNotificationCount(s.id, "librarian")).toBe(beforeStop);
     const beforeResume = observe.prompts.filter((prompt) => prompt.agent === "librarian").length;
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(observe.prompts.filter((prompt) => prompt.agent === "librarian")).toHaveLength(beforeResume);

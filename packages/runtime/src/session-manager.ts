@@ -2321,6 +2321,14 @@ export class SessionManager {
         agent.prompt(this.renderTaskEvents(notifications)),
       );
 
+      // Status returns to idle after an explicit abort, so it cannot identify
+      // a cleanly consumed batch. Keep aborted input durable for replay after
+      // the next explicit user turn resumes delivery.
+      if (agent.lastRunOutcome === "aborted") {
+        if (!entry.taskLedger.isPaused(name)) await entry.taskLedger.pauseAgent(name);
+        return;
+      }
+
       // #97 error path. A delegated run that ended in `error` is handled here
       // (the trace-reminder extension bails on an errored run, leaving the host
       // the sole owner of error recovery). Transient errors self-retry up to a
@@ -2329,10 +2337,19 @@ export class SessionManager {
       if (agent.status === "error") {
         if (agent.role === "expert") {
           if (await this.handleDeliveryError(entry, agent)) continue;
-          await entry.taskLedger.acknowledge(notifications.map((item) => item.id));
           return;
         }
         if (await this.handleInternalDeliveryError(entry, agent)) continue;
+        return;
+      }
+      if (agent.lastRunOutcome !== "ok") {
+        await entry.taskLedger.pauseAgent(name);
+        entry.bus.emit(ev.systemMessage(
+          entry.id,
+          "error",
+          `Agent "${name}" 未产生可确认的运行结果，已保留任务事件并暂停投递。`,
+          { agent: name, recoverable: true },
+        ));
         return;
       }
       await entry.taskLedger.acknowledge(notifications.map((item) => item.id));
@@ -2386,6 +2403,9 @@ export class SessionManager {
         { agent: name, recoverable: true },
       ),
     );
+    // Preserve every event from the failed batch, including completed child
+    // results. The next explicit user turn resumes and replays them.
+    await entry.taskLedger.pauseAgent(name);
     await this.writeErrorToTaskCreators(entry, name, headline);
     entry.deliveryErrors.delete(name); // reset streak for a future task
     return false;
