@@ -8,7 +8,7 @@
  * runtime, trace agent excluded) goes false and STAYS false.
  *
  * The subtlety (#99): `runState.active` can briefly flip true→false→true when a
- * turn ends and a hook / system message / queued mailbox delivery immediately
+ * turn ends and a hook / system message / queued task event immediately
  * re-wakes an agent. That mid-flap `false` is NOT the end of the turn. So we
  * debounce the terminal transition with a settle window: a false only counts as
  * the turn's end once it has held for `settleMs`. If `active` goes true again

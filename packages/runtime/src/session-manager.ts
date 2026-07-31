@@ -1,7 +1,7 @@
 /**
  * SessionManager — orchestration core + STATE AUTHORITY (§10).
  *
- * Owns all sessions. Each session owns its agents (MasAgent), Mailbox, trace
+ * Owns all sessions. Each session owns its agents, flat task ledger, trace
  * (GraphOfTrace), and EventBus. The manager is the sole authority for agent
  * status; it surfaces `GET /sessions/:id/agents`, `agent_status_update` SSE
  * events, and feeds `/metrics`.
@@ -32,7 +32,12 @@ import {
   type UserInputCancellationReason,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
-import { Mailbox, type MailboxMessage } from "./mailbox.js";
+import {
+  TaskLedger,
+  TASK_CONTEXT_MAX_CHARS,
+  type TaskNotification,
+  type TaskRecord,
+} from "./task-ledger.js";
 import { GraphOfTrace } from "./trace.js";
 import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import {
@@ -48,10 +53,12 @@ import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
   personaFor,
   withLanguageDirective,
+  withCoreCoordinationProtocols,
   withPersistentRootDirective,
   withSharedRootDirective,
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
+import { renderTaskListBlock } from "./extensions/task-context.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
@@ -259,26 +266,15 @@ interface SessionEntry {
   updatedAt: string;
   lastActivityAt: number;
   bus: EventBus;
-  mailbox: Mailbox;
+  taskLedger: TaskLedger;
   trace: GraphOfTrace;
   agents: Map<string, MasAgent>;
-  /** agent name → task description (for AgentStatus.task). */
-  tasks: Map<string, string>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
    * when a delegated run ends in `error`, reset to 0 on any successful (non-error)
    * delivery run. Drives self-retry vs escalation in `runDeliveryLoop`.
    */
   deliveryErrors: Map<string, number>;
-  /**
-   * #97 directed escalation: per-agent record of who LAST delegated a task to it
-   * (the `fromAgent` of the most recent `task_delegate` it drained). When a
-   * delegated run fails or ends silently, the escalation note is routed to this
-   * real delegator (supporting chains like auditor→engineer) instead of always
-   * the principal. Cleared on a clean delivery so a stale delegator never targets
-   * an unrelated later run; falls back to `principal` when absent/unreachable.
-   */
-  delegators: Map<string, string>;
   runActive: boolean;
   activeRunId: string | null;
   /** One visible ask_user plus FIFO requests waiting behind it. */
@@ -308,7 +304,7 @@ export interface SessionManagerOptions {
   dataRoot?: string;
   /** Override the agent session factory (default: env-selected). */
   agentFactory?: AgentSessionFactory;
-  /** Persist events.jsonl / mailbox / trace.json (default true). */
+  /** Persist events.jsonl / tasks.json / trace.json (default true). */
   persist?: boolean;
   /** Override the external MCP bridge (default: real stdio bridge). Tests inject a fake. */
   mcpBridge?: McpBridge;
@@ -461,7 +457,7 @@ export class SessionManager {
   private readonly userInputTimeoutMs: number;
   private lastActivityAt = 0;
 
-  // #76: active mailbox delivery. A delivery loop drains a target agent's inbox
+  // Active task-event delivery. A loop serially processes one target agent.
   // and runs it; the key (`${sid}:${name}`) guards re-entrancy so concurrent
   // wakes for one agent collapse into a single serial loop (its `prompt` is
   // never invoked concurrently).
@@ -1189,6 +1185,7 @@ export class SessionManager {
       // #309: skill_search toggle off — hide router teaching only.
       filtered = withoutRouterSkillInstructions(selected);
     }
+    filtered = withCoreCoordinationProtocols(filtered, name, role);
     let persona = withLanguageDirective(filtered);
     // #257: tell working agents (not the passive trace recorder) where the
     // shared cross-session persistent root lives, by absolute path, so they can
@@ -1256,7 +1253,7 @@ export class SessionManager {
         : {};
 
     const bus = new EventBus({ persistPath: persistBase ? join(persistBase, "events.jsonl") : undefined });
-    const mailbox = new Mailbox(id, persistBase ? join(persistBase, "mailbox") : undefined);
+    const taskLedger = new TaskLedger(id, persistBase ? join(persistBase, "tasks.json") : undefined);
     // #79: push every trace mutation to the SSE stream as CUSTOM:trace_node so
     // the web Graph of Trace updates live instead of polling. The store stays
     // bus-agnostic; the manager owns the wire shape.
@@ -1275,12 +1272,10 @@ export class SessionManager {
       updatedAt: nowIso,
       lastActivityAt,
       bus,
-      mailbox,
+      taskLedger,
       trace,
       agents: new Map(),
-      tasks: new Map(),
       deliveryErrors: new Map(),
-      delegators: new Map(),
       runActive: false,
       activeRunId: null,
       userInputs: { queue: [], operations: Promise.resolve() },
@@ -1316,7 +1311,13 @@ export class SessionManager {
       // Only (re)write the ref when the caller chose one — restore must not
       // clobber an existing ref with an empty object.
       if (explicitRef) await this.writeProviderRef(entry);
-      await mailbox.recover();
+      try {
+        await taskLedger.recover();
+      } catch (err) {
+        bus.clear();
+        this.sessions.delete(id);
+        throw err;
+      }
       await this.loadTrace(entry);
       // Rehydrate cumulative token usage so the running total survives restarts.
       await this.loadUsage(entry);
@@ -1328,6 +1329,10 @@ export class SessionManager {
       // ask_user. Close any legacy request that has no persisted terminal
       // event so replay never presents it as live input.
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
+    }
+    this.emitTaskSnapshot(entry);
+    if (_restore) {
+      for (const target of taskLedger.notificationTargets()) this.wakeAgent(id, target);
     }
     return this.toSession(entry);
   }
@@ -1360,7 +1365,7 @@ export class SessionManager {
    * `.bp/<sid>/` transcript is intact — a refresh then looks like total loss.
    *
    * Discovery is metadata-only: we read each `meta.json` but do NOT revive the
-   * full runtime entry (bus/mailbox/trace/agents), so listing stays cheap and
+   * full runtime entry (bus/task ledger/trace/agents), so listing stays cheap and
    * eviction keeps saving memory. The session is lazily revived by
    * `ensureLoaded` only when it's actually opened. In-memory entries win on id
    * collision. Ordering is left to the caller (the web sorts by updatedAt).
@@ -1440,7 +1445,7 @@ export class SessionManager {
       killed++;
     }
     await e.bus.flush();
-    await e.mailbox.flush();
+    await e.taskLedger.flush();
     await e.trace.flush();
     e.bus.clear();
     this.sessions.delete(id);
@@ -1500,6 +1505,12 @@ export class SessionManager {
       }
     }
 
+    // A new explicit user turn resumes delivery paused by Stop or by an
+    // exhausted principal/trace notification run. Other targets may resume
+    // immediately; this target waits until its direct turn settles so prompts
+    // never overlap.
+    const resumeTargetAfterRun = await this.resumeTaskDelivery(entry, agentName);
+
     // Concurrent send: the target agent is still streaming its previous run.
     // A plain prompt() would hit the SDK's "already processing" guard. Queue
     // the message as a follow-up onto the current run instead — no new runId,
@@ -1511,7 +1522,11 @@ export class SessionManager {
       entry.bus.emit(
         ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
       );
-      void agent.followUp(content);
+      void agent.followUp(content).finally(() => {
+        if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
+          this.wakeAgent(sessionId, agentName);
+        }
+      });
       return { accepted: true, runId, queued: true };
     }
 
@@ -1549,8 +1564,20 @@ export class SessionManager {
         // active=false frame; for a delegation a pending delivery loop keeps it
         // true (the loop emits its own terminal frame when it drains).
         this.emitSessionState(entry);
+        if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
+          this.wakeAgent(sessionId, agentName);
+        }
       });
     return { accepted: true, runId };
+  }
+
+  private async resumeTaskDelivery(entry: SessionEntry, deferAgent: string): Promise<boolean> {
+    if (!entry.taskLedger.hasPausedDelivery()) return false;
+    await entry.taskLedger.resumeDelivery();
+    for (const target of entry.taskLedger.notificationTargets()) {
+      if (target !== deferAgent) this.wakeAgent(entry.id, target);
+    }
+    return entry.taskLedger.count(deferAgent) > 0;
   }
 
   /** Queue a user question. Only the FIFO head is persisted and shown. */
@@ -1801,8 +1828,8 @@ export class SessionManager {
    *
    * Whole-session (`agentName` omitted, the Stop button — #90 / #327): abort
    * EVERY agent (incl. their running script subprocesses, via Pi
-   * `session.abort()`), clear ALL mailboxes so a queued message can't re-wake a
-   * stopped agent, emit one deterministic system_message acknowledgement, and
+   * `session.abort()`), pause task delivery without deleting queued work, emit
+   * one deterministic system_message acknowledgement, and
    * settle run state so the UI clears Stop without a follow-up provider call.
    * Do NOT prompt the principal solely to acknowledge the interruption (#327).
    */
@@ -1852,19 +1879,21 @@ export class SessionManager {
     // Capture run identity before aborts clear agent state so the interrupt
     // acknowledgement can carry a stable id for client hydrate dedupe (#330).
     const interruptEventId = `interrupt:${sessionId}:${entry.activeRunId ?? randomUUID()}`;
+    // Fence new delivery-loop iterations before waiting for in-flight prompts
+    // to unwind. The batch already being processed may settle, but later queued
+    // events remain durable for the next explicit user turn.
+    if (wholeSession) await entry.taskLedger.pauseDelivery();
     // Abort every target and WAIT for each in-flight run to fully settle (#101)
     // — RUN_FINISHED emitted, status settled, provider stream fenced.
     await Promise.all(targets.map((a) => a!.abort()));
     entry.runActive = false;
     entry.activeRunId = null;
     if (wholeSession) {
-      // Clear every inbox so a queued task_delegate cannot re-wake an agent
-      // the user just stopped.
-      await entry.mailbox.clearAll();
+      // Clear queued task events so they cannot re-wake an agent the user stopped.
       // Deterministic UI/runtime acknowledgement — no model/provider run (#327).
       // Stable `id` so history rehydrate + SSE ring replay coalesce to one bubble (#330).
       entry.bus.emit(
-        ev.systemMessage(sessionId, "info", "⏹️ 用户已中断当前任务，信箱已清空，正在等候进一步指示。", {
+        ev.systemMessage(sessionId, "info", "⏹️ 用户已中断当前任务，任务投递已暂停，正在等候进一步指示。", {
           agent: "principal",
           recoverable: true,
           id: interruptEventId,
@@ -1891,9 +1920,9 @@ export class SessionManager {
     return result;
   }
 
-  /** Test/diagnostic accessor: number of queued messages in `agent`'s inbox. */
-  mailboxCount(sessionId: string, agent: string): number {
-    return this.sessions.get(sessionId)?.mailbox.count(agent) ?? 0;
+  /** Test/diagnostic accessor: number of queued task notifications for `agent`. */
+  taskNotificationCount(sessionId: string, agent: string): number {
+    return this.sessions.get(sessionId)?.taskLedger.count(agent) ?? 0;
   }
 
   /* ------------------------------ agents ------------------------------- */
@@ -2003,8 +2032,25 @@ export class SessionManager {
     const deps: ToolDeps = {
       sessionId,
       fromAgent: name,
-      mailbox: entry.mailbox,
       trace: entry.trace,
+      dispatchTask: async (target, content) => {
+        const task = await entry.taskLedger.dispatch(name, target, content);
+        entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "created", task }));
+        this.touch(entry);
+        this.emitSessionState(entry);
+        return task;
+      },
+      completeTask: async (taskId, reply) => {
+        const before = entry.taskLedger.get(taskId);
+        const task = await entry.taskLedger.complete(taskId, name, reply);
+        if (before?.status !== "completed") {
+          entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "completed", task }));
+          this.touch(entry);
+          this.emitSessionState(entry);
+        }
+        return task;
+      },
+      dispatchTrace: async (content) => entry.taskLedger.enqueueTrace(name, content),
       ensureAgent: async (target) => {
         await this.ensureAgent(sessionId, target);
       },
@@ -2077,11 +2123,14 @@ export class SessionManager {
       // 意图二 fallback: the trace-reminder extension calls this when an expert
       // was reminded once and still didn't report back, so the principal never
       // dead-waits on a silent expert.
-      onUnreplied: (agentName) => this.writeFallbackToDelegator(entry, agentName),
+      onUnreplied: (agentName) => this.writeFallbackToTaskCreators(entry, agentName),
+      hasPendingTasks: () => entry.taskLedger.pendingAssignedTo(name).length > 0,
+      claimTaskReminder: (agentName) => entry.taskLedger.claimReminder(agentName),
       // #97: only the principal gets the live team-status block injected each
       // turn (it is the coordinator). Other roles run without it.
       renderAgentStatus:
         name === "principal" ? () => this.renderAgentStatus(entry) : undefined,
+      renderTaskContext: () => this.renderTaskContext(entry, name),
     });
 
     const agent = new MasAgent({
@@ -2129,54 +2178,54 @@ export class SessionManager {
     agent.seedUsage(entry.tokenUsage.byAgent[name]);
     agent.seedStats(entry.stats.byAgent[name]);
     entry.agents.set(name, agent);
-    if (!entry.tasks.has(name)) entry.tasks.set(name, "");
     return agent;
   }
 
-  /**
-   * 意图二 fallback — the trace-reminder extension calls this (via the factory's
-   * `onUnreplied`) when an expert was reminded once and STILL did not
-   * `send_message` its delegator (the "silence" path; a hard *error* run is
-   * handled separately). We write a NEUTRAL system note into the REAL delegator's
-   * mailbox and wake it so it never dead-waits. The delegator is whoever last
-   * delegated to this expert (#97 directed escalation), falling back to the
-   * principal. This fires during the expert's run (before the clean-run cleanup
-   * in `runDeliveryLoop`), so the delegator record is still present. The note
-   * only states the fact — the expert ended without delivering a result — and
-   * deliberately gives NO directive ("re-delegate", "proceed without it"): the
-   * delegator decides what to do. Best-effort: a failed write must never break
-   * the agent loop.
-   */
-  private writeFallbackToDelegator(entry: SessionEntry, expert: string): void {
-    const to = this.delegatorFor(entry, expert);
-    void entry.mailbox
-      .write({
-        fromAgent: "system",
-        toAgent: to,
-        msgType: "system",
-        content: `[系统通知] 专家 "${expert}" 结束了本次任务但未回交结果。`,
-      })
-      .then(() => this.wakeAgent(entry.id, to))
-      .catch(() => {
-        /* best-effort */
-      });
+  private async writeFallbackToTaskCreators(entry: SessionEntry, expert: string): Promise<void> {
+    try {
+      const taskIds = await entry.taskLedger.notifyUnhandled(expert);
+      const creators = new Set<string>();
+      for (const taskId of taskIds) {
+        const task = entry.taskLedger.get(taskId);
+        if (task) creators.add(task.created_by);
+      }
+      if (taskIds.length > 0) {
+        entry.bus.emit(
+          ev.systemMessage(entry.id, "warning", `Agent "${expert}" did not act after one task reminder.`, {
+            agent: expert,
+            recoverable: true,
+          }),
+        );
+      }
+      for (const creator of creators) this.wakeAgent(entry.id, creator);
+    } catch {
+      // Best-effort fallback must never break an agent run.
+    }
   }
 
   /**
    * #97: snapshot the live team status for injection into the principal's turn
    * (via the agent-status extension's Pi `context` hook). Lists every agent —
-   * INCLUDING the principal itself, so it sees its own inbox backlog — with its
-   * authoritative status and the number of messages still queued unread in its
-   * inbox (`mailbox.count`). Excludes the trace agent (an internal recorder) and
+   * INCLUDING the principal itself, so it sees its own task backlog — with its
+   * authoritative status and the number of task events still queued unread in its
+   * durable task-event backlog. Excludes the trace agent and
    * any stopped agent (destroyed; irrelevant to current coordination). Returns
    * "" when nothing is worth reporting so the extension injects nothing.
    */
   private renderAgentStatus(entry: SessionEntry): string {
     const lines = collectAgentStatusLines(
       entry.agents.values(),
-      (name) => entry.mailbox.count(name),
+      (name) => entry.taskLedger.count(name),
     );
     return renderAgentStatusBlock(lines);
+  }
+
+  private renderTaskContext(entry: SessionEntry, name: string): string {
+    return renderTaskListBlock(
+      entry.taskLedger.pendingAssignedTo(name),
+      entry.taskLedger.pendingCreatedBy(name),
+      TASK_CONTEXT_MAX_CHARS,
+    );
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {
@@ -2187,6 +2236,11 @@ export class SessionManager {
     await this.cancelUserInputs(entry, (input) => input.agent === name, "agent_destroyed", true);
     agent.stop();
     entry.agents.delete(name); // history on disk is kept (§5).
+    const cancelled = await entry.taskLedger.cancelAssignedTo(name, `Agent "${name}" was destroyed before completion.`);
+    for (const task of cancelled) {
+      entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "cancelled", task }));
+      this.wakeAgent(sessionId, task.created_by);
+    }
   }
 
   /**
@@ -2209,16 +2263,18 @@ export class SessionManager {
     }
   }
 
-  /* ------------------------- mailbox delivery (#76) ------------------------- */
+  /* ---------------------- task-notification delivery ---------------------- */
 
   /**
-   * #76: wake `name` to consume its mailbox. Fire-and-forget — `send_message`
-   * calls this after writing; the actual run happens in a serial delivery loop.
+   * Wake `name` to consume durable task notifications. Fire-and-forget; task
+   * tools call this after committing ledger state.
    * The re-entrancy guard (`deliveryLoops`) means concurrent wakes for the same
    * agent collapse into the one already-running loop (which re-drains after each
    * turn), so an agent's `prompt` is never invoked concurrently.
    */
   private wakeAgent(sessionId: string, name: string): void {
+    const current = this.sessions.get(sessionId);
+    if (!current || current.taskLedger.isPaused(name)) return;
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
     this.deliveryLoops.add(key);
@@ -2230,19 +2286,18 @@ export class SessionManager {
       // this trailing frame the derived run-active flag would stay stuck true.
       const entry = this.sessions.get(sessionId);
       if (entry) this.emitSessionState(entry);
-      // Re-check after releasing the guard: a message could have been written
+      // Re-check after releasing the guard: a notification could have been written
       // between the loop's final empty read and this delete, and that writer's
-      // wakeAgent would have bailed (key still present) — leaving the message
-      // unread. Re-wake if the inbox is non-empty so it never strands.
-      if (entry && entry.mailbox.count(name) > 0) this.wakeAgent(sessionId, name);
+      // wakeAgent would have bailed (key still present) — leaving the notification
+      // unread. Re-wake if the queue is non-empty so it never strands.
+      if (entry && entry.taskLedger.count(name) > 0) this.wakeAgent(sessionId, name);
     });
   }
 
   /**
-   * Drain `name`'s inbox and run it, looping so messages that arrive *during* a
-   * turn are picked up without a second external wake. Each iteration atomically
-   * drains the inbox, ensures the agent, wraps the messages as
-   * `<message_envelope>`s (the format the A2A persona documents), and prompts.
+   * Peek `name`'s durable task events and run it, looping so events that arrive
+   * during a turn are picked up without a second external wake. Events are only
+   * acknowledged after a clean provider run.
    * `MasAgent.prompt` is error-isolated (never throws), so a failed expert turn
    * ends the loop cleanly rather than rejecting. A `session_state` frame is
    * emitted on entry and exit so the derived run-active flag reflects the
@@ -2253,50 +2308,82 @@ export class SessionManager {
     for (;;) {
       const entry = this.sessions.get(sessionId);
       if (!entry) return;
-      const msgs = await entry.mailbox.readBatch(name); // bounded FIFO batch (#76)
-      if (msgs.length === 0) return;
+      if (entry.taskLedger.isPaused(name)) return;
+      const notifications = entry.taskLedger.peekBatch(name);
+      if (notifications.length === 0) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
-      // #97 directed escalation: remember who delegated this work (the last
-      // task_delegate in the batch). Self-retry nudges are msgType "system", so
-      // they never overwrite a real delegator recorded on the original task.
-      const delegated = [...msgs].reverse().find((m) => m.msgType === "task_delegate");
-      if (delegated) entry.delegators.set(name, delegated.fromAgent);
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
       // #167: cap concurrent provider calls across experts in this session.
-      await this.withProviderSlot(sessionId, () => agent.prompt(this.renderEnvelopes(msgs, name)));
+      const ran = await this.withProviderSlot(sessionId, async () => {
+        // Stop may have paused delivery while this run waited for a provider
+        // semaphore slot. Do not start a new model call after Stop completed.
+        const current = this.sessions.get(sessionId);
+        if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+        await agent.prompt(this.renderTaskEvents(notifications));
+        return true;
+      });
+      if (!ran || entry.taskLedger.isPaused(name)) return;
+
+      // Status returns to idle after an explicit abort, so it cannot identify
+      // a cleanly consumed batch. Keep aborted input durable for replay after
+      // the next explicit user turn resumes delivery.
+      if (agent.lastRunOutcome === "aborted") {
+        if (!entry.taskLedger.isPaused(name)) await entry.taskLedger.pauseAgent(name);
+        return;
+      }
 
       // #97 error path. A delegated run that ended in `error` is handled here
       // (the trace-reminder extension bails on an errored run, leaving the host
       // the sole owner of error recovery). Transient errors self-retry up to a
       // cap; fatal errors (auth/config) and the exhausted cap escalate to the
       // principal. A clean run resets the agent's consecutive-error count.
-      if (agent.status === "error" && agent.role === "expert") {
-        if (this.handleDeliveryError(entry, agent)) continue; // self-retry queued
-        return; // escalated — nothing more to drain for this agent
+      if (agent.status === "error") {
+        if (agent.role === "expert") {
+          if (await this.handleDeliveryError(entry, agent)) continue;
+          return;
+        }
+        if (await this.handleInternalDeliveryError(entry, agent)) continue;
+        return;
       }
+      if (agent.lastRunOutcome !== "ok") {
+        await entry.taskLedger.pauseAgent(name);
+        entry.bus.emit(ev.systemMessage(
+          entry.id,
+          "error",
+          `Agent "${name}" 未产生可确认的运行结果，已保留任务事件并暂停投递。`,
+          { agent: name, recoverable: true },
+        ));
+        return;
+      }
+      // Linearize acknowledgement with pauseDelivery(): if Stop won the ledger
+      // write race, retain the batch for the next explicit user turn.
+      const acknowledged = await entry.taskLedger.acknowledgeIfActive(
+        name,
+        notifications.map((item) => item.id),
+      );
+      if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
-      entry.delegators.delete(name); // and forget the delegator (task done)
     }
   }
 
   /**
    * #97: react to a failed delegated expert run. Returns true when a self-retry
-   * was queued (the loop should continue and re-drain the agent's own inbox),
+   * was queued (the loop should continue and re-drain the agent's own queue),
    * false when the failure was escalated to the principal (the loop should stop).
    *
    * Policy:
    *  - `retryable` (rate limit / 5xx / network) AND under the retry cap →
-   *    re-wake the SAME expert with a neutral system nudge in its own inbox, and
+   *    re-wake the SAME expert with a neutral system nudge in its own queue, and
    *    surface a `warning` to the user ("retrying n/N"). Re-running may succeed.
    *  - `fatal` (auth / missing key / forbidden), OR the cap is reached →
-   *    escalate: write a NEUTRAL error note to the principal's mailbox + wake it,
+   *    escalate: queue a neutral error event for each task creator and wake it,
    *    surface an `error` to the user, and reset the streak so a future task to
    *    this expert starts fresh.
    */
-  private handleDeliveryError(entry: SessionEntry, agent: MasAgent): boolean {
+  private async handleDeliveryError(entry: SessionEntry, agent: MasAgent): Promise<boolean> {
     const name = agent.name;
     const count = (entry.deliveryErrors.get(name) ?? 0) + 1;
     entry.deliveryErrors.set(name, count);
@@ -2312,110 +2399,84 @@ export class SessionManager {
           { agent: name, recoverable: true },
         ),
       );
-      // Re-wake the SAME expert via its own inbox: a neutral, directive-free
-      // nudge. The expert retains its prior conversation context, so it knows
-      // what it was attempting; we only signal "the last attempt failed, try
-      // again". Returning true lets the loop re-drain this note immediately.
-      void entry.mailbox
-        .write({
-          fromAgent: "system",
-          toAgent: name,
-          msgType: "system",
-          content: `[系统通知] 上一次任务执行出错（${headline}）。请重试。`,
-        })
-        .catch(() => {
-          /* best-effort */
-        });
+      // Leave the current notification batch unacknowledged; the serial loop
+      // retries the same durable events.
       return true;
     }
 
-    // Fatal, or retries exhausted → escalate to the real delegator and stop.
-    const delegator = this.delegatorFor(entry, name);
-    const target = delegator === "principal" ? "主管" : `委派方 "${delegator}"`;
+    // Fatal, or retries exhausted → notify every creator of a pending task.
     entry.bus.emit(
       ev.systemMessage(
         entry.id,
         "error",
         kind === "fatal"
-          ? `专家 "${name}" 发生无法自动恢复的错误，已上报${target}。`
-          : `专家 "${name}" 连续 ${count} 次执行失败，已上报${target}。`,
+          ? `专家 "${name}" 发生无法自动恢复的错误，已通知任务派遣者。`
+          : `专家 "${name}" 连续 ${count} 次执行失败，已通知任务派遣者。`,
         { agent: name, recoverable: true },
       ),
     );
-    this.writeErrorToDelegator(entry, name, headline);
+    // Preserve every event from the failed batch, including completed child
+    // results. The next explicit user turn resumes and replays them.
+    await entry.taskLedger.pauseAgent(name);
+    await this.writeErrorToTaskCreators(entry, name, headline);
     entry.deliveryErrors.delete(name); // reset streak for a future task
-    entry.delegators.delete(name); // delegator notified; forget it
     return false;
   }
 
-  /**
-   * #97 directed escalation: resolve who an expert's failure/silence should be
-   * reported to. Returns the recorded delegator ONLY when it is a still-live,
-   * non-trace agent other than the expert itself (a destroyed/stopped delegator
-   * would be wrongly resurrected by the wake, and a self/system target is
-   * nonsensical). Otherwise falls back to `principal`, the root coordinator,
-   * which always exists and owns un-rooted work.
-   */
-  private delegatorFor(entry: SessionEntry, expert: string): string {
-    const d = entry.delegators.get(expert);
-    if (!d || d === expert || d === "system" || d === "principal") return "principal";
-    const agent = entry.agents.get(d);
-    if (!agent || agent.status === "stopped" || agent.role === "trace") return "principal";
-    return d;
-  }
-
-  /**
-   * #97 error escalation: write a NEUTRAL, error-flavored system note into the
-   * REAL delegator's mailbox and wake it, so whoever delegated the work (the
-   * principal, or another agent in a chain like auditor→engineer) learns the
-   * expert failed rather than dead-waiting. Distinct from
-   * `writeFallbackToDelegator` (the "silence" path): this one states an ERROR
-   * occurred and carries the error headline as context, but — like the silence
-   * note — gives NO directive ("re-delegate" / "proceed"): the delegator decides.
-   * Best-effort; never breaks the loop.
-   */
-  private writeErrorToDelegator(entry: SessionEntry, expert: string, headline: string): void {
-    const to = this.delegatorFor(entry, expert);
-    void entry.mailbox
-      .write({
-        fromAgent: "system",
-        toAgent: to,
-        msgType: "system",
-        content: `[系统通知] 专家 "${expert}" 在执行任务时发生错误，未能产出结果。错误：${headline}`,
-      })
-      .then(() => this.wakeAgent(entry.id, to))
-      .catch(() => {
-        /* best-effort */
-      });
-  }
-
-  /**
-   * Wrap drained mailbox messages in the `<message_envelope>` header the A2A
-   * persona (`personas.ts`) tells agents to expect, so the model knows who sent
-   * each message and why. User-origin messages declare `<source type="user"/>`;
-   * agent-origin ones name the sender.
-   *
-   * 意图一·触发点2 (Pi-native hooks): when the PRINCIPAL receives a message from
-   * another agent (not the user — i.e. an expert reporting back), append a single
-   * static line nudging it to record_trace any real decision it makes while
-   * processing the reply. Stateless, loop-free (at most one line per delivery).
-   */
-  private renderEnvelopes(msgs: readonly MailboxMessage[], toAgent: string): string {
-    const body = msgs
-      .map((m) => {
-        const source =
-          m.msgType === "user_message"
-            ? `<source type="user" />`
-            : `<source type="agent" name="${m.fromAgent}" />`;
-        return `<message_envelope>\n  ${source}\n  <type>${m.msgType}</type>\n</message_envelope>\n${m.content}`;
-      })
-      .join("\n\n");
-
-    const fromAgent = msgs.some((m) => m.msgType !== "user_message");
-    if (toAgent === "principal" && fromAgent) {
-      return `${body}\n\n[提醒：处理完这些消息后，如有实质决策请调用 record_trace 记录。]`;
+  private async handleInternalDeliveryError(entry: SessionEntry, agent: MasAgent): Promise<boolean> {
+    const name = agent.name;
+    const count = (entry.deliveryErrors.get(name) ?? 0) + 1;
+    entry.deliveryErrors.set(name, count);
+    const kind = agent.lastErrorKind ?? "retryable";
+    if (kind === "retryable" && count < SessionManager.MAX_DELIVERY_RETRIES) {
+      entry.bus.emit(
+        ev.systemMessage(
+          entry.id,
+          "warning",
+          `Agent "${name}" 处理任务事件时出错，正在自动重试 (${count}/${SessionManager.MAX_DELIVERY_RETRIES})…`,
+          { agent: name, recoverable: true },
+        ),
+      );
+      return true;
     }
-    return body;
+    await entry.taskLedger.pauseAgent(name);
+    entry.deliveryErrors.delete(name);
+    entry.bus.emit(
+      ev.systemMessage(
+        entry.id,
+        "error",
+        `Agent "${name}" 无法处理待投递任务事件，已暂停自动投递；下一条用户消息将恢复。`,
+        { agent: name, recoverable: true },
+      ),
+    );
+    return false;
+  }
+
+  private async writeErrorToTaskCreators(entry: SessionEntry, expert: string, headline: string): Promise<void> {
+    const creators = new Set<string>();
+    for (const task of entry.taskLedger.pendingAssignedTo(expert)) {
+      try {
+        await entry.taskLedger.enqueueSystem(
+          task.created_by,
+          `Agent "${expert}" failed while task ${task.id} remains pending. Error: ${headline}`,
+          task.id,
+        );
+        creators.add(task.created_by);
+      } catch {
+        // The user-facing system_message already records the terminal delivery
+        // error. A full creator queue must not make the failed assignee retry
+        // forever; the pending task remains visible in the creator's task list.
+      }
+    }
+    for (const creator of creators) this.wakeAgent(entry.id, creator);
+  }
+
+  private renderTaskEvents(notifications: readonly TaskNotification[]): string {
+    return `<task_events>\n${notifications.map((notification) => {
+      if (notification.kind === "trace") return notification.content;
+      const task = notification.task_id ? ` task_id="${notification.task_id}"` : "";
+      return `<task_event kind="${notification.kind}"${task} from="${notification.from_agent}">\n${notification.content}\n</task_event>`;
+    }).join("\n\n")}\n</task_events>`;
   }
 
   /* -------------------------- state authority -------------------------- */
@@ -2429,7 +2490,7 @@ export class SessionManager {
       const out: AgentStatus = {
         name: a.name,
         status: st.status,
-        task: entry.tasks.get(a.name) ?? "",
+        task: entry.taskLedger.pendingAssignedTo(a.name)[0]?.content ?? "",
         updatedAt: new Date().toISOString(),
         alive: st.status !== "stopped",
         retry: st.retry,
@@ -2442,12 +2503,12 @@ export class SessionManager {
 
   /**
    * #76: a session is "running" whenever ANY non-trace agent is running, or a
-   * mailbox delivery loop is pending for a non-trace target (the loop is
-   * registered synchronously inside `send_message`, so this closes the await gap
+   * task-event delivery loop is pending for a non-trace target (the loop is
+   * registered synchronously inside `dispatch_task`, so this closes the await gap
    * between the sender finishing its turn and the delegated target starting —
    * without it the flag would flicker false in that window). The trace agent is
    * a real spawned agent (record_trace dispatches `trace_event` envelopes into
-   * its mailbox and it owns the Graph of Trace as editor, see
+   * its internal trace event and it owns the Graph of Trace as editor, see
    * `system-tools.ts:createRecordTraceTool`), but it is excluded from the
    * AGGREGATE: a trace recording isn't "the user's task is still running". It
    * is still LISTED in `agents[]` with its own status so the Agents panel shows
@@ -2486,6 +2547,19 @@ export class SessionManager {
         tokenUsage: entry.tokenUsage,
       }),
     );
+  }
+
+  private emitTaskSnapshot(entry: SessionEntry): void {
+    entry.bus.emitEphemeral(
+      ev.custom({ sessionId: entry.id }, CUSTOM_EVENT.TASK_STATE, {
+        op: "snapshot",
+        tasks: entry.taskLedger.list(),
+      }),
+    );
+  }
+
+  listTasks(sessionId: string): TaskRecord[] {
+    return this.sessions.get(sessionId)?.taskLedger.list() ?? [];
   }
 
   getSessionState(sessionId: string): {
@@ -2646,7 +2720,22 @@ export class SessionManager {
   }
 
   recentEvents(sessionId: string): AgUiEvent[] {
-    return this.sessions.get(sessionId)?.bus.recent() ?? [];
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return [];
+    const recent = entry.bus.recent().filter(
+      (event) => !(
+        event.type === "CUSTOM" &&
+        event.name === CUSTOM_EVENT.TASK_STATE &&
+        (event.value as { op?: string } | undefined)?.op === "snapshot"
+      ),
+    );
+    recent.push(
+      ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, {
+        op: "snapshot",
+        tasks: entry.taskLedger.list(),
+      }),
+    );
+    return recent;
   }
 
   /* ----------------------------- shutdown ------------------------------ */
@@ -2654,7 +2743,7 @@ export class SessionManager {
   /** §7: flush all persisted state before exit. */
   async emergencySaveAll(): Promise<void> {
     await Promise.all(
-      [...this.sessions.values()].flatMap((e) => [e.bus.flush(), e.mailbox.flush(), e.trace.flush(), this.writeMeta(e)]),
+      [...this.sessions.values()].flatMap((e) => [e.bus.flush(), e.taskLedger.flush(), e.trace.flush(), this.writeMeta(e)]),
     );
     await this.mcpBridge?.close().catch(() => {});
   }
@@ -2818,7 +2907,7 @@ export class SessionManager {
   /**
    * Restore session list from disk. Reads `<dataRoot>/.bp/<id>/meta.json` for
    * every directory and recreates the session entry with its original
-   * timestamps preserved (provider ref, mailbox, trace also rehydrate via the
+   * timestamps preserved (provider ref, task ledger, trace also rehydrate via the
    * normal `createSession` restore path). §10 策略A: agents start idle and
    * are lazily revived when the user actually sends a message.
    *
@@ -2890,6 +2979,7 @@ export class SessionManager {
       );
       return sid;
     } catch (err) {
+      this.sessions.delete(sid);
       // eslint-disable-next-line no-console
       console.warn(`[runtime] skipping ${id}: ${(err as Error).message}`);
       return null;

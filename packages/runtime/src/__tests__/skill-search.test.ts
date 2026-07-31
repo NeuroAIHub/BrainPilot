@@ -10,7 +10,6 @@ import {
   searchSkills,
   createSkillSearchTool,
 } from "../tools/skill-search.js";
-import { Mailbox } from "../mailbox.js";
 import { GraphOfTrace } from "../trace.js";
 import type { ToolDeps } from "../tools/system-tools.js";
 
@@ -388,8 +387,10 @@ describe("createSkillSearchTool", () => {
     const deps: ToolDeps = {
       sessionId: "s",
       fromAgent: "principal",
-      mailbox: new Mailbox("s"),
       trace: new GraphOfTrace("s"),
+      dispatchTask: async () => { throw new Error("unused"); },
+      completeTask: async () => { throw new Error("unused"); },
+      dispatchTrace: async () => {},
       ensureAgent: async () => {},
       destroyAgent: async () => {},
       wakeAgent: () => {},
@@ -426,8 +427,10 @@ describe("createSkillSearchTool", () => {
     const deps: ToolDeps = {
       sessionId: "s",
       fromAgent: "principal",
-      mailbox: new Mailbox("s"),
       trace: new GraphOfTrace("s"),
+      dispatchTask: async () => { throw new Error("unused"); },
+      completeTask: async () => { throw new Error("unused"); },
+      dispatchTrace: async () => {},
       ensureAgent: async () => {},
       destroyAgent: async () => {},
       wakeAgent: () => {},
@@ -443,8 +446,10 @@ describe("createSkillSearchTool", () => {
     const deps: ToolDeps = {
       sessionId: "s",
       fromAgent: "principal",
-      mailbox: new Mailbox("s"),
       trace: new GraphOfTrace("s"),
+      dispatchTask: async () => { throw new Error("unused"); },
+      completeTask: async () => { throw new Error("unused"); },
+      dispatchTrace: async () => {},
       ensureAgent: async () => {},
       destroyAgent: async () => {},
       wakeAgent: () => {},

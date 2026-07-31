@@ -35,7 +35,7 @@ export default defineMessages(
     "profile.writer.role": "Scientific writing · Reporting",
     "profile.writer.desc": "Transforms research findings into clear, rigorous papers, documentation and reports tailored to the audience.",
     "profile.auditor.role": "Audit · Fabrication detection",
-    "profile.auditor.desc": "Before the principal delivers its final report, cross-checks every numeric claim, file path and external citation against the session's actual execution record (Bash output, file writes, the Graph of Trace, the mailbox) and flags fabricated claims with no supporting evidence. Judges only whether claims match evidence, not scientific correctness; advisory — the principal makes the final call.",
+    "profile.auditor.desc": "Before the principal delivers its final report, cross-checks every numeric claim, file path and external citation against the session's actual execution record (Bash output, file writes, and task artifacts) and flags fabricated claims with no supporting evidence. Judges only whether claims match evidence, not scientific correctness; advisory — the principal makes the final call.",
     "profile.user.role": "Human user",
     "profile.user.desc": "The human researcher driving the session through chat prompts.",
     "profile.default.role": "Expert · Domain agent",

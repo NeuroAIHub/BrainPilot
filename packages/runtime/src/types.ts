@@ -206,10 +206,11 @@ export type AgentSessionFactory = (params: {
   /**
    * 意图二 fallback (Pi-native hooks): invoked by the trace-reminder extension
    * when an expert was reminded once and STILL did not report back, so the host
-   * can write a fallback note into the principal's mailbox (the PI never
-   * dead-waits). Omitted by the mock factory.
+   * can notify each pending task's creator, so no sender dead-waits.
    */
-  onUnreplied?: (agentName: string) => void;
+  onUnreplied?: (agentName: string) => void | Promise<void>;
+  hasPendingTasks?: () => boolean;
+  claimTaskReminder?: (agentName: string) => Promise<boolean>;
   /**
    * #97: compute a fresh "team status" block to inject at the top of every turn
    * (via the agent-status extension's Pi `context` hook). Called once per turn;
@@ -218,6 +219,8 @@ export type AgentSessionFactory = (params: {
    * roles and by the mock factory.
    */
   renderAgentStatus?: () => string;
+  /** Fresh flat task-list context, injected ephemerally on every turn. */
+  renderTaskContext?: () => string;
   /**
    * Per-session LLM provider resolved from providers.json. When omitted, the
    * factory falls back to Pi's env-based default (Docker/static compat).

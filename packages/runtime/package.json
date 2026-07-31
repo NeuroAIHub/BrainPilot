@@ -6,7 +6,7 @@
   },
   "license": "AGPL-3.0-only",
   "type": "module",
-  "description": "BrainPilot Runtime — Pi SDK orchestration, SessionManager, Mailbox, GoT, state authority, HTTP server",
+  "description": "BrainPilot Runtime — Pi SDK orchestration, SessionManager, task ledger, GoT, state authority, HTTP server",
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [

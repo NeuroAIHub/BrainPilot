@@ -29,23 +29,23 @@ describe("renderAgentStatusBlock", () => {
     expect(out).toContain("<internal_agent_status>");
     expect(out).toContain("</internal_agent_status>");
     expect(out).toContain("Never mention");
-    expect(out).toContain("- principal: status=running, 1 pending message");
+    expect(out).toContain("- principal: status=running, 1 pending task event");
     expect(out).not.toContain("experimentalist");
-    expect(out).toContain("- librarian: 1 pending message");
-    expect(out).toContain("- engineer: status=error, 2 pending messages");
+    expect(out).toContain("- librarian: 1 pending task event");
+    expect(out).toContain("- engineer: status=error, 2 pending task events");
   });
 
-  it("uses the singular form for exactly one pending message", () => {
+  it("uses the singular form for exactly one pending task event", () => {
     const out = renderAgentStatusBlock([{ name: "x", status: "idle", unread: 1 }]);
-    expect(out).toContain("1 pending message");
+    expect(out).toContain("1 pending task event");
     expect(out).not.toContain("1 pending messages");
   });
 
-  it("uses the plural form for many pending messages", () => {
+  it("uses the plural form for many pending task events", () => {
     const out = renderAgentStatusBlock([
       { name: "b", status: "idle", unread: 3 },
     ]);
-    expect(out).toContain("3 pending messages");
+    expect(out).toContain("3 pending task events");
   });
 });
 

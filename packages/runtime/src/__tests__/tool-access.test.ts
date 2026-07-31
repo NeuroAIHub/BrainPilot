@@ -6,17 +6,26 @@ import {
   systemToolsForRole,
   builtinToolNamesForRole,
   createAskUserTool,
+  createDispatchTaskTool,
+  createCompleteTaskTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
-import { Mailbox } from "../mailbox.js";
 import { GraphOfTrace } from "../trace.js";
 
 function deps(name: string): ToolDeps {
   return {
     sessionId: "s",
     fromAgent: name,
-    mailbox: new Mailbox("s"),
     trace: new GraphOfTrace("s"),
+    dispatchTask: async (to, content) => ({
+      id: "task_000001", seq: 1, created_by: name, assigned_to: to, content,
+      status: "pending", created_at: 1,
+    }),
+    completeTask: async (taskId, reply) => ({
+      id: taskId, seq: 1, created_by: "principal", assigned_to: name, content: "work",
+      status: "completed", reply, created_at: 1, completed_at: 2,
+    }),
+    dispatchTrace: async () => {},
     ensureAgent: async () => {},
     destroyAgent: async () => {},
     wakeAgent: () => {},
@@ -30,6 +39,25 @@ function deps(name: string): ToolDeps {
 }
 
 describe("tool access control (§9)", () => {
+  it("dispatch_task and complete_task expose stable task-oriented contracts", async () => {
+    const d = deps("engineer");
+    const dispatched: Array<[string, string]> = [];
+    d.dispatchTask = async (to, content) => {
+      dispatched.push([to, content]);
+      return { id: "task_000007", seq: 7, created_by: "engineer", assigned_to: to, content, status: "pending", created_at: 1 };
+    };
+    const dispatch = createDispatchTaskTool(d);
+    expect((dispatch.parameters.required as string[])).toEqual(["content", "to"]);
+    expect((await dispatch.execute({ to: "writer", content: "polish docs/report.md" })).isError).toBeUndefined();
+    expect(dispatched).toEqual([["writer", "polish docs/report.md"]]);
+    await expect(dispatch.execute({ to: "engineer", content: "self" })).resolves.toMatchObject({ isError: true });
+    await expect(dispatch.execute({ to: "trace", content: "wrong" })).resolves.toMatchObject({ isError: true });
+
+    const complete = createCompleteTaskTool(d);
+    expect((complete.parameters.required as string[])).toEqual(["task_id", "reply"]);
+    expect((await complete.execute({ task_id: "task_000001", reply: "done" })).isError).toBeUndefined();
+  });
+
   it("ask_user validates choices and defaults free text to enabled", async () => {
     const seen: Array<Record<string, unknown>> = [];
     const d = deps("principal");
@@ -57,7 +85,7 @@ describe("tool access control (§9)", () => {
 
   it("principal gets comms + record_trace, not graph mutation tools", () => {
     const names = systemToolNamesForRole("principal", "principal");
-    expect(names).toEqual(expect.arrayContaining(["send_message", "create_agent", "destroy_agent", "record_trace"]));
+    expect(names).toEqual(expect.arrayContaining(["dispatch_task", "complete_task", "create_agent", "destroy_agent", "record_trace"]));
     expect(names).not.toContain("create_trace_node");
     expect(names).not.toContain("get_trace_graph");
   });
@@ -73,16 +101,17 @@ describe("tool access control (§9)", () => {
     expect(names.sort()).toEqual(
       ["add_trace_relation", "create_trace_node", "get_trace_graph", "update_trace_node"].sort(),
     );
-    expect(names).not.toContain("send_message");
+    expect(names).not.toContain("dispatch_task");
     expect(names).not.toContain("create_agent");
   });
 
-  it("expert gets send_message + record_trace + skill_search + local KB tools", () => {
+  it("expert gets task tools + record_trace + skill_search + local KB tools", () => {
     const names = systemToolNamesForRole("expert", "librarian");
     expect(names.sort()).toEqual(
       [
         "record_trace",
-        "send_message",
+        "dispatch_task",
+        "complete_task",
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
@@ -132,25 +161,26 @@ describe("tool access control (§9)", () => {
     expect(w).not.toContain("bash");
   });
 
-  it("librarian stays read-only (no write/bash)", () => {
+  it("librarian can save handoffs but cannot run a shell", () => {
     const lib = builtinToolNamesForRole("expert", "librarian");
     expect(lib).toContain("read");
-    expect(lib).not.toContain("write");
+    expect(lib).toContain("write");
     expect(lib).not.toContain("bash");
   });
 
-  it("unknown experts fall back to the lean role default", () => {
+  it("unknown experts can save handoffs with the lean role default", () => {
     expect(builtinToolNamesForRole("expert", "statistician").sort()).toEqual(
-      ["find", "grep", "read"].sort(),
+      ["find", "grep", "read", "write"].sort(),
     );
   });
 
-  it("auditor gets send_message + record_trace + skill_search + local KB tools, but NO trace-graph access", () => {
+  it("auditor gets task tools + record_trace + skill_search + local KB tools, but NO trace-graph access", () => {
     const names = systemToolNamesForRole("expert", "auditor");
     expect(names.sort()).toEqual(
       [
         "record_trace",
-        "send_message",
+        "dispatch_task",
+        "complete_task",
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
@@ -198,7 +228,7 @@ describe("tool toggles", () => {
     expect(principal).toContain("search_papers_local");
     // Always-on tools stay wired (regression: filter must not affect them).
     expect(principal).toEqual(expect.arrayContaining([
-      "send_message", "ask_user", "create_agent", "record_trace",
+      "dispatch_task", "complete_task", "ask_user", "create_agent", "record_trace",
     ]));
   });
 
@@ -219,10 +249,11 @@ describe("tool toggles", () => {
     const names = systemToolsForRole("principal", "principal", deps("principal"), off).map((t) => t.name).sort();
     expect(names).toEqual([
       "ask_user",
+      "complete_task",
       "create_agent",
       "destroy_agent",
+      "dispatch_task",
       "record_trace",
-      "send_message",
     ].sort());
   });
 

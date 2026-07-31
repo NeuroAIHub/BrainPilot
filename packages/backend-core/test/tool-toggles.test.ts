@@ -120,7 +120,7 @@ describe("Tool toggles CRUD (/api/tool-toggles)", () => {
     const res = await put(app, {
       skill_search: false,
       skil_search: true,           // typo
-      send_message: false,         // not toggleable
+      dispatch_task: false,        // not toggleable
       get_domain_knowledge_local: "off",  // non-boolean
     });
     expect(res.status).toBe(200);

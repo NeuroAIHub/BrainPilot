@@ -35,7 +35,7 @@ describe("turnTimerReducer (#99 whole-turn timing)", () => {
     expect(s.running).toBe(true); // still running (candidate pending, not settled)
     expect(s.candidateEndAt).toBe(2000);
 
-    // ...but a hook / mailbox delivery re-wakes an agent before settle fires.
+    // ...but a hook / task event re-wakes an agent before settle fires.
     s = turnTimerReducer(s, { type: "active", value: true, atMs: 2050 });
     expect(s.candidateEndAt).toBeNull(); // candidate discarded
     expect(s.running).toBe(true);

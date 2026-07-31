@@ -19,6 +19,7 @@ import { MockAgentSession } from "./mock-agent.js";
 import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
+import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
 import {
@@ -117,6 +118,8 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     role: params.role,
     name: params.agentName,
     onUnreplied: params.onUnreplied ?? (() => {}),
+    hasPendingTasks: params.hasPendingTasks,
+    claimTaskReminder: params.claimTaskReminder,
   });
   // #97: inject a fresh team-status block at the top of every turn, but only for
   // the agent the host supplied a renderer for (the principal). The `context`
@@ -124,6 +127,9 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   const extensionFactories: unknown[] = [traceReminder];
   if (params.renderAgentStatus) {
     extensionFactories.push(makeAgentStatusExt({ renderStatus: params.renderAgentStatus }));
+  }
+  if (params.renderTaskContext) {
+    extensionFactories.push(makeTaskContextExt({ renderTasks: params.renderTaskContext }));
   }
   // #346: rewrite logical /workspace (and /data, …) onto durable volume roots
   // BEFORE other path guards run, so subsequent handlers see post-rewrite paths.

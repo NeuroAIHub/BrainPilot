@@ -106,7 +106,8 @@ describe("SessionManager (mock mode)", () => {
 
     // Principal is a non-trace agent — should have system tools.
     const principalTools = seenTools[0]!;
-    expect(principalTools).toContain("send_message");
+    expect(principalTools).toContain("dispatch_task");
+    expect(principalTools).toContain("complete_task");
     expect(principalTools).toContain("ask_user");
   });
 
@@ -132,7 +133,7 @@ describe("SessionManager (mock mode)", () => {
     expect(PERSONAS.principal).toContain("## Incremental planning for heavy work");
     expect(PERSONAS.principal).toContain("dry run, smoke test, tiny dataset");
     expect(PERSONAS.engineer).toContain("## High-impact action gate");
-    expect(PERSONAS.engineer).toContain('send_message(to="principal", ...)');
+    expect(PERSONAS.engineer).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(PERSONAS.engineer).toContain("## Execution discipline");
     expect(PERSONAS.engineer).toContain("Prefer writing new outputs inside the session workspace");
     expect(PERSONAS.experimentalist).toContain("## High-impact action gate");
@@ -169,9 +170,11 @@ describe("SessionManager (mock mode)", () => {
     await sm.sendMessage(s.id, "hi");
     await waitFor(() => seen.length > 0);
 
-    // The on-disk persona is used verbatim as the base, with the language
-    // directive appended at load time (#97) so it reaches pre-existing scaffolds.
+    // The on-disk persona remains the base, while non-overridable coordination
+    // and language contracts are appended once at load time.
     expect(seen[0]).toContain("# Custom PI\nDo it my way.");
+    expect(seen[0]!.match(/^## Handoffs$/gm)).toHaveLength(1);
+    expect(seen[0]!.match(/^## Delegation$/gm)).toHaveLength(1);
     expect(seen[0]).toContain("## Response language");
     await rm(root, { recursive: true, force: true });
   });

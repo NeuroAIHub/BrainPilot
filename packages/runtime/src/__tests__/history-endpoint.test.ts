@@ -65,7 +65,7 @@ describe("GET /sessions/:id/history", () => {
     const res = await app.request("/sessions/22222222-2222-2222-2222-222222222222/history?limit=10");
     expect(res.status).toBe(200);
     const body = (await res.json()) as { events: Array<{ delta: string }>; total: number; truncated: boolean };
-    expect(body.total).toBe(15);
+    expect(body.total).toBe(15); // ephemeral snapshots do not mutate durable history
     expect(body.truncated).toBe(true);
     expect(body.events).toHaveLength(10);
     // tail: msg-5..msg-14

@@ -6,7 +6,7 @@
  * What this pins down (host-side, mock factory):
  *   - calling `record_trace` ensures a `trace` agent is in the session's agent
  *     list (status idle by default; visible to the panel via `listAgents`);
- *   - a `trace_event` envelope is delivered to the trace agent's mailbox,
+ *   - a trace event is delivered through the internal durable queue,
  *     formatted as `[Trace Event]\nDescription: …\nContext: …\n\nArtifacts:`;
  *   - `agent_status_update` events with name="trace" reach the bus once the
  *     trace agent runs (running → idle), proving the panel will "light up";
@@ -116,7 +116,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
     expect(names).toContain("trace");
   });
 
-  it("delivers a [Trace Event] envelope to the trace agent's mailbox", async () => {
+  it("delivers a [Trace Event] envelope to the trace agent", async () => {
     let captured: string | undefined;
     const factory = scriptedFactory({
       principal: {
@@ -194,7 +194,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
     // deriveRunActive — its self-recording shouldn't read as "the user's
     // task is still running". Once the principal's run finishes, runState
     // settles to inactive even if the trace agent is still consuming
-    // its mailbox.
+    // its internal task-event queue.
     const factory = scriptedFactory({
       principal: {
         onPrompt: (_text, turn) =>

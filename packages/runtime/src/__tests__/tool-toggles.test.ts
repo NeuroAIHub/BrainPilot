@@ -90,18 +90,18 @@ describe("tool-toggles loader", () => {
 
   it("silently drops unknown keys (a typo can't disable a built-in)", async () => {
     // A hand-edit that misspells `skil_search` or names a real always-on
-    // tool like `send_message` must not cause the loader to expose that key.
+    // tool like `dispatch_task` must not cause the loader to expose that key.
     await writeToggles(JSON.stringify({
       skil_search: false,        // typo
-      send_message: false,       // not toggleable
+      dispatch_task: false,      // not toggleable
       skill_search: true,
     }));
     const result = await loadToolToggles(root);
     expect(result).toEqual({ skill_search: true });
     // Verify the always-on lookup is unaffected — `isToolEnabled` only
-    // accepts the strict union, so the caller can't ask about send_message
+    // accepts the strict union, so the caller can't ask about dispatch_task
     // (typescript blocks it), but we can still assert the object shape.
-    expect(result).not.toHaveProperty("send_message");
+    expect(result).not.toHaveProperty("dispatch_task");
   });
 
   it("non-boolean values are dropped (default-on fallback)", async () => {

@@ -1,7 +1,7 @@
 /**
  * @brainpilot/runtime — Pi SDK multi-agent orchestration + STATE AUTHORITY.
  *
- * Public surface: SessionManager, MasAgent, Mailbox, GraphOfTrace, event
+ * Public surface: SessionManager, MasAgent, TaskLedger, GraphOfTrace, event
  * helpers, agent factories, server bootstrap.
  */
 export const RUNTIME_NAME = "@brainpilot/runtime";
@@ -12,8 +12,8 @@ export type { SessionManagerOptions } from "./session-manager.js";
 export { MasAgent } from "./mas-agent.js";
 export type { AgentStatus, MasAgentOpts } from "./mas-agent.js";
 
-export { Mailbox } from "./mailbox.js";
-export type { MailboxMessage, MsgType } from "./mailbox.js";
+export { TaskLedger, TaskLedgerCorruptError, TaskQueueFullError } from "./task-ledger.js";
+export type { TaskRecord, TaskStatus, TaskNotification, TaskNotificationKind } from "./task-ledger.js";
 
 export { GraphOfTrace } from "./trace.js";
 export { EventBus } from "./event-bus.js";

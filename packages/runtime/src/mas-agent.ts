@@ -119,6 +119,8 @@ export class MasAgent {
   private readonly unsubscribe: () => void;
 
   private _status: AgentStatus = "idle";
+  /** Outcome of the most recently settled prompt; status alone cannot distinguish abort from success. */
+  private _lastRunOutcome: RunStatsStatus | undefined;
   /** Present only while Pi is sleeping before another provider attempt. */
   private currentRetry: AgentRetryState | undefined;
   /** Provider errors are held until Pi either retries successfully or exhausts. */
@@ -195,6 +197,10 @@ export class MasAgent {
 
   get status(): AgentStatus {
     return this._status;
+  }
+
+  get lastRunOutcome(): RunStatsStatus | undefined {
+    return this._lastRunOutcome;
   }
 
   /**
@@ -439,6 +445,7 @@ export class MasAgent {
     this.currentRunId = newRunId();
     this.runStartedAt = Date.now();
     this.abortRequested = false;
+    this._lastRunOutcome = undefined;
     this.currentRetry = undefined;
     this.pendingProviderError = undefined;
     // Snapshot cumulative stats BEFORE any events flow so the eventual delta
@@ -507,6 +514,7 @@ export class MasAgent {
         runOutcome = "error";
       }
     } finally {
+      this._lastRunOutcome = runOutcome;
       // Emit the per-run stats delta before clearing run-scoped state so
       // consumers see a stable `runId`. Aborted-mid-run is caught by
       // `abort()`'s own cleanup path (see abort()); if we reach here with a

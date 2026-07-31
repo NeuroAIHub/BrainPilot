@@ -234,7 +234,7 @@ export function formatDuration(ms: number): string {
 }
 
 /* --------------------------------------------------------------------------
- * Per-agent activity statistics (all messages, not just send_message)
+ * Per-agent activity statistics (all messages, not just task dispatches)
  * ------------------------------------------------------------------------ */
 
 export interface AgentActivity {
@@ -252,7 +252,7 @@ export interface AgentActivity {
   toolCalls: number;
   toolCallsByName: Record<string, number>;
   topTools: Array<{ name: string; count: number }>;
-  // Communication (send_message only)
+  // Communication (dispatch_task edges)
   sentMessages: number;
   receivedMessages: number;
   communicationPartners: string[];

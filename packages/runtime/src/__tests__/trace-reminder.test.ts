@@ -1,16 +1,4 @@
-/**
- * trace-reminder extension — unit tests driving the extension directly with a
- * fake Pi ExtensionAPI (no SessionManager, no provider). The SessionManager
- * tests deliberately use a scripted factory that does NOT load this extension,
- * so the reminder logic was previously unasserted — which let #211 (the
- * read-only exemption being dead due to a tool-name case mismatch) ship in #210.
- * These tests pin the exact followUp messages emitted per role/tool sequence.
- *
- * Pi emits builtin tool names LOWERCASE (BUILTIN_TOOL_CONFIG in
- * tools/system-tools.ts: principal = read/write/edit/bash/grep/find/glob/ls), so
- * the scenarios use those real names.
- */
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { makeTraceReminderExt, type TraceReminderDeps } from "../extensions/trace-reminder.js";
 import type { AgentRole } from "../types.js";
 
@@ -19,7 +7,11 @@ interface SentMessage {
   deliverAs?: string;
 }
 
-/** A minimal fake of the slice of Pi's ExtensionAPI the extension uses. */
+interface ToolCall {
+  name: string;
+  args?: Record<string, unknown>;
+}
+
 function fakePi() {
   const handlers: Record<string, Array<(e: unknown) => unknown>> = {};
   const sent: SentMessage[] = [];
@@ -33,115 +25,217 @@ function fakePi() {
     fire(ev: string, e?: unknown) {
       for (const fn of handlers[ev] || []) fn(e);
     },
+    async fireAsync(ev: string, e?: unknown) {
+      for (const fn of handlers[ev] || []) await fn(e);
+    },
     sent,
   };
 }
 
-/** The kind sub-tag of each emitted [SYSTEM-MESSAGE:kind] followUp, in order. */
 function kindsOf(sent: SentMessage[]): string[] {
   return sent.map((s) => (s.content.match(/\[SYSTEM-MESSAGE:(\w+)\]/) || [])[1]);
 }
 
-/**
- * Run ONE agent loop: agent_start → successful tool calls → a clean agent_end,
- * and return the kinds of followUp reminders the extension emitted.
- */
 function runOnce(
   role: AgentRole,
-  tools: string[],
+  calls: Array<string | ToolCall>,
   deps?: Partial<TraceReminderDeps>,
 ): { kinds: string[]; sent: SentMessage[] } {
   const pi = fakePi();
-  makeTraceReminderExt({ role, name: deps?.name ?? role, onUnreplied: deps?.onUnreplied ?? (() => {}) })(
-    pi as never,
-  );
+  makeTraceReminderExt({
+    role,
+    name: deps?.name ?? role,
+    onUnreplied: deps?.onUnreplied ?? (() => {}),
+    hasPendingTasks: deps?.hasPendingTasks ?? (() => role === "expert"),
+    claimTaskReminder: deps?.claimTaskReminder,
+  })(pi as never);
   pi.fire("agent_start");
-  for (const t of tools) pi.fire("tool_execution_end", { toolName: t, isError: false });
+  calls.forEach((call, index) => {
+    const spec = typeof call === "string" ? { name: call, args: {} } : call;
+    const event = { toolCallId: `t${index}`, toolName: spec.name, args: spec.args ?? {} };
+    pi.fire("tool_execution_start", event);
+    pi.fire("tool_execution_end", { ...event, isError: false });
+  });
   pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
   return { kinds: kindsOf(pi.sent), sent: pi.sent };
 }
 
-describe("trace-reminder: principal delegate reminder (意图三, #211)", () => {
-  // A read-only principal turn that DID record a trace must not be nudged at all:
-  // trace dimension is satisfied and read-only work is exempt from delegate.
-  it.each(["read", "grep", "glob", "ls", "find"])(
-    "read-only tool %s + record_trace → no reminder (exempt)",
-    (tool) => {
-      expect(runOnce("principal", [tool, "record_trace"]).kinds).toEqual([]);
-    },
+describe("trace-reminder: event-driven trace gating", () => {
+  it.each(["read", "grep", "glob", "ls", "find", "skill_search"])(
+    "read-only/lookup tool %s does not arm a trace reminder",
+    (tool) => expect(runOnce("principal", [tool]).kinds).toEqual([]),
   );
 
-  it("substantive tool (bash) + record_trace → delegate reminder", () => {
-    expect(runOnce("principal", ["bash", "record_trace"]).kinds).toEqual(["delegate"]);
+  it("substantive PI work needs trace and delegation in one reminder", () => {
+    expect(runOnce("principal", ["bash"]).kinds).toEqual(["merged"]);
   });
 
-  it("write/edit are substantive → delegate reminder", () => {
+  it("recorded substantive PI work only needs delegation", () => {
     expect(runOnce("principal", ["write", "record_trace"]).kinds).toEqual(["delegate"]);
-    expect(runOnce("principal", ["edit", "record_trace"]).kinds).toEqual(["delegate"]);
   });
 
-  it("external/domain (unknown) tool is substantive → delegate reminder", () => {
-    expect(runOnce("principal", ["mcp__foo__do_thing", "record_trace"]).kinds).toEqual(["delegate"]);
+  it("creating an agent is not itself a delegation", () => {
+    expect(runOnce("principal", ["bash", "create_agent"]).kinds).toEqual(["merged"]);
   });
 
-  it("management tools (create_agent) are exempt → no delegate reminder", () => {
-    expect(runOnce("principal", ["create_agent", "record_trace"]).kinds).toEqual([]);
+  it("sending a task counts as delegation", () => {
+    expect(runOnce("principal", [
+      "bash",
+      { name: "dispatch_task", args: { to: "engineer" } },
+    ]).kinds).toEqual(["trace"]);
   });
 
-  it("tool-name case does not matter (Read == read)", () => {
-    expect(runOnce("principal", ["Read", "record_trace"]).kinds).toEqual([]);
-    expect(runOnce("principal", ["READ", "record_trace"]).kinds).toEqual([]);
-  });
-
-  it("a principal that delegated (create_agent) is never told to delegate, even after substantive work", () => {
-    // create_agent sets `delegated` → delegate branch is suppressed; only the
-    // trace lapse (no record_trace here) remains.
-    expect(runOnce("principal", ["bash", "create_agent"]).kinds).toEqual(["trace"]);
+  it("tool-name case does not matter", () => {
+    expect(runOnce("principal", ["READ"]).kinds).toEqual([]);
+    expect(runOnce("principal", ["WRITE", "record_trace"]).kinds).toEqual(["delegate"]);
   });
 });
 
-describe("trace-reminder: trace + reply (意图一/二) still work", () => {
-  it("principal with no record_trace → trace reminder", () => {
-    expect(runOnce("principal", ["read"]).kinds).toEqual(["trace"]);
+describe("trace-reminder: flat task activity", () => {
+  const pendingEngineerTask = {
+    name: "engineer",
+    hasPendingTasks: () => true,
+  };
+
+  it("read-only expert work asks for a reply but not a trace", () => {
+    expect(runOnce("expert", ["read"], pendingEngineerTask).kinds).toEqual(["reply"]);
   });
 
-  it("expert that neither traced nor replied → single merged reminder", () => {
-    expect(runOnce("expert", ["read"]).kinds).toEqual(["merged"]);
+  it("dispatching a peer task counts as progress", () => {
+    expect(runOnce("expert", [
+      { name: "dispatch_task", args: { to: "writer" } },
+    ], pendingEngineerTask).kinds).toEqual(["trace"]);
   });
 
-  it("expert that traced but did not reply → reply reminder", () => {
-    expect(runOnce("expert", ["read", "record_trace"]).kinds).toEqual(["reply"]);
+  it("substantive work before a peer request still requires trace, not reply", () => {
+    expect(runOnce("expert", [
+      "write",
+      { name: "dispatch_task", args: { to: "writer" } },
+    ], pendingEngineerTask).kinds).toEqual(["trace"]);
   });
 
-  it("expert that replied but did not trace → trace reminder", () => {
-    expect(runOnce("expert", ["read", "send_message"]).kinds).toEqual(["trace"]);
+  it("completing one task still reminds when another assignment remains pending", () => {
+    expect(runOnce("expert", [
+      { name: "complete_task", args: { task_id: "task_000001" } },
+    ], pendingEngineerTask).kinds).toEqual(["merged"]);
   });
 
-  it("expert that both traced and replied → no reminder", () => {
-    expect(runOnce("expert", ["record_trace", "send_message"]).kinds).toEqual([]);
+  it("completing the final task only needs trace", () => {
+    expect(runOnce("expert", [
+      { name: "complete_task", args: { task_id: "task_000001" } },
+    ], { ...pendingEngineerTask, hasPendingTasks: () => false }).kinds).toEqual(["trace"]);
+  });
+
+  it("a traced completion needs no reminder", () => {
+    expect(runOnce("expert", [
+      "record_trace",
+      { name: "complete_task", args: { task_id: "task_000001" } },
+    ], { ...pendingEngineerTask, hasPendingTasks: () => false }).kinds).toEqual([]);
   });
 
   it("trace agent is never nudged", () => {
-    expect(runOnce("trace", ["read"]).kinds).toEqual([]);
+    expect(runOnce("trace", ["write"]).kinds).toEqual([]);
   });
 });
 
-describe("trace-reminder: error short-circuit (#97)", () => {
-  it("a run that ended in error emits no reminder", () => {
+describe("trace-reminder: one follow-up maximum", () => {
+  it("awaits the durable reminder claim before sending the follow-up", async () => {
+    const pi = fakePi();
+    let release!: (claimed: boolean) => void;
+    const claimed = new Promise<boolean>((resolve) => { release = resolve; });
+    makeTraceReminderExt({
+      role: "expert",
+      name: "engineer",
+      hasPendingTasks: () => true,
+      claimTaskReminder: () => claimed,
+      onUnreplied: () => {},
+    })(pi as never);
+    pi.fire("agent_start");
+    const ending = pi.fireAsync("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(pi.sent).toEqual([]);
+    release(true);
+    await ending;
+    expect(kindsOf(pi.sent)).toEqual(["reply"]);
+  });
+
+  it("keeps state across the follow-up and does not inject a second reminder", () => {
+    const fallback = vi.fn();
+    const pi = fakePi();
+    makeTraceReminderExt({
+      role: "expert",
+      name: "engineer",
+      onUnreplied: fallback,
+      hasPendingTasks: () => true,
+    })(pi as never);
+
+    pi.fire("agent_start");
+    pi.fire("tool_execution_start", { toolCallId: "w", toolName: "write", args: {} });
+    pi.fire("tool_execution_end", { toolCallId: "w", toolName: "write", isError: false });
+    pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(kindsOf(pi.sent)).toEqual(["merged"]);
+
+    // The internally-triggered follow-up still fails to reply. It falls back to
+    // the task creator without injecting a second model message.
+    pi.fire("agent_start");
+    pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(kindsOf(pi.sent)).toEqual(["merged"]);
+    expect(fallback).toHaveBeenCalledOnce();
+  });
+
+  it("a reply during the follow-up satisfies the chain without another reminder", () => {
+    const fallback = vi.fn();
+    const pi = fakePi();
+    let hasPending = true;
+    makeTraceReminderExt({
+      role: "expert",
+      name: "engineer",
+      onUnreplied: fallback,
+      hasPendingTasks: () => hasPending,
+    })(pi as never);
+
+    pi.fire("agent_start");
+    pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(kindsOf(pi.sent)).toEqual(["reply"]);
+
+    pi.fire("agent_start");
+    pi.fire("tool_execution_start", {
+      toolCallId: "s",
+      toolName: "complete_task",
+      args: { task_id: "task_000001" },
+    });
+    hasPending = false;
+    pi.fire("tool_execution_end", { toolCallId: "s", toolName: "complete_task", isError: false });
+    pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(kindsOf(pi.sent)).toEqual(["reply"]);
+    expect(fallback).not.toHaveBeenCalled();
+  });
+});
+
+describe("trace-reminder: failures and message envelope", () => {
+  it("a failed tool does not arm trace", () => {
+    const pi = fakePi();
+    makeTraceReminderExt({ role: "principal", name: "principal", onUnreplied: () => {} })(pi as never);
+    pi.fire("agent_start");
+    pi.fire("tool_execution_start", { toolCallId: "x", toolName: "bash", args: {} });
+    pi.fire("tool_execution_end", { toolCallId: "x", toolName: "bash", isError: true });
+    pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
+    expect(pi.sent).toEqual([]);
+  });
+
+  it("an errored run emits no reminder", () => {
     const pi = fakePi();
     makeTraceReminderExt({ role: "expert", name: "expert", onUnreplied: () => {} })(pi as never);
     pi.fire("agent_start");
-    pi.fire("tool_execution_end", { toolName: "read", isError: false });
     pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "error" }] });
-    expect(kindsOf(pi.sent)).toEqual([]);
+    expect(pi.sent).toEqual([]);
   });
-});
 
-describe("trace-reminder: every injected message is wrapped (问题④)", () => {
-  it("followUp content is wrapped in a strip-able [SYSTEM-MESSAGE:kind] … [/SYSTEM-MESSAGE] marker", () => {
-    const { sent } = runOnce("expert", ["read"]); // merged reminder
+  it("every reminder is wrapped in a strip-able system-message marker", () => {
+    const { sent } = runOnce("expert", ["read"], { hasPendingTasks: () => true });
     expect(sent).toHaveLength(1);
-    expect(sent[0].deliverAs).toBe("followUp");
-    expect(sent[0].content).toMatch(/^\[SYSTEM-MESSAGE:merged\] [\s\S]+ \[\/SYSTEM-MESSAGE\]$/);
+    expect(sent[0]!.deliverAs).toBe("followUp");
+    expect(sent[0]!.content).toMatch(
+      /^\[SYSTEM-MESSAGE:reply\] [\s\S]+ \[\/SYSTEM-MESSAGE\]$/,
+    );
   });
 });

@@ -32,7 +32,7 @@ const DEFAULT_CONTEXT_WINDOW = 200_000;
 // #293: 8_192 is far below what modern models (Claude Sonnet 5, GPT-5, Gemini 2.5)
 // support and — critically — below what a single tool call can require. Anthropic/
 // OpenAI stream tool_use arguments as JSON in order, so a `write` / `edit` /
-// `send_message` whose `content` runs long gets its stream cut off mid-string when
+// `dispatch_task` whose `content` runs long gets its stream cut off mid-string when
 // `max_tokens` is hit; Pi's streaming JSON repair recovers earlier fields (`path`)
 // but the truncated `content` is lost, and the agent then retries indefinitely
 // against the same ceiling. 32_768 matches the modal maxTokens in Pi's built-in

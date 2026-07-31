@@ -97,7 +97,7 @@ describe("resolveGatewayModel", () => {
     const m = cfg.providers[GATEWAY_PROVIDER].models[0];
     expect(m.contextWindow).toBe(200_000);
     // #293: default raised to 32_768 so long tool-call arguments (write/edit/
-    // send_message content) don't get truncated mid-stream.
+    // dispatch_task content) don't get truncated mid-stream.
     expect(m.maxTokens).toBe(32_768);
   });
 

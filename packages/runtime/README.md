@@ -3,7 +3,7 @@
 The orchestration runtime for **BrainPilot** — the open-source, single-user
 multi-agent platform built on TypeScript + the [Pi SDK](https://pi.dev). This
 package owns the agent lifecycle and is the **state authority**: a Principal
-agent coordinating specialist agents over a file-based mailbox, exposed as a
+agent coordinating specialist agents through a durable flat task ledger, exposed as a
 Hono + SSE server.
 
 It is consumed by `@brainpilot/backend-core` (which proxies to it as a stateless
