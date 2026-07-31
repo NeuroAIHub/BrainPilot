@@ -355,6 +355,17 @@ export class TaskLedger {
     });
   }
 
+  /** Atomically acknowledge a delivered batch only while its target is active. */
+  async acknowledgeIfActive(agent: string, ids: readonly string[]): Promise<boolean> {
+    if (ids.length === 0) return true;
+    const idSet = new Set(ids);
+    return this.mutate(() => {
+      if (this.isPaused(agent)) return false;
+      this.notifications = this.notifications.filter((notification) => !idSet.has(notification.id));
+      return true;
+    });
+  }
+
   count(agent: string): number {
     return this.notifications.reduce((total, notification) => total + Number(notification.to_agent === agent), 0);
   }

@@ -2317,9 +2317,15 @@ export class SessionManager {
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
       // #167: cap concurrent provider calls across experts in this session.
-      await this.withProviderSlot(sessionId, () =>
-        agent.prompt(this.renderTaskEvents(notifications)),
-      );
+      const ran = await this.withProviderSlot(sessionId, async () => {
+        // Stop may have paused delivery while this run waited for a provider
+        // semaphore slot. Do not start a new model call after Stop completed.
+        const current = this.sessions.get(sessionId);
+        if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+        await agent.prompt(this.renderTaskEvents(notifications));
+        return true;
+      });
+      if (!ran || entry.taskLedger.isPaused(name)) return;
 
       // Status returns to idle after an explicit abort, so it cannot identify
       // a cleanly consumed batch. Keep aborted input durable for replay after
@@ -2352,7 +2358,13 @@ export class SessionManager {
         ));
         return;
       }
-      await entry.taskLedger.acknowledge(notifications.map((item) => item.id));
+      // Linearize acknowledgement with pauseDelivery(): if Stop won the ledger
+      // write race, retain the batch for the next explicit user turn.
+      const acknowledged = await entry.taskLedger.acknowledgeIfActive(
+        name,
+        notifications.map((item) => item.id),
+      );
+      if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
     }
   }

@@ -97,6 +97,20 @@ describe("TaskLedger", () => {
     expect(restored.isPaused("engineer")).toBe(false);
   });
 
+  it("does not acknowledge a batch after delivery is paused", async () => {
+    const ledger = new TaskLedger("s");
+    await ledger.dispatch("principal", "engineer", "work");
+    const ids = ledger.peekBatch("engineer").map((event) => event.id);
+    await ledger.pauseDelivery();
+
+    expect(await ledger.acknowledgeIfActive("engineer", ids)).toBe(false);
+    expect(ledger.peekBatch("engineer")).toHaveLength(1);
+
+    await ledger.resumeDelivery();
+    expect(await ledger.acknowledgeIfActive("engineer", ids)).toBe(true);
+    expect(ledger.peekBatch("engineer")).toEqual([]);
+  });
+
   it("treats a missing ledger as empty but rejects corruption without overwriting it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "task-ledger-corrupt-"));
     dirs.push(dir);

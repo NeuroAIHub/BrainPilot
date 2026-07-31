@@ -81,6 +81,49 @@ function trackingFactory(peak: { current: number; max: number }, gate: { release
   return factory;
 }
 
+function stopWhileQueuedFactory(
+  prompts: string[],
+  state: { dispatched: boolean },
+): AgentSessionFactory {
+  let releasePrincipal!: () => void;
+  const principalGate = new Promise<void>((resolve) => { releasePrincipal = resolve; });
+  return async ({ sessionId, agentName, systemTools }) => {
+    const listeners = new Set<(e: PiAgentEvent) => void>();
+    const emit = (event: PiAgentEvent) => {
+      for (const listener of listeners) listener(event);
+    };
+    return {
+      sessionId,
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async prompt(text: string) {
+        prompts.push(agentName);
+        emit({ type: "agent_start" });
+        emit({ type: "turn_start" });
+        emit({ type: "message_start", message: { role: "assistant", content: [] } });
+        if (agentName === "principal" && text.includes("QUEUE")) {
+          const dispatch = systemTools.find((tool) => tool.name === "dispatch_task");
+          await dispatch!.execute({ to: "engineer", content: "queued work" });
+          state.dispatched = true;
+          await principalGate;
+        }
+        emit({
+          type: "message_end",
+          message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
+        });
+        emit({ type: "turn_end" });
+        emit({ type: "agent_end", messages: [], willRetry: false });
+      },
+      async abort() {
+        if (agentName === "principal") releasePrincipal();
+      },
+      dispose() {},
+    };
+  };
+}
+
 async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
   const start = Date.now();
   while (!pred()) {
@@ -90,6 +133,29 @@ async function waitFor(pred: () => boolean, timeoutMs = 3000): Promise<void> {
 }
 
 describe("#167 per-session provider concurrency cap", () => {
+  it("does not start queued delivery after whole-session Stop", async () => {
+    const prompts: string[] = [];
+    const state = { dispatched: false };
+    const m = new SessionManager({
+      persist: false,
+      agentFactory: stopWhileQueuedFactory(prompts, state),
+      maxConcurrentAgents: 1,
+    });
+    const s = await m.createSession();
+
+    await m.sendMessage(s.id, "QUEUE one expert behind the principal");
+    await waitFor(() => state.dispatched && m.taskNotificationCount(s.id, "engineer") === 1);
+    await m.interrupt(s.id);
+    await new Promise((resolve) => setTimeout(resolve, 30));
+
+    expect(prompts.filter((name) => name === "engineer")).toHaveLength(0);
+    expect(m.taskNotificationCount(s.id, "engineer")).toBe(1);
+
+    await m.sendMessage(s.id, "resume");
+    await waitFor(() => prompts.includes("engineer"));
+    await waitFor(() => m.taskNotificationCount(s.id, "engineer") === 0);
+  });
+
   it("never runs more than maxConcurrentAgents prompts at once", async () => {
     const peak = { current: 0, max: 0 };
     const gate: { release?: () => void } = {};
