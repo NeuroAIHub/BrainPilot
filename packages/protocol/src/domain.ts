@@ -350,7 +350,6 @@ export type TraceRestorePreview = z.infer<typeof TraceRestorePreviewSchema>;
 
 export const TraceRestoreResultSchema = z.object({
   restoredCheckpointId: z.string(),
-  recoveryCheckpointId: z.string(),
   auditNodeId: z.string().optional(),
   changeId: z.string().optional(),
 });
@@ -377,7 +376,6 @@ export type TraceCausalRollbackPreview = z.infer<typeof TraceCausalRollbackPrevi
 export const TraceCausalRollbackResultSchema = z.object({
   nodeId: z.string(),
   affectedNodeIds: z.array(z.string()),
-  recoveryCheckpointId: z.string(),
   auditNodeId: z.string().optional(),
   changeId: z.string().optional(),
 });

@@ -556,33 +556,16 @@ export class GraphOfTrace {
     return { affectedNodeIds: affected, checkpointIds };
   }
 
-  markNodesRolledBack(nodeIds: string[], targetNodeId: string): Record<string, boolean> {
-    const previous: Record<string, boolean> = {};
+  markNodesRolledBack(nodeIds: string[], targetNodeId: string): void {
     for (const id of nodeIds) {
       const node = this.nodes.get(id);
       if (!node || this.isSessionRoot(id)) continue;
-      previous[id] = node.revoked;
       node.revoked = true;
       this.normalizeCausalGraph();
       node.updatedAt = now();
       this.commit("updated", id, {
         actor: { type: "user" }, action: "node_revoked", target: { nodeId: id },
         before: false, after: true, reason: `Causal rollback to ${targetNodeId}`,
-      });
-    }
-    return previous;
-  }
-
-  restoreNodeStatuses(statuses: Record<string, boolean>): void {
-    for (const [id, revoked] of Object.entries(statuses)) {
-      const node = this.nodes.get(id);
-      if (!node || this.isSessionRoot(id)) continue;
-      node.revoked = revoked;
-      this.normalizeCausalGraph();
-      node.updatedAt = now();
-      this.commit("updated", id, {
-        actor: { type: "user" }, action: "node_revocation_undone", target: { nodeId: id },
-        before: !revoked, after: revoked,
       });
     }
   }

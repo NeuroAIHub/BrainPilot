@@ -38,7 +38,7 @@ interface CheckpointRecord {
   ref: TraceCheckpointRef;
   skipped: Skipped[];
   treeId?: string;
-  kind: "trace" | "recovery";
+  kind: "trace" | "recovery" | "baseline";
 }
 interface CheckpointIndex {
   version: 2;
@@ -227,7 +227,7 @@ export class WorkspaceCheckpointStore {
             ref: record.ref,
             skipped: record.skipped ?? [],
             ...(record.treeId ? { treeId: record.treeId } : {}),
-            kind: record.kind === "recovery" ? "recovery" : "trace",
+            kind: record.kind === "recovery" || record.kind === "baseline" ? record.kind : "trace",
           };
         }
         this.loaded = { version: 2, headCheckpointId: parsed.headCheckpointId, checkpoints };
@@ -449,7 +449,7 @@ export class WorkspaceCheckpointStore {
     });
   }
 
-  private async captureUnlocked(sourceAgent: string | undefined, kind: "trace" | "recovery"): Promise<TraceCheckpointRef> {
+  private async captureUnlocked(sourceAgent: string | undefined, kind: "trace" | "recovery" | "baseline"): Promise<TraceCheckpointRef> {
     const id = `checkpoint_${randomUUID()}`;
     const capturedAt = new Date().toISOString();
     const index = await this.index();
@@ -637,7 +637,7 @@ export class WorkspaceCheckpointStore {
   restoreCausal(
     checkpointIds: string[],
     expectedStateToken: string,
-  ): Promise<{ recoveryCheckpointId: string }> {
+  ): Promise<void> {
     return this.exclusive(async () => {
       const plan = await this.synthesizeCausalTree(checkpointIds);
       if (plan.stateToken !== expectedStateToken) {
@@ -657,12 +657,13 @@ export class WorkspaceCheckpointStore {
       if (!recovery?.ref.commitId) throw new Error("failed to create recovery checkpoint");
       try {
         await this.applyTree(plan.target, plan.current);
+        const baseline = await this.captureUnlocked("system", "baseline");
+        if (!baseline.commitId) throw new Error(baseline.error ?? "failed to create post-restore baseline");
       } catch (error) {
         const failedState = await this.buildTree().catch(() => plan.current);
         await this.applyRecord(recovery, failedState).catch(() => undefined);
         throw error;
       }
-      return { recoveryCheckpointId: recoveryRef.id };
     });
   }
 
@@ -726,7 +727,7 @@ export class WorkspaceCheckpointStore {
     await this.applyTree({ treeId: record.treeId, files: await this.treeFiles(record.treeId), skipped: record.skipped }, current);
   }
 
-  restore(id: string, expectedStateToken: string): Promise<{ restoredCheckpointId: string; recoveryCheckpointId: string }> {
+  restore(id: string, expectedStateToken: string): Promise<{ restoredCheckpointId: string }> {
     return this.exclusive(async () => {
       const index = await this.index();
       const target = index.checkpoints[id];
@@ -742,12 +743,14 @@ export class WorkspaceCheckpointStore {
       if (!recovery?.ref.commitId) throw new Error("failed to create recovery checkpoint");
       try {
         await this.applyRecord(target, current);
+        const baseline = await this.captureUnlocked("system", "baseline");
+        if (!baseline.commitId) throw new Error(baseline.error ?? "failed to create post-restore baseline");
       } catch (error) {
         const failedState = await this.buildTree().catch(() => current);
         await this.applyRecord(recovery, failedState).catch(() => undefined);
         throw error;
       }
-      return { restoredCheckpointId: id, recoveryCheckpointId: recoveryRef.id };
+      return { restoredCheckpointId: id };
     });
   }
 }

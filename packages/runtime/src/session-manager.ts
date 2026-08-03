@@ -2666,14 +2666,13 @@ export class SessionManager {
     return false;
   }
 
-  /** Restore gate includes Trace, queued work, and active tool execution. */
+  /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
   private hasAnyAgentActivity(entry: SessionEntry): boolean {
     if (entry.runActive || entry.userInputs.active || entry.userInputs.queue.length > 0) return true;
     for (const agent of entry.agents.values()) {
       if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
     }
-    if ([...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`))) return true;
-    return entry.taskLedger.notificationTargets().some((agent) => !entry.taskLedger.isPaused(agent));
+    return [...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`));
   }
 
   private beginWorkspaceOperation(entry: SessionEntry, action: "restore" | "roll back"): void {
@@ -2685,7 +2684,7 @@ export class SessionManager {
     entry.workspaceOperationActive = true;
     if (this.hasAnyAgentActivity(entry)) {
       entry.workspaceOperationActive = false;
-      const error = new Error(`cannot ${action} while an agent or queued task is active`);
+      const error = new Error(`cannot ${action} while an agent is active`);
       (error as Error & { code?: string }).code = "SESSION_ACTIVE";
       throw error;
     }
@@ -2805,16 +2804,18 @@ export class SessionManager {
       const plan = entry.trace.getCausalRollbackPlan(nodeId);
       if (!plan) return undefined;
       const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
-      const restored = await entry.checkpoints.restoreCausal(checkpointIds, stateToken);
-      const previousStatuses = entry.trace.markNodesRolledBack(plan.affectedNodeIds, nodeId);
+      await entry.checkpoints.restoreCausal(checkpointIds, stateToken);
+      await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
+      this.emitTaskSnapshot(entry);
+      entry.trace.markNodesRolledBack(plan.affectedNodeIds, nodeId);
       const change = entry.trace.recordChange({
         actor: { type: "user" },
         action: "causal_rollback",
         target: { nodeId },
         reason: `Revoked ${plan.affectedNodeIds.length} causal descendants.`,
-        metadata: { affectedNodeIds: plan.affectedNodeIds, previousRevoked: previousStatuses, recoveryCheckpointId: restored.recoveryCheckpointId },
+        metadata: { affectedNodeIds: plan.affectedNodeIds },
       });
-      return { nodeId, affectedNodeIds: plan.affectedNodeIds, recoveryCheckpointId: restored.recoveryCheckpointId, changeId: change.id };
+      return { nodeId, affectedNodeIds: plan.affectedNodeIds, changeId: change.id };
     } finally {
       this.endWorkspaceOperation(entry);
     }
@@ -2826,21 +2827,17 @@ export class SessionManager {
     this.beginWorkspaceOperation(entry, "restore");
     try {
       const restored = await entry.checkpoints.restore(checkpointId, stateToken);
+      await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
+      this.emitTaskSnapshot(entry);
       const [checkpoint] = await entry.checkpoints.refs([checkpointId]);
       if (!checkpoint) throw new Error("restored checkpoint disappeared");
       const targetNode = entry.trace.getGraph().nodes.find((node) => node.checkpoints?.some((item) => item.id === checkpointId));
-      const rollbackChange = [...entry.trace.getChanges(2_000)].reverse().find((change) =>
-        change.action === "causal_rollback" && change.metadata?.recoveryCheckpointId === checkpointId);
-      const causalStatuses = rollbackChange?.metadata?.previousRevoked && typeof rollbackChange.metadata.previousRevoked === "object"
-        ? rollbackChange.metadata.previousRevoked as Record<string, boolean>
-        : undefined;
-      if (causalStatuses) entry.trace.restoreNodeStatuses(causalStatuses);
       const change = entry.trace.recordChange({
         actor: { type: "user" },
-        action: causalStatuses ? "causal_rollback_undo" : "workspace_restore",
+        action: "workspace_restore",
         target: targetNode ? { nodeId: targetNode.id } : {},
         reason: `Restored workspace checkpoint ${checkpointId}.`,
-        metadata: { restoredCheckpointId: checkpointId, recoveryCheckpointId: restored.recoveryCheckpointId, ...(rollbackChange ? { rollbackChangeId: rollbackChange.id } : {}) },
+        metadata: { restoredCheckpointId: checkpointId },
       });
       return { ...restored, changeId: change.id };
     } finally {

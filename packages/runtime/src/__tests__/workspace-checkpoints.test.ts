@@ -46,8 +46,8 @@ describe("WorkspaceCheckpointStore", () => {
     expect(detail?.skipped.some((item) => item.path === "ignored.txt" && item.reason === "ignored")).toBe(true);
   });
 
-  it("restores managed files and can restore the generated recovery checkpoint", async () => {
-    const { workspace, store } = await fixture();
+  it("restores managed files and makes the restored tree the next checkpoint baseline", async () => {
+    const { workspace, state, store } = await fixture();
     await writeFile(join(workspace, ".gitignore"), "keep.local\n", "utf8");
     await writeFile(join(workspace, "tracked.txt"), "old\n", "utf8");
     await writeFile(join(workspace, "keep.local"), "untouched\n", "utf8");
@@ -60,15 +60,19 @@ describe("WorkspaceCheckpointStore", () => {
 
     const preview = await store.preview(old.id);
     expect(preview?.files.some((item) => item.path === "later.txt" && item.status === "deleted")).toBe(true);
-    const restored = await store.restore(old.id, preview!.stateToken);
+    await store.restore(old.id, preview!.stateToken);
     expect(await readFile(join(workspace, "tracked.txt"), "utf8")).toBe("old\n");
     await expect(readFile(join(workspace, "later.txt"), "utf8")).rejects.toThrow();
     expect(await readFile(join(workspace, "keep.local"), "utf8")).toBe("untouched\n");
 
-    const undoPreview = await store.preview(restored.recoveryCheckpointId);
-    await store.restore(restored.recoveryCheckpointId, undoPreview!.stateToken);
-    expect(await readFile(join(workspace, "tracked.txt"), "utf8")).toBe("new\n");
-    expect(await readFile(join(workspace, "later.txt"), "utf8")).toBe("later\n");
+    await writeFile(join(workspace, "after-restore.txt"), "after\n", "utf8");
+    const next = await store.capture("writer");
+    expect(next.stats).toMatchObject({ files: 1, added: 1, modified: 0, deleted: 0 });
+    const index = JSON.parse(await readFile(join(state, "workspace-checkpoints.json"), "utf8")) as {
+      checkpoints: Record<string, { kind: string }>;
+    };
+    expect(next.baseCheckpointId).toBeTruthy();
+    expect(index.checkpoints[next.baseCheckpointId!]?.kind).toBe("baseline");
   });
 
   it("rejects a restore when the workspace changed after preview", async () => {
@@ -174,11 +178,13 @@ describe("WorkspaceCheckpointStore", () => {
       expect.objectContaining({ path: "b.txt", status: "deleted" }),
       expect.objectContaining({ path: "shared.txt", status: "modified" }),
     ]));
-    const result = await store.restoreCausal([a2.id, b.id], preview.stateToken);
-    expect(result.recoveryCheckpointId).toBeTruthy();
+    await store.restoreCausal([a2.id, b.id], preview.stateToken);
     expect(await readFile(join(workspace, "shared.txt"), "utf8")).toBe("A\n");
     await expect(readFile(join(workspace, "a2.txt"), "utf8")).rejects.toThrow();
     await expect(readFile(join(workspace, "b.txt"), "utf8")).rejects.toThrow();
+    await writeFile(join(workspace, "after.txt"), "after\n", "utf8");
+    const next = await store.capture("writer");
+    expect(next.stats).toMatchObject({ files: 1, added: 1, modified: 0, deleted: 0 });
   });
 
   it("reports a conflict instead of overwriting a later independent edit", async () => {
