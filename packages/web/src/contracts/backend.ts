@@ -847,8 +847,14 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
 
 export function normalizeTraceNode(rawValue: unknown): TraceNode {
   const raw = asDict(rawValue);
-  const parents = Array.isArray(raw.parents)
-    ? raw.parents.map((parent) => {
+  // Materialized GET responses expose confirmed parents through `parents` for
+  // V1 consumers and the complete V2 review state through `causalParents`.
+  // Prefer the canonical collection when present so refresh does not discard
+  // candidate, uncertain, or rejected edges that live deltas can still show.
+  const canonicalParents = raw.causalParents ?? raw.causal_parents;
+  const parentValues = Array.isArray(canonicalParents) ? canonicalParents : raw.parents;
+  const parents = Array.isArray(parentValues)
+    ? parentValues.map((parent) => {
         const item = asDict(parent);
         const canonicalId = stringValue(item.nodeId ?? item.node_id);
         const conclusion = optionalString(item.conclusion);
@@ -858,7 +864,7 @@ export function normalizeTraceNode(rawValue: unknown): TraceNode {
           explanation: optionalString(item.explanation ?? item.reason),
           edgeType: optionalString(item.edgeType ?? item.edge_type) ?? conclusion,
         };
-      }).filter((parent) => parent.id && parent.edgeType !== "rejected")
+      }).filter((parent) => parent.id)
     : [];
   const artifacts = Array.isArray(raw.artifacts)
     ? raw.artifacts.map((artifact) => {

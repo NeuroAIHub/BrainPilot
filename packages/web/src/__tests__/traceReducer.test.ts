@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { reduceTraceForEvent } from "../contexts/traceReducer";
-import type { TraceGraph, WebSocketEvent } from "../contracts/backend";
+import { normalizeTraceGraph, type TraceGraph, type WebSocketEvent } from "../contracts/backend";
 
 // #79: trace nodes arrive live as CUSTOM { name:"trace_node", value:{ op, node } }.
 
@@ -20,6 +20,47 @@ const traceEv = (op: string, n: Record<string, unknown>): WebSocketEvent =>
   ({ type: "CUSTOM", name: "trace_node", value: { op, node: n } } as unknown as WebSocketEvent);
 
 describe("reduceTraceForEvent (#79)", () => {
+  it("preserves every canonical parent state from a materialized GET graph", () => {
+    const graph = normalizeTraceGraph({
+      schemaVersion: "2.0",
+      revision: 3,
+      meta: { sessionId: "s" },
+      nodes: [
+        { id: "a", title: "A", type: "task", status: "completed", parents: [], causalParents: [], toolCalls: [] },
+        { id: "b", title: "B", type: "task", status: "completed", parents: [], causalParents: [], toolCalls: [] },
+        { id: "c", title: "C", type: "task", status: "completed", parents: [], causalParents: [], toolCalls: [] },
+        { id: "d", title: "D", type: "task", status: "completed", parents: [], causalParents: [], toolCalls: [] },
+        {
+          id: "target",
+          title: "Target",
+          type: "task",
+          status: "pending",
+          // This is the confirmed-only V1 compatibility projection returned
+          // by SessionManager.getTrace().
+          parents: [{ id: "a", relation: "depends_on", edgeType: "confirmed" }],
+          causalParents: [
+            { nodeId: "a", conclusion: "confirmed", reason: "accepted" },
+            { nodeId: "b", conclusion: "candidate", reason: "awaiting review" },
+            { nodeId: "c", conclusion: "uncertain", reason: "weak evidence" },
+            { nodeId: "d", conclusion: "rejected", reason: "contradicted" },
+          ],
+          toolCalls: [],
+        },
+      ],
+      dependencies: [],
+      episodes: [],
+      artifacts: [],
+    });
+
+    const target = graph.nodes.find((item) => item.id === "target")!;
+    expect(target.parents).toEqual([
+      expect.objectContaining({ id: "a", edgeType: "confirmed", explanation: "accepted" }),
+      expect.objectContaining({ id: "b", edgeType: "candidate", explanation: "awaiting review" }),
+      expect.objectContaining({ id: "c", edgeType: "uncertain", explanation: "weak evidence" }),
+      expect.objectContaining({ id: "d", edgeType: "rejected", explanation: "contradicted" }),
+    ]);
+  });
+
   it("accepts runtime-shaped canonical parents in a V2 trace_delta", () => {
     const delta = {
       type: "CUSTOM",
