@@ -115,6 +115,11 @@ describe("tool access control (§9)", () => {
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
+        "spawn_subagent",
+        "wait_subagent",
+        "get_subagent",
+        "cancel_subagent",
+        "list_subagent_profiles",
       ].sort(),
     );
     expect(names).not.toContain("create_agent");
@@ -184,6 +189,11 @@ describe("tool access control (§9)", () => {
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
+        "spawn_subagent",
+        "wait_subagent",
+        "get_subagent",
+        "cancel_subagent",
+        "list_subagent_profiles",
       ].sort(),
     );
     // Audit evidence is restricted to the workspace — no graph reads, no

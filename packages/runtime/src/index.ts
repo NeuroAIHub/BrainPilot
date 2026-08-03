@@ -15,6 +15,11 @@ export type { AgentStatus, MasAgentOpts } from "./mas-agent.js";
 export { TaskLedger, TaskLedgerCorruptError, TaskQueueFullError } from "./task-ledger.js";
 export type { TaskRecord, TaskStatus, TaskNotification, TaskNotificationKind } from "./task-ledger.js";
 
+export { SubagentManager } from "./subagent-manager.js";
+export type { SubagentInput, SubagentTask, SubagentResult, SubmittedSubagentResult } from "./subagent-manager.js";
+export { builtinSubagentProfiles, builtinSubagentTemplateFiles, loadSubagentProfile, allowedSubagentProfiles, SUBAGENT_FORBIDDEN_TOOL_NAMES } from "./subagent-profiles.js";
+export type { SubagentProfile } from "./subagent-profiles.js";
+
 export { GraphOfTrace } from "./trace.js";
 export { EventBus } from "./event-bus.js";
 export { ev, newMessageId, newRunId } from "./events.js";

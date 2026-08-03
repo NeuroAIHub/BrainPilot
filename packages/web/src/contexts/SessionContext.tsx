@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, ChatMessage, DomainResources, MessageFilterConfig, MessageFilterRule, Session, SessionTokenUsage, TraceGraph, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, SubagentStatus, ChatMessage, DomainResources, MessageFilterConfig, MessageFilterRule, Session, SessionTokenUsage, TraceGraph, normalizeSessionState, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
@@ -47,6 +47,7 @@ interface SessionContextValue {
   error: string | null;
   currentView: "chat" | "agents" | "trace";
   agents: AgentStatus[];
+  subagents: SubagentStatus[];
   /**
    * #99: authoritative whole-turn run-active signal from session_state.runState
    * (trace agent excluded, delivery loops included), with the backend timestamp
@@ -87,6 +88,7 @@ interface SessionContextValue {
    *  error — the composer uses this to restore the draft so input isn't lost. */
   sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources }) => Promise<boolean>;
   interruptCurrent: () => Promise<void>;
+  interruptSubagent: (childId: string) => Promise<boolean>;
   interruptTool: (toolCallId: string) => Promise<void>;
   isInterrupting: boolean;
   interruptingToolIds: ReadonlySet<string>;
@@ -379,6 +381,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // so keystrokes don't re-render the whole chat subtree. Drafts are keyed by
   // session id and survive PromptComposer unmount (tab switches).
   const [agents, setAgents] = useState<AgentStatus[]>([]);
+  const [subagents, setSubagents] = useState<SubagentStatus[]>([]);
   // #99: authoritative whole-turn run-active flag from session_state.runState
   // (derived by the runtime: trace agent excluded, delivery loops included),
   // paired with the backend ISO timestamp of the snapshot that carried it. The
@@ -799,6 +802,19 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [currentSession],
   );
 
+  const interruptSubagent = useCallback(async (childId: string): Promise<boolean> => {
+    const sid = currentSession?.id;
+    if (!sid || !childId) return false;
+    try {
+      const { interrupted } = await api.sessions.interrupt(sid, childId);
+      if (!interrupted) setError(tg("ctx.session.interruptFailed"));
+      return interrupted;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : tg("ctx.session.interruptFailed"));
+      return false;
+    }
+  }, [currentSession]);
+
   const interruptTool = useCallback(async (toolCallId: string) => {
     const sid = currentSession?.id;
     if (!sid || interruptingToolsRef.current.has(toolCallId)) return;
@@ -954,6 +970,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     if (!currentSession?.id) {
       setAgents([]);
+      setSubagents([]);
       return;
     }
     let cancelled = false;
@@ -966,10 +983,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           ...agent,
           updatedAt: agent.updatedAt || new Date().toISOString(),
         })));
+        setSubagents(snap.subagents ?? []);
       }
     }).catch(() => {
       if (!cancelled) {
         setAgents([]);
+        setSubagents([]);
       }
     });
     return () => {
@@ -1041,6 +1060,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // wholesale on every occurrence — same payload arrives via SSE first
         // frame on reconnect and on every semantic transition thereafter.
         const value = (event.value ?? {}) as Record<string, unknown>;
+        const stateSnapshot = normalizeSessionState(value);
         const agentsRaw = Array.isArray(value.agents) ? (value.agents as Array<Record<string, unknown>>) : [];
         const nextAgents = agentsRaw.map((agent) => ({
           name: String(agent.name ?? ""),
@@ -1056,6 +1076,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
             : undefined,
         }));
         setAgents(nextAgents);
+        setSubagents(stateSnapshot.subagents ?? []);
         // #99: feed the whole-turn timer. runState.active is the authoritative
         // "the user's task is still running" flag; lastActivityTs is the backend
         // timestamp of this snapshot (fallback to now() if absent).
@@ -1097,6 +1118,24 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               kind: "status",
             };
             return { ...current, [sid]: [...msgs, recoveredMsg] };
+          });
+        }
+        continue;
+      }
+      if (event.type === "CUSTOM" && event.name === "subagent_state") {
+        const child = normalizeSessionState({
+          runState: { active: false, runId: null },
+          agents: [],
+          subagents: [event.value],
+          lastActivityTs: "",
+        }).subagents?.[0];
+        if (child) {
+          setSubagents((current) => {
+            const index = current.findIndex((item) => item.id === child.id);
+            if (index < 0) return [...current, child];
+            const next = current.slice();
+            next[index] = child;
+            return next;
           });
         }
         continue;
@@ -1315,6 +1354,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       error,
       currentView,
       agents,
+      subagents,
       runActive,
       tokenUsage,
       agentFilters,
@@ -1328,6 +1368,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       deleteSession,
       sendPrompt,
       interruptCurrent,
+      interruptSubagent,
       interruptTool,
       isInterrupting,
       interruptingToolIds,
@@ -1353,6 +1394,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       error,
       currentView,
       agents,
+      subagents,
       runActive,
       tokenUsage,
       agentFilters,
@@ -1366,6 +1408,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       deleteSession,
       sendPrompt,
       interruptCurrent,
+      interruptSubagent,
       interruptTool,
       isInterrupting,
       interruptingToolIds,

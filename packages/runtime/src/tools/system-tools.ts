@@ -7,7 +7,9 @@
  * Per-agent access control (§9, ported from legacy `agent_tool_config`) is
  * applied by `toolsForRole` — each role only receives its allowed tools.
  */
+import type { SubagentStatus } from "@brainpilot/protocol";
 import type { AgentRole, SystemTool } from "../types.js";
+import type { SubagentResult, SubagentTask } from "../subagent-manager.js";
 import { TaskQueueFullError, type TaskRecord } from "../task-ledger.js";
 import type { GraphOfTrace } from "../trace.js";
 import { createSkillSearchTool } from "./skill-search.js";
@@ -48,6 +50,13 @@ export interface ToolDeps {
    * `bp_template/skills/` dir loaded through `additionalSkillPaths`.
    */
   routerSkillsDir: string;
+  /** Present only for persistent experts that may create isolated leaf workers. */
+  spawnSubagents?: (args: { context?: string; tasks: SubagentTask[] }) => Promise<SubagentResult[]>;
+  startSubagents?: (args: { context?: string; tasks: SubagentTask[] }) => Promise<SubagentStatus[]>;
+  waitSubagents?: (childIds: string[]) => Promise<SubagentResult[]>;
+  getSubagents?: (childIds?: string[]) => SubagentStatus[];
+  cancelSubagents?: (childIds: string[]) => Promise<SubagentStatus[]>;
+  listSubagentProfiles?: () => Promise<Array<{ name: string; description: string; builtinTools: string[]; systemTools: string[]; mcp: boolean; modelId?: string; timeoutMs?: number }>>;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -209,6 +218,109 @@ export function createDestroyAgentTool(deps: ToolDeps): SystemTool {
       await deps.destroyAgent(name);
       return ok(`agent ${name} destroyed`);
     },
+  };
+}
+
+export function createSpawnSubagentTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "spawn_subagent",
+    description:
+      "Run 1-4 context-isolated leaf subagents in parallel. By default this waits for structured results; " +
+      "set wait=false to receive child ids immediately, continue other work, then use wait_subagent or get_subagent. " +
+      "Pass all required background explicitly; children do not inherit your conversation.",
+    parameters: {
+      type: "object",
+      properties: {
+        context: { type: "string", description: "Optional shared background for every child." },
+        wait: { type: "boolean", description: "Wait for all results. Defaults to true; false launches in the background." },
+        tasks: {
+          type: "array", minItems: 1, maxItems: 4,
+          items: {
+            type: "object",
+            properties: {
+              name: { type: "string" },
+              profile: { type: "string", description: "Profile name from list_subagent_profiles." },
+              task: { type: "string" },
+              inputs: {
+                type: "array",
+                items: {
+                  type: "object",
+                  properties: {
+                    scope: { type: "string", enum: ["workspace", "attachments", "data", "shared"] },
+                    path: { type: "string" },
+                    alias: { type: "string" },
+                    mode: { type: "string", enum: ["copy", "reference"] },
+                  },
+                  required: ["scope", "path"],
+                },
+              },
+            },
+            required: ["profile", "task"],
+          },
+        },
+      },
+      required: ["tasks"],
+    },
+    execute: async (params) => {
+      if (!deps.spawnSubagents) return { ...ok("subagent spawning is unavailable"), isError: true };
+      const tasks = Array.isArray(params.tasks) ? params.tasks as SubagentTask[] : [];
+      const args = { ...(typeof params.context === "string" ? { context: params.context } : {}), tasks };
+      if (params.wait === false) {
+        if (!deps.startSubagents) return { ...ok("background subagent spawning is unavailable"), isError: true };
+        return ok(JSON.stringify({ waiting: false, subagents: await deps.startSubagents(args) }, null, 2));
+      }
+      return ok(JSON.stringify({ results: await deps.spawnSubagents(args) }, null, 2));
+    },
+  };
+}
+
+function childIdsFrom(params: Record<string, unknown>): string[] {
+  return Array.isArray(params.child_ids) ? params.child_ids.map(String) : [];
+}
+
+export function createWaitSubagentTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "wait_subagent",
+    description: "Wait for previously launched subagents to reach terminal states and return their structured results in the requested order.",
+    parameters: { type: "object", properties: { child_ids: { type: "array", minItems: 1, maxItems: 32, items: { type: "string" } } }, required: ["child_ids"] },
+    execute: async (params) => deps.waitSubagents
+      ? ok(JSON.stringify({ results: await deps.waitSubagents(childIdsFrom(params)) }, null, 2))
+      : { ...ok("subagent waiting is unavailable"), isError: true },
+  };
+}
+
+export function createGetSubagentTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "get_subagent",
+    description: "Get current status for your subagents without waiting. Omit child_ids to list all subagents you created.",
+    parameters: { type: "object", properties: { child_ids: { type: "array", maxItems: 32, items: { type: "string" } } } },
+    execute: async (params) => {
+      if (!deps.getSubagents) return { ...ok("subagent status is unavailable"), isError: true };
+      const ids = childIdsFrom(params);
+      return ok(JSON.stringify({ subagents: deps.getSubagents(ids.length ? ids : undefined) }, null, 2));
+    },
+  };
+}
+
+export function createCancelSubagentTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "cancel_subagent",
+    description: "Cancel one or more queued or running subagents that you created. Terminal subagents are returned unchanged.",
+    parameters: { type: "object", properties: { child_ids: { type: "array", minItems: 1, maxItems: 32, items: { type: "string" } } }, required: ["child_ids"] },
+    execute: async (params) => deps.cancelSubagents
+      ? ok(JSON.stringify({ subagents: await deps.cancelSubagents(childIdsFrom(params)) }, null, 2))
+      : { ...ok("subagent cancellation is unavailable"), isError: true },
+  };
+}
+
+export function createListSubagentProfilesTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "list_subagent_profiles",
+    description: "List the built-in and deployment-defined subagent profiles this agent is authorized to launch.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => deps.listSubagentProfiles
+      ? ok(JSON.stringify({ profiles: await deps.listSubagentProfiles() }, null, 2))
+      : { ...ok("subagent profile discovery is unavailable"), isError: true },
   };
 }
 
@@ -403,6 +515,9 @@ export function allSystemTools(
     createAddTraceRelationTool(deps),
     createGetTraceGraphTool(deps),
   ];
+  if (deps.spawnSubagents) {
+    tools.push(createSpawnSubagentTool(deps), createWaitSubagentTool(deps), createGetSubagentTool(deps), createCancelSubagentTool(deps), createListSubagentProfilesTool(deps));
+  }
   if (isToolEnabled(toggles, "skill_search")) {
     tools.push(createSkillSearchTool(deps));
   }
@@ -448,6 +563,18 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_domain_knowledge_local",
     "search_papers_local",
   ],
+  librarian: [
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
+    "get_domain_knowledge_local", "search_papers_local",
+  ],
+  engineer: [
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
+    "get_domain_knowledge_local", "search_papers_local",
+  ],
+  experimentalist: [
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
+    "get_domain_knowledge_local", "search_papers_local",
+  ],
   // Auditor: comms + self-trace only. Deliberately NO `get_trace_graph` —
   // evidence is restricted to the session workspace; the audit must not
   // dredge the trace graph or other agents' internal state. skill_search and
@@ -457,6 +584,11 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task",
     "complete_task",
     "record_trace",
+    "spawn_subagent",
+    "wait_subagent",
+    "get_subagent",
+    "cancel_subagent",
+    "list_subagent_profiles",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
@@ -466,6 +598,11 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task",
     "complete_task",
     "record_trace",
+    "spawn_subagent",
+    "wait_subagent",
+    "get_subagent",
+    "cancel_subagent",
+    "list_subagent_profiles",
     "ask_user",
     "skill_search",
     "get_domain_knowledge_local",

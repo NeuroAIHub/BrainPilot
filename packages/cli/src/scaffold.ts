@@ -24,7 +24,7 @@
 import { mkdir, writeFile, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { join } from "node:path";
-import { materializeKb, materializeSkills } from "@brainpilot/runtime";
+import { builtinSubagentTemplateFiles, materializeKb, materializeSkills } from "@brainpilot/runtime";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { dataPaths, type DataPaths } from "./paths.js";
 
@@ -204,6 +204,17 @@ Built-in agent names: principal, librarian, experimentalist, engineer, writer,
 auditor, trace.
 `;
 
+const SUBAGENTS_README = `# Subagent profiles
+
+This directory contains editable copies of BrainPilot's official isolated
+leaf-worker profiles. Edit a profile's prompt.md or profile.json, or add a new
+kebab-case directory with both files and a version-1 configuration.
+
+Scaffolding never overwrites existing files. Runtime validation rejects unknown
+tools and unsafe parent roles. Leaf workers cannot contact users or agents,
+mutate the parent trace, manage agents, or spawn further children.
+`;
+
 export interface ScaffoldOptions {
   /** Default backend port baked into brainpilot.config.json. */
   port?: number;
@@ -262,10 +273,16 @@ export async function scaffold(
   //    have an obvious place to drop overrides; see AGENTS_README below.
   await mkdir(p.dataDir, { recursive: true });
   await mkdir(p.bpTemplateAgents, { recursive: true });
+  await mkdir(p.bpTemplateSubagents, { recursive: true });
   await mkdir(p.bpTemplateSkills, { recursive: true });
   await mkdir(p.bp, { recursive: true });
   await mkdir(p.workspaces, { recursive: true });
   await mkdir(p.logsDir, { recursive: true });
+
+  const subagentTemplates = builtinSubagentTemplateFiles();
+  for (const template of subagentTemplates) {
+    await mkdir(join(p.bpTemplateSubagents, template.name), { recursive: true });
+  }
 
   const writes: Array<[string, string]> = [
     // ② provider registry (SSOT) + an annotated example to copy from.
@@ -278,6 +295,7 @@ export async function scaffold(
     [join(p.bpTemplateSkills, "example.md"), EXAMPLE_SKILL],
     // ④ agents dir README — empty by design (#102 fix).
     [join(p.bpTemplateAgents, "README.md"), AGENTS_README],
+    [join(p.bpTemplateSubagents, "README.md"), SUBAGENTS_README],
     // ⑤ CLI global config.
     [
       p.brainpilotConfig,
@@ -293,6 +311,13 @@ export async function scaffold(
       ),
     ],
   ];
+
+  for (const template of subagentTemplates) {
+    writes.push(
+      [join(p.bpTemplateSubagents, template.name, "prompt.md"), template.prompt],
+      [join(p.bpTemplateSubagents, template.name, "profile.json"), template.profileJson],
+    );
+  }
 
   for (const [path, content] of writes) {
     if (await writeIfAbsent(path, content)) created.push(path);

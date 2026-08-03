@@ -229,7 +229,20 @@ export function AgentNetwork({
   hiddenErrorsCount,
 }: AgentNetworkProps) {
   const t = useT();
-  const { currentSession } = useSessions();
+  const { currentSession, subagents, interruptSubagent } = useSessions();
+  const [stoppingSubagents, setStoppingSubagents] = useState<Set<string>>(() => new Set());
+  const stopSubagent = async (childId: string) => {
+    setStoppingSubagents((current) => new Set(current).add(childId));
+    try {
+      await interruptSubagent(childId);
+    } finally {
+      setStoppingSubagents((current) => {
+        const next = new Set(current);
+        next.delete(childId);
+        return next;
+      });
+    }
+  };
   const sessionId = currentSession?.id ?? null;
   const [selection, setSelection] = useState<Selection>(null);
   const [hoverEdgeKey, setHoverEdgeKey] = useState<string | null>(null);
@@ -499,6 +512,32 @@ export function AgentNetwork({
             <ul>
               {availableNames.map((name) => (
                 <li key={name}>{name}</li>
+              ))}
+            </ul>
+          </details>
+        ) : null}
+        {subagents.length > 0 ? (
+          <details className="agent-network__available agent-network__subagents" open>
+            <summary>{t("network.subagents.summary", { count: subagents.length })}</summary>
+            <ul>
+              {subagents.map((child) => (
+                <li key={child.id} title={child.error ?? child.resultSummary ?? child.task}>
+                  <strong>{child.label}</strong>
+                  <span>{child.parentAgent} → {child.profile}</span>
+                  <span>{child.status}{child.durationMs !== undefined ? ` · ${(child.durationMs / 1000).toFixed(1)}s` : ""}</span>
+                  {child.artifacts?.length ? <span>{t("network.subagents.artifacts", { count: child.artifacts.length })}</span> : null}
+                  {child.status === "queued" || child.status === "running" ? (
+                    <button
+                      type="button"
+                      className="agent-network__subagent-stop"
+                      disabled={stoppingSubagents.has(child.id)}
+                      onClick={() => void stopSubagent(child.id)}
+                    >
+                      <X size={13} aria-hidden="true" />
+                      {stoppingSubagents.has(child.id) ? t("network.subagents.stopping") : t("network.subagents.stop")}
+                    </button>
+                  ) : null}
+                </li>
               ))}
             </ul>
           </details>
@@ -1346,4 +1385,3 @@ function GlobalFilterList({
     </ul>
   );
 }
-

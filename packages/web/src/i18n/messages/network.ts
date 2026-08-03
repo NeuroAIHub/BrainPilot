@@ -15,6 +15,10 @@ export default defineMessages(
       "network.legend.result": "结果",
       "network.legend.counter": "{live} 个参与 · {running} 运行中 · {edges} 条连线 · {msgs} 条消息",
       "network.available.summary": "{count} 个可用但未参与的智能体",
+      "network.subagents.summary": "{count} 个隔离子智能体",
+      "network.subagents.artifacts": "{count} 个产物",
+      "network.subagents.stop": "中断",
+      "network.subagents.stopping": "中断中…",
 
     // Aria labels
     "network.aria.legend": "网络图例",
@@ -120,6 +124,10 @@ export default defineMessages(
     "network.legend.result": "result",
       "network.legend.counter": "{live} active · {running} running · {edges} links · {msgs} messages",
       "network.available.summary": "{count} available agents not used",
+      "network.subagents.summary": "{count} isolated subagents",
+      "network.subagents.artifacts": "{count} artifacts",
+      "network.subagents.stop": "Stop",
+      "network.subagents.stopping": "Stopping…",
 
     "network.aria.legend": "Network legend",
     "network.aria.viewport": "Agent collaboration network",

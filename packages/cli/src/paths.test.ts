@@ -45,6 +45,7 @@ describe("dataPaths", () => {
     const p = dataPaths("/data");
     expect(p.bpTemplate).toBe("/data/bp_template");
     expect(p.bpTemplateAgents).toBe("/data/bp_template/agents");
+    expect(p.bpTemplateSubagents).toBe("/data/bp_template/subagents");
     expect(p.bpTemplateSettings).toBe("/data/bp_template/settings.json");
     expect(p.bp).toBe("/data/.bp");
     expect(p.workspaces).toBe("/data/workspaces");

@@ -84,6 +84,35 @@ export const AgentStatusSchema = z.object({
 });
 export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
+export const SubagentRunStatusSchema = z.enum([
+  "queued",
+  "running",
+  "succeeded",
+  "failed",
+  "cancelled",
+  "timed_out",
+  "interrupted",
+]);
+export type SubagentRunStatus = z.infer<typeof SubagentRunStatusSchema>;
+
+/** A short-lived, context-isolated child session owned by a persistent expert. */
+export const SubagentStatusSchema = z.object({
+  id: z.string(),
+  parentAgent: z.string(),
+  rootRunId: z.string().nullable(),
+  profile: z.string(),
+  label: z.string(),
+  task: z.string(),
+  status: SubagentRunStatusSchema,
+  startedAt: z.string().optional(),
+  finishedAt: z.string().optional(),
+  durationMs: z.number().nonnegative().optional(),
+  resultSummary: z.string().optional(),
+  artifacts: z.array(z.string()).optional(),
+  error: z.string().optional(),
+});
+export type SubagentStatus = z.infer<typeof SubagentStatusSchema>;
+
 /**
  * §10 `AgentState` — the Runtime-internal authoritative state shape (camelCase).
  */
@@ -242,6 +271,8 @@ export const SessionStateSnapshotSchema = z.object({
     runId: z.string().nullable(),
   }),
   agents: z.array(AgentStatusSchema),
+  /** Optional for compatibility with runtimes predating isolated subagents. */
+  subagents: z.array(SubagentStatusSchema).optional(),
   lastActivityTs: z.string(),
   /** Frozen when the session is created and persisted across restore. */
   domainResources: DomainResourcesSchema.optional(),

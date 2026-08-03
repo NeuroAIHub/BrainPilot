@@ -15,6 +15,7 @@ import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
+import { AsyncLocalStorage } from "node:async_hooks";
 import {
   CUSTOM_EVENT,
   type AgUiEvent,
@@ -47,7 +48,7 @@ import {
   emptySessionStats,
   recomputeSessionTotal,
 } from "./usage-stats.js";
-import { systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
+import { allSystemTools, systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
@@ -71,6 +72,8 @@ import {
   resolveLegacyPersistentUserId,
 } from "./persistent-layout.js";
 import type { AgentRole, AgentSessionFactory, EventListener, SystemTool, SystemToolResult } from "./types.js";
+import { SubagentManager } from "./subagent-manager.js";
+import { allowedSubagentProfiles, SUBAGENT_FORBIDDEN_TOOL_NAMES, type SubagentProfile } from "./subagent-profiles.js";
 import {
   toolTogglesForDomainResources,
   withoutDomainResourceInstructions,
@@ -268,6 +271,7 @@ interface SessionEntry {
   bus: EventBus;
   taskLedger: TaskLedger;
   trace: GraphOfTrace;
+  subagents: SubagentManager;
   agents: Map<string, MasAgent>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
@@ -495,6 +499,7 @@ export class SessionManager {
   // (intended range ~2–6 for shared/rate-limited gateways).
   private readonly maxConcurrentAgents: number;
   private readonly providerSlots = new Map<string, ProviderSemaphore>();
+  private readonly providerLease = new AsyncLocalStorage<{ sessionId: string; childLane: ProviderSemaphore }>();
 
   // #256: max upload size in bytes (base64 + raw-stream paths). Configurable
   // via BP_UPLOAD_MAX_BYTES / opts; default 1 GiB.
@@ -1286,7 +1291,42 @@ export class SessionManager {
       },
     );
 
-    const entry: SessionEntry = {
+    let entry!: SessionEntry;
+    const subagents = new SubagentManager({
+      sessionId: id,
+      dataRoot: this.dataRoot,
+      stateDir: persistBase ?? join(this.dataRoot, ".bp", id),
+      workspaceDir: this.workspaceDir(id),
+      persistentDir: this.persistentDir(),
+      sharedDir: this.sharedDir,
+      persist: this.persist,
+      bus,
+      createChildSession: (args) => this.createSubagentSession(entry, args),
+      runWithProviderCapacity: (fn, borrowParent) => this.withProviderSlot(id, fn, borrowParent, true),
+      onUsage: (childId, usage) => {
+        entry.tokenUsage.byAgent[childId] = usage;
+        entry.tokenUsage.total = sumAgentUsage(entry.tokenUsage.byAgent);
+        const stats = emptyAgentStats();
+        stats.tokens = { ...usage };
+        entry.stats.byAgent[childId] = stats;
+        recomputeSessionTotal(entry.stats);
+        void this.writeUsage(entry);
+        void this.writeStats(entry);
+      },
+      onRunFinished: ({ childId, status, usage, startedAt, finishedAt }) => {
+        const delta = emptyAgentStats();
+        delta.tokens = { ...usage };
+        entry.stats.byRun.push({ runId: childId, agentName: childId, startedAt, finishedAt, status, delta });
+        void this.writeStats(entry);
+      },
+      onChanged: () => {
+        if (!entry) return;
+        this.touch(entry);
+        this.emitSessionState(entry);
+      },
+    });
+
+    entry = {
       id,
       title: input.title ?? "Untitled session",
       createdAt,
@@ -1295,6 +1335,7 @@ export class SessionManager {
       bus,
       taskLedger,
       trace,
+      subagents,
       agents: new Map(),
       deliveryErrors: new Map(),
       runActive: false,
@@ -1351,6 +1392,7 @@ export class SessionManager {
       // event so replay never presents it as live input.
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
+    await subagents.restore();
     this.emitTaskSnapshot(entry);
     if (_restore) {
       for (const target of taskLedger.notificationTargets()) this.wakeAgent(id, target);
@@ -1442,6 +1484,7 @@ export class SessionManager {
     if (!e) return false;
     await this.discardUserInputs(e);
     for (const a of e.agents.values()) a.stop();
+    await e.subagents.dispose();
     e.bus.clear();
     this.sessions.delete(id);
     this.providerSlots.delete(id);
@@ -1465,6 +1508,8 @@ export class SessionManager {
       a.stop();
       killed++;
     }
+    killed += await e.subagents.cancelAll();
+    await e.subagents.flush();
     await e.bus.flush();
     await e.taskLedger.flush();
     await e.trace.flush();
@@ -1869,6 +1914,10 @@ export class SessionManager {
     if (!entry) return false;
     const wholeSession = agentName === undefined;
     const targets = agentName ? [entry.agents.get(agentName)].filter(Boolean) : [...entry.agents.values()];
+    const directChild = agentName ? entry.subagents.list().find((child) => child.id === agentName) : undefined;
+    const hasSubagentActivity = directChild
+      ? directChild.status === "queued" || directChild.status === "running"
+      : wholeSession && entry.subagents.list().some((child) => child.status === "queued" || child.status === "running");
     const hasPendingInput = Boolean(entry.userInputs.active || entry.userInputs.queue.length > 0);
     const hasTargetInput = agentName !== undefined && (
       entry.userInputs.active?.agent === agentName
@@ -1882,6 +1931,7 @@ export class SessionManager {
     );
     if (
       !hasTargetActivity
+      && !hasSubagentActivity
       && !hasDelivery
       && !hasTargetInput
       && !(wholeSession && (entry.runActive || hasPendingInput))
@@ -1904,12 +1954,15 @@ export class SessionManager {
     // to unwind. The batch already being processed may settle, but later queued
     // events remain durable for the next explicit user turn.
     if (wholeSession) await entry.taskLedger.pauseDelivery();
+    const childrenCancelled = agentName
+      ? directChild ? Number(await entry.subagents.cancel(agentName, "Subagent interrupted by user.")) : 0
+      : await entry.subagents.cancelAll();
     // Abort every target and WAIT for each in-flight run to fully settle (#101)
     // — RUN_FINISHED emitted, status settled, provider stream fenced.
     await Promise.all(targets.map((a) => a!.abort()));
-    entry.runActive = false;
-    entry.activeRunId = null;
     if (wholeSession) {
+      entry.runActive = false;
+      entry.activeRunId = null;
       // Clear queued task events so they cannot re-wake an agent the user stopped.
       // Deterministic UI/runtime acknowledgement — no model/provider run (#327).
       // Stable `id` so history rehydrate + SSE ring replay coalesce to one bubble (#330).
@@ -1924,7 +1977,7 @@ export class SessionManager {
       this.emitSessionState(entry);
     }
     await entry.bus.flush();
-    return targets.length > 0;
+    return targets.length > 0 || childrenCancelled > 0;
   }
 
   /** Interrupt exactly one currently executing, locally-cancellable tool. */
@@ -2043,6 +2096,70 @@ export class SessionManager {
   }
 
   /** Ensure an agent exists (create or resurrect). */
+  private async createSubagentSession(
+    entry: SessionEntry,
+    args: {
+      childId: string;
+      parentAgent: string;
+      profile: SubagentProfile;
+      cwd: string;
+      historyPath: string;
+      submitTool: SystemTool;
+    },
+  ) {
+    const toolToggles = toolTogglesForDomainResources(entry.domainResources, await this.ensureToolToggles());
+    const childDeps: ToolDeps = {
+      sessionId: entry.id,
+      fromAgent: args.childId,
+      trace: entry.trace,
+      dispatchTask: async () => { throw new Error("leaf subagents cannot dispatch tasks"); },
+      completeTask: async () => { throw new Error("leaf subagents cannot complete parent-agent tasks"); },
+      dispatchTrace: async () => { throw new Error("leaf subagents cannot write the parent trace"); },
+      ensureAgent: async () => { throw new Error("leaf subagents cannot create or message agents"); },
+      destroyAgent: async () => { throw new Error("leaf subagents cannot destroy agents"); },
+      wakeAgent: () => {},
+      requestUserInput: async () => { throw new Error("leaf subagents cannot ask the user"); },
+      routerSkillsDir: this.routerSkillsDir,
+    };
+    const available = allSystemTools(childDeps, toolToggles);
+    const systemTools = args.profile.systemTools
+      .map((name) => available.get(name))
+      .filter((tool): tool is SystemTool => Boolean(tool));
+    systemTools.push(args.submitTool);
+    if (args.profile.mcp) {
+      systemTools.push(...(await this.ensureMcpTools()).filter((tool) => !SUBAGENT_FORBIDDEN_TOOL_NAMES.has(tool.name)));
+    }
+
+    let skillPaths: string[] | undefined;
+    if (entry.domainResources === "full") {
+      await this.ensureSkillsMaterialized();
+      skillPaths = [this.skillsDir];
+    }
+    const providerConfig = await resolveSessionProvider(this.dataRoot, {
+      providerId: entry.providerRef.providerId,
+      modelId: args.profile.modelId ?? entry.providerRef.modelId,
+    });
+    if (args.profile.modelId && providerConfig?.modelId !== args.profile.modelId) {
+      throw new Error(`subagent profile model is not available in this provider: ${args.profile.modelId}`);
+    }
+    return this.agentFactory({
+      sessionId: entry.id,
+      agentName: args.childId,
+      role: "expert",
+      historyPath: args.historyPath,
+      cwd: args.cwd,
+      systemTools,
+      allowedToolNames: [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)],
+      systemPrompt: withLanguageDirective(args.profile.prompt),
+      suppressCoordinationHooks: true,
+      skillPaths,
+      managedPathRoots: { cwd: args.cwd, persistentDir: join(args.cwd, ".persistent-unavailable") },
+      blockRouterSkills: !isToolEnabled(toolToggles, "skill_search"),
+      routerSkillsDir: this.routerSkillsDir,
+      providerConfig,
+    });
+  }
+
   async ensureAgent(sessionId: string, name: string): Promise<MasAgent> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
@@ -2086,6 +2203,30 @@ export class SessionManager {
         req,
       ),
       routerSkillsDir: this.routerSkillsDir,
+      spawnSubagents: role === "expert" ? ({ context, tasks }) => entry.subagents.runBatch({
+        parentAgent: name,
+        rootRunId: entry.activeRunId,
+        context,
+        tasks,
+      }) : undefined,
+      startSubagents: role === "expert" ? ({ context, tasks }) => entry.subagents.startBatch({
+        parentAgent: name,
+        rootRunId: entry.activeRunId,
+        context,
+        tasks,
+      }) : undefined,
+      waitSubagents: role === "expert" ? (childIds) => entry.subagents.waitFor(name, childIds) : undefined,
+      getSubagents: role === "expert" ? (childIds) => entry.subagents.listForParent(name, childIds) : undefined,
+      cancelSubagents: role === "expert" ? (childIds) => entry.subagents.cancelForParent(name, childIds) : undefined,
+      listSubagentProfiles: role === "expert" ? async () => (await allowedSubagentProfiles(this.dataRoot, name)).map((profile) => ({
+        name: profile.name,
+        description: profile.description,
+        builtinTools: profile.builtinTools,
+        systemTools: profile.systemTools,
+        mcp: profile.mcp,
+        ...(profile.modelId ? { modelId: profile.modelId } : {}),
+        ...(profile.timeoutMs ? { timeoutMs: profile.timeoutMs } : {}),
+      })) : undefined,
     };
     const toolToggles = toolTogglesForDomainResources(
       entry.domainResources,
@@ -2269,8 +2410,25 @@ export class SessionManager {
    * concurrency cap. `agent.prompt` is error-isolated (never throws), so the
    * slot is always released. A cap of 0/negative disables throttling.
    */
-  private async withProviderSlot<T>(sessionId: string, fn: () => Promise<T>): Promise<T> {
+  private async withProviderSlot<T>(
+    sessionId: string,
+    fn: () => Promise<T>,
+    borrowParent = false,
+    allowNestedBorrow = false,
+  ): Promise<T> {
     if (this.maxConcurrentAgents <= 0) return fn();
+    // A custom tool runs inside the owning prompt's async chain. Its first
+    // child may borrow that already-counted provider lease, avoiding deadlock
+    // when the configured provider concurrency is one.
+    const inherited = this.providerLease.getStore();
+    if (inherited?.sessionId === sessionId && (borrowParent || (allowNestedBorrow && this.maxConcurrentAgents === 1))) {
+      const releaseBorrowed = await inherited.childLane.acquire();
+      try {
+        return await fn();
+      } finally {
+        releaseBorrowed();
+      }
+    }
     let sem = this.providerSlots.get(sessionId);
     if (!sem) {
       sem = new ProviderSemaphore(this.maxConcurrentAgents);
@@ -2278,7 +2436,7 @@ export class SessionManager {
     }
     const release = await sem.acquire();
     try {
-      return await fn();
+      return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
     } finally {
       release();
     }
@@ -2537,6 +2695,7 @@ export class SessionManager {
    */
   private deriveRunActive(entry: SessionEntry): boolean {
     if (entry.runActive) return true;
+    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "running")) return true;
     for (const a of entry.agents.values()) {
       if (a.role !== "trace" && a.status === "running") return true;
     }
@@ -2563,6 +2722,7 @@ export class SessionManager {
       ev.custom({ sessionId: entry.id }, "session_state", {
         runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
         agents: this.listAgents(entry.id),
+        subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
         domainResources: entry.domainResources,
         tokenUsage: entry.tokenUsage,
@@ -2586,6 +2746,7 @@ export class SessionManager {
   getSessionState(sessionId: string): {
     runState: { active: boolean; runId: string | null };
     agents: AgentStatus[];
+    subagents?: import("@brainpilot/protocol").SubagentStatus[];
     lastActivityTs: string;
     domainResources: DomainResources;
     tokenUsage: SessionTokenUsage;
@@ -2595,6 +2756,7 @@ export class SessionManager {
     return {
       runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
       agents: this.listAgents(sessionId),
+      subagents: entry.subagents.list(),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
       domainResources: entry.domainResources,
       tokenUsage: entry.tokenUsage,
@@ -2764,7 +2926,7 @@ export class SessionManager {
   /** §7: flush all persisted state before exit. */
   async emergencySaveAll(): Promise<void> {
     await Promise.all(
-      [...this.sessions.values()].flatMap((e) => [e.bus.flush(), e.taskLedger.flush(), e.trace.flush(), this.writeMeta(e)]),
+      [...this.sessions.values()].flatMap((e) => [e.bus.flush(), e.taskLedger.flush(), e.trace.flush(), e.subagents.flush(), this.writeMeta(e)]),
     );
     await this.mcpBridge?.close().catch(() => {});
   }

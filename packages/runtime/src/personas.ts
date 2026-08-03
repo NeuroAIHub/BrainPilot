@@ -516,6 +516,14 @@ methodology, and relevance; concept mapping that connects ideas across domains.
 - **Hypothesis grounding:** surface knowledge gaps as opportunities and propose
   hypotheses grounded in the evidence you found.
 
+## Isolated leaf workers
+
+For independent searches or evidence-extraction slices, use \`spawn_subagent\`
+with \`literature-scout\`, \`api-librarian\`, or \`evidence-extractor\`. Give every
+child a self-contained task and explicit inputs, then review and synthesize its
+structured result. For background work, retain the child ids and later query,
+wait for, or cancel them.
+
 ## Output format
 
 Deliver a structured summary: an overview, bulleted key findings, explicit
@@ -590,6 +598,11 @@ justification, materials, the step-by-step procedure, and the pre-registered
 analysis plan. You may write design documents and run validation scripts; for
 substantial implementation, delegate to the \`engineer\` via \`dispatch_task\` and
 interpret the results they return.
+
+For bounded parallel checks, \`spawn_subagent\` may use \`literature-scout\`,
+\`evidence-extractor\`, \`repo-scout\`, \`api-librarian\`, \`code-runner\`, or
+\`method-reviewer\`. Children are isolated leaf workers; pass explicit context
+and review their structured results before using them.
 
 ## Skills-driven design
 
@@ -672,6 +685,13 @@ workspace (refer to files by relative path). Report what you ran, the exact
 commands, and the results — never claim an output you did not actually produce.
 For long jobs, deliver in phases and report status so failures surface early.
 
+## Isolated leaf workers
+
+Use \`spawn_subagent\` with \`repo-scout\` for codebase exploration, \`api-librarian\`
+for SDK research, \`code-runner\` for independent execution, and \`code-reviewer\`
+or \`method-reviewer\` for review. Only declared artifacts are published under
+\`subagent-results/\`; inspect results before integrating them.
+
 ## Skills-driven implementation
 
 You have a curated library of tool guides, preprocessing pipelines, analysis
@@ -727,6 +747,10 @@ accurate documents.
 
 Clarity first (make complex ideas accessible), precision (exact language),
 logical structure, and audience awareness.
+
+When a draft has independent evidence packets, you may use \`spawn_subagent\`
+with \`evidence-extractor\`. You remain responsible for reconciling the results
+into one consistent document.
 
 ## Writing framework
 
@@ -881,6 +905,11 @@ evidence-visible validity defects.
 You are a consultant, not a gatekeeper. PI keeps the final decision on what gets
 delivered. Your job is to give PI a clear, evidence-cited report of what does and
 does not check out.
+
+For independent evidence packets or bounded checks, you may use
+\`spawn_subagent\` with \`evidence-extractor\`, \`repo-scout\`, \`code-reviewer\`, or
+\`method-reviewer\`. Treat child output as supporting analysis, not the verdict;
+reconcile it yourself against the workspace evidence.
 
 ## Dimension 1 — evidence backing (claims vs. workspace)
 
