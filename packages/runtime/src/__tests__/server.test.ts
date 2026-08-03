@@ -1,11 +1,12 @@
 import { describe, it, expect } from "vitest";
-import { mkdtemp, mkdir, writeFile, readFile, readdir } from "node:fs/promises";
+import { mkdtemp, mkdir, writeFile, readFile, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createServer, startServer } from "../server.js";
 import { SessionManager } from "../session-manager.js";
 import { PERSISTENT_LAYOUT_MARKER } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
+import { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
 
 /**
  * HTTP surface smoke test. Drives every non-SSE RUNTIME_ROUTE via app.request
@@ -37,6 +38,33 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     // Opt-in budget unset by default → null (single-user / no throttle).
     expect(body.memLimitBytes).toBeNull();
     expect(body.memRatio).toBeNull();
+  });
+
+  it("serves checkpoint diff/preview and restores through the trace API", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-checkpoint-api-"));
+    try {
+      const manager = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+      await manager.createSession({ id: "checkpoint-api" });
+      const workspace = join(dataRoot, "workspaces", "checkpoint-api");
+      const store = new WorkspaceCheckpointStore("checkpoint-api", workspace, join(dataRoot, ".bp", "checkpoint-api"));
+      await writeFile(join(workspace, "value.txt"), "old\n", "utf8");
+      const checkpoint = await store.capture("principal");
+      await writeFile(join(workspace, "value.txt"), "new\n", "utf8");
+      const a = createServer({ manager }).app;
+
+      const diff = await a.request(`/sessions/checkpoint-api/trace/checkpoints/${checkpoint.id}/diff?path=value.txt`);
+      expect(diff.status).toBe(200);
+      expect((await diff.json()) as { diff: string }).toMatchObject({ diff: expect.stringContaining("+old") });
+      const preview = await a.request(`/sessions/checkpoint-api/trace/checkpoints/${checkpoint.id}/restore-preview`);
+      const body = await preview.json() as { stateToken: string };
+      const restored = await a.request(`/sessions/checkpoint-api/trace/checkpoints/${checkpoint.id}/restore`, {
+        method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ stateToken: body.stateToken }),
+      });
+      expect(restored.status).toBe(200);
+      expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("old\n");
+    } finally {
+      await rm(dataRoot, { recursive: true, force: true });
+    }
   });
 
   it("returns a truthful terminal response for an unknown tool call", async () => {

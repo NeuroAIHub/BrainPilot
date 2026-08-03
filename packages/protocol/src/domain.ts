@@ -316,6 +316,71 @@ export const TraceCheckpointRefSchema = z.object({
 });
 export type TraceCheckpointRef = z.infer<typeof TraceCheckpointRefSchema>;
 
+export const TraceCheckpointFileChangeSchema = z.object({
+  path: z.string(),
+  previousPath: z.string().optional(),
+  status: z.enum(["added", "modified", "deleted", "renamed"]),
+  additions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
+  binary: z.boolean().default(false),
+});
+export type TraceCheckpointFileChange = z.infer<typeof TraceCheckpointFileChangeSchema>;
+
+export const TraceCheckpointSkippedFileSchema = z.object({
+  path: z.string(),
+  reason: z.enum(["ignored", "too_large", "total_limit", "internal", "unsupported"]),
+  size: z.number().int().nonnegative().optional(),
+});
+export type TraceCheckpointSkippedFile = z.infer<typeof TraceCheckpointSkippedFileSchema>;
+
+export const TraceCheckpointDetailSchema = z.object({
+  checkpoint: TraceCheckpointRefSchema,
+  files: z.array(TraceCheckpointFileChangeSchema),
+  skipped: z.array(TraceCheckpointSkippedFileSchema),
+});
+export type TraceCheckpointDetail = z.infer<typeof TraceCheckpointDetailSchema>;
+
+export const TraceRestorePreviewSchema = z.object({
+  checkpointId: z.string(),
+  stateToken: z.string(),
+  files: z.array(TraceCheckpointFileChangeSchema),
+  skipped: z.array(TraceCheckpointSkippedFileSchema),
+});
+export type TraceRestorePreview = z.infer<typeof TraceRestorePreviewSchema>;
+
+export const TraceRestoreResultSchema = z.object({
+  restoredCheckpointId: z.string(),
+  auditNodeId: z.string().optional(),
+  changeId: z.string().optional(),
+});
+export type TraceRestoreResult = z.infer<typeof TraceRestoreResultSchema>;
+
+export const TraceCausalRollbackConflictSchema = z.object({
+  path: z.string(),
+  checkpointIds: z.array(z.string()),
+  reason: z.string(),
+});
+export type TraceCausalRollbackConflict = z.infer<typeof TraceCausalRollbackConflictSchema>;
+
+export const TraceCausalRollbackPreviewSchema = z.object({
+  nodeId: z.string(),
+  stateToken: z.string(),
+  affectedNodeIds: z.array(z.string()),
+  affectedCheckpointIds: z.array(z.string()),
+  files: z.array(TraceCheckpointFileChangeSchema),
+  skipped: z.array(TraceCheckpointSkippedFileSchema),
+  conflicts: z.array(TraceCausalRollbackConflictSchema),
+});
+export type TraceCausalRollbackPreview = z.infer<typeof TraceCausalRollbackPreviewSchema>;
+
+export const TraceCausalRollbackResultSchema = z.object({
+  nodeId: z.string(),
+  affectedNodeIds: z.array(z.string()),
+  auditNodeId: z.string().optional(),
+  changeId: z.string().optional(),
+});
+export type TraceCausalRollbackResult = z.infer<typeof TraceCausalRollbackResultSchema>;
+
 export const TraceParentConclusionSchema = z.enum(["candidate", "confirmed", "rejected", "uncertain"]);
 export type TraceParentConclusion = z.infer<typeof TraceParentConclusionSchema>;
 

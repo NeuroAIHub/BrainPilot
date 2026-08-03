@@ -30,6 +30,7 @@ import {
   SessionSchema,
   SessionStateSnapshotSchema,
   SessionStatsSchema,
+  TraceDependencySchema,
 } from "./domain.js";
 
 export type HttpMethod = "GET" | "POST" | "PUT" | "DELETE";
@@ -130,6 +131,16 @@ export type GetSessionStateResponse = z.infer<typeof GetSessionStateResponseSche
  */
 export const GetSessionStatsResponseSchema = SessionStatsSchema;
 export type GetSessionStatsResponse = z.infer<typeof GetSessionStatsResponseSchema>;
+
+export const TraceDependencyDecisionRequestSchema = z.object({
+  decision: z.enum(["accept", "reject"]),
+  reason: z.string().optional(),
+});
+export type TraceDependencyDecisionRequest = z.infer<typeof TraceDependencyDecisionRequestSchema>;
+export const TraceDependencyDecisionResponseSchema = TraceDependencySchema;
+export type TraceDependencyDecisionResponse = z.infer<typeof TraceDependencyDecisionResponseSchema>;
+export const TraceStateTokenRequestSchema = z.object({ stateToken: z.string().min(1) });
+export type TraceStateTokenRequest = z.infer<typeof TraceStateTokenRequestSchema>;
 
 /* ------------------------------------------------------------------ *
  * POST /sessions/:id/messages  (inject user message)
@@ -288,6 +299,15 @@ export const RUNTIME_ROUTES = {
   getSessionStats: { method: "GET", path: "/sessions/:id/stats" },
   /** Graph of Trace (reasoning DAG) for a session. */
   getTrace: { method: "GET", path: "/sessions/:id/trace" },
+  getTraceChanges: { method: "GET", path: "/sessions/:id/trace/changes" },
+  getAuditReports: { method: "GET", path: "/sessions/:id/audits" },
+  decideTraceDependency: { method: "POST", path: "/sessions/:id/trace/dependencies/:dependencyId/decision" },
+  getTraceNodeCheckpoints: { method: "GET", path: "/sessions/:id/trace/nodes/:nodeId/checkpoints" },
+  getTraceCausalRollbackPreview: { method: "GET", path: "/sessions/:id/trace/nodes/:nodeId/rollback-preview" },
+  rollbackTraceNode: { method: "POST", path: "/sessions/:id/trace/nodes/:nodeId/rollback" },
+  getTraceCheckpointDiff: { method: "GET", path: "/sessions/:id/trace/checkpoints/:checkpointId/diff" },
+  getTraceRestorePreview: { method: "GET", path: "/sessions/:id/trace/checkpoints/:checkpointId/restore-preview" },
+  restoreTraceCheckpoint: { method: "POST", path: "/sessions/:id/trace/checkpoints/:checkpointId/restore" },
   sendMessage: { method: "POST", path: "/sessions/:id/messages" },
   /** Canonical AG-UI event stream (§15.4). */
   sessionEvents: { method: "GET", path: "/sse/:id" },

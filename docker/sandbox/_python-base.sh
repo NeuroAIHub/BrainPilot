@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
-# _python-base.sh — cpu/gpu sandbox 共享的 python3 + pip + curl + 镜像源安装段。
+# _python-base.sh — cpu/gpu sandbox 共享的 python3 + pip + curl + Git + 镜像源安装段。
 # 由 Dockerfile 的 python-baseline stage 直接 RUN（gpu-base 继承该 stage，无需重跑）。
-# curl/ca-certificates 供 HEALTHCHECK 探活用，cpu/gpu 都需要，故装在此共享层。
+# curl/ca-certificates 供 HEALTHCHECK 探活；Git 供 GoT workspace checkpoint
+# 捕获、diff 与恢复使用。它们都是 cpu/gpu 运行时依赖，故装在此共享层。
 # 镜像源来自 ENV（Dockerfile 经 build-arg 透传），为空则用镜像自带官方源
 # （pypi.org / deb.debian.org）。
 set -euo pipefail
@@ -10,8 +11,12 @@ set -euo pipefail
 [ -n "${APT_MIRROR:-}" ] && sed -i "s|http://deb.debian.org|$APT_MIRROR|g" \
   /etc/apt/sources.list.d/*.sources /etc/apt/sources.list 2>/dev/null || true
 apt-get update && apt-get install -y --no-install-recommends \
-  python3 python3-pip python3-venv curl ca-certificates
+  python3 python3-pip python3-venv curl ca-certificates git
 rm -rf /var/lib/apt/lists/*
+
+# Fail the image build rather than shipping a runtime whose checkpoint feature
+# can only report unavailable.
+git --version >/dev/null
 
 # pip 源：PIP_INDEX_URL 注入则固化 /etc/pip.conf，否则用 pip 官方默认
 if [ -n "${PIP_INDEX_URL:-}" ]; then

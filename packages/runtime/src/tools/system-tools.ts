@@ -9,6 +9,7 @@
  */
 import type { TraceNodeRecord } from "@brainpilot/protocol";
 import type { GraphOfTrace, TraceArtifactInput, TraceAuditTarget } from "../trace.js";
+import type { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
 import { TaskQueueFullError, type TaskRecord } from "../task-ledger.js";
 import type { AgentRole, SystemTool } from "../types.js";
 import { createSkillSearchTool } from "./skill-search.js";
@@ -22,6 +23,7 @@ export interface ToolDeps {
   sessionId: string;
   fromAgent: string;
   trace: GraphOfTrace;
+  checkpoints?: WorkspaceCheckpointStore;
   dispatchTask: (to: string, content: string) => Promise<TaskRecord>;
   completeTask: (taskId: string, reply: string) => Promise<TaskRecord>;
   dispatchTrace: (content: string) => Promise<void>;
@@ -90,6 +92,15 @@ function artifactInputs(value: unknown): TraceArtifactInput[] {
       ...(typeof input.blobHash === "string" ? { blobHash: input.blobHash } : {}),
     }];
   });
+}
+
+async function attachCheckpointWithGitEvidence(deps: ToolDeps, nodeId: string, checkpointId: string): Promise<void> {
+  if (!deps.checkpoints) return;
+  const [[checkpoint], files] = await Promise.all([
+    deps.checkpoints.refs([checkpointId]),
+    deps.checkpoints.provenance(checkpointId),
+  ]);
+  if (checkpoint) deps.trace.attachCheckpoint(nodeId, checkpoint, files ?? []);
 }
 
 export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
@@ -301,16 +312,23 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
         : [];
       const inputs = artifactInputs(params.artifact_inputs);
       const outputs = artifactInputs(params.artifact_outputs);
+      const checkpoint = await deps.checkpoints?.capture(deps.fromAgent);
+      const gitEvidence = checkpoint
+        ? await deps.checkpoints?.provenance(checkpoint.id).catch(() => undefined)
+        : undefined;
       const record: TraceNodeRecord = {
         sourceAgent: deps.fromAgent,
         description,
         ...(context ? { context } : {}),
+        ...(checkpoint ? { checkpointId: checkpoint.id } : {}),
         createdAt: new Date().toISOString(),
       };
       const lines = [`[Trace Event]`, `Description: ${description}`];
       if (context) lines.push(`Context: ${context}`);
+      if (checkpoint) lines.push(`Checkpoint-ID: ${checkpoint.id}`);
       if (inputs.length) lines.push(`Artifact-Inputs: ${JSON.stringify(inputs)}`);
       if (outputs.length) lines.push(`Artifact-Outputs: ${JSON.stringify(outputs)}`);
+      if (gitEvidence?.length) lines.push(`Git-Evidence: ${JSON.stringify(gitEvidence)}`);
       lines.push("", "Artifacts:");
       if (artifacts.length === 0) {
         lines.push("(none)");
@@ -344,7 +362,7 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
     name: "create_trace_node",
     description:
       "Create one new active Graph of Trace node only when the current host-bound record represents a distinct, durable scientific unit that is not already in the active graph. " +
-      "Do not create nodes for coordination, delegation, progress, presentation, reformatting, or repetition. The Host attaches the current source record automatically. " +
+      "Do not create nodes for coordination, delegation, progress, presentation, reformatting, or repetition. The Host attaches the current source record and checkpoint automatically. " +
       "The Host also attaches the session root whenever no more specific causal parent has been confirmed; never submit the session root as a parent candidate. " +
       "One Trace Event may call this tool more than once only when it explicitly contains multiple independently meaningful scientific units with enough content to describe each accurately.",
     parameters: {
@@ -391,6 +409,8 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
         if (typeof candidate.node_id !== "string" || typeof candidate.reason !== "string") continue;
         deps.trace.proposeCausalParent(node.id, candidate.node_id, candidate.reason, { type: "agent", name: deps.fromAgent });
       }
+      const checkpointId = record?.checkpointId;
+      if (checkpointId) await attachCheckpointWithGitEvidence(deps, node.id, checkpointId);
       return ok(`node ${node.id} created`);
     },
   };
@@ -402,7 +422,7 @@ export function createUpdateTraceNodeTool(deps: ToolDeps): SystemTool {
     description:
       "Update exactly one existing active Trace node only when the current host-bound record belongs to the same scientific unit and adds evidence, results, a correction, or a meaningful status change. " +
       "Read the target node first and preserve its valid existing content when supplying replacement text. Do not update merely to rephrase, translate, format, present, or repeat it. " +
-      "The Host attaches the current record automatically; revoked nodes cannot be reused, and confidence must be re-evaluated on every substantive update.",
+      "The Host attaches the current record and checkpoint automatically; revoked nodes cannot be reused, and confidence must be re-evaluated on every substantive update.",
     parameters: {
       type: "object",
       properties: {
@@ -447,6 +467,8 @@ export function createUpdateTraceNodeTool(deps: ToolDeps): SystemTool {
         if (typeof candidate.node_id !== "string" || typeof candidate.reason !== "string") continue;
         deps.trace.proposeCausalParent(id, candidate.node_id, candidate.reason, { type: "agent", name: deps.fromAgent });
       }
+      const checkpointId = record?.checkpointId;
+      if (node && checkpointId) await attachCheckpointWithGitEvidence(deps, id, checkpointId);
       return node ? ok(`node ${id} updated`) : { ...ok(`node ${id} not found`), isError: true };
     },
   };
@@ -516,6 +538,29 @@ export function createGetTraceNeighborhoodTool(deps: ToolDeps): SystemTool {
     execute: async (params) => {
       const neighborhood = deps.trace.getNeighborhood(String(params.node_id ?? ""), typeof params.depth === "number" ? params.depth : 1);
       return neighborhood ? ok(cappedJson(neighborhood)) : { ...ok("trace node not found"), isError: true };
+    },
+  };
+}
+
+export function createGetTraceDiffTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "get_trace_diff",
+    description: "Read the latest checkpoint diff for one active Trace node, optionally limited to one path.",
+    parameters: {
+      type: "object",
+      properties: { node_id: { type: "string" }, path: { type: "string" } },
+      required: ["node_id"],
+    },
+    execute: async (params) => {
+      if (!deps.checkpoints) return { ...ok("checkpoint store unavailable"), isError: true };
+      const node = deps.trace.getNode(String(params.node_id ?? ""));
+      if (!node || node.revoked) return { ...ok("trace node not found"), isError: true };
+      const checkpoint = node.checkpoints?.at(-1);
+      if (!checkpoint) return { ...ok("node has no checkpoint"), isError: true };
+      if (typeof params.path === "string" && params.path) {
+        return ok(await deps.checkpoints.diff(checkpoint.id, params.path) ?? "");
+      }
+      return ok(cappedJson(await deps.checkpoints.detail(checkpoint.id)));
     },
   };
 }
@@ -681,6 +726,7 @@ export function allSystemTools(
     createGetTraceGraphTool(deps),
     createGetTraceNodeTool(deps),
     createGetTraceNeighborhoodTool(deps),
+    createGetTraceDiffTool(deps),
     createListPendingTraceReviewsTool(deps),
     // Temporarily disabled: the current substring matcher is not reliable
     // enough to expose as an Agent tool. Keep the implementation above so it
@@ -747,6 +793,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "list_pending_trace_reviews",
     "get_trace_node",
     "get_trace_neighborhood",
+    "get_trace_diff",
     // "search_trace", // temporarily disabled; see allSystemTools above
     "edit_trace_review",
     "submit_audit_report",
