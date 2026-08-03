@@ -100,13 +100,6 @@ function semanticTypeForLegacyRelation(relation: string | undefined): TraceSeman
   }
 }
 
-function legacyRelationForSemantic(type: TraceSemanticLinkType): string {
-  switch (type) {
-    case "sequence_after": return "follows";
-    default: return type;
-  }
-}
-
 /** Legacy callback operation retained for older hosting code and tests. */
 export type TraceChangeOp = "created" | "updated";
 
