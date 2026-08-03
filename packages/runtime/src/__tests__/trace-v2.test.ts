@@ -68,15 +68,15 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     expect(graph.getNode(conclusion.id)?.parentIds).toEqual([evidence.id]);
   });
 
-  it("repairs rootless and cyclic V2 data into a root-reachable active DAG", () => {
+  it("repairs rootless and cyclic V2 data into one all-state DAG", () => {
     const graph = new GraphOfTrace("s");
     graph.load({
       schemaVersion: "2.0",
       revision: 4,
       meta: { sessionId: "s" },
       nodes: [
-        { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "b", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
-        { id: "b", title: "B", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "a", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
+        { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "b", conclusion: "rejected" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
+        { id: "b", title: "B", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "a", conclusion: "candidate" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
         { id: "orphan", title: "Orphan", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "missing", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
       ],
       dependencies: [], episodes: [], artifacts: [],
@@ -99,8 +99,27 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       return visit(start);
     };
     expect(normalized.nodes.filter((node) => node.id !== rootId).every((node) => reachesRoot(node.id))).toBe(true);
-    expect(normalized.nodes.flatMap((node) => node.parents).some((parent) => parent.reason?.includes("confirmed cycle rejected"))).toBe(true);
+    const allParents = new Map(normalized.nodes.map((node) => [node.id, node.parents.map((parent) => parent.nodeId)]));
+    const isAcyclic = (start: string, visiting = new Set<string>(), visited = new Set<string>()): boolean => {
+      if (visiting.has(start)) return false;
+      if (visited.has(start)) return true;
+      const nextVisiting = new Set(visiting).add(start);
+      if (!(allParents.get(start) ?? []).every((parentId) => isAcyclic(parentId, nextVisiting, visited))) return false;
+      visited.add(start);
+      return true;
+    };
+    expect(normalized.nodes.every((node) => isAcyclic(node.id))).toBe(true);
+    expect(normalized.nodes.flatMap((node) => node.parents.filter((parent) => parent.nodeId === "a" || parent.nodeId === "b"))).toHaveLength(1);
     expect(graph.getNode("orphan")?.parentIds).toEqual([rootId]);
+  });
+
+  it("rejects a reverse candidate even when the existing edge is rejected history", () => {
+    const graph = new GraphOfTrace("s");
+    const a = graph.createNode({ title: "A" });
+    const b = graph.createNode({ title: "B" });
+    expect(graph.proposeCausalParent(b.id, a.id, "A informed B", { type: "agent", name: "trace" })).toBe(true);
+    expect(graph.review(b.id, "reject", "not causal", { type: "agent", name: "auditor" }, a.id)).toBe(true);
+    expect(graph.proposeCausalParent(a.id, b.id, "B informed A", { type: "agent", name: "trace" })).toBe(false);
   });
 
   it("migrates V1 lazily and persists only nodes[].parents as authoritative relationships", async () => {

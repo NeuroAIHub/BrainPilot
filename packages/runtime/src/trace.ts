@@ -405,6 +405,7 @@ export class GraphOfTrace {
     if (!child || !parent || child.revoked || parent.revoked || this.isSessionRoot(childNodeId) || this.isSessionRoot(parentNodeId) || childNodeId === parentNodeId) return false;
     const existing = child.parents.find((item) => item.nodeId === parentNodeId);
     if (existing?.conclusion === "rejected") return false;
+    if (!existing && this.wouldCreateCycle(parentNodeId, childNodeId)) return false;
     const before = existing ? clone(existing) : undefined;
     if (existing) {
       if (existing.conclusion === "confirmed" && existing.reason === reason) return true;
@@ -457,7 +458,6 @@ export class GraphOfTrace {
     const ref = node.parents.find((item) => item.nodeId === parentNodeId);
     if (!parent || parent.revoked || !ref) return false;
     if (conclusion === "approve" && parent.reviewConclusion === "rejected") return false;
-    if (conclusion === "approve" && this.wouldCreateConfirmedCycle(parentNodeId, nodeId)) return false;
     const before = ref.conclusion;
     ref.conclusion = conclusion === "approve" ? "confirmed" : conclusion === "reject" ? "rejected" : "uncertain";
     ref.reason = reason;
@@ -550,7 +550,6 @@ export class GraphOfTrace {
   decideDependency(id: string, decision: "accept" | "reject", reason?: string): TraceDependency | undefined {
     const dependency = this.dependencies.get(id);
     if (!dependency || this.isSessionRoot(dependency.prerequisiteId) || this.isSessionRoot(dependency.dependentId)) return undefined;
-    if (decision === "accept" && this.wouldCreateConfirmedCycle(dependency.prerequisiteId, dependency.dependentId)) return undefined;
     dependency.state = decision === "accept" ? "active" : "rejected";
     dependency.confidence = decision === "accept" ? "high" : dependency.confidence;
     dependency.evidence = this.mergeEvidence(dependency.evidence, [{
@@ -710,12 +709,13 @@ export class GraphOfTrace {
     const seen = new Set<string>([id]);
     let frontier = [id];
     for (let level = 0; level < requestedDepth; level++) {
+      const frontierSet = new Set(frontier);
       const next = new Set<string>();
       for (const edge of this.dependencies.values()) {
         const from = edge.prerequisiteId;
         const to = edge.dependentId;
-        if (frontier.includes(from) && !seen.has(to)) next.add(to);
-        if (frontier.includes(to) && !seen.has(from)) next.add(from);
+        if (frontierSet.has(from) && !seen.has(to)) next.add(to);
+        if (frontierSet.has(to) && !seen.has(from)) next.add(from);
       }
       frontier = [...next];
       for (const nextId of frontier) seen.add(nextId);
@@ -1009,7 +1009,7 @@ export class GraphOfTrace {
       const id = asString(edge.id, stableId("dependency", prerequisiteId, dependentId));
       const state = edge.state === "active" || edge.state === "rejected" ? edge.state : "proposed";
       // Never hydrate a malformed persisted cycle into the canonical graph.
-      if (state !== "rejected" && this.wouldCreateCycle(prerequisiteId, dependentId)) {
+      if (this.wouldCreateCycle(prerequisiteId, dependentId)) {
         continue;
       }
       const dependency: TraceDependency = {
@@ -1381,9 +1381,9 @@ export class GraphOfTrace {
   }
 
   /**
-   * Enforce the official active DAG after creates, reviews, restores and loads.
-   * Candidate/rejected relations remain review history; only confirmed active
-   * parents participate in cycle and reachability checks.
+   * Enforce one DAG across every canonical parent conclusion after creates,
+   * reviews, restores and loads. Candidate/uncertain/rejected edges remain
+   * review history, but history is still graph structure and cannot cycle.
    */
   private normalizeCausalGraph(): void {
     const root = this.ensureSessionRoot();
@@ -1405,8 +1405,9 @@ export class GraphOfTrace {
       node.parents = [...deduplicated.values()];
     }
 
-    // Accept confirmed edges in stable insertion order, demoting only the edge
-    // that would close a cycle. This also repairs manually edited/corrupt V2.
+    // Accept all edges in stable insertion order. A manually edited or corrupt
+    // persisted edge that closes a cycle is dropped: changing its conclusion
+    // would not remove it from the all-state DAG.
     const outgoing = new Map<string, Set<string>>();
     const hasPath = (fromId: string, targetId: string): boolean => {
       const seen = new Set<string>();
@@ -1422,22 +1423,17 @@ export class GraphOfTrace {
       return visit(fromId);
     };
     for (const node of this.nodes.values()) {
-      if (node.revoked || node.id === root.id) continue;
+      if (node.id === root.id) continue;
+      const accepted: TraceCausalParent[] = [];
       for (const parent of node.parents) {
-        if (parent.conclusion !== "confirmed") continue;
         const parentNode = this.nodes.get(parent.nodeId);
-        if (!parentNode || parentNode.revoked) continue;
-        if (hasPath(node.id, parent.nodeId)) {
-          parent.conclusion = "uncertain";
-          parent.reason = parent.reason
-            ? `${parent.reason} (Demoted by Host: confirmed cycle rejected.)`
-            : "Demoted by Host: confirmed cycle rejected.";
-          continue;
-        }
+        if (!parentNode || hasPath(node.id, parent.nodeId)) continue;
+        accepted.push(parent);
         const children = outgoing.get(parent.nodeId) ?? new Set<string>();
         children.add(node.id);
         outgoing.set(parent.nodeId, children);
       }
+      node.parents = accepted;
     }
 
     // A real confirmed parent replaces the temporary root link. Otherwise the
@@ -1474,28 +1470,12 @@ export class GraphOfTrace {
       if (id === prerequisiteId) return true;
       if (seen.has(id)) return false;
       seen.add(id);
-      for (const edge of this.dependencies.values()) {
-        if (edge.state !== "rejected" && edge.prerequisiteId === id && visit(edge.dependentId)) return true;
+      for (const node of this.nodes.values()) {
+        if (node.parents.some((parent) => parent.nodeId === id) && visit(node.id)) return true;
       }
       return false;
     };
     return visit(dependentId);
-  }
-
-  private wouldCreateConfirmedCycle(parentNodeId: string, childNodeId: string): boolean {
-    if (parentNodeId === childNodeId) return true;
-    const seen = new Set<string>();
-    const visit = (id: string): boolean => {
-      if (id === parentNodeId) return true;
-      if (seen.has(id)) return false;
-      seen.add(id);
-      for (const node of this.nodes.values()) {
-        if (node.revoked) continue;
-        if (node.parents.some((parent) => parent.nodeId === id && parent.conclusion === "confirmed") && visit(node.id)) return true;
-      }
-      return false;
-    };
-    return visit(childNodeId);
   }
 
   private syncCompatibilityDependency(
@@ -1704,6 +1684,10 @@ export class GraphOfTrace {
       ...(typeof item.detail === "string" ? { detail: item.detail } : {}),
       ...(typeof item.artifactId === "string" ? { artifactId: item.artifactId } : {}),
       ...(typeof item.reportId === "string" ? { reportId: item.reportId } : {}),
+      ...(typeof item.path === "string" ? { path: item.path } : {}),
+      ...(typeof item.checkpointId === "string" ? { checkpointId: item.checkpointId } : {}),
+      ...(typeof item.baseBlobId === "string" ? { baseBlobId: item.baseBlobId } : {}),
+      ...(typeof item.resultBlobId === "string" ? { resultBlobId: item.resultBlobId } : {}),
       ...(typeof item.deterministic === "boolean" ? { deterministic: item.deterministic } : {}),
     }));
   }

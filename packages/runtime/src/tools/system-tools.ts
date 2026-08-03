@@ -296,7 +296,9 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       // exactly the persona we already ship for it.
       const description = String(params.description ?? "");
       const context = String(params.context ?? "");
-      const artifacts = (params.artifacts as string[]) ?? [];
+      const artifacts = Array.isArray(params.artifacts)
+        ? params.artifacts.filter((value): value is string => typeof value === "string")
+        : [];
       const inputs = artifactInputs(params.artifact_inputs);
       const outputs = artifactInputs(params.artifact_outputs);
       const record: TraceNodeRecord = {
