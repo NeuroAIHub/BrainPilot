@@ -1,6 +1,6 @@
 import { AlertTriangle, FileDiff, GitCommit, Loader2, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { TraceCausalRollbackPreview, TraceChange, TraceCheckpointDetail, TraceCheckpointRef, TraceNode, TraceRestorePreview } from "../../contracts/backend";
+import type { TraceCausalRollbackPreview, TraceCheckpointDetail, TraceCheckpointRef, TraceNode, TraceRestorePreview } from "../../contracts/backend";
 import { api } from "../../utils/api";
 
 interface Props {
@@ -9,21 +9,6 @@ interface Props {
   restoreDisabled?: boolean;
   onRestored?: () => Promise<void> | void;
   t: (key: string, vars?: Record<string, string | number>) => string;
-}
-
-/** Latest causal rollback for this node that has not been consumed by Undo. */
-export function findPendingCausalRollback(changes: TraceChange[], nodeId: string): string | null {
-  const undone = new Set(changes.flatMap((change) =>
-    change.action === "causal_rollback_undo" && typeof change.metadata?.rollbackChangeId === "string"
-      ? [change.metadata.rollbackChangeId]
-      : [],
-  ));
-  for (let index = changes.length - 1; index >= 0; index--) {
-    const change = changes[index]!;
-    if (change.action !== "causal_rollback" || change.target.nodeId !== nodeId || undone.has(change.id)) continue;
-    if (typeof change.metadata?.recoveryCheckpointId === "string") return change.metadata.recoveryCheckpointId;
-  }
-  return null;
 }
 
 export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRestored, t }: Props) {
@@ -36,9 +21,6 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
   const [error, setError] = useState<string | null>(null);
   const [preview, setPreview] = useState<TraceRestorePreview | null>(null);
   const [causalPreview, setCausalPreview] = useState<TraceCausalRollbackPreview | null>(null);
-  const [recoveryId, setRecoveryId] = useState<string | null>(
-    typeof node.metadata?.recoveryCheckpointId === "string" ? node.metadata.recoveryCheckpointId : null,
-  );
 
   useEffect(() => {
     setSelectedId(embedded.at(-1)?.id ?? null);
@@ -47,22 +29,14 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     setPreview(null);
     setCausalPreview(null);
     setError(null);
-    setRecoveryId(typeof node.metadata?.recoveryCheckpointId === "string" ? node.metadata.recoveryCheckpointId : null);
-    if (!sessionId) {
+    if (!sessionId || embedded.length === 0) {
       setDetails([]);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    const detailRequest = embedded.length > 0
-      ? api.sessions.getTraceNodeCheckpoints(sessionId, node.id)
-      : Promise.resolve([] as TraceCheckpointDetail[]);
-    void Promise.all([detailRequest, api.sessions.getTraceChanges(sessionId, 500)])
-      .then(([value, changes]) => {
-        if (cancelled) return;
-        setDetails(value);
-        setRecoveryId(findPendingCausalRollback(changes, node.id));
-      })
+    void api.sessions.getTraceNodeCheckpoints(sessionId, node.id)
+      .then((value) => { if (!cancelled) setDetails(value); })
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -74,10 +48,8 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
   );
   const selectedDetail = details.find((item) => item.checkpoint.id === selectedRef?.id);
 
-  // A causal rollback belongs to the graph node, not to the node's own
-  // checkpoint. A branch point may have no snapshot while its descendants do,
-  // and rollback audit nodes need to expose their recovery checkpoint.
-  if (embedded.length === 0 && !sessionId && !recoveryId) return null;
+  // A branch point can trigger causal rollback even without its own snapshot.
+  if (embedded.length === 0 && !sessionId) return null;
 
   const loadDiff = async (path: string) => {
     if (!sessionId || !selectedRef) return;
@@ -111,8 +83,7 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     setLoading(true);
     setError(null);
     try {
-      const result = await api.sessions.restoreTraceCheckpoint(sessionId, value.checkpointId, value.stateToken);
-      setRecoveryId(result.recoveryCheckpointId);
+      await api.sessions.restoreTraceCheckpoint(sessionId, value.checkpointId, value.stateToken);
       setPreview(null);
       window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
       await onRestored?.();
@@ -142,31 +113,13 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     setLoading(true);
     setError(null);
     try {
-      const result = await api.sessions.rollbackTraceNode(sessionId, node.id, value.stateToken);
-      setRecoveryId(result.recoveryCheckpointId);
+      await api.sessions.rollbackTraceNode(sessionId, node.id, value.stateToken);
       setCausalPreview(null);
       window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
       await onRestored?.();
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
       setCausalPreview(null);
-    } finally {
-      setLoading(false);
-    }
-  };
-
-  const undo = async () => {
-    if (!sessionId || !recoveryId) return;
-    setLoading(true);
-    setError(null);
-    try {
-      const value = await api.sessions.getTraceRestorePreview(sessionId, recoveryId);
-      const result = await api.sessions.restoreTraceCheckpoint(sessionId, recoveryId, value.stateToken);
-      setRecoveryId(result.recoveryCheckpointId);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
-      await onRestored?.();
-    } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setLoading(false);
     }
@@ -224,13 +177,12 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
       {selectedPath && diff ? <pre className="trace-checkpoint__diff"><FileDiff size={13} />{diff}</pre> : null}
       {sessionId ? (
         <div className="trace-checkpoint__actions">
-          {!recoveryId ? <button type="button" disabled={loading || restoreDisabled} onClick={() => void beginCausalRollback()}>
+          <button type="button" disabled={loading || restoreDisabled} onClick={() => void beginCausalRollback()}>
             <RotateCcw size={13} /> {t("trace.checkpoint.causalRollback")}
-          </button> : null}
+          </button>
           {selectedRef?.commitId ? <button type="button" disabled={loading || restoreDisabled} onClick={() => void beginRestore(selectedRef.id)}>
             {t("trace.checkpoint.restoreSnapshot")}
           </button> : null}
-          {recoveryId ? <button type="button" disabled={loading || restoreDisabled} onClick={() => void undo()}>{t("trace.checkpoint.undo")}</button> : null}
         </div>
       ) : null}
       {restoreDisabled ? <small>{t("trace.checkpoint.activeBlocked")}</small> : null}
