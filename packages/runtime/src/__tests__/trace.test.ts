@@ -24,17 +24,19 @@ describe("GraphOfTrace onChange (#79)", () => {
     ]);
   });
 
-  it("createChainedNode links to the previous node and tags metadata.auto", () => {
+  it("createChainedNode keeps chronology separate from causality and tags metadata.auto", () => {
     const g = new GraphOfTrace("s");
     const root = g.createChainedNode({ title: "root", agent: "principal" });
-    expect(root.parents).toEqual([]); // first node is a root
+    expect(root.parents).toEqual([
+      expect.objectContaining({ relation: "depends_on", edgeType: "confirmed" }),
+    ]);
     expect(root.metadata?.auto).toBe(true);
 
     const next = g.createChainedNode({ title: "next", agent: "principal" });
-    expect(next.parents).toEqual([{ id: root.id, relation: "follows" }]);
-    expect(next.parentIds).toEqual([root.id]);
-    // Reverse edge maintained.
-    expect(g.getNode(root.id)!.childIds).toContain(next.id);
+    expect(next.parents).toEqual([
+      expect.objectContaining({ relation: "depends_on", edgeType: "confirmed" }),
+    ]);
+    expect(next.parentIds).not.toContain(root.id);
   });
 
   it("getLastNodeId tracks the most recent create", () => {
@@ -60,8 +62,10 @@ describe("GraphOfTrace onChange (#79)", () => {
     // Correct direction: survey (earlier) is prerequisite of synthesis (later).
     expect(g.addRelation("survey", "synthesis", "synthesis builds on the survey")).toBe(true);
     // synthesis depends_on survey: survey recorded as synthesis's parent.
-    expect(g.getNode("synthesis")!.parentIds).toContain("survey");
-    expect(g.getNode("survey")!.childIds).toContain("synthesis");
+    expect(g.getNodeV2("synthesis")!.parents).toContainEqual(
+      expect.objectContaining({ nodeId: "survey", conclusion: "candidate" }),
+    );
+    expect(g.getNode("synthesis")!.parentIds).not.toContain("survey");
   });
 
   it("auto-corrects a reversed depends_on edge to follow chronology (#110)", () => {
@@ -82,26 +86,17 @@ describe("GraphOfTrace onChange (#79)", () => {
     });
 
     // Reversed args: caller says from=synthesis (later) -> to=survey (earlier).
-    // The guard must swap so the edge still points survey -> synthesis.
+    // V2 preserves the caller-declared direction and requires Auditor review.
     expect(g.addRelation("synthesis", "survey", "synthesis depends on survey")).toBe(true);
-    expect(g.getNode("synthesis")!.parentIds).toContain("survey");
-    expect(g.getNode("synthesis")!.parentIds).not.toContain("synthesis");
-    expect(g.getNode("survey")!.childIds).toContain("synthesis");
-    expect(g.getNode("survey")!.parentIds).not.toContain("synthesis");
+    expect(g.getNodeV2("survey")!.parents).toContainEqual(
+      expect.objectContaining({ nodeId: "synthesis", conclusion: "candidate" }),
+    );
 
-    // Reversed again: from=audit (latest) -> to=synthesis. Swap → synthesis -> audit.
+    // Reversed again remains audit -> synthesis as declared.
     expect(g.addRelation("audit", "synthesis", "audit depends on synthesis")).toBe(true);
-    expect(g.getNode("audit")!.parentIds).toContain("synthesis");
-    expect(g.getNode("synthesis")!.childIds).toContain("audit");
-
-    // Every depends_on edge now points earlier → later (no time reversal).
-    for (const node of g.getGraph().nodes) {
-      for (const p of node.parents) {
-        if (p.relation !== "depends_on") continue;
-        const parent = g.getNode(p.id)!;
-        expect(parent.createdAt! <= node.createdAt!).toBe(true);
-      }
-    }
+    expect(g.getNodeV2("synthesis")!.parents).toContainEqual(
+      expect.objectContaining({ nodeId: "audit", conclusion: "candidate" }),
+    );
   });
 
   it("does not reorder non-depends_on relations (parent/follows left intact)", () => {
@@ -118,10 +113,13 @@ describe("GraphOfTrace onChange (#79)", () => {
     // A 'parent' edge from the later node is a legitimate hierarchy link; the
     // chronology guard only applies to depends_on and must leave this as-is.
     expect(g.addRelation("late", "early", "hierarchy", "parent")).toBe(true);
-    expect(g.getNode("early")!.parentIds).toContain("late");
+    expect(g.getNode("early")!.parentIds).not.toContain("late");
+    expect(g.getNodeDetail("early")!.semanticLinks.incoming).toContainEqual(
+      expect.objectContaining({ fromId: "late" }),
+    );
   });
 
-  it("load() resumes chaining from the latest node", () => {
+  it("load() tracks the latest node without manufacturing lineage", () => {
     const g = new GraphOfTrace("s");
     const older: TraceNode = {
       id: "n1", title: "older", type: "task", status: "completed",
@@ -133,6 +131,6 @@ describe("GraphOfTrace onChange (#79)", () => {
     g.load({ meta: { sessionId: "s" }, nodes: [older, newer] });
     expect(g.getLastNodeId()).toBe("n2");
     const chained = g.createChainedNode({ title: "after-restore" });
-    expect(chained.parentIds).toEqual(["n2"]);
+    expect(chained.parentIds).not.toContain("n2");
   });
 });

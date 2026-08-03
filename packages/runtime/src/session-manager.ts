@@ -17,6 +17,7 @@ import { join, resolve, sep, dirname } from "node:path";
 import { randomUUID } from "node:crypto";
 import {
   CUSTOM_EVENT,
+  type AuditReport,
   type AgUiEvent,
   type AgentStats,
   type AgentStatus,
@@ -29,6 +30,7 @@ import {
   type SessionTokenUsage,
   type TokenUsage,
   type TraceGraph,
+  type TraceNodeRecord,
   type UserInputCancellationReason,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
@@ -38,7 +40,7 @@ import {
   type TaskNotification,
   type TaskRecord,
 } from "./task-ledger.js";
-import { GraphOfTrace } from "./trace.js";
+import { GraphOfTrace, type TraceAuditTarget } from "./trace.js";
 import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import {
   addStatsDelta,
@@ -268,6 +270,12 @@ interface SessionEntry {
   bus: EventBus;
   taskLedger: TaskLedger;
   trace: GraphOfTrace;
+  /** Host-bound source record while Trace processes one durable event. */
+  currentTraceRecord?: TraceNodeRecord;
+  /** Host-bound immutable target for one Auditor turn. */
+  currentTraceAuditTarget?: TraceAuditTarget;
+  /** Deduplicates durable Auditor targets by node/parent identity. */
+  traceAuditQueued: Set<string>;
   agents: Map<string, MasAgent>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
@@ -1263,6 +1271,9 @@ export class SessionManager {
       (op, node) => {
         bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_NODE, { op, node }));
       },
+      (delta) => {
+        bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_DELTA, delta));
+      },
     );
 
     const entry: SessionEntry = {
@@ -1274,6 +1285,9 @@ export class SessionManager {
       bus,
       taskLedger,
       trace,
+      currentTraceRecord: undefined,
+      currentTraceAuditTarget: undefined,
+      traceAuditQueued: new Set(),
       agents: new Map(),
       deliveryErrors: new Map(),
       runActive: false,
@@ -1319,6 +1333,7 @@ export class SessionManager {
         throw err;
       }
       await this.loadTrace(entry);
+      this.rebuildQueuedTraceAudits(entry);
       // Rehydrate cumulative token usage so the running total survives restarts.
       await this.loadUsage(entry);
       // Rehydrate full per-run/per-session stats (tokens+tools+skills+errors).
@@ -2033,6 +2048,8 @@ export class SessionManager {
       sessionId,
       fromAgent: name,
       trace: entry.trace,
+      currentTraceRecord: () => entry.currentTraceRecord,
+      currentTraceAuditTarget: () => entry.currentTraceAuditTarget,
       dispatchTask: async (target, content) => {
         const task = await entry.taskLedger.dispatch(name, target, content);
         entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "created", task }));
@@ -2309,22 +2326,40 @@ export class SessionManager {
       const entry = this.sessions.get(sessionId);
       if (!entry) return;
       if (entry.taskLedger.isPaused(name)) return;
-      const notifications = entry.taskLedger.peekBatch(name);
+      // Trace and Auditor bind exactly one durable event to host-owned state.
+      const notifications = entry.taskLedger.peekBatch(
+        name,
+        name === "trace" || name === "auditor" ? 1 : undefined,
+      );
       if (notifications.length === 0) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
+      const traceRecord = name === "trace"
+        ? this.parseInternalEnvelope<TraceNodeRecord>(notifications[0]?.content, "Trace-Record")
+        : undefined;
+      const auditTarget = name === "auditor"
+        ? this.coerceTraceAuditTarget(this.parseInternalEnvelope(notifications[0]?.content, "Trace-Audit-Target"))
+        : undefined;
+      if (name === "trace") entry.currentTraceRecord = traceRecord;
+      if (name === "auditor") entry.currentTraceAuditTarget = auditTarget;
       // #167: cap concurrent provider calls across experts in this session.
-      const ran = await this.withProviderSlot(sessionId, async () => {
-        // Stop may have paused delivery while this run waited for a provider
-        // semaphore slot. Do not start a new model call after Stop completed.
-        const current = this.sessions.get(sessionId);
-        if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
-        await agent.prompt(this.renderTaskEvents(notifications));
-        return true;
-      });
+      let ran = false;
+      try {
+        ran = await this.withProviderSlot(sessionId, async () => {
+          // Stop may have paused delivery while this run waited for a provider
+          // semaphore slot. Do not start a new model call after Stop completed.
+          const current = this.sessions.get(sessionId);
+          if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+          await agent.prompt(this.renderTaskEvents(notifications));
+          return true;
+        });
+      } finally {
+        if (name === "trace") entry.currentTraceRecord = undefined;
+        if (name === "auditor") entry.currentTraceAuditTarget = undefined;
+      }
       if (!ran || entry.taskLedger.isPaused(name)) return;
 
       // Status returns to idle after an explicit abort, so it cannot identify
@@ -2358,6 +2393,16 @@ export class SessionManager {
         ));
         return;
       }
+      if (name === "auditor" && auditTarget) {
+        const pending = entry.trace.listPendingAuditTargets([auditTarget.nodeId])
+          .find((target) => this.traceAuditKey(target) === this.traceAuditKey(auditTarget));
+        if (pending?.fingerprint === auditTarget.fingerprint) {
+          // A clean turn is not a completed audit unless the bound target was
+          // concluded. Keep the notification durable and pause to avoid a spin.
+          await entry.taskLedger.pauseAgent(name);
+          return;
+        }
+      }
       // Linearize acknowledgement with pauseDelivery(): if Stop won the ledger
       // write race, retain the batch for the next explicit user turn.
       const acknowledged = await entry.taskLedger.acknowledgeIfActive(
@@ -2366,6 +2411,74 @@ export class SessionManager {
       );
       if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
+      if (name === "trace") {
+        void this.enqueuePendingTraceAudits(entry);
+      } else if (name === "auditor" && auditTarget) {
+        entry.traceAuditQueued.delete(this.traceAuditKey(auditTarget));
+        const latest = entry.trace.auditFingerprint(auditTarget.nodeId, auditTarget.parentNodeId);
+        const stillPending = entry.trace.listPendingAuditTargets([auditTarget.nodeId])
+          .some((target) => this.traceAuditKey(target) === this.traceAuditKey(auditTarget));
+        if (stillPending && latest && latest !== auditTarget.fingerprint) {
+          void this.enqueueTraceAudit(entry, { ...auditTarget, fingerprint: latest });
+        }
+      }
+    }
+  }
+
+  private parseInternalEnvelope<T>(content: string | undefined, key: string): T | undefined {
+    if (!content) return undefined;
+    const prefix = `${key}: `;
+    const line = content.split("\n").find((candidate) => candidate.startsWith(prefix));
+    if (!line) return undefined;
+    try { return JSON.parse(line.slice(prefix.length)) as T; } catch { return undefined; }
+  }
+
+  private rebuildQueuedTraceAudits(entry: SessionEntry): void {
+    entry.traceAuditQueued.clear();
+    const notifications = entry.taskLedger.peekBatch("auditor", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    for (const notification of notifications) {
+      const target = this.coerceTraceAuditTarget(
+        this.parseInternalEnvelope(notification.content, "Trace-Audit-Target"),
+      );
+      if (target) entry.traceAuditQueued.add(this.traceAuditKey(target));
+    }
+  }
+
+  private traceAuditKey(target: Pick<TraceAuditTarget, "nodeId" | "parentNodeId">): string {
+    return target.parentNodeId ? `${target.nodeId}<-${target.parentNodeId}` : target.nodeId;
+  }
+
+  private coerceTraceAuditTarget(value: unknown): TraceAuditTarget | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const raw = value as Record<string, unknown>;
+    if (typeof raw.nodeId !== "string" || typeof raw.fingerprint !== "string") return undefined;
+    return {
+      nodeId: raw.nodeId,
+      ...(typeof raw.parentNodeId === "string" ? { parentNodeId: raw.parentNodeId } : {}),
+      fingerprint: raw.fingerprint,
+    };
+  }
+
+  private async enqueuePendingTraceAudits(entry: SessionEntry): Promise<void> {
+    for (const target of entry.trace.listPendingAuditTargets()) await this.enqueueTraceAudit(entry, target);
+  }
+
+  private async enqueueTraceAudit(entry: SessionEntry, target: TraceAuditTarget): Promise<void> {
+    const key = this.traceAuditKey(target);
+    if (entry.traceAuditQueued.has(key)) return;
+    entry.traceAuditQueued.add(key);
+    try {
+      await this.ensureAgent(entry.id, "auditor");
+      const instruction = target.parentNodeId
+        ? `[后台 GoT 审计] 请独立审查节点 ${target.nodeId} 的候选因果父节点 ${target.parentNodeId}。读取必要的局部 Trace 证据，然后用 edit_trace_review 提交一次结论和理由。不要通知 PI。`
+        : `[后台 GoT 审计] 请独立审查节点 ${target.nodeId} 的内容与证据充分性。读取必要的局部 Trace 证据，然后用 edit_trace_review 提交一次结论和理由。不要通知 PI。`;
+      await entry.taskLedger.enqueueSystem(
+        "auditor",
+        `${instruction}\nTrace-Audit-Target: ${JSON.stringify(target)}`,
+      );
+      this.wakeAgent(entry.id, "auditor");
+    } catch {
+      entry.traceAuditQueued.delete(key);
     }
   }
 
@@ -2584,6 +2697,14 @@ export class SessionManager {
   getTrace(sessionId: string): TraceGraph | undefined {
     const entry = this.sessions.get(sessionId);
     return entry?.trace.getGraph();
+  }
+
+  getTraceChanges(sessionId: string, limit = 200): import("@brainpilot/protocol").TraceChange[] | undefined {
+    return this.sessions.get(sessionId)?.trace.getChanges(limit);
+  }
+
+  getAuditReports(sessionId: string): AuditReport[] | undefined {
+    return this.sessions.get(sessionId)?.trace.getAuditReports();
   }
 
   /**
@@ -2813,6 +2934,7 @@ export class SessionManager {
     } catch {
       /* no trace yet */
     }
+    await entry.trace.recoverChanges();
   }
 
   private usagePath(sid: string): string {
