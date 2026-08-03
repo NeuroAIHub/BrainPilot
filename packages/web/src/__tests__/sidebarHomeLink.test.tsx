@@ -50,6 +50,7 @@ function render() {
       activePage="workspace"
       onOpenDemo={noop}
       onGoWorkspace={noop}
+      onOpenPlugins={noop}
       onOpenSettings={noop}
       onOpenSearch={noop}
       onResizeStart={noop}
@@ -59,6 +60,11 @@ function render() {
 }
 
 describe("Sidebar — #250 return-home entry", () => {
+  it("renders the marketplace entry directly below Live Demo", () => {
+    const html = render();
+    expect(html.indexOf("sidebar.demo")).toBeLessThan(html.indexOf("sidebar.plugins"));
+  });
+
   it("renders a home link to runtimeConfig.homeUrl in hosted mode", () => {
     runtimeConfig.localMode = false;
     runtimeConfig.homeUrl = "https://brainpilot.example/";

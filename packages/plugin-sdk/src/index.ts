@@ -1,7 +1,13 @@
 import { compare, satisfies, valid, validRange } from "semver";
+import {
+  PREVIEW_RPC_VERSION,
+  type PreviewerContribution,
+  type PreviewerMatch,
+} from "./preview.js";
+
+export * from "./preview.js";
 
 export const PLUGIN_API_VERSION = "1" as const;
-export const PREVIEW_RPC_VERSION = "1" as const;
 export const AGENT_INSTRUCTIONS_PROTOCOL_VERSION = "1" as const;
 export const KNOWLEDGE_SERVICE_PROTOCOL_VERSION = "1" as const;
 export const LITERATURE_SERVICE_PROTOCOL_VERSION = "1" as const;
@@ -22,29 +28,6 @@ export interface PluginDependency {
   id: string;
   version: string;
   optional?: boolean;
-}
-
-export interface PreviewDatasetRule {
-  kind: "stem-siblings";
-  companions: string[];
-  required?: string[];
-}
-
-export interface PreviewerMatch {
-  extensions?: string[];
-  mimeTypes?: string[];
-  dataset?: string | PreviewDatasetRule;
-}
-
-export interface PreviewerContribution {
-  id: string;
-  match?: PreviewerMatch;
-  /** Legacy v0 form; normalized into match.extensions by parsePluginManifest. */
-  extensions?: string[];
-  priority?: number;
-  mode?: "readonly" | "editable";
-  delivery?: "whole" | "range" | "derived";
-  entry: string;
 }
 
 export interface EntryContribution { id: string; title: string; entry: string; }
@@ -160,30 +143,6 @@ export interface PluginUpdateStatus {
   publishedAt?: string;
 }
 
-export interface PreviewFileDescriptor {
-  name: string;
-  size: number;
-  mime?: string;
-  handle?: string;
-}
-
-/** A host-selected sibling file for a compound dataset (for example BrainVision). */
-export interface PreviewCompanionFile extends PreviewFileDescriptor { buffer?: ArrayBuffer; }
-export interface PreviewDatasetDescriptor { kind: string; primaryHandle: string; members: PreviewFileDescriptor[]; }
-
-export type PreviewHostToPluginMessage =
-  | { type: "preview/initialize"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; theme?: "light" | "dark" }
-  | { type: "preview/open"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; requestId: string; file: PreviewFileDescriptor; buffer: ArrayBuffer; companions?: PreviewCompanionFile[]; dataset?: PreviewDatasetDescriptor; derived?: unknown }
-  | { type: "preview/range-result"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; requestId: string; handle: string; offset: number; totalSize: number; buffer: ArrayBuffer }
-  | { type: "preview/dispose"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string };
-
-export type PreviewPluginToHostMessage =
-  | { type: "preview/ready"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string }
-  | { type: "preview/rendered"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; requestId: string; metadata?: Record<string, unknown> }
-  | { type: "preview/error"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; requestId?: string; message: string }
-  | { type: "preview/resize"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; height: number }
-  | { type: "preview/read-range"; rpcVersion: typeof PREVIEW_RPC_VERSION; token: string; requestId: string; handle: string; offset: number; length: number };
-
 export interface KnowledgeServiceCapabilities {
   protocolVersion: typeof KNOWLEDGE_SERVICE_PROTOCOL_VERSION;
   collections?: boolean;
@@ -209,7 +168,6 @@ function stringArray(value: unknown): string[] | null { return Array.isArray(val
 function uniqueIds(values: Array<{ id: string }>): boolean { return new Set(values.map((value) => value.id)).size === values.length; }
 export function isPluginVersion(value: string): boolean { return valid(value) === value; }
 export function isSafePluginPath(value: string): boolean { return Boolean(value) && !value.startsWith("/") && !value.startsWith("\\") && !/^[A-Za-z]:/.test(value) && !value.split(/[\\/]/).includes(".."); }
-export function previewerExtensions(value: PreviewerContribution): string[] { return value.match?.extensions ?? value.extensions ?? []; }
 
 export function parsePluginManifest(value: unknown): PluginManifest | null {
   if (!object(value)) return null;
@@ -321,12 +279,6 @@ export function parsePluginManifest(value: unknown): PluginManifest | null {
 export function parsePublishablePluginManifest(value: unknown): PluginManifest | null {
   const manifest = parsePluginManifest(value);
   return manifest?.engines?.brainpilot && isBrainPilotVersionRange(manifest.engines.brainpilot) ? manifest : null;
-}
-
-export function isPreviewPluginMessage(value: unknown): value is PreviewPluginToHostMessage {
-  if (!object(value) || value.rpcVersion !== PREVIEW_RPC_VERSION || typeof value.token !== "string" || typeof value.type !== "string") return false;
-  if (value.type === "preview/read-range") return typeof value.requestId === "string" && typeof value.handle === "string" && typeof value.offset === "number" && value.offset >= 0 && typeof value.length === "number" && value.length > 0;
-  return value.type === "preview/ready" || value.type === "preview/rendered" || value.type === "preview/error" || value.type === "preview/resize";
 }
 
 export function isBrainPilotVersionRange(range: string | undefined): range is string {

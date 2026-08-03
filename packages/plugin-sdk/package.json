@@ -19,6 +19,10 @@
       "types": "./dist/index.d.ts",
       "default": "./dist/index.js"
     },
+    "./preview": {
+      "types": "./dist/preview.d.ts",
+      "default": "./dist/preview.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"

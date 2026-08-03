@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { Bot, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
@@ -19,6 +19,8 @@ import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
 import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
 
+const PluginMarketplace = lazy(() => import("../plugins/PluginMarketplace").then((module) => ({ default: module.PluginMarketplace })));
+
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
@@ -31,7 +33,7 @@ export function DesktopShell() {
   const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
   const [isNarrow, setIsNarrow] = useState(false);
   const isSidebarCollapsed = userCollapsed ?? isNarrow;
-  const [activePage, setActivePage] = useState<"workspace" | "demo">("workspace");
+  const [activePage, setActivePage] = useState<"workspace" | "demo" | "plugins">("workspace");
   // Bumped on every sidebar "Live Demo" click so DemoView returns to its
   // session-selection landing even when the demo page is already open (#111).
   const [demoResetSignal, setDemoResetSignal] = useState(0);
@@ -153,6 +155,7 @@ export function DesktopShell() {
           setDemoResetSignal((n) => n + 1);
         }}
         onGoWorkspace={() => setActivePage("workspace")}
+        onOpenPlugins={() => setActivePage("plugins")}
         onOpenSettings={() => openSettings()}
         onOpenSearch={() => setIsSearchOpen(true)}
         onResizeStart={(pointerX) => {
@@ -168,6 +171,10 @@ export function DesktopShell() {
 
       {activePage === "demo" ? (
         <DemoView resetSignal={demoResetSignal} />
+      ) : activePage === "plugins" ? (
+        <Suspense fallback={<main className="plugin-market"><div className="plugin-market__empty"><strong>{t("marketplace.loading")}</strong></div></main>}>
+          <PluginMarketplace />
+        </Suspense>
       ) : (
       <main
         className={`workspace ${isFilesOpen ? "workspace--files-open" : ""} ${

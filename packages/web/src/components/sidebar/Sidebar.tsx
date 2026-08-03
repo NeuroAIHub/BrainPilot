@@ -2,6 +2,7 @@ import {
   Home,
   MessagesSquare,
   MonitorPlay,
+  Package,
   PanelLeft,
   PenLine,
   Settings,
@@ -15,16 +16,17 @@ import { SessionList } from "./SessionList";
 
 type SidebarProps = {
   isCollapsed: boolean;
-  activePage: "workspace" | "demo";
+  activePage: "workspace" | "demo" | "plugins";
   onOpenDemo: () => void;
   onGoWorkspace: () => void;
+  onOpenPlugins: () => void;
   onOpenSettings: () => void;
   onOpenSearch: () => void;
   onResizeStart: (pointerX: number) => void;
   onToggle: () => void;
 };
 
-export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, onOpenSettings, onOpenSearch, onResizeStart, onToggle }: SidebarProps) {
+export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, onOpenPlugins, onOpenSettings, onOpenSearch, onResizeStart, onToggle }: SidebarProps) {
   const {
     sessions,
     currentSession,
@@ -150,6 +152,15 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
         >
           <MonitorPlay size={16} />
           <span>{t("sidebar.demo")}</span>
+        </button>
+        <button
+          className={`nav-item ${activePage === "plugins" ? "is-active" : ""}`}
+          onClick={onOpenPlugins}
+          title={t("sidebar.plugins")}
+          type="button"
+        >
+          <Package size={16} />
+          <span>{t("sidebar.plugins")}</span>
         </button>
       </nav>
 

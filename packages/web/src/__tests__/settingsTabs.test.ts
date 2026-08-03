@@ -5,6 +5,11 @@ const ids = (localMode: boolean, knowledgeBaseSettingsEnabled: boolean) =>
   getSettingsTabs({ localMode, knowledgeBaseSettingsEnabled }).map((tab) => tab.id);
 
 describe("Settings tabs — deployment capabilities", () => {
+  it("always exposes downloaded plugin management", () => {
+    expect(ids(true, false)).toContain("plugins");
+    expect(ids(false, true)).toContain("plugins");
+  });
+
   it("shows knowledge-base management by default", () => {
     expect(ids(true, true)).toContain("knowledgeBase");
   });
