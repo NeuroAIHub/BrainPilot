@@ -33,8 +33,11 @@ interface TraceGraphViewProps {
     zoomOut?: string;
     reset?: string;
   };
+  /** V2 semantic links are independently view-toggleable. */
+  showSemanticLinks?: boolean;
+  /** Proposed candidates are visible by default but distinguishable from official edges. */
+  showProposedDependencies?: boolean;
 }
-
 /**
  * Presentational reasoning-trace graph: the SVG DAG, zoom controls, viewport
  * pan/drag, wheel-zoom, and per-node drag offsets. Owns only view-local state
@@ -52,6 +55,8 @@ export function TraceGraphView({
   emptyLabel,
   formatKind,
   zoomLabels,
+  showSemanticLinks = true,
+  showProposedDependencies = true,
 }: TraceGraphViewProps) {
   const [nodeOffsets, setNodeOffsets] = useState<Map<string, { dx: number; dy: number }>>(new Map());
   const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -242,7 +247,16 @@ export function TraceGraphView({
             </marker>
           </defs>
           {adjustedLayout.positioned.flatMap(({ node }) =>
-            node.parents.map((parentRef) => {
+            node.parents
+              .filter((parentRef) => {
+                const semantic = parentRef.edgeType === "semantic" || [
+                  "follows", "restored_from", "supports", "contradicts", "supersedes", "references", "legacy",
+                ].includes(parentRef.relation ?? "");
+                if (semantic) return showSemanticLinks;
+                if (parentRef.edgeType === "proposed" || parentRef.edgeType === "candidate") return showProposedDependencies;
+                return true;
+              })
+              .map((parentRef) => {
               const parent = adjustedLayout.byId.get(parentRef.id);
               const child = adjustedLayout.byId.get(node.id);
               if (!parent || !child) {
@@ -260,8 +274,12 @@ export function TraceGraphView({
               const midY = (startY + endY) / 2;
               const labelText = parentRef.relation ? (relationLabels[parentRef.relation] || parentRef.relation) : "";
               const labelWidth = Math.max(48, labelText.length * 5.5 + 10);
+              const semantic = parentRef.edgeType === "semantic" || [
+                "follows", "restored_from", "supports", "contradicts", "supersedes", "references", "legacy",
+              ].includes(parentRef.relation ?? "");
+              const edgeKind = parentRef.edgeType || (semantic ? "semantic" : parentRef.relation || "necessitated_by");
               return (
-                <g className={`trace-edge trace-edge--${parentRef.relation || "necessitated_by"}`} key={`${parentRef.id}-${node.id}`}>
+                <g className={`trace-edge trace-edge--${edgeKind} trace-edge--${parentRef.relation || "necessitated_by"}`} key={`${parentRef.id}-${node.id}-${parentRef.edgeType || ""}`}>
                   <path d={path} />
                   {parentRef.relation ? (
                     <g className="trace-edge-label">
@@ -277,14 +295,14 @@ export function TraceGraphView({
                   ) : null}
                 </g>
               );
-            }),
+              }),
           )}
           {adjustedLayout.positioned.map(({ node, x, y }) => {
             const kind = getNodeKind(node);
             const kindLabel = formatKind?.(kind) ?? kind;
             return (
               <g
-                className={`trace-map-node trace-map-node--${kind} trace-map-node--${normalizeStatus(node.status)} ${selectedNodeId === node.id ? "is-selected" : ""} ${draggingNodeRef.current?.nodeId === node.id ? "is-dragging" : ""}`}
+                className={`trace-map-node trace-map-node--${kind} trace-map-node--${normalizeStatus(node.status)} ${node.revoked ? "is-revoked" : ""} ${selectedNodeId === node.id ? "is-selected" : ""} ${draggingNodeRef.current?.nodeId === node.id ? "is-dragging" : ""}`}
                 key={node.id}
                 onMouseDown={(e) => {
                   e.stopPropagation();
@@ -308,7 +326,7 @@ export function TraceGraphView({
                 <rect height={adjustedLayout.nodeHeight} rx="8" width={adjustedLayout.nodeWidth} />
                 <circle className={`trace-node__dot--${normalizeStatus(node.status)}`} cx="16" cy="24" r="4" />
                 <text className="trace-map-node__title" x="28" y="26">{truncateNodeTitle(node.title)}</text>
-                <text className="trace-map-node__meta" x="28" y="44">{node.agent || kindLabel}</text>
+                <text className="trace-map-node__meta" x="28" y="44">{node.revoked ? "Revoked" : `${node.agent || kindLabel} · ${node.confidence ?? "?"}`}</text>
                 <text className="trace-map-node__kind" x="28" y="58">{kindLabel}</text>
               </g>
             );

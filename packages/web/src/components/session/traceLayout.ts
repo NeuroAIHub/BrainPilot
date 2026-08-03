@@ -12,7 +12,6 @@ export function formatTime(value?: string): string {
   }
   return new Date(value).toLocaleString();
 }
-
 export function getStatusLabelKey(status: string): string | null {
   if (status === "done" || status === "completed") {
     return "trace.status.done";
@@ -131,15 +130,23 @@ export interface TraceLayout {
 export function buildTraceLayout(nodes: TraceNode[], direction: TraceLayoutDirection): TraceLayout {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const levelCache = new Map<string, number>();
+  // Semantic links deliberately do not define dependency rank. They may be
+  // reciprocal (supports/contradicts/references) even though official and
+  // proposed dependencies are cycle-checked, so feeding them into the DAG
+  // recursion would make the renderer recurse forever.
+  const layoutParents = (node: TraceNode): string[] => node.parents
+    .filter((parent) => parent.edgeType !== "semantic")
+    .map((parent) => parent.id);
   const getLevel = (node: TraceNode): number => {
     if (levelCache.has(node.id)) {
       return levelCache.get(node.id) as number;
     }
-    if (node.parentIds.length === 0) {
+    const parents = layoutParents(node);
+    if (parents.length === 0) {
       levelCache.set(node.id, 0);
       return 0;
     }
-    const level = 1 + Math.max(...node.parentIds.map((parentId) => {
+    const level = 1 + Math.max(...parents.map((parentId) => {
       const parent = byId.get(parentId);
       return parent ? getLevel(parent) : 0;
     }));

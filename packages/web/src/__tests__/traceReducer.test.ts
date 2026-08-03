@@ -16,11 +16,60 @@ const node = (id: string, extra: Record<string, unknown> = {}) => ({
   toolCalls: [],
   ...extra,
 });
-
 const traceEv = (op: string, n: Record<string, unknown>): WebSocketEvent =>
   ({ type: "CUSTOM", name: "trace_node", value: { op, node: n } } as unknown as WebSocketEvent);
 
 describe("reduceTraceForEvent (#79)", () => {
+  it("accepts a canonical V2 trace_delta and materializes active/proposed/semantic edges", () => {
+    const delta = {
+      type: "CUSTOM",
+      name: "trace_delta",
+      value: {
+        schemaVersion: "2.0",
+        revision: 4,
+        op: "snapshot",
+        graph: {
+          schemaVersion: "2.0",
+          revision: 4,
+          meta: { sessionId: "s" },
+          nodes: [
+            { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [] },
+            { id: "b", title: "B", type: "task", status: "pending", toolCalls: [], artifactIds: [], episodeTags: [] },
+          ],
+          dependencies: [
+            { id: "official", prerequisiteId: "a", dependentId: "b", origin: "host", confidence: "high", state: "active", evidence: [] },
+            { id: "candidate", prerequisiteId: "b", dependentId: "a", origin: "trace", confidence: "low", state: "proposed", evidence: [] },
+          ],
+          semanticLinks: [{ id: "sequence", fromId: "a", toId: "b", type: "sequence_after" }],
+          episodes: [],
+          artifacts: [],
+        },
+      },
+    } as unknown as WebSocketEvent;
+    const out = reduceTraceForEvent(null, delta, "s")!;
+    expect(out).toMatchObject({ schemaVersion: "2.0", revision: 4 });
+    const b = out.nodes.find((item) => item.id === "b")!;
+    expect(b.parents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "a", edgeType: "active" }),
+      expect.objectContaining({ id: "a", edgeType: "semantic" }),
+    ]));
+    const a = out.nodes.find((item) => item.id === "a")!;
+    expect(a.parents).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "b", edgeType: "proposed" }),
+    ]));
+  });
+
+  it("does not let a replayed stale V2 revision overwrite a newer graph", () => {
+    const start: TraceGraph = { schemaVersion: "2.0", revision: 5, meta: { sessionId: "s" }, nodes: [node("new")] };
+    const stale = {
+      type: "CUSTOM", name: "trace_delta", value: {
+        schemaVersion: "2.0", revision: 4, op: "snapshot",
+        graph: { schemaVersion: "2.0", revision: 4, meta: { sessionId: "s" }, nodes: [], dependencies: [], semanticLinks: [], episodes: [], artifacts: [] },
+      },
+    } as unknown as WebSocketEvent;
+    expect(reduceTraceForEvent(start, stale, "s")).toBe(start);
+  });
+
   it("seeds a graph from null on the first node", () => {
     const out = reduceTraceForEvent(null, traceEv("created", node("a")), "s");
     expect(out).not.toBeNull();

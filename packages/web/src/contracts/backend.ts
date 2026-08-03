@@ -32,6 +32,23 @@ import type {
   TraceArtifact,
   TraceTimestamp,
   TraceGraph,
+  TraceDependency,
+  TraceSemanticLink,
+  TraceEpisode,
+  TraceArtifactV2,
+  TraceDeltaV2,
+  TraceCheckpointRef,
+  TraceCheckpointDetail,
+  TraceCheckpointFileChange,
+  TraceCheckpointSkippedFile,
+  TraceRestorePreview,
+  TraceRestoreResult,
+  TraceCausalRollbackPreview,
+  TraceCausalRollbackResult,
+  TraceChange,
+  TraceNodeRecord,
+  TraceCausalParent,
+  AuditReport,
 } from "@brainpilot/protocol";
 
 // Re-export the canonical protocol domain types under their existing names so
@@ -58,6 +75,23 @@ export type {
   TraceArtifact,
   TraceTimestamp,
   TraceGraph,
+  TraceDependency,
+  TraceSemanticLink,
+  TraceEpisode,
+  TraceArtifactV2,
+  TraceDeltaV2,
+  TraceCheckpointRef,
+  TraceCheckpointDetail,
+  TraceCheckpointFileChange,
+  TraceCheckpointSkippedFile,
+  TraceRestorePreview,
+  TraceRestoreResult,
+  TraceCausalRollbackPreview,
+  TraceCausalRollbackResult,
+  TraceChange,
+  TraceNodeRecord,
+  TraceCausalParent,
+  AuditReport,
 };
 
 /**
@@ -838,6 +872,29 @@ export function normalizeTraceNode(rawValue: unknown): TraceNode {
   const description = optionalString(raw.description);
   const timestamp = asDict(raw.timestamp);
   const parentIds = normalizeStringArray(raw.parentIds ?? raw.parent_ids);
+  const checkpoints = Array.isArray(raw.checkpoints)
+    ? raw.checkpoints.map((value) => {
+        const item = asDict(value);
+        const stats = asDict(item.stats);
+        return {
+          id: stringValue(item.id),
+          commitId: optionalString(item.commitId ?? item.commit_id),
+          status: stringValue(item.status, "failed") as TraceCheckpointRef["status"],
+          capturedAt: stringValue(item.capturedAt ?? item.captured_at),
+          sourceAgent: optionalString(item.sourceAgent ?? item.source_agent),
+          baseCheckpointId: optionalString(item.baseCheckpointId ?? item.base_checkpoint_id),
+          stats: Object.keys(stats).length > 0 ? {
+            files: optionalNumber(stats.files) ?? 0,
+            added: optionalNumber(stats.added) ?? 0,
+            modified: optionalNumber(stats.modified) ?? 0,
+            deleted: optionalNumber(stats.deleted) ?? 0,
+            renamed: optionalNumber(stats.renamed) ?? 0,
+          } : undefined,
+          skippedCount: optionalNumber(item.skippedCount ?? item.skipped_count) ?? 0,
+          error: optionalString(item.error),
+        };
+      }).filter((item) => item.id)
+    : undefined;
   return {
     id: stringValue(raw.id ?? raw.node_id),
     title: stringValue(raw.title, stringValue(raw.id ?? raw.node_id, "Trace node")),
@@ -864,7 +921,25 @@ export function normalizeTraceNode(rawValue: unknown): TraceNode {
     durationMs: optionalNumber(raw.durationMs ?? raw.duration_ms),
     errorMessage: optionalString(raw.errorMessage ?? raw.error_message),
     toolCalls: normalizeStringArray(raw.toolCalls ?? raw.tool_calls),
+    checkpoints,
+    artifactIds: normalizeStringArray(raw.artifactIds ?? raw.artifact_ids),
+    primaryEpisodeId: optionalString(raw.primaryEpisodeId ?? raw.primary_episode_id),
+    episodeTags: normalizeStringArray(raw.episodeTags ?? raw.episode_tags),
     metadata: asOptionalUnknownRecord(raw.metadata),
+    records: Array.isArray(raw.records) ? camelizeObject(raw.records) as TraceNodeRecord[] : undefined,
+    causalParents: Array.isArray(raw.causalParents ?? raw.causal_parents)
+      ? camelizeObject(raw.causalParents ?? raw.causal_parents) as TraceCausalParent[]
+      : undefined,
+    executionResult: raw.executionResult === "failed" || raw.execution_result === "failed" ? "failed" : "completed",
+    revoked: raw.revoked === true,
+    confidence: raw.confidence === "low" || raw.confidence === "medium" || raw.confidence === "high"
+      ? raw.confidence
+      : undefined,
+    confidenceReason: optionalString(raw.confidenceReason ?? raw.confidence_reason),
+    reviewConclusion: typeof (raw.reviewConclusion ?? raw.review_conclusion) === "string"
+      ? (raw.reviewConclusion ?? raw.review_conclusion) as TraceNode["reviewConclusion"]
+      : "unreviewed",
+    reviewReason: optionalString(raw.reviewReason ?? raw.review_reason),
   };
 }
 
@@ -959,7 +1034,51 @@ function normalizeSessionTokenUsage(rawValue: unknown): SessionTokenUsage | unde
 export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
   const raw = asDict(rawValue);
   const meta = asDict(raw.meta);
-  const nodes = Array.isArray(raw.nodes) ? raw.nodes.map(normalizeTraceNode) : [];
+  const rawNodes = Array.isArray(raw.nodes) ? raw.nodes : [];
+  const isCanonicalV2 = raw.schemaVersion === "2.0" && Array.isArray(raw.dependencies);
+  const registry = new Map(
+    (Array.isArray(raw.artifacts) ? raw.artifacts : []).map(asDict)
+      .filter((artifact) => typeof artifact.id === "string")
+      .map((artifact) => [artifact.id as string, artifact]),
+  );
+  const nodes = isCanonicalV2
+    ? rawNodes.map((value) => {
+        const node = asDict(value);
+        const id = stringValue(node.id);
+        // A materialized V2 compatibility response may already carry parents.
+        if (Array.isArray(node.parents)) return normalizeTraceNode(node);
+        const report = asDict(node.report);
+        const artifactIds = normalizeStringArray(node.artifactIds ?? node.artifact_ids);
+        const artifacts = artifactIds
+          .map((artifactId) => registry.get(artifactId))
+          .filter((artifact): artifact is Dict => Boolean(artifact))
+          .map((artifact) => ({ path: artifact.path, type: artifact.type ?? artifact.kind }));
+        const parents = [
+          ...(Array.isArray(raw.dependencies) ? raw.dependencies : []).flatMap((edgeValue) => {
+            const edge = asDict(edgeValue);
+            const dependentId = stringValue(edge.dependentId ?? edge.dependent_id);
+            const prerequisiteId = stringValue(edge.prerequisiteId ?? edge.prerequisite_id);
+            if (dependentId !== id || !prerequisiteId || edge.state === "rejected") return [];
+            return [{ id: prerequisiteId, relation: "depends_on", explanation: edge.reason, edgeType: edge.state }];
+          }),
+          ...(Array.isArray(raw.semanticLinks ?? raw.semantic_links) ? (raw.semanticLinks ?? raw.semantic_links) as unknown[] : []).flatMap((linkValue) => {
+            const link = asDict(linkValue);
+            const toId = stringValue(link.toId ?? link.to_id);
+            const fromId = stringValue(link.fromId ?? link.from_id);
+            if (toId !== id || !fromId) return [];
+            const type = stringValue(link.type, "legacy");
+            return [{ id: fromId, relation: type === "sequence_after" ? "follows" : type, explanation: link.reason, edgeType: "semantic" }];
+          }),
+        ];
+        return normalizeTraceNode({
+          ...node,
+          summary: report.summary,
+          content: report.content,
+          artifacts,
+          parents,
+        });
+      })
+    : rawNodes.map(normalizeTraceNode);
   const childIdsByParent = new Map<string, Set<string>>();
   for (const node of nodes) {
     for (const parentId of node.parentIds) {
@@ -968,7 +1087,21 @@ export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
       childIdsByParent.set(parentId, children);
     }
   }
+  const dependencies = Array.isArray(raw.dependencies)
+    ? camelizeObject(raw.dependencies) as TraceDependency[]
+    : undefined;
+  const semanticLinks = Array.isArray(raw.semanticLinks ?? raw.semantic_links)
+    ? camelizeObject(raw.semanticLinks ?? raw.semantic_links) as TraceSemanticLink[]
+    : undefined;
+  const episodes = Array.isArray(raw.episodes)
+    ? camelizeObject(raw.episodes) as TraceEpisode[]
+    : undefined;
+  const traceArtifacts = Array.isArray(raw.artifacts)
+    ? camelizeObject(raw.artifacts) as TraceArtifactV2[]
+    : undefined;
   return {
+    ...(raw.schemaVersion === "2.0" ? { schemaVersion: "2.0" as const } : {}),
+    ...(typeof raw.revision === "number" && Number.isFinite(raw.revision) ? { revision: Math.max(0, Math.trunc(raw.revision)) } : {}),
     meta: {
       ...(camelizeObject(meta) as Record<string, unknown>),
       sessionId: stringValue(meta.sessionId ?? meta.session_id),
@@ -981,6 +1114,10 @@ export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
       ...node,
       childIds: node.childIds.length ? node.childIds : Array.from(childIdsByParent.get(node.id) ?? []),
     })),
+    ...(dependencies ? { dependencies } : {}),
+    ...(semanticLinks ? { semanticLinks } : {}),
+    ...(episodes ? { episodes } : {}),
+    ...(traceArtifacts ? { artifacts: traceArtifacts } : {}),
   };
 }
 
