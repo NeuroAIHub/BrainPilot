@@ -6666,6 +6666,231 @@ button {
   line-height: 1.4;
 }
 
+/* Graph of Trace v2: audit, dependency, and checkpoint affordances. */
+.trace-control--toggle {
+  justify-content: flex-start;
+  gap: 6px;
+  cursor: pointer;
+}
+
+.trace-control--toggle input {
+  width: auto;
+  min-width: auto;
+  accent-color: var(--color-accent);
+}
+
+/* TraceGraphV2: official dependencies are solid; candidates remain tentative. */
+.trace-edge--active path,
+.trace-edge--confirmed path {
+  stroke: color-mix(in srgb, var(--color-success) 68%, var(--color-border-strong));
+  stroke-width: 2.25;
+}
+
+.trace-edge--proposed path,
+.trace-edge--candidate path {
+  stroke: color-mix(in srgb, var(--color-warning) 72%, var(--color-border-strong));
+  stroke-dasharray: 6 4;
+}
+
+.trace-edge--uncertain path {
+  stroke: color-mix(in srgb, var(--color-warning) 52%, var(--color-border-strong));
+  stroke-dasharray: 3 4;
+}
+
+.trace-edge--rejected path {
+  stroke: color-mix(in srgb, var(--color-danger) 72%, var(--color-border-strong));
+  stroke-dasharray: 2 5;
+}
+
+.trace-map-node--episode rect {
+  stroke-dasharray: 5 3;
+  fill: color-mix(in srgb, var(--color-info) 10%, var(--color-surface));
+}
+
+.trace-map-node.is-revoked {
+  opacity: 0.46;
+}
+
+.trace-map-node.is-revoked rect {
+  stroke-dasharray: 5 4;
+}
+
+.trace-detail__badges span.trace-detail__badge--revoked {
+  color: var(--color-danger, #c2413b);
+  border-color: currentColor;
+}
+
+.trace-detail__section > summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+  color: var(--color-text);
+  font-size: 12px;
+  font-weight: 560;
+}
+
+.trace-audit-reports__list {
+  display: grid;
+  gap: 8px;
+}
+
+.trace-audit-reports__list > article {
+  display: grid;
+  gap: 7px;
+  border: 1px solid var(--color-border);
+  border-radius: 8px;
+  padding: 9px;
+}
+
+.trace-audit-reports__list header {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.trace-audit-reports__list pre {
+  max-height: 280px;
+  overflow: auto;
+  white-space: pre-wrap;
+  font-size: 11px;
+}
+
+.trace-audit-reports__list button {
+  justify-self: start;
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  padding: 5px 8px;
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+  cursor: pointer;
+}
+
+.trace-dependency-candidate {
+  display: grid;
+  gap: 5px;
+  border: 1px dashed color-mix(in srgb, var(--color-warning) 55%, var(--color-border));
+  border-radius: 8px;
+  padding: 7px;
+}
+
+.trace-dependency-candidate__actions {
+  display: flex;
+  gap: 6px;
+}
+
+.trace-dependency-candidate__actions button {
+  border: 1px solid var(--color-border);
+  border-radius: 6px;
+  background: var(--color-surface-soft);
+  color: var(--color-text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  padding: 3px 7px;
+}
+
+.trace-checkpoint__toolbar,
+.trace-checkpoint__actions,
+.trace-checkpoint__confirm > div {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.trace-checkpoint__toolbar select {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-1);
+  color: var(--text-primary);
+  padding: 5px 7px;
+}
+
+.trace-checkpoint__status {
+  font-size: 11px;
+  color: var(--text-secondary);
+}
+
+.trace-checkpoint__status.is-partial,
+.trace-checkpoint__error {
+  color: var(--status-warning, #b7791f);
+}
+
+.trace-checkpoint__summary,
+.trace-checkpoint__loading {
+  color: var(--text-secondary) !important;
+  font-size: 12px;
+}
+
+.trace-checkpoint__files {
+  display: grid;
+  gap: 4px;
+  max-height: 220px;
+  overflow: auto;
+}
+
+.trace-checkpoint__files button {
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  border: 1px solid transparent;
+  border-radius: 5px;
+  background: transparent;
+  color: var(--text-primary);
+  padding: 5px;
+  text-align: left;
+}
+
+.trace-checkpoint__files button:hover,
+.trace-checkpoint__files button.is-active {
+  border-color: var(--border-subtle);
+  background: var(--surface-2);
+}
+
+.trace-checkpoint__files button span:nth-child(2) {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.trace-checkpoint__files small,
+.trace-checkpoint__skipped small {
+  color: var(--text-muted);
+}
+
+.trace-checkpoint__code {
+  font-family: var(--font-mono);
+  font-weight: 700;
+}
+
+.trace-checkpoint__code.is-added { color: #2f9e44; }
+.trace-checkpoint__code.is-deleted { color: #e03131; }
+.trace-checkpoint__code.is-modified,
+.trace-checkpoint__code.is-renamed { color: #e67700; }
+
+.trace-checkpoint__diff {
+  max-height: 320px;
+  overflow: auto;
+  white-space: pre;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-0);
+  padding: 8px;
+  font: 11px/1.5 var(--font-mono);
+}
+
+.trace-checkpoint__confirm {
+  margin-top: 8px;
+  border: 1px solid var(--status-warning, #b7791f);
+  border-radius: 7px;
+  padding: 9px;
+  background: var(--surface-2);
+}
+
+
 .kb-ready__dims {
   margin: 0;
   display: flex;

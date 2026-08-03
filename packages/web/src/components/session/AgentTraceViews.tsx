@@ -3,11 +3,13 @@ import { Network, Pause, Play, RefreshCw, Search, X } from "lucide-react";
 import { TraceNode } from "../../contracts/backend";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
+import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { AgentNetwork } from "./AgentNetwork";
 import { TraceGraphView } from "./TraceGraphView";
 import { TraceNodeDetail } from "./TraceNodeDetail";
+import { AuditReportsPanel } from "./AuditReportsPanel";
 import {
   formatTime,
   getNodeKind,
@@ -22,6 +24,68 @@ import {
   traceEmptyLabelKey,
 } from "./traceEmptyState";
 
+/** Materialize collapsible V2 episode group nodes without mutating session state. */
+function withEpisodeGroups(nodes: TraceNode[], episodes: Array<{ id: string; title: string }> | undefined, collapsed: boolean): TraceNode[] {
+  if (!collapsed || !episodes?.length) return nodes;
+  const titleByEpisode = new Map(episodes.map((episode) => [episode.id, episode.title]));
+  const members = new Map<string, TraceNode[]>();
+  for (const node of nodes) {
+    if (!node.primaryEpisodeId || !titleByEpisode.has(node.primaryEpisodeId)) continue;
+    const group = members.get(node.primaryEpisodeId) ?? [];
+    group.push(node);
+    members.set(node.primaryEpisodeId, group);
+  }
+  if (members.size === 0) return nodes;
+  const targetFor = (id: string): string => {
+    const node = nodes.find((item) => item.id === id);
+    return node?.primaryEpisodeId && members.has(node.primaryEpisodeId) ? `episode:${node.primaryEpisodeId}` : id;
+  };
+  const grouped = new Map<string, TraceNode>();
+  for (const [episodeId, episodeNodes] of members) {
+    const first = episodeNodes[0]!;
+    grouped.set(`episode:${episodeId}`, {
+      id: `episode:${episodeId}`,
+      title: titleByEpisode.get(episodeId) ?? episodeId,
+      type: "episode",
+      status: "completed",
+      summary: `${episodeNodes.length} grouped trace node${episodeNodes.length === 1 ? "" : "s"}`,
+      parents: [],
+      artifacts: [],
+      parentIds: [],
+      childIds: [],
+      createdAt: first.createdAt,
+      updatedAt: first.updatedAt,
+      toolCalls: [],
+      metadata: { syntheticEpisode: true, episodeId },
+    });
+  }
+  for (const node of nodes) {
+    if (node.primaryEpisodeId && members.has(node.primaryEpisodeId)) continue;
+    grouped.set(node.id, { ...node, parents: [], parentIds: [], childIds: [] });
+  }
+  for (const node of nodes) {
+    const targetId = targetFor(node.id);
+    const target = grouped.get(targetId);
+    if (!target) continue;
+    for (const parent of node.parents) {
+      const sourceId = targetFor(parent.id);
+      if (sourceId === targetId || !grouped.has(sourceId)) continue;
+      if (!target.parents.some((item) => item.id === sourceId && item.relation === parent.relation && item.edgeType === parent.edgeType)) {
+        target.parents.push({ ...parent, id: sourceId });
+      }
+    }
+  }
+  const result = [...grouped.values()].map((node) => ({ ...node, parentIds: [...new Set(node.parents.map((parent) => parent.id))] }));
+  const children = new Map<string, Set<string>>();
+  for (const node of result) {
+    for (const parentId of node.parentIds) {
+      const set = children.get(parentId) ?? new Set<string>();
+      set.add(node.id);
+      children.set(parentId, set);
+    }
+  }
+  return result.map((node) => ({ ...node, childIds: [...(children.get(node.id) ?? [])] }));
+}
 export function AgentsPanel() {
   const {
     agents,
@@ -70,7 +134,7 @@ export function AgentsPanel() {
 export function TracePanel() {
   // #79: trace is now live — seeded + kept current by SessionContext via SSE
   // (CUSTOM:trace_node), so this panel reads it instead of polling.
-  const { currentSession, currentTrace, refreshTrace } = useSessions();
+  const { currentSession, currentTrace, refreshTrace, runActive } = useSessions();
   const t = useT();
   const trace = currentTrace;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -83,6 +147,8 @@ export function TracePanel() {
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [fitToken, setFitToken] = useState(0);
+  const [showProposedDependencies, setShowProposedDependencies] = useState(true);
+  const [collapseEpisodes, setCollapseEpisodes] = useState(false);
   const wasUserAdjustedRef = useRef(false);
   const prevNodeCountRef = useRef(0);
   const formatNodeKind = (kind: string) => {
@@ -126,6 +192,10 @@ export function TracePanel() {
     })),
     [filteredNodes, visibleNodeIds],
   );
+  const graphNodes = useMemo(
+    () => withEpisodeGroups(visibleNodes, trace?.episodes, collapseEpisodes),
+    [visibleNodes, trace?.episodes, collapseEpisodes],
+  );
   const statusOptions = useMemo(
     () => Array.from(new Set((trace?.nodes ?? []).map((node) => normalizeStatus(node.status)).filter(Boolean))).sort(),
     [trace?.nodes],
@@ -138,11 +208,11 @@ export function TracePanel() {
     if (!trace) {
       return null;
     }
-    if (visibleNodes.length === 0) {
+    if (graphNodes.length === 0) {
       return null;
     }
-    return visibleNodes.find((node) => node.id === selectedNodeId) ?? visibleNodes[0] ?? null;
-  }, [selectedNodeId, trace, visibleNodes]);
+    return graphNodes.find((node) => node.id === selectedNodeId) ?? graphNodes[0] ?? null;
+  }, [graphNodes, selectedNodeId, trace]);
 
   // #317: distinguish empty corpus (0/0) from filter/playback zero-results.
   const controlsEffective = traceControlsEffective(allNodes.length);
@@ -171,10 +241,10 @@ export function TracePanel() {
   }, [allNodes]);
 
   useEffect(() => {
-    if (selectedNodeId && visibleNodes.length > 0 && !visibleNodeIds.has(selectedNodeId)) {
-      setSelectedNodeId(visibleNodes[0].id);
+    if (selectedNodeId && graphNodes.length > 0 && !graphNodes.some((node) => node.id === selectedNodeId)) {
+      setSelectedNodeId(graphNodes[0].id);
     }
-  }, [selectedNodeId, visibleNodeIds, visibleNodes]);
+  }, [graphNodes, selectedNodeId]);
 
   useEffect(() => {
     setPlaybackIndex(allNodes.length);
@@ -332,12 +402,20 @@ export function TracePanel() {
                   value={typeFilter}
                 />
               </div>
+              <label className="trace-control trace-control--toggle">
+                <input checked={showProposedDependencies} onChange={(event) => setShowProposedDependencies(event.target.checked)} type="checkbox" />
+                <span>{t("trace.toggle.candidates")}</span>
+              </label>
+              <label className="trace-control trace-control--toggle">
+                <input checked={collapseEpisodes} onChange={(event) => setCollapseEpisodes(event.target.checked)} type="checkbox" />
+                <span>{t("trace.toggle.episodes")}</span>
+              </label>
             </div>
 
             <div className="trace-layout">
               <div className="trace-map" aria-label={t("trace.aria.graph")}>
                 <TraceGraphView
-                  nodes={visibleNodes}
+                  nodes={graphNodes}
                   direction={direction}
                   selectedNodeId={selectedNode?.id ?? null}
                   onSelectNode={setSelectedNodeId}
@@ -346,6 +424,7 @@ export function TracePanel() {
                   fitToken={fitToken}
                   emptyLabel={emptyLabel}
                   formatKind={formatNodeKind}
+                  showProposedDependencies={showProposedDependencies}
                   zoomLabels={{
                     controls: t("trace.aria.zoomControls"),
                     zoomIn: t("trace.aria.zoomIn"),
@@ -380,7 +459,23 @@ export function TracePanel() {
               </div>
 
               <article className="trace-detail">
-                <TraceNodeDetail node={selectedNode} nodes={allNodes} onSelectNode={setSelectedNodeId} formatKind={formatNodeKind} t={t} />
+                <TraceNodeDetail
+                  node={selectedNode}
+                  nodes={allNodes}
+                  graph={trace}
+                  onSelectNode={setSelectedNodeId}
+                  formatKind={formatNodeKind}
+                  t={t}
+                  sessionId={currentSession?.id}
+                  restoreDisabled={runActive?.active === true}
+                  onRestored={() => currentSession ? refreshTrace(currentSession.id) : undefined}
+                  onDependencyDecision={async (dependencyId, decision) => {
+                    if (!currentSession) return;
+                    await api.sessions.decideTraceDependency(currentSession.id, dependencyId, decision);
+                    await refreshTrace(currentSession.id);
+                  }}
+                />
+                <AuditReportsPanel sessionId={currentSession?.id} revision={trace?.revision} t={t} />
               </article>
             </div>
           </>
