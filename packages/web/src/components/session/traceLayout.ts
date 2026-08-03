@@ -12,7 +12,6 @@ export function formatTime(value?: string): string {
   }
   return new Date(value).toLocaleString();
 }
-
 export function getStatusLabelKey(status: string): string | null {
   if (status === "done" || status === "completed") {
     return "trace.status.done";
@@ -131,18 +130,28 @@ export interface TraceLayout {
 export function buildTraceLayout(nodes: TraceNode[], direction: TraceLayoutDirection): TraceLayout {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const levelCache = new Map<string, number>();
+  const inProgress = new Set<string>();
+  const layoutParents = (node: TraceNode): string[] => node.parents.map((parent) => parent.id);
   const getLevel = (node: TraceNode): number => {
     if (levelCache.has(node.id)) {
       return levelCache.get(node.id) as number;
     }
-    if (node.parentIds.length === 0) {
+    // The Host guarantees one DAG across every parent conclusion. Keep this
+    // guard for malformed legacy/external payloads so a bad graph degrades to
+    // a root-level rank instead of crashing the entire Trace panel.
+    if (inProgress.has(node.id)) return 0;
+    inProgress.add(node.id);
+    const parents = layoutParents(node);
+    if (parents.length === 0) {
+      inProgress.delete(node.id);
       levelCache.set(node.id, 0);
       return 0;
     }
-    const level = 1 + Math.max(...node.parentIds.map((parentId) => {
+    const level = 1 + Math.max(...parents.map((parentId) => {
       const parent = byId.get(parentId);
       return parent ? getLevel(parent) : 0;
     }));
+    inProgress.delete(node.id);
     levelCache.set(node.id, level);
     return level;
   };

@@ -2,6 +2,7 @@ import { describe, it, expect } from "vitest";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
+  allSystemTools,
   systemToolNamesForRole,
   systemToolsForRole,
   builtinToolNamesForRole,
@@ -11,6 +12,14 @@ import {
   type ToolDeps,
 } from "../tools/system-tools.js";
 import { GraphOfTrace } from "../trace.js";
+
+const TRACE_V2_TOOLS = [
+  "create_trace_node",
+  "get_trace_graph",
+  "get_trace_neighborhood",
+  "get_trace_node",
+  "update_trace_node",
+].sort();
 
 function deps(name: string): ToolDeps {
   return {
@@ -98,11 +107,24 @@ describe("tool access control (§9)", () => {
 
   it("trace agent gets ONLY graph tools", () => {
     const names = systemToolNamesForRole("trace", "trace");
-    expect(names.sort()).toEqual(
-      ["add_trace_relation", "create_trace_node", "get_trace_graph", "update_trace_node"].sort(),
-    );
+    expect(names.sort()).toEqual(TRACE_V2_TOOLS);
     expect(names).not.toContain("dispatch_task");
     expect(names).not.toContain("create_agent");
+  });
+
+  it("does not register legacy relation or episode mutation tools", () => {
+    const names = new Set(allSystemTools(deps("trace")).keys());
+    for (const name of [
+      "add_trace_relation",
+      "propose_trace_dependency",
+      "create_trace_episode",
+      "rename_trace_episode",
+      "merge_trace_episodes",
+      "split_trace_episode",
+      "assign_trace_episode",
+    ]) {
+      expect(names.has(name), name).toBe(false);
+    }
   });
 
   it("expert gets task tools + record_trace + skill_search + local KB tools", () => {
@@ -138,9 +160,7 @@ describe("tool access control (§9)", () => {
   it("resolves the actual SystemTool objects for a role (filtered)", () => {
     const tools = systemToolsForRole("trace", "trace", deps("trace"));
     const toolNames = tools.map((t) => t.name).sort();
-    expect(toolNames).toEqual(
-      ["add_trace_relation", "create_trace_node", "get_trace_graph", "update_trace_node"].sort(),
-    );
+    expect(toolNames).toEqual(TRACE_V2_TOOLS);
   });
 
   it("builtin tool allowlist differs by role", () => {
@@ -179,13 +199,17 @@ describe("tool access control (§9)", () => {
     );
   });
 
-  it("auditor gets task tools + record_trace + skill_search + local KB tools, but NO trace-graph access", () => {
+  it("auditor gets bounded Trace readers and review-only mutation access", () => {
     const names = systemToolNamesForRole("expert", "auditor");
     expect(names.sort()).toEqual(
       [
-        "record_trace",
-        "dispatch_task",
         "complete_task",
+        "list_pending_trace_reviews",
+        "get_trace_node",
+        "get_trace_neighborhood",
+        "get_trace_diff",
+        "edit_trace_review",
+        "submit_audit_report",
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
@@ -196,20 +220,72 @@ describe("tool access control (§9)", () => {
         "list_subagent_profiles",
       ].sort(),
     );
-    // Audit evidence is restricted to the workspace — no graph reads, no
-    // create/destroy, no graph mutation.
+    expect(names).not.toContain("record_trace");
     expect(names).not.toContain("get_trace_graph");
     expect(names).not.toContain("create_trace_node");
     expect(names).not.toContain("create_agent");
     expect(names).not.toContain("destroy_agent");
   });
 
-  it("auditor builtins include read+grep+bash+write but NOT edit", () => {
+  it("auditor builtins are read-only and reports use a system tool", () => {
     const a = builtinToolNamesForRole("expert", "auditor");
-    // Read-only inspection + write for its own audit report.
-    expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash", "write"]));
-    // Must NOT be able to modify other agents' artefacts.
+    expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash"]));
+    expect(a).not.toContain("write");
     expect(a).not.toContain("edit");
+  });
+
+  it("lets Auditor list pending node and parent reviews without rebinding", async () => {
+    const d = deps("auditor");
+    const parent = d.trace.createNode({ title: "Evidence" });
+    const child = d.trace.createNode({ title: "Conclusion" });
+    d.trace.review(parent.id, "approve", "supported", { type: "agent", name: "auditor" });
+    d.trace.proposeCausalParent(child.id, parent.id, "Conclusion consumes the evidence.", { type: "agent", name: "trace" });
+
+    const tool = systemToolsForRole("expert", "auditor", d)
+      .find((item) => item.name === "list_pending_trace_reviews")!;
+    const text = (await tool.execute({})).content.map((item) => item.text).join("");
+    expect(text).toContain('"title": "Conclusion"');
+    expect(text).toContain('"parentTitle": "Evidence"');
+    expect(text).toContain('"conclusion": "candidate"');
+    expect(d.currentTraceAuditTarget).toBeUndefined();
+  });
+
+  it("binds Auditor targets in the Host and persists a report", async () => {
+    const d = deps("auditor");
+    const node = d.trace.createNode({ title: "Conclusion", confidence: "medium", confidenceReason: "One result file." });
+    const target = d.trace.listPendingAuditTargets()[0]!;
+    d.currentTraceAuditTarget = () => target;
+    const tools = new Map(systemToolsForRole("expert", "auditor", d).map((tool) => [tool.name, tool]));
+
+    expect((await tools.get("edit_trace_review")!.execute({ conclusion: "approve", reason: "The bound evidence supports this node." })).isError)
+      .not.toBe(true);
+    expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
+    await tools.get("submit_audit_report")!.execute({ risk: "low", summary: "Evidence is consistent.", report: "# Audit\nEvidence is consistent." });
+    expect(d.trace.getAuditReports()).toContainEqual(expect.objectContaining({ kind: "trace", target: { nodeId: node.id } }));
+    expect(tools.has("dispatch_task")).toBe(false);
+  });
+
+  it("requires confidence and returns only a compact active graph to Trace", async () => {
+    const d = deps("trace");
+    const tools = new Map(systemToolsForRole("trace", "trace", d).map((tool) => [tool.name, tool]));
+    expect((await tools.get("create_trace_node")!.execute({ title: "Missing confidence" })).isError).toBe(true);
+    expect((await tools.get("create_trace_node")!.execute({
+      title: "Ablation",
+      confidence: "medium",
+      confidence_reason: "One complete seed.",
+    })).isError).not.toBe(true);
+    const node = d.trace.getGraphV2().nodes.find((item) => item.type !== "session_start")!;
+    const agentGraph = JSON.parse((await tools.get("get_trace_graph")!.execute({})).content[0]!.text) as {
+      revision: number;
+      nodes: Array<{ id: string; parents: unknown[] }>;
+      dependencies?: unknown;
+      artifacts?: unknown;
+    };
+    expect(agentGraph.nodes).toEqual([expect.objectContaining({ id: node.id, parents: [] })]);
+    expect(agentGraph).not.toHaveProperty("dependencies");
+    expect(agentGraph).not.toHaveProperty("artifacts");
+    expect(agentGraph.nodes[0]).not.toHaveProperty("records");
+    expect((await tools.get("update_trace_node")!.execute({ node_id: node.id, summary: "updated" })).isError).toBe(true);
   });
 });
 
@@ -274,12 +350,7 @@ describe("tool toggles", () => {
       search_papers_local: false,
     };
     const names = systemToolsForRole("trace", "trace", deps("trace"), off).map((t) => t.name).sort();
-    expect(names).toEqual([
-      "add_trace_relation",
-      "create_trace_node",
-      "get_trace_graph",
-      "update_trace_node",
-    ].sort());
+    expect(names).toEqual(TRACE_V2_TOOLS);
   });
 
   it("undefined field falls back to enabled (partial patch semantics)", () => {

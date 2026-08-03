@@ -1,6 +1,6 @@
 import { CUSTOM_EVENT } from "@brainpilot/protocol";
 import type { TraceGraph, TraceNode, WebSocketEvent } from "../contracts/backend";
-import { normalizeTraceNode } from "../contracts/backend";
+import { normalizeTraceGraph, normalizeTraceNode } from "../contracts/backend";
 
 /**
  * #79: merge a single `CUSTOM:trace_node` event into the live Graph of Trace.
@@ -25,7 +25,17 @@ export function reduceTraceForEvent(
   sessionId: string,
 ): TraceGraph | null {
   const e = event as Record<string, unknown>;
-  if (e.type !== "CUSTOM" || e.name !== CUSTOM_EVENT.TRACE_NODE) return graph;
+  if (e.type !== "CUSTOM") return graph;
+  if (e.name === CUSTOM_EVENT.TRACE_DELTA) {
+    const value = (e.value ?? {}) as Record<string, unknown>;
+    const rawGraph = value.graph;
+    if (!rawGraph || typeof rawGraph !== "object") return graph;
+    const next = normalizeTraceGraph(rawGraph);
+    // Never let a replayed stale delta roll a newer graph backwards.
+    if ((graph?.revision ?? -1) > (next.revision ?? -1)) return graph;
+    return next;
+  }
+  if (e.name !== CUSTOM_EVENT.TRACE_NODE) return graph;
   const value = (e.value ?? {}) as Record<string, unknown>;
   const rawNode = value.node;
   if (!rawNode || typeof rawNode !== "object") return graph;
@@ -42,9 +52,8 @@ export function reduceTraceForEvent(
       ? base.nodes.map((n, i) => (i === idx ? node : n))
       : [...base.nodes, node];
 
-  return { meta: base.meta, nodes: withChildIds(nextNodes) };
+  return { ...base, nodes: withChildIds(nextNodes) };
 }
-
 /** Recompute every node's `childIds` from the parent links across the set. */
 function withChildIds(nodes: TraceNode[]): TraceNode[] {
   const childrenByParent = new Map<string, Set<string>>();

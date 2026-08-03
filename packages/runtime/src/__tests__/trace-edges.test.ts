@@ -4,14 +4,12 @@
  * After the legacy-parity rewrite, `record_trace` does NOT mutate the graph
  * directly. It dispatches a `[Trace Event]` envelope into the trace agent's
  * internal event queue; the trace agent (a real Pi AgentSession) is the editor that calls
- * `create_trace_node` / `update_trace_node` / `add_trace_relation`. These tests
+ * `create_trace_node` / `update_trace_node`. These tests
  * pin down the host-side plumbing — independent of the Pi-native reminder hooks
  * which only load under the real factory (verified separately per design §7/T2):
  *   - the principal calling `record_trace` causes a trace agent to be spawned
  *     and a trace event to reach its durable queue;
- *   - when the trace agent runs and calls `create_trace_node` consecutively,
- *     the resulting nodes are chained into a connected DAG via the
- *     `getLastNodeId()` fallback (visible edges, not orphan dots);
+ *   - chronology alone does not create causal lineage;
  *   - every trace mutation is pushed to the SSE stream as CUSTOM:trace_node.
  */
 import { describe, it, expect } from "vitest";
@@ -85,11 +83,7 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 describe("Graph of Trace structural plumbing", () => {
-  it("chains consecutive trace agent nodes into a connected DAG (not orphans)", async () => {
-    // Regression: before the agent-driven rewrite, `record_trace` chained nodes
-    // itself; now the trace agent is the writer. The `create_trace_node` tool
-    // still falls back to `getLastNodeId()` when no explicit parent is given,
-    // so consecutive trace-agent decisions remain a connected chain.
+  it("keeps consecutive records as sibling branches under Session Start", async () => {
     let principalTurn = 0;
     let traceTurn = 0;
     const factory = scriptedFactory({
@@ -104,14 +98,17 @@ describe("Graph of Trace structural plumbing", () => {
       },
       trace: {
         onPrompt: (text) => {
-          // The trace agent reads the [Trace Event] envelope and creates a
-          // node; it does NOT pass parent_id, so the chain is via the
-          // create_trace_node fallback to getLastNodeId.
+          // No parent candidate means a sibling branch under Session Start.
           if (!text.includes("[Trace Event]")) return undefined;
           traceTurn += 1;
           return {
             tool: "create_trace_node",
-            args: { title: `decision ${traceTurn}`, type: "trace" },
+            args: {
+              title: `decision ${traceTurn}`,
+              type: "trace",
+              confidence: "medium",
+              confidence_reason: "The source record is available.",
+            },
           };
         },
       },
@@ -120,17 +117,24 @@ describe("Graph of Trace structural plumbing", () => {
     const s = await m.createSession();
 
     await m.sendMessage(s.id, "first");
-    await waitFor(() => m.getTrace(s.id)!.nodes.length >= 1);
+    await waitFor(() => m.getTrace(s.id)!.nodes.some((node) => node.title === "decision 1"));
     await m.sendMessage(s.id, "second");
-    await waitFor(() => m.getTrace(s.id)!.nodes.length >= 2);
+    await waitFor(() => m.getTrace(s.id)!.nodes.some((node) => node.title === "decision 2"));
 
-    const nodes = m.getTrace(s.id)!.nodes;
+    const trace = m.getTrace(s.id)!;
+    const nodes = trace.nodes;
     const first = nodes.find((n) => n.title === "decision 1")!;
     const second = nodes.find((n) => n.title === "decision 2")!;
     expect(first).toBeDefined();
     expect(second).toBeDefined();
-    expect(second.parentIds).toContain(first.id);
-    expect(second.parents[0]!.relation).toBe("follows");
+    expect(first.parentIds).toEqual([trace.meta.rootNodeId]);
+    expect(second.parentIds).toEqual([trace.meta.rootNodeId]);
+    expect(first.records).toEqual([
+      expect.objectContaining({ sourceAgent: "principal", description: "decision 1" }),
+    ]);
+    expect(second.records).toEqual([
+      expect.objectContaining({ sourceAgent: "principal", description: "decision 2" }),
+    ]);
   });
 
   it("pushes every trace mutation to the SSE stream as CUSTOM:trace_node", async () => {
@@ -144,7 +148,15 @@ describe("Graph of Trace structural plumbing", () => {
       trace: {
         onPrompt: (text) =>
           text.includes("[Trace Event]")
-            ? { tool: "create_trace_node", args: { title: "a decision", type: "trace" } }
+            ? {
+                tool: "create_trace_node",
+                args: {
+                  title: "a decision",
+                  type: "trace",
+                  confidence: "medium",
+                  confidence_reason: "The source record is available.",
+                },
+              }
             : undefined,
       },
     });

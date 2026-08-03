@@ -260,6 +260,24 @@ export class TaskLedger {
     });
   }
 
+  /** Destructively clear work that must not survive a workspace rollback. */
+  async cancelAllPending(reason: string): Promise<TaskRecord[]> {
+    return this.mutate(() => {
+      const cancelled: TaskRecord[] = [];
+      for (const task of this.tasks) {
+        if (task.status !== "pending") continue;
+        task.status = "cancelled";
+        task.reply = reason;
+        task.completed_at = Date.now();
+        cancelled.push(this.publicTask(task));
+      }
+      // Terminal and system notifications can also carry assumptions about
+      // the pre-rollback workspace, so the entire delivery queue is discarded.
+      this.notifications = [];
+      return cancelled;
+    });
+  }
+
   async enqueueTrace(fromAgent: string, content: string): Promise<void> {
     await this.mutate(() => { this.enqueue("trace", "trace", fromAgent, content); });
   }

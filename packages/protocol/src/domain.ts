@@ -316,6 +316,161 @@ export const TraceTimestampSchema = z.object({
 });
 export type TraceTimestamp = z.infer<typeof TraceTimestampSchema>;
 
+export const TraceCheckpointStatusSchema = z.enum([
+  "ready",
+  "partial",
+  "failed",
+  "unavailable",
+]);
+export type TraceCheckpointStatus = z.infer<typeof TraceCheckpointStatusSchema>;
+
+export const TraceCheckpointStatsSchema = z.object({
+  files: z.number().int().nonnegative(),
+  added: z.number().int().nonnegative(),
+  modified: z.number().int().nonnegative(),
+  deleted: z.number().int().nonnegative(),
+  renamed: z.number().int().nonnegative(),
+});
+export type TraceCheckpointStats = z.infer<typeof TraceCheckpointStatsSchema>;
+
+/** Lightweight checkpoint reference embedded in trace.json and live events. */
+export const TraceCheckpointRefSchema = z.object({
+  id: z.string(),
+  commitId: z.string().optional(),
+  status: TraceCheckpointStatusSchema,
+  capturedAt: z.string(),
+  sourceAgent: z.string().optional(),
+  baseCheckpointId: z.string().optional(),
+  stats: TraceCheckpointStatsSchema.optional(),
+  skippedCount: z.number().int().nonnegative().default(0),
+  error: z.string().optional(),
+});
+export type TraceCheckpointRef = z.infer<typeof TraceCheckpointRefSchema>;
+
+export const TraceCheckpointFileChangeSchema = z.object({
+  path: z.string(),
+  previousPath: z.string().optional(),
+  status: z.enum(["added", "modified", "deleted", "renamed"]),
+  additions: z.number().int().nonnegative().optional(),
+  deletions: z.number().int().nonnegative().optional(),
+  binary: z.boolean().default(false),
+});
+export type TraceCheckpointFileChange = z.infer<typeof TraceCheckpointFileChangeSchema>;
+
+export const TraceCheckpointSkippedFileSchema = z.object({
+  path: z.string(),
+  reason: z.enum(["ignored", "too_large", "total_limit", "internal", "unsupported"]),
+  size: z.number().int().nonnegative().optional(),
+});
+export type TraceCheckpointSkippedFile = z.infer<typeof TraceCheckpointSkippedFileSchema>;
+
+export const TraceCheckpointDetailSchema = z.object({
+  checkpoint: TraceCheckpointRefSchema,
+  files: z.array(TraceCheckpointFileChangeSchema),
+  skipped: z.array(TraceCheckpointSkippedFileSchema),
+});
+export type TraceCheckpointDetail = z.infer<typeof TraceCheckpointDetailSchema>;
+
+export const TraceRestorePreviewSchema = z.object({
+  checkpointId: z.string(),
+  stateToken: z.string(),
+  files: z.array(TraceCheckpointFileChangeSchema),
+  skipped: z.array(TraceCheckpointSkippedFileSchema),
+});
+export type TraceRestorePreview = z.infer<typeof TraceRestorePreviewSchema>;
+
+export const TraceRestoreResultSchema = z.object({
+  restoredCheckpointId: z.string(),
+  auditNodeId: z.string().optional(),
+  changeId: z.string().optional(),
+});
+export type TraceRestoreResult = z.infer<typeof TraceRestoreResultSchema>;
+
+export const TraceCausalRollbackConflictSchema = z.object({
+  path: z.string(),
+  checkpointIds: z.array(z.string()),
+  reason: z.string(),
+});
+export type TraceCausalRollbackConflict = z.infer<typeof TraceCausalRollbackConflictSchema>;
+
+export const TraceCausalRollbackPreviewSchema = z.object({
+  nodeId: z.string(),
+  stateToken: z.string(),
+  affectedNodeIds: z.array(z.string()),
+  affectedCheckpointIds: z.array(z.string()),
+  files: z.array(TraceCheckpointFileChangeSchema),
+  skipped: z.array(TraceCheckpointSkippedFileSchema),
+  conflicts: z.array(TraceCausalRollbackConflictSchema),
+});
+export type TraceCausalRollbackPreview = z.infer<typeof TraceCausalRollbackPreviewSchema>;
+
+export const TraceCausalRollbackResultSchema = z.object({
+  nodeId: z.string(),
+  affectedNodeIds: z.array(z.string()),
+  auditNodeId: z.string().optional(),
+  changeId: z.string().optional(),
+});
+export type TraceCausalRollbackResult = z.infer<typeof TraceCausalRollbackResultSchema>;
+
+export const TraceParentConclusionSchema = z.enum(["candidate", "confirmed", "rejected", "uncertain"]);
+export type TraceParentConclusion = z.infer<typeof TraceParentConclusionSchema>;
+
+export const TraceNodeReviewConclusionSchema = z.enum(["unreviewed", "approved", "rejected", "uncertain"]);
+export type TraceNodeReviewConclusion = z.infer<typeof TraceNodeReviewConclusionSchema>;
+
+/** Trace Agent's current evidence-support assessment, independent of audit. */
+export const TraceNodeConfidenceSchema = z.enum(["low", "medium", "high"]);
+export type TraceNodeConfidence = z.infer<typeof TraceNodeConfidenceSchema>;
+
+/** One immutable reporting record curated into a logical research node. */
+export const TraceNodeRecordSchema = z.object({
+  sourceAgent: z.string(),
+  description: z.string(),
+  context: z.string().optional(),
+  checkpointId: z.string().optional(),
+  createdAt: z.string(),
+});
+export type TraceNodeRecord = z.infer<typeof TraceNodeRecordSchema>;
+
+/** Embedded causal upstream reference. No relationship kind is needed. */
+export const TraceCausalParentSchema = z.object({
+  nodeId: z.string(),
+  conclusion: TraceParentConclusionSchema,
+  /** Current concise reason; earlier reasons remain in TraceChangeLog. */
+  reason: z.string().optional(),
+});
+export type TraceCausalParent = z.infer<typeof TraceCausalParentSchema>;
+
+export const TraceChangeActorSchema = z.object({
+  type: z.enum(["user", "agent", "host"]),
+  name: z.string().optional(),
+});
+export const TraceChangeSchema = z.object({
+  id: z.string(),
+  revision: z.number().int().nonnegative(),
+  actor: TraceChangeActorSchema,
+  action: z.string(),
+  target: z.object({ nodeId: z.string().optional(), parentNodeId: z.string().optional() }),
+  before: z.unknown().optional(),
+  after: z.unknown().optional(),
+  reason: z.string().optional(),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  createdAt: z.string(),
+});
+export type TraceChange = z.infer<typeof TraceChangeSchema>;
+
+export const AuditReportSchema = z.object({
+  id: z.string(),
+  kind: z.enum(["trace", "deliverable"]),
+  target: z.object({ nodeId: z.string().optional(), parentNodeId: z.string().optional() }).optional(),
+  risk: z.enum(["low", "medium", "high"]),
+  summary: z.string(),
+  report: z.string(),
+  createdAt: z.string(),
+  sharedWithPiAt: z.string().optional(),
+});
+export type AuditReport = z.infer<typeof AuditReportSchema>;
+
 export const TraceNodeSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -338,21 +493,225 @@ export const TraceNodeSchema = z.object({
   durationMs: z.number().optional(),
   errorMessage: z.string().optional(),
   toolCalls: z.array(z.string()),
+  checkpoints: z.array(TraceCheckpointRefSchema).optional(),
+  /** V2 projection hints; relation copies remain view-only. */
+  artifactIds: z.array(z.string()).optional(),
+  primaryEpisodeId: z.string().optional(),
+  episodeTags: z.array(z.string()).optional(),
   metadata: z.record(z.string(), z.unknown()).optional(),
+  records: z.array(TraceNodeRecordSchema).optional(),
+  causalParents: z.array(TraceCausalParentSchema).optional(),
+  executionResult: z.enum(["completed", "failed"]).optional(),
+  revoked: z.boolean().optional(),
+  confidence: TraceNodeConfidenceSchema.optional(),
+  confidenceReason: z.string().optional(),
+  reviewConclusion: TraceNodeReviewConclusionSchema.optional(),
+  reviewReason: z.string().optional(),
 });
 export type TraceNode = z.infer<typeof TraceNodeSchema>;
 
+/* ------------------------------------------------------------------ *
+ * Trace Graph V2
+ * ------------------------------------------------------------------ *
+ *
+ * V1 kept duplicated parent/child arrays on every node. V2 embeds only the
+ * upstream parent references on each canonical node; child ids and dependency
+ * collections are derived API/UI projections. The legacy TraceNode/TraceGraph
+ * definitions above remain the compatibility view used by older clients and
+ * replay bundles.
+ */
+
+export const TraceDependencyOriginSchema = z.enum([
+  "trace",
+  "agent_report",
+  "explicit",
+  "host",
+  "user",
+  "legacy",
+]);
+export type TraceDependencyOrigin = z.infer<typeof TraceDependencyOriginSchema>;
+
+export const TraceDependencyConfidenceSchema = z.enum(["low", "medium", "high"]);
+export type TraceDependencyConfidence = z.infer<typeof TraceDependencyConfidenceSchema>;
+
+export const TraceDependencyStateSchema = z.enum(["proposed", "active", "rejected"]);
+export type TraceDependencyState = z.infer<typeof TraceDependencyStateSchema>;
+
+/** Structured provenance for a dependency; free-form summaries are reports, not facts. */
+export const TraceDependencyEvidenceSchema = z.object({
+  source: z.string(),
+  kind: z.string(),
+  detail: z.string().optional(),
+  artifactId: z.string().optional(),
+  reportId: z.string().optional(),
+  path: z.string().optional(),
+  checkpointId: z.string().optional(),
+  baseBlobId: z.string().optional(),
+  resultBlobId: z.string().optional(),
+  deterministic: z.boolean().optional(),
+});
+export type TraceDependencyEvidence = z.infer<typeof TraceDependencyEvidenceSchema>;
+
+/** prerequisiteId -> dependentId. Time order is deliberately not encoded here. */
+export const TraceDependencySchema = z.object({
+  id: z.string(),
+  prerequisiteId: z.string(),
+  dependentId: z.string(),
+  origin: TraceDependencyOriginSchema,
+  confidence: TraceDependencyConfidenceSchema,
+  state: TraceDependencyStateSchema,
+  reason: z.string().optional(),
+  evidence: z.array(TraceDependencyEvidenceSchema),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type TraceDependency = z.infer<typeof TraceDependencySchema>;
+
+/** Presentation-only grouping. Membership is owned by node.primaryEpisodeId. */
+export const TraceEpisodeSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  description: z.string().optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type TraceEpisode = z.infer<typeof TraceEpisodeSchema>;
+
+export const TraceArtifactVerificationStatusSchema = z.enum([
+  "unverified",
+  "reserved",
+  "verified",
+  "missing",
+]);
+export type TraceArtifactVerificationStatus = z.infer<typeof TraceArtifactVerificationStatusSchema>;
+
+/**
+ * Artifact registry entry. The registry, rather than natural-language node
+ * summaries, is the durable evidence surface. `checkpoint` is retained for
+ * checkpoint-diff/restore compatibility and is optional for ordinary files.
+ */
+export const TraceArtifactV2Schema = z.object({
+  id: z.string(),
+  producerNodeId: z.string().nullable().optional(),
+  path: z.string(),
+  kind: z.string(),
+  type: z.string().optional(),
+  checkpointId: z.string().optional(),
+  checkpoint: TraceCheckpointRefSchema.optional(),
+  blobHash: z.string().optional(),
+  changeStatus: z.enum(["added", "modified", "deleted", "renamed"]).optional(),
+  previousPath: z.string().optional(),
+  exists: z.enum(["unknown", "present", "missing"]).default("unknown"),
+  verificationStatus: TraceArtifactVerificationStatusSchema.default("reserved"),
+  role: z.enum(["input", "output", "checkpoint", "reference"]).optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+});
+export type TraceArtifactV2 = z.infer<typeof TraceArtifactV2Schema>;
+
+/** Explicitly labels LLM-authored prose as a report rather than verified fact. */
+export const TraceAgentReportSchema = z.object({
+  kind: z.literal("agent_report"),
+  summary: z.string().optional(),
+  content: z.string().optional(),
+  author: z.string().optional(),
+});
+export type TraceAgentReport = z.infer<typeof TraceAgentReportSchema>;
+
+export const TraceNodeV2Schema = z.object({
+  id: z.string(),
+  title: z.string(),
+  type: z.string(),
+  status: TraceNodeStatusSchema,
+  agent: z.string().optional(),
+  description: z.string().optional(),
+  reason: z.string().optional(),
+  context: z.string().optional(),
+  report: TraceAgentReportSchema.optional(),
+  createdAt: z.string().optional(),
+  updatedAt: z.string().optional(),
+  timestamp: TraceTimestampSchema.optional(),
+  durationMs: z.number().optional(),
+  errorMessage: z.string().optional(),
+  toolCalls: z.array(z.string()),
+  artifactIds: z.array(z.string()).default([]),
+  primaryEpisodeId: z.string().optional(),
+  episodeTags: z.array(z.string()).default([]),
+  metadata: z.record(z.string(), z.unknown()).optional(),
+  records: z.array(TraceNodeRecordSchema).default([]),
+  parents: z.array(TraceCausalParentSchema).default([]),
+  executionResult: z.enum(["completed", "failed"]).default("completed"),
+  revoked: z.boolean().default(false),
+  /** Historical nodes may be unevaluated; all new Trace writes provide both. */
+  confidence: TraceNodeConfidenceSchema.optional(),
+  confidenceReason: z.string().optional(),
+  reviewConclusion: TraceNodeReviewConclusionSchema.default("unreviewed"),
+  reviewReason: z.string().optional(),
+});
+export type TraceNodeV2 = z.infer<typeof TraceNodeV2Schema>;
+
+export const TraceMetaSchema = z
+  .object({
+    sessionId: z.string(),
+    /** Host-managed structural root. It is not a scientific Trace claim. */
+    rootNodeId: z.string().optional(),
+    userId: z.string().optional(),
+    projectName: z.string().optional(),
+    currentFocus: z.string().optional(),
+    createdAt: z.string().optional(),
+  })
+  .passthrough();
+export type TraceMeta = z.infer<typeof TraceMetaSchema>;
+
+const TraceDocumentV2Shape = {
+  schemaVersion: z.literal("2.0"),
+  revision: z.number().int().nonnegative(),
+  meta: TraceMetaSchema,
+  nodes: z.array(TraceNodeV2Schema),
+  episodes: z.array(TraceEpisodeSchema),
+  artifacts: z.array(TraceArtifactV2Schema),
+};
+
+/** Canonical trace.json shape. Node.parents is the only causal source of truth. */
+export const TraceDocumentV2Schema = z.object({
+  ...TraceDocumentV2Shape,
+  /** Host-only embedded journal tail; omitted from API projections. */
+  pendingChanges: z.array(TraceChangeSchema).optional(),
+});
+export type TraceDocumentV2 = z.infer<typeof TraceDocumentV2Schema>;
+
+/** API/SSE view. Dependency collections are derived from node.parents. */
+export const TraceGraphViewV2Schema = z.object({
+  ...TraceDocumentV2Shape,
+  dependencies: z.array(TraceDependencySchema),
+});
+export type TraceGraphViewV2 = z.infer<typeof TraceGraphViewV2Schema>;
+
+/** Backwards-compatible name for the V2 API/SSE view. */
+export const TraceGraphV2Schema = TraceGraphViewV2Schema;
+export type TraceGraphV2 = z.infer<typeof TraceGraphV2Schema>;
+
+/** A V2 SSE update. Snapshot is intentionally supported during transition. */
+export const TraceDeltaV2Schema = z.object({
+  schemaVersion: z.literal("2.0"),
+  revision: z.number().int().nonnegative(),
+  op: z.enum(["snapshot", "upsert", "remove"]),
+  graph: TraceGraphV2Schema.optional(),
+  entity: z.enum(["node", "dependency", "episode", "artifact"]).optional(),
+  id: z.string().optional(),
+});
+export type TraceDeltaV2 = z.infer<typeof TraceDeltaV2Schema>;
+
 export const TraceGraphSchema = z.object({
-  meta: z
-    .object({
-      sessionId: z.string(),
-      userId: z.string().optional(),
-      projectName: z.string().optional(),
-      currentFocus: z.string().optional(),
-      createdAt: z.string().optional(),
-    })
-    .passthrough(),
+  /** Optional V2 metadata on the materialized backwards-compatible view. */
+  schemaVersion: z.literal("2.0").optional(),
+  revision: z.number().int().nonnegative().optional(),
+  meta: TraceMetaSchema,
   nodes: z.array(TraceNodeSchema),
+  /** V2 derived collections exposed alongside the legacy node projection. */
+  dependencies: z.array(TraceDependencySchema).optional(),
+  episodes: z.array(TraceEpisodeSchema).optional(),
+  artifacts: z.array(TraceArtifactV2Schema).optional(),
 });
 export type TraceGraph = z.infer<typeof TraceGraphSchema>;
 

@@ -18,6 +18,7 @@ import { randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   CUSTOM_EVENT,
+  type AuditReport,
   type AgUiEvent,
   type AgentStats,
   type AgentStatus,
@@ -30,6 +31,12 @@ import {
   type SessionTokenUsage,
   type TokenUsage,
   type TraceGraph,
+  type TraceCausalRollbackPreview,
+  type TraceCausalRollbackResult,
+  type TraceCheckpointDetail,
+  type TraceRestorePreview,
+  type TraceRestoreResult,
+  type TraceNodeRecord,
   type UserInputCancellationReason,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
@@ -39,7 +46,8 @@ import {
   type TaskNotification,
   type TaskRecord,
 } from "./task-ledger.js";
-import { GraphOfTrace } from "./trace.js";
+import { GraphOfTrace, type TraceAuditTarget } from "./trace.js";
+import { WorkspaceCheckpointStore } from "./workspace-checkpoints.js";
 import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import {
   addStatsDelta,
@@ -272,6 +280,14 @@ interface SessionEntry {
   taskLedger: TaskLedger;
   trace: GraphOfTrace;
   subagents: SubagentManager;
+  checkpoints: WorkspaceCheckpointStore;
+  workspaceOperationActive: boolean;
+  /** Host-bound source record while Trace processes one durable event. */
+  currentTraceRecord?: TraceNodeRecord;
+  /** Host-bound immutable target for one Auditor turn. */
+  currentTraceAuditTarget?: TraceAuditTarget;
+  /** Deduplicates durable Auditor targets by node/parent identity. */
+  traceAuditQueued: Set<string>;
   agents: Map<string, MasAgent>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
@@ -962,6 +978,9 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
+    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+      throw new Error("workspace restore is in progress");
+    }
     try {
       await rm(abs, { recursive: true });
       return true;
@@ -1010,6 +1029,9 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
+    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+      throw new Error("workspace restore is in progress");
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, buf);
     return { path: this.relManagedPath(abs, root, prefix), size: buf.byteLength };
@@ -1039,6 +1061,9 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
+    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+      throw new Error("workspace restore is in progress");
+    }
     await mkdir(dirname(abs), { recursive: true });
 
     // Normalize either stream flavor to a Node Readable.
@@ -1289,6 +1314,14 @@ export class SessionManager {
       (op, node) => {
         bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_NODE, { op, node }));
       },
+      (delta) => {
+        bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_DELTA, delta));
+      },
+    );
+    const checkpoints = new WorkspaceCheckpointStore(
+      id,
+      this.workspaceDir(id),
+      persistBase ?? join(this.dataRoot, ".bp", id),
     );
 
     let entry!: SessionEntry;
@@ -1336,6 +1369,11 @@ export class SessionManager {
       taskLedger,
       trace,
       subagents,
+      checkpoints,
+      workspaceOperationActive: false,
+      currentTraceRecord: undefined,
+      currentTraceAuditTarget: undefined,
+      traceAuditQueued: new Set(),
       agents: new Map(),
       deliveryErrors: new Map(),
       runActive: false,
@@ -1381,6 +1419,7 @@ export class SessionManager {
         throw err;
       }
       await this.loadTrace(entry);
+      this.rebuildQueuedTraceAudits(entry);
       // Rehydrate cumulative token usage so the running total survives restarts.
       await this.loadUsage(entry);
       // Rehydrate full per-run/per-session stats (tokens+tools+skills+errors).
@@ -1530,6 +1569,7 @@ export class SessionManager {
   ): Promise<{ accepted: boolean; runId?: string; queued?: boolean }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
+    if (entry.workspaceOperationActive) return { accepted: false };
     this.touch(entry);
     // §R-4: refuse new runs past the soft memory threshold. The HTTP `accepted`
     // flag alone isn't surfaced by the web, so also emit a system message.
@@ -2171,6 +2211,9 @@ export class SessionManager {
       sessionId,
       fromAgent: name,
       trace: entry.trace,
+      checkpoints: entry.checkpoints,
+      currentTraceRecord: () => entry.currentTraceRecord,
+      currentTraceAuditTarget: () => entry.currentTraceAuditTarget,
       dispatchTask: async (target, content) => {
         const task = await entry.taskLedger.dispatch(name, target, content);
         entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "created", task }));
@@ -2453,7 +2496,7 @@ export class SessionManager {
    */
   private wakeAgent(sessionId: string, name: string): void {
     const current = this.sessions.get(sessionId);
-    if (!current || current.taskLedger.isPaused(name)) return;
+    if (!current || current.workspaceOperationActive || current.taskLedger.isPaused(name)) return;
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
     this.deliveryLoops.add(key);
@@ -2488,22 +2531,40 @@ export class SessionManager {
       const entry = this.sessions.get(sessionId);
       if (!entry) return;
       if (entry.taskLedger.isPaused(name)) return;
-      const notifications = entry.taskLedger.peekBatch(name);
+      // Trace and Auditor bind exactly one durable event to host-owned state.
+      const notifications = entry.taskLedger.peekBatch(
+        name,
+        name === "trace" || name === "auditor" ? 1 : undefined,
+      );
       if (notifications.length === 0) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
+      const traceRecord = name === "trace"
+        ? this.parseInternalEnvelope<TraceNodeRecord>(notifications[0]?.content, "Trace-Record")
+        : undefined;
+      const auditTarget = name === "auditor"
+        ? this.coerceTraceAuditTarget(this.parseInternalEnvelope(notifications[0]?.content, "Trace-Audit-Target"))
+        : undefined;
+      if (name === "trace") entry.currentTraceRecord = traceRecord;
+      if (name === "auditor") entry.currentTraceAuditTarget = auditTarget;
       // #167: cap concurrent provider calls across experts in this session.
-      const ran = await this.withProviderSlot(sessionId, async () => {
-        // Stop may have paused delivery while this run waited for a provider
-        // semaphore slot. Do not start a new model call after Stop completed.
-        const current = this.sessions.get(sessionId);
-        if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
-        await agent.prompt(this.renderTaskEvents(notifications));
-        return true;
-      });
+      let ran = false;
+      try {
+        ran = await this.withProviderSlot(sessionId, async () => {
+          // Stop may have paused delivery while this run waited for a provider
+          // semaphore slot. Do not start a new model call after Stop completed.
+          const current = this.sessions.get(sessionId);
+          if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+          await agent.prompt(this.renderTaskEvents(notifications));
+          return true;
+        });
+      } finally {
+        if (name === "trace") entry.currentTraceRecord = undefined;
+        if (name === "auditor") entry.currentTraceAuditTarget = undefined;
+      }
       if (!ran || entry.taskLedger.isPaused(name)) return;
 
       // Status returns to idle after an explicit abort, so it cannot identify
@@ -2537,6 +2598,16 @@ export class SessionManager {
         ));
         return;
       }
+      if (name === "auditor" && auditTarget) {
+        const pending = entry.trace.listPendingAuditTargets([auditTarget.nodeId])
+          .find((target) => this.traceAuditKey(target) === this.traceAuditKey(auditTarget));
+        if (pending?.fingerprint === auditTarget.fingerprint) {
+          // A clean turn is not a completed audit unless the bound target was
+          // concluded. Keep the notification durable and pause to avoid a spin.
+          await entry.taskLedger.pauseAgent(name);
+          return;
+        }
+      }
       // Linearize acknowledgement with pauseDelivery(): if Stop won the ledger
       // write race, retain the batch for the next explicit user turn.
       const acknowledged = await entry.taskLedger.acknowledgeIfActive(
@@ -2545,6 +2616,74 @@ export class SessionManager {
       );
       if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
+      if (name === "trace") {
+        void this.enqueuePendingTraceAudits(entry);
+      } else if (name === "auditor" && auditTarget) {
+        entry.traceAuditQueued.delete(this.traceAuditKey(auditTarget));
+        const latest = entry.trace.auditFingerprint(auditTarget.nodeId, auditTarget.parentNodeId);
+        const stillPending = entry.trace.listPendingAuditTargets([auditTarget.nodeId])
+          .some((target) => this.traceAuditKey(target) === this.traceAuditKey(auditTarget));
+        if (stillPending && latest && latest !== auditTarget.fingerprint) {
+          void this.enqueueTraceAudit(entry, { ...auditTarget, fingerprint: latest });
+        }
+      }
+    }
+  }
+
+  private parseInternalEnvelope<T>(content: string | undefined, key: string): T | undefined {
+    if (!content) return undefined;
+    const prefix = `${key}: `;
+    const line = content.split("\n").find((candidate) => candidate.startsWith(prefix));
+    if (!line) return undefined;
+    try { return JSON.parse(line.slice(prefix.length)) as T; } catch { return undefined; }
+  }
+
+  private rebuildQueuedTraceAudits(entry: SessionEntry): void {
+    entry.traceAuditQueued.clear();
+    const notifications = entry.taskLedger.peekBatch("auditor", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
+    for (const notification of notifications) {
+      const target = this.coerceTraceAuditTarget(
+        this.parseInternalEnvelope(notification.content, "Trace-Audit-Target"),
+      );
+      if (target) entry.traceAuditQueued.add(this.traceAuditKey(target));
+    }
+  }
+
+  private traceAuditKey(target: Pick<TraceAuditTarget, "nodeId" | "parentNodeId">): string {
+    return target.parentNodeId ? `${target.nodeId}<-${target.parentNodeId}` : target.nodeId;
+  }
+
+  private coerceTraceAuditTarget(value: unknown): TraceAuditTarget | undefined {
+    if (!value || typeof value !== "object") return undefined;
+    const raw = value as Record<string, unknown>;
+    if (typeof raw.nodeId !== "string" || typeof raw.fingerprint !== "string") return undefined;
+    return {
+      nodeId: raw.nodeId,
+      ...(typeof raw.parentNodeId === "string" ? { parentNodeId: raw.parentNodeId } : {}),
+      fingerprint: raw.fingerprint,
+    };
+  }
+
+  private async enqueuePendingTraceAudits(entry: SessionEntry): Promise<void> {
+    for (const target of entry.trace.listPendingAuditTargets()) await this.enqueueTraceAudit(entry, target);
+  }
+
+  private async enqueueTraceAudit(entry: SessionEntry, target: TraceAuditTarget): Promise<void> {
+    const key = this.traceAuditKey(target);
+    if (entry.traceAuditQueued.has(key)) return;
+    entry.traceAuditQueued.add(key);
+    try {
+      await this.ensureAgent(entry.id, "auditor");
+      const instruction = target.parentNodeId
+        ? `[后台 GoT 审计] 请独立审查节点 ${target.nodeId} 的候选因果父节点 ${target.parentNodeId}。读取必要的局部 Trace 证据，然后用 edit_trace_review 提交一次结论和理由。不要通知 PI。`
+        : `[后台 GoT 审计] 请独立审查节点 ${target.nodeId} 的内容与证据充分性。读取必要的局部 Trace 证据，然后用 edit_trace_review 提交一次结论和理由。不要通知 PI。`;
+      await entry.taskLedger.enqueueSystem(
+        "auditor",
+        `${instruction}\nTrace-Audit-Target: ${JSON.stringify(target)}`,
+      );
+      this.wakeAgent(entry.id, "auditor");
+    } catch {
+      entry.traceAuditQueued.delete(key);
     }
   }
 
@@ -2707,6 +2846,35 @@ export class SessionManager {
     return false;
   }
 
+  /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
+  private hasAnyAgentActivity(entry: SessionEntry): boolean {
+    if (entry.runActive || entry.userInputs.active || entry.userInputs.queue.length > 0) return true;
+    for (const agent of entry.agents.values()) {
+      if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
+    }
+    return [...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`));
+  }
+
+  private beginWorkspaceOperation(entry: SessionEntry, action: "restore" | "roll back"): void {
+    if (entry.workspaceOperationActive) {
+      const error = new Error(`cannot ${action} while another workspace operation is active`);
+      (error as Error & { code?: string }).code = "SESSION_ACTIVE";
+      throw error;
+    }
+    entry.workspaceOperationActive = true;
+    if (this.hasAnyAgentActivity(entry)) {
+      entry.workspaceOperationActive = false;
+      const error = new Error(`cannot ${action} while an agent is active`);
+      (error as Error & { code?: string }).code = "SESSION_ACTIVE";
+      throw error;
+    }
+  }
+
+  private endWorkspaceOperation(entry: SessionEntry): void {
+    entry.workspaceOperationActive = false;
+    for (const agent of entry.taskLedger.notificationTargets()) this.wakeAgent(entry.id, agent);
+  }
+
   /**
    * #70/#76: emit the authoritative live snapshot as a `CUSTOM:session_state`
    * event. This is the wholesale source the web Agents panel replaces its
@@ -2767,6 +2935,107 @@ export class SessionManager {
   getTrace(sessionId: string): TraceGraph | undefined {
     const entry = this.sessions.get(sessionId);
     return entry?.trace.getGraph();
+  }
+
+  getTraceChanges(sessionId: string, limit = 200): import("@brainpilot/protocol").TraceChange[] | undefined {
+    return this.sessions.get(sessionId)?.trace.getChanges(limit);
+  }
+
+  getAuditReports(sessionId: string): AuditReport[] | undefined {
+    return this.sessions.get(sessionId)?.trace.getAuditReports();
+  }
+
+  decideTraceDependency(
+    sessionId: string,
+    dependencyId: string,
+    decision: "accept" | "reject",
+    reason?: string,
+  ): import("@brainpilot/protocol").TraceDependency | undefined {
+    return this.sessions.get(sessionId)?.trace.decideDependency(dependencyId, decision, reason);
+  }
+
+  async getTraceNodeCheckpoints(sessionId: string, nodeId: string): Promise<TraceCheckpointDetail[] | undefined> {
+    const entry = this.sessions.get(sessionId);
+    const node = entry?.trace.getNode(nodeId);
+    if (!entry || !node) return undefined;
+    const details = await Promise.all((node.checkpoints ?? []).map((checkpoint) => entry.checkpoints.detail(checkpoint.id)));
+    return details.filter((item): item is TraceCheckpointDetail => Boolean(item));
+  }
+
+  async getTraceCheckpointDiff(sessionId: string, checkpointId: string, path: string): Promise<string | undefined> {
+    return this.sessions.get(sessionId)?.checkpoints.diff(checkpointId, path);
+  }
+
+  async getTraceRestorePreview(sessionId: string, checkpointId: string): Promise<TraceRestorePreview | undefined> {
+    return this.sessions.get(sessionId)?.checkpoints.preview(checkpointId);
+  }
+
+  async getTraceCausalRollbackPreview(sessionId: string, nodeId: string): Promise<TraceCausalRollbackPreview | undefined> {
+    const entry = this.sessions.get(sessionId);
+    const plan = entry?.trace.getCausalRollbackPlan(nodeId);
+    if (!entry || !plan) return undefined;
+    const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+    const preview = await entry.checkpoints.previewCausal(checkpointIds);
+    return { nodeId, affectedNodeIds: plan.affectedNodeIds, affectedCheckpointIds: checkpointIds, ...preview };
+  }
+
+  async rollbackTraceNode(sessionId: string, nodeId: string, stateToken: string): Promise<TraceCausalRollbackResult | undefined> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    this.beginWorkspaceOperation(entry, "roll back");
+    let releaseWorkspace = true;
+    try {
+      const plan = entry.trace.getCausalRollbackPlan(nodeId);
+      if (!plan) return undefined;
+      const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+      await entry.checkpoints.restoreCausal(checkpointIds, stateToken, async () => {
+        await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
+        this.emitTaskSnapshot(entry);
+      });
+      entry.trace.markNodesRolledBack(plan.affectedNodeIds, nodeId);
+      const change = entry.trace.recordChange({
+        actor: { type: "user" },
+        action: "causal_rollback",
+        target: { nodeId },
+        reason: `Revoked ${plan.affectedNodeIds.length} causal descendants.`,
+        metadata: { affectedNodeIds: plan.affectedNodeIds },
+      });
+      return { nodeId, affectedNodeIds: plan.affectedNodeIds, changeId: change.id };
+    } catch (error) {
+      if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
+      throw error;
+    } finally {
+      if (releaseWorkspace) this.endWorkspaceOperation(entry);
+    }
+  }
+
+  async restoreTraceCheckpoint(sessionId: string, checkpointId: string, stateToken: string): Promise<TraceRestoreResult | undefined> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    this.beginWorkspaceOperation(entry, "restore");
+    let releaseWorkspace = true;
+    try {
+      const restored = await entry.checkpoints.restore(checkpointId, stateToken, async () => {
+        await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
+        this.emitTaskSnapshot(entry);
+      });
+      const [checkpoint] = await entry.checkpoints.refs([checkpointId]);
+      if (!checkpoint) throw new Error("restored checkpoint disappeared");
+      const targetNode = entry.trace.getGraph().nodes.find((node) => node.checkpoints?.some((item) => item.id === checkpointId));
+      const change = entry.trace.recordChange({
+        actor: { type: "user" },
+        action: "workspace_restore",
+        target: targetNode ? { nodeId: targetNode.id } : {},
+        reason: `Restored workspace checkpoint ${checkpointId}.`,
+        metadata: { restoredCheckpointId: checkpointId },
+      });
+      return { ...restored, changeId: change.id };
+    } catch (error) {
+      if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
+      throw error;
+    } finally {
+      if (releaseWorkspace) this.endWorkspaceOperation(entry);
+    }
   }
 
   /**
@@ -2996,6 +3265,7 @@ export class SessionManager {
     } catch {
       /* no trace yet */
     }
+    await entry.trace.recoverChanges();
   }
 
   private usagePath(sid: string): string {

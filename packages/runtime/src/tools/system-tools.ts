@@ -7,11 +7,12 @@
  * Per-agent access control (§9, ported from legacy `agent_tool_config`) is
  * applied by `toolsForRole` — each role only receives its allowed tools.
  */
-import type { SubagentStatus } from "@brainpilot/protocol";
-import type { AgentRole, SystemTool } from "../types.js";
+import type { SubagentStatus, TraceNodeRecord } from "@brainpilot/protocol";
 import type { SubagentResult, SubagentTask } from "../subagent-manager.js";
+import type { GraphOfTrace, TraceArtifactInput, TraceAuditTarget } from "../trace.js";
+import type { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
 import { TaskQueueFullError, type TaskRecord } from "../task-ledger.js";
-import type { GraphOfTrace } from "../trace.js";
+import type { AgentRole, SystemTool } from "../types.js";
 import { createSkillSearchTool } from "./skill-search.js";
 import {
   createGetDomainKnowledgeLocalTool,
@@ -23,6 +24,7 @@ export interface ToolDeps {
   sessionId: string;
   fromAgent: string;
   trace: GraphOfTrace;
+  checkpoints?: WorkspaceCheckpointStore;
   dispatchTask: (to: string, content: string) => Promise<TaskRecord>;
   completeTask: (taskId: string, reply: string) => Promise<TaskRecord>;
   dispatchTrace: (content: string) => Promise<void>;
@@ -57,10 +59,56 @@ export interface ToolDeps {
   getSubagents?: (childIds?: string[]) => SubagentStatus[];
   cancelSubagents?: (childIds: string[]) => Promise<SubagentStatus[]>;
   listSubagentProfiles?: () => Promise<Array<{ name: string; description: string; builtinTools: string[]; systemTools: string[]; mcp: boolean; modelId?: string; timeoutMs?: number }>>;
+  /** Current host-owned record while the Trace Agent processes one trace event. */
+  currentTraceRecord?: () => TraceNodeRecord | undefined;
+  /** Host-bound immutable target for one asynchronous Auditor turn. */
+  currentTraceAuditTarget?: () => TraceAuditTarget | undefined;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
   return { content: [{ type: "text", text }] };
+}
+
+/** Detail/read tools are deliberately bounded so one graph query cannot eat a turn. */
+const TRACE_DETAIL_MAX_TOKENS = 1500;
+
+function cappedJson(value: unknown, maxTokens = TRACE_DETAIL_MAX_TOKENS): string {
+  const text = JSON.stringify(value, null, 2);
+  const maxChars = maxTokens * 3.5;
+  if (text.length <= maxChars) return text;
+  const suffix = `\n… truncated at ${maxTokens} estimated tokens`;
+  // Reserve the marker itself so the returned result, not merely its raw JSON
+  // prefix, stays within the declared 1500-token detail cap.
+  return `${text.slice(0, Math.max(0, Math.floor(maxChars - suffix.length)))}${suffix}`;
+}
+
+function artifactInputs(value: unknown): TraceArtifactInput[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((item): TraceArtifactInput[] => {
+    if (typeof item === "string" && item) return [{ path: item }];
+    if (!item || typeof item !== "object") return [];
+    const input = item as Record<string, unknown>;
+    if (typeof input.path !== "string" || !input.path) return [];
+    return [{
+      ...(typeof input.id === "string" ? { id: input.id } : {}),
+      path: input.path,
+      ...(typeof input.kind === "string" ? { kind: input.kind } : {}),
+      ...(typeof input.type === "string" ? { type: input.type } : {}),
+      ...(typeof input.producer_node_id === "string" ? { producerNodeId: input.producer_node_id } : {}),
+      ...(typeof input.producerNodeId === "string" ? { producerNodeId: input.producerNodeId } : {}),
+      ...(typeof input.blob_hash === "string" ? { blobHash: input.blob_hash } : {}),
+      ...(typeof input.blobHash === "string" ? { blobHash: input.blobHash } : {}),
+    }];
+  });
+}
+
+async function attachCheckpointWithGitEvidence(deps: ToolDeps, nodeId: string, checkpointId: string): Promise<void> {
+  if (!deps.checkpoints) return;
+  const [[checkpoint], files] = await Promise.all([
+    deps.checkpoints.refs([checkpointId]),
+    deps.checkpoints.provenance(checkpointId),
+  ]);
+  if (checkpoint) deps.trace.attachCheckpoint(nodeId, checkpoint, files ?? []);
 }
 
 export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
@@ -82,6 +130,12 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       if (!to || !content) return { ...ok("to and content are required"), isError: true };
       if (to === deps.fromAgent) return { ...ok("cannot dispatch a task to yourself"), isError: true };
       if (to === "trace") return { ...ok("cannot dispatch user tasks to the trace agent"), isError: true };
+      if (deps.fromAgent === "auditor" && deps.currentTraceAuditTarget?.()) {
+        return { ...ok("A bound GoT audit is a single-turn review and cannot delegate tasks"), isError: true };
+      }
+      if (deps.fromAgent === "auditor" && to === "principal") {
+        return { ...ok("Auditor reports are user-gated and cannot be sent directly to PI"), isError: true };
+      }
       await deps.ensureAgent(to);
       try {
         const task = await deps.dispatchTask(to, content);
@@ -336,6 +390,16 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       properties: {
         description: { type: "string" },
         artifacts: { type: "array", items: { type: "string" } },
+        artifact_inputs: {
+          type: "array",
+          items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, producer_node_id: { type: "string" } }, required: ["path"] },
+          description: "Artifacts consumed by this work; registry references are preferred.",
+        },
+        artifact_outputs: {
+          type: "array",
+          items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, blob_hash: { type: "string" } }, required: ["path"] },
+          description: "Artifacts produced by this work.",
+        },
         context: { type: "string" },
       },
       required: ["description"],
@@ -344,22 +408,45 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       // §10 (legacy parity): record_trace does NOT mutate the graph directly.
       // Instead it dispatches a [Trace Event] envelope into the trace agent's
       // durable internal queue; the trace agent receives it and
-      // calls create_trace_node / update_trace_node / add_trace_relation as the
-      // editor. This keeps the trace agent's status authentically live in the
+      // calls create_trace_node / update_trace_node as the editor. The host
+      // binds the source record to the durable
+      // task notification
+      // delivery; Trace only decides which logical research node receives it.
+      // This keeps the trace agent's status authentically live in the
       // Agents panel (otherwise it would be a permanently-dormant placeholder)
       // and lets the trace agent merge/dedupe across multiple sources, which is
       // exactly the persona we already ship for it.
       const description = String(params.description ?? "");
       const context = String(params.context ?? "");
-      const artifacts = (params.artifacts as string[]) ?? [];
+      const artifacts = Array.isArray(params.artifacts)
+        ? params.artifacts.filter((value): value is string => typeof value === "string")
+        : [];
+      const inputs = artifactInputs(params.artifact_inputs);
+      const outputs = artifactInputs(params.artifact_outputs);
+      const checkpoint = await deps.checkpoints?.capture(deps.fromAgent);
+      const gitEvidence = checkpoint
+        ? await deps.checkpoints?.provenance(checkpoint.id).catch(() => undefined)
+        : undefined;
+      const record: TraceNodeRecord = {
+        sourceAgent: deps.fromAgent,
+        description,
+        ...(context ? { context } : {}),
+        ...(checkpoint ? { checkpointId: checkpoint.id } : {}),
+        createdAt: new Date().toISOString(),
+      };
       const lines = [`[Trace Event]`, `Description: ${description}`];
       if (context) lines.push(`Context: ${context}`);
+      if (checkpoint) lines.push(`Checkpoint-ID: ${checkpoint.id}`);
+      if (inputs.length) lines.push(`Artifact-Inputs: ${JSON.stringify(inputs)}`);
+      if (outputs.length) lines.push(`Artifact-Outputs: ${JSON.stringify(outputs)}`);
+      if (gitEvidence?.length) lines.push(`Git-Evidence: ${JSON.stringify(gitEvidence)}`);
       lines.push("", "Artifacts:");
       if (artifacts.length === 0) {
         lines.push("(none)");
       } else {
         for (const a of artifacts) lines.push(`- ${a}`);
       }
+      lines.push(`Trace-Record: ${JSON.stringify(record)}`);
       const envelope = lines.join("\n");
 
       // Spawn-on-demand: the trace agent is a real Pi session. ensureAgent
@@ -384,32 +471,57 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
 export function createTraceNodeTool(deps: ToolDeps): SystemTool {
   return {
     name: "create_trace_node",
-    description: "Create a node in the Graph of Trace.",
+    description:
+      "Create one new active Graph of Trace node only when the current host-bound record represents a distinct, durable scientific unit that is not already in the active graph. " +
+      "Do not create nodes for coordination, delegation, progress, presentation, reformatting, or repetition. The Host attaches the current source record and checkpoint automatically. " +
+      "The Host also attaches the session root whenever no more specific causal parent has been confirmed; never submit the session root as a parent candidate. " +
+      "One Trace Event may call this tool more than once only when it explicitly contains multiple independently meaningful scientific units with enough content to describe each accurately.",
     parameters: {
       type: "object",
       properties: {
-        title: { type: "string" },
-        type: { type: "string" },
-        status: { type: "string" },
-        description: { type: "string" },
-        parent_id: { type: "string" },
+        title: { type: "string", description: "Concise name of the scientific result, decision, analysis, artifact, or conclusion; not an activity-log title." },
+        type: { type: "string", description: "Optional short presentation label; do not invent a complex ontology." },
+        status: { type: "string", enum: ["completed", "failed"] },
+        description: { type: "string", description: "What was scientifically decided, measured, produced, observed, or concluded." },
+        confidence: { type: "string", enum: ["low", "medium", "high"], description: "Strength of support from accessible records and evidence, not task success or writing detail." },
+        confidence_reason: { type: "string", description: "Name the concrete supporting records/evidence and their limitations; specificity alone does not justify high confidence." },
+        parent_candidates: {
+          type: "array",
+          items: { type: "object", properties: { node_id: { type: "string" }, reason: { type: "string" } }, required: ["node_id", "reason"] },
+          description: "Direct epistemic or computational prerequisites actually consumed by this node. Chronology, delegation, and topic similarity are insufficient. Trace proposes; Auditor confirms.",
+        },
+        artifact_inputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, producer_node_id: { type: "string" } }, required: ["path"] } },
+        artifact_outputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, blob_hash: { type: "string" } }, required: ["path"] } },
       },
-      required: ["title"],
+      required: ["title", "confidence", "confidence_reason"],
     },
     execute: async (params: Record<string, unknown>) => {
-      // Honour an explicit parent_id; otherwise chain to the most recent node so
-      // the graph stays connected instead of accumulating orphan nodes.
-      const explicitParent = params.parent_id ? String(params.parent_id) : undefined;
-      const parentId = explicitParent ?? deps.trace.getLastNodeId();
-      const relation = explicitParent ? "parent" : "follows";
+      if ((params.confidence !== "low" && params.confidence !== "medium" && params.confidence !== "high") || !String(params.confidence_reason ?? "").trim()) {
+        return { ...ok("confidence and a non-empty confidence_reason are required"), isError: true };
+      }
+      const record = deps.currentTraceRecord?.();
       const node = deps.trace.createNode({
         title: String(params.title ?? ""),
         type: params.type ? String(params.type) : undefined,
-        status: params.status ? String(params.status) : undefined,
+        status: params.status === "failed" ? "failed" : "completed",
+        executionResult: params.status === "failed" ? "failed" : "completed",
         description: params.description ? String(params.description) : undefined,
-        agent: deps.fromAgent,
-        parents: parentId ? [{ id: parentId, relation }] : undefined,
+        confidence: params.confidence === "high" || params.confidence === "medium" ? params.confidence : "low",
+        confidenceReason: String(params.confidence_reason ?? ""),
+        agent: record?.sourceAgent ?? deps.fromAgent,
+        records: record ? [record] : [],
+        changeActor: { type: "agent", name: deps.fromAgent },
+        artifactInputs: artifactInputs(params.artifact_inputs),
+        artifactOutputs: artifactInputs(params.artifact_outputs),
       });
+      for (const value of Array.isArray(params.parent_candidates) ? params.parent_candidates : []) {
+        if (!value || typeof value !== "object") continue;
+        const candidate = value as Record<string, unknown>;
+        if (typeof candidate.node_id !== "string" || typeof candidate.reason !== "string") continue;
+        deps.trace.proposeCausalParent(node.id, candidate.node_id, candidate.reason, { type: "agent", name: deps.fromAgent });
+      }
+      const checkpointId = record?.checkpointId;
+      if (checkpointId) await attachCheckpointWithGitEvidence(deps, node.id, checkpointId);
       return ok(`node ${node.id} created`);
     },
   };
@@ -418,60 +530,57 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
 export function createUpdateTraceNodeTool(deps: ToolDeps): SystemTool {
   return {
     name: "update_trace_node",
-    description: "Update fields of an existing trace node.",
+    description:
+      "Update exactly one existing active Trace node only when the current host-bound record belongs to the same scientific unit and adds evidence, results, a correction, or a meaningful status change. " +
+      "Read the target node first and preserve its valid existing content when supplying replacement text. Do not update merely to rephrase, translate, format, present, or repeat it. " +
+      "The Host attaches the current record and checkpoint automatically; revoked nodes cannot be reused, and confidence must be re-evaluated on every substantive update.",
     parameters: {
       type: "object",
       properties: {
-        node_id: { type: "string" },
-        status: { type: "string" },
+        node_id: { type: "string", description: "Active node representing the exact same scientific unit. Inspect it with get_trace_node before updating." },
+        title: { type: "string", description: "Supply only when the existing title is inaccurate or the same scientific unit now has a clearer stable name." },
+        description: { type: "string", description: "Complete merged scientific description preserving valid prior content; this replaces the stored description." },
+        status: { type: "string", enum: ["completed", "failed"] },
         summary: { type: "string" },
         content: { type: "string" },
+        confidence: { type: "string", enum: ["low", "medium", "high"], description: "Re-evaluated strength of support after incorporating the current record." },
+        confidence_reason: { type: "string", description: "Required concrete re-evaluation after every node update, even when the level is unchanged." },
+        artifact_outputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" } }, required: ["path"] } },
+        parent_candidates: {
+          type: "array",
+          items: { type: "object", properties: { node_id: { type: "string" }, reason: { type: "string" } }, required: ["node_id", "reason"] },
+          description: "New direct epistemic or computational prerequisites revealed by this update; never infer them from chronology.",
+        },
       },
-      required: ["node_id"],
+      required: ["node_id", "confidence", "confidence_reason"],
     },
     execute: async (params: Record<string, unknown>) => {
       const id = String(params.node_id ?? "");
+      if (deps.trace.getNodeV2(id)?.revoked) return { ...ok(`node ${id} is revoked; create a new node instead`), isError: true };
+      if ((params.confidence !== "low" && params.confidence !== "medium" && params.confidence !== "high") || !String(params.confidence_reason ?? "").trim()) {
+        return { ...ok("confidence and a non-empty confidence_reason are required for every node update"), isError: true };
+      }
+      const record = deps.currentTraceRecord?.();
       const updates: Record<string, unknown> = {};
       for (const k of ["status", "summary", "content", "title", "description"]) {
         if (params[k] !== undefined) updates[k] = params[k];
       }
-      const node = deps.trace.updateNode(id, updates);
+      if (params.status === "completed" || params.status === "failed") updates.executionResult = params.status;
+      updates.confidence = params.confidence === "high" || params.confidence === "medium" ? params.confidence : "low";
+      updates.confidenceReason = String(params.confidence_reason ?? "");
+      const outputs = artifactInputs(params.artifact_outputs);
+      if (outputs.length) updates.artifacts = outputs.map((artifact) => ({ path: artifact.path, type: artifact.type }));
+      const node = deps.trace.updateNode(id, updates, { type: "agent", name: deps.fromAgent });
+      if (node && record) deps.trace.appendRecord(id, record, { type: "agent", name: deps.fromAgent });
+      for (const value of Array.isArray(params.parent_candidates) ? params.parent_candidates : []) {
+        if (!value || typeof value !== "object") continue;
+        const candidate = value as Record<string, unknown>;
+        if (typeof candidate.node_id !== "string" || typeof candidate.reason !== "string") continue;
+        deps.trace.proposeCausalParent(id, candidate.node_id, candidate.reason, { type: "agent", name: deps.fromAgent });
+      }
+      const checkpointId = record?.checkpointId;
+      if (node && checkpointId) await attachCheckpointWithGitEvidence(deps, id, checkpointId);
       return node ? ok(`node ${id} updated`) : { ...ok(`node ${id} not found`), isError: true };
-    },
-  };
-}
-
-export function createAddTraceRelationTool(deps: ToolDeps): SystemTool {
-  return {
-    name: "add_trace_relation",
-    description:
-      "Add a directed dependency edge between two trace nodes. DIRECTION MATTERS: " +
-      "`from_id` is the PREREQUISITE (the earlier source work that must exist first), " +
-      "`to_id` is the DEPENDENT (the later downstream work that relies on it). The " +
-      "edge points from_id ──▶ to_id, read as \"to_id depends_on from_id\". " +
-      "Example: a librarian survey is the prerequisite of an experimentalist synthesis, " +
-      "so call add_trace_relation(from_id=<survey>, to_id=<synthesis>) — NOT the reverse. " +
-      "Rule of thumb: the prerequisite (from_id) is almost always the node that was " +
-      "created earlier; if you find yourself pointing from a later node to an earlier " +
-      "one, you have the arguments backwards.",
-    parameters: {
-      type: "object",
-      properties: {
-        from_id: { type: "string", description: "Prerequisite / earlier source node." },
-        to_id: { type: "string", description: "Dependent / later downstream node." },
-        explanation: { type: "string" },
-      },
-      required: ["from_id", "to_id", "explanation"],
-    },
-    execute: async (params: Record<string, unknown>) => {
-      const okEdge = deps.trace.addRelation(
-        String(params.from_id ?? ""),
-        String(params.to_id ?? ""),
-        String(params.explanation ?? ""),
-      );
-      return okEdge
-        ? ok("relation added")
-        : { ...ok("relation failed: node not found"), isError: true };
     },
   };
 }
@@ -479,9 +588,222 @@ export function createAddTraceRelationTool(deps: ToolDeps): SystemTool {
 export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
   return {
     name: "get_trace_graph",
-    description: "Get the current Graph of Trace as JSON.",
+    description:
+      "Get the compact active Graph of Trace for curation. Returns concise node metadata and embedded causal parents only; use get_trace_node or get_trace_neighborhood for evidence details.",
     parameters: { type: "object", properties: {} },
-    execute: async () => ok(JSON.stringify(deps.trace.getGraph())),
+    execute: async () => {
+      const graph = deps.trace.getGraphV2();
+      const rootId = graph.meta.rootNodeId;
+      const activeIds = new Set(
+        graph.nodes
+          .filter((node) => !node.revoked && node.id !== rootId)
+          .map((node) => node.id),
+      );
+      return ok(JSON.stringify({
+        schemaVersion: graph.schemaVersion,
+        revision: graph.revision,
+        nodes: graph.nodes
+          .filter((node) => activeIds.has(node.id))
+          .map((node) => ({
+            id: node.id,
+            title: node.title,
+            type: node.type,
+            status: node.status,
+            ...(node.description
+              ? { description: node.description.length > 400 ? `${node.description.slice(0, 399)}…` : node.description }
+              : {}),
+            confidence: node.confidence,
+            reviewConclusion: node.reviewConclusion,
+            updatedAt: node.updatedAt,
+            parents: node.parents
+              .filter((parent) => parent.nodeId !== rootId && activeIds.has(parent.nodeId))
+              .map((parent) => ({
+                nodeId: parent.nodeId,
+                conclusion: parent.conclusion,
+                ...(parent.reason ? { reason: parent.reason } : {}),
+              })),
+          })),
+      }));
+    },
+  };
+}
+
+/** Principal-only bounded trace readers; no Principal full-graph tool exists. */
+export function createGetTraceNodeTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "get_trace_node",
+    description: "Read one Trace node with its official/candidate dependencies, semantic links, episode, and artifacts.",
+    parameters: { type: "object", properties: { node_id: { type: "string" } }, required: ["node_id"] },
+    execute: async (params) => {
+      const detail = deps.trace.getNodeDetail(String(params.node_id ?? ""));
+      return detail ? ok(cappedJson(detail)) : { ...ok("trace node not found"), isError: true };
+    },
+  };
+}
+
+export function createGetTraceNeighborhoodTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "get_trace_neighborhood",
+    description: "Read a bounded local Trace neighborhood around one node; use this instead of a full graph.",
+    parameters: { type: "object", properties: { node_id: { type: "string" }, depth: { type: "number", minimum: 0, maximum: 4 } }, required: ["node_id"] },
+    execute: async (params) => {
+      const neighborhood = deps.trace.getNeighborhood(String(params.node_id ?? ""), typeof params.depth === "number" ? params.depth : 1);
+      return neighborhood ? ok(cappedJson(neighborhood)) : { ...ok("trace node not found"), isError: true };
+    },
+  };
+}
+
+export function createGetTraceDiffTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "get_trace_diff",
+    description: "Read the latest checkpoint diff for one active Trace node, optionally limited to one path.",
+    parameters: {
+      type: "object",
+      properties: { node_id: { type: "string" }, path: { type: "string" } },
+      required: ["node_id"],
+    },
+    execute: async (params) => {
+      if (!deps.checkpoints) return { ...ok("checkpoint store unavailable"), isError: true };
+      const node = deps.trace.getNode(String(params.node_id ?? ""));
+      if (!node || node.revoked) return { ...ok("trace node not found"), isError: true };
+      const checkpoint = node.checkpoints?.at(-1);
+      if (!checkpoint) return { ...ok("node has no checkpoint"), isError: true };
+      if (typeof params.path === "string" && params.path) {
+        return ok(await deps.checkpoints.diff(checkpoint.id, params.path) ?? "");
+      }
+      return ok(cappedJson(await deps.checkpoints.detail(checkpoint.id)));
+    },
+  };
+}
+
+/** Auditor-only discovery surface for outstanding node and parent reviews. */
+export function createListPendingTraceReviewsTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "list_pending_trace_reviews",
+    description:
+      "List active Trace nodes whose node review is unreviewed and causal parent candidates that still need a conclusion. " +
+      "This is read-only and does not bind or change the current audit target.",
+    parameters: {
+      type: "object",
+      properties: {
+        limit: { type: "number", minimum: 1, maximum: 100, description: "Maximum combined pending targets to return." },
+      },
+    },
+    execute: async (params) => {
+      const limit = typeof params.limit === "number"
+        ? Math.max(1, Math.min(100, Math.trunc(params.limit)))
+        : 50;
+      const targets = deps.trace.listPendingAuditTargets();
+      const selected = targets.slice(0, limit);
+      const nodes: Array<Record<string, unknown>> = [];
+      const parentRelations: Array<Record<string, unknown>> = [];
+      for (const target of selected) {
+        const node = deps.trace.getNodeV2(target.nodeId);
+        if (!node) continue;
+        if (!target.parentNodeId) {
+          nodes.push({
+            nodeId: node.id,
+            title: node.title,
+            updatedAt: node.updatedAt,
+            reviewConclusion: node.reviewConclusion,
+            ...(node.confidence ? { confidence: node.confidence } : {}),
+          });
+          continue;
+        }
+        const parent = deps.trace.getNodeV2(target.parentNodeId);
+        const relation = node.parents.find((item) => item.nodeId === target.parentNodeId);
+        parentRelations.push({
+          nodeId: node.id,
+          title: node.title,
+          parentNodeId: target.parentNodeId,
+          ...(parent ? { parentTitle: parent.title } : {}),
+          conclusion: relation?.conclusion ?? "candidate",
+          ...(relation?.reason ? { reason: relation.reason } : {}),
+        });
+      }
+      return ok(cappedJson({
+        nodes,
+        parentRelations,
+        total: targets.length,
+        returned: selected.length,
+        truncated: targets.length > selected.length,
+      }));
+    },
+  };
+}
+
+export function createSearchTraceTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "search_trace",
+    description: "Search concise agent reports and node metadata in Trace; returns a bounded set of matching details.",
+    parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number", minimum: 1, maximum: 100 } }, required: ["query"] },
+    execute: async (params) => ok(cappedJson(deps.trace.search(String(params.query ?? ""), typeof params.limit === "number" ? params.limit : 12))),
+  };
+}
+
+/** Auditor-only mutation surface: append one bounded node/parent conclusion. */
+export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "edit_trace_review",
+    description: "Review one Trace node or one proposed causal parent. Only conclusion and reason may be changed.",
+    parameters: {
+      type: "object",
+      properties: {
+        conclusion: { type: "string", enum: ["approve", "reject", "uncertain"] },
+        reason: { type: "string" },
+      },
+      required: ["conclusion", "reason"],
+    },
+    execute: async (params) => {
+      const conclusion = params.conclusion;
+      if (conclusion !== "approve" && conclusion !== "reject" && conclusion !== "uncertain") {
+        return { ...ok("invalid review conclusion"), isError: true };
+      }
+      const target = deps.currentTraceAuditTarget?.();
+      if (!target) return { ...ok("no host-bound trace audit target for this turn"), isError: true };
+      const success = deps.trace.review(
+        target.nodeId,
+        conclusion,
+        String(params.reason ?? ""),
+        { type: "agent", name: deps.fromAgent },
+        target.parentNodeId,
+        target.fingerprint,
+      );
+      return success ? ok("trace review recorded") : { ...ok("review rejected: target changed, missing, revoked, or cyclic; it will be re-queued"), isError: true };
+    },
+  };
+}
+
+export function createSubmitAuditReportTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "submit_audit_report",
+    description: "Persist the completed audit for the user. This never notifies PI.",
+    parameters: {
+      type: "object",
+      properties: {
+        risk: { type: "string", enum: ["low", "medium", "high"] },
+        summary: { type: "string" },
+        report: { type: "string", description: "Complete Markdown audit report with concrete evidence." },
+      },
+      required: ["risk", "summary", "report"],
+    },
+    execute: async (params) => {
+      if (params.risk !== "low" && params.risk !== "medium" && params.risk !== "high") {
+        return { ...ok("invalid audit risk"), isError: true };
+      }
+      const summary = String(params.summary ?? "").trim();
+      const reportBody = String(params.report ?? "").trim();
+      if (!summary || !reportBody) return { ...ok("summary and report are required"), isError: true };
+      const target = deps.currentTraceAuditTarget?.();
+      const report = deps.trace.submitAuditReport({
+        kind: target ? "trace" : "deliverable",
+        ...(target ? { target: { nodeId: target.nodeId, ...(target.parentNodeId ? { parentNodeId: target.parentNodeId } : {}) } } : {}),
+        risk: params.risk,
+        summary,
+        report: reportBody,
+      });
+      return ok(`audit report ${report.id} saved for the user`);
+    },
   };
 }
 
@@ -512,8 +834,17 @@ export function allSystemTools(
     createRecordTraceTool(deps),
     createTraceNodeTool(deps),
     createUpdateTraceNodeTool(deps),
-    createAddTraceRelationTool(deps),
     createGetTraceGraphTool(deps),
+    createGetTraceNodeTool(deps),
+    createGetTraceNeighborhoodTool(deps),
+    createGetTraceDiffTool(deps),
+    createListPendingTraceReviewsTool(deps),
+    // Temporarily disabled: the current substring matcher is not reliable
+    // enough to expose as an Agent tool. Keep the implementation above so it
+    // can be re-enabled after tokenized/ranked search is implemented.
+    // createSearchTraceTool(deps),
+    createEditTraceReviewTool(deps),
+    createSubmitAuditReportTool(deps),
   ];
   if (deps.spawnSubagents) {
     tools.push(createSpawnSubagentTool(deps), createWaitSubagentTool(deps), createGetSubagentTool(deps), createCancelSubagentTool(deps), createListSubagentProfilesTool(deps));
@@ -554,7 +885,14 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_domain_knowledge_local",
     "search_papers_local",
   ],
-  trace: ["create_trace_node", "update_trace_node", "add_trace_relation", "get_trace_graph"],
+  trace: [
+    "create_trace_node",
+    "update_trace_node",
+    "get_trace_graph",
+    "get_trace_node",
+    "get_trace_neighborhood",
+    // "search_trace", // temporarily disabled; see allSystemTools above
+  ],
   expert: [
     "dispatch_task",
     "complete_task",
@@ -575,20 +913,22 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
-  // Auditor: comms + self-trace only. Deliberately NO `get_trace_graph` —
-  // evidence is restricted to the session workspace; the audit must not
-  // dredge the trace graph or other agents' internal state. skill_search and
-  // the local KB tools are included so an audit can resolve a methodology
-  // skill referenced in a draft and verify a cited claim against the KB.
+  // Auditor gets bounded Trace readers, review-only mutation tools, and
+  // isolated leaf workers. It cannot mutate ordinary Trace nodes.
   auditor: [
-    "dispatch_task",
     "complete_task",
-    "record_trace",
     "spawn_subagent",
     "wait_subagent",
     "get_subagent",
     "cancel_subagent",
     "list_subagent_profiles",
+    "list_pending_trace_reviews",
+    "get_trace_node",
+    "get_trace_neighborhood",
+    "get_trace_diff",
+    // "search_trace", // temporarily disabled; see allSystemTools above
+    "edit_trace_review",
+    "submit_audit_report",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
@@ -646,11 +986,12 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],
-  // Auditor: read-only inspection + `write` for its own audit report. NO `edit`
-  // (must not modify other agents' artefacts). `bash` is included for
+  // Auditor: read-only inspection. Reports are persisted through the
+  // user-gated submit_audit_report tool; no workspace write/edit access.
+  // `bash` is included for
   // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
   // enforced by the auditor persona, not by the tool whitelist.
-  auditor: ["read", "grep", "find", "glob", "bash", "write"],
+  auditor: ["read", "grep", "find", "glob", "bash"],
 };
 
 export function systemToolNamesForRole(role: AgentRole, agentName: string): string[] {

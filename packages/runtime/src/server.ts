@@ -18,6 +18,8 @@ import {
   CreateSessionRequestSchema,
   SendMessageRequestSchema,
   InterruptRequestSchema,
+  TraceDependencyDecisionRequestSchema,
+  TraceStateTokenRequestSchema,
   WriteFileRequestSchema,
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
@@ -77,6 +79,95 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     await manager.ensureLoaded(id);
     const graph = manager.getTrace(id);
     return graph ? c.json(graph) : c.json({ error: "not found" }, 404);
+  });
+
+  app.get("/sessions/:id/trace/changes", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const limit = Number(c.req.query("limit") ?? 200);
+    const changes = manager.getTraceChanges(id, Number.isFinite(limit) ? limit : 200);
+    return changes ? c.json({ changes }) : c.json({ error: "not found" }, 404);
+  });
+
+  app.get("/sessions/:id/audits", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const reports = manager.getAuditReports(id);
+    return reports ? c.json({ reports }) : c.json({ error: "not found" }, 404);
+  });
+
+  app.post("/sessions/:id/trace/dependencies/:dependencyId/decision", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const parsed = TraceDependencyDecisionRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "decision must be accept or reject" }, 400);
+    const dependency = manager.decideTraceDependency(id, c.req.param("dependencyId"), parsed.data.decision, parsed.data.reason);
+    return dependency ? c.json(dependency) : c.json({ error: "dependency not found" }, 404);
+  });
+
+  app.get("/sessions/:id/trace/nodes/:nodeId/checkpoints", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    const checkpoints = await manager.getTraceNodeCheckpoints(id, c.req.param("nodeId"));
+    return checkpoints ? c.json({ checkpoints }) : c.json({ error: "not found" }, 404);
+  });
+
+  app.get("/sessions/:id/trace/nodes/:nodeId/rollback-preview", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    try {
+      const preview = await manager.getTraceCausalRollbackPreview(id, c.req.param("nodeId"));
+      return preview ? c.json(preview) : c.json({ error: "not found" }, 404);
+    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  });
+
+  app.post("/sessions/:id/trace/nodes/:nodeId/rollback", async (c) => {
+    const id = c.req.param("id");
+    const parsed = TraceStateTokenRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "stateToken required" }, 400);
+    await manager.ensureLoaded(id);
+    try {
+      const result = await manager.rollbackTraceNode(id, c.req.param("nodeId"), parsed.data.stateToken);
+      return result ? c.json(result) : c.json({ error: "not found" }, 404);
+    } catch (error) {
+      const typed = error as Error & { code?: string; conflicts?: unknown };
+      const status = typed.code === "SESSION_ACTIVE" || typed.code === "STALE_WORKSPACE" || typed.code === "CAUSAL_CONFLICT" ? 409 : 400;
+      return c.json({ error: typed.message, code: typed.code, conflicts: typed.conflicts }, status);
+    }
+  });
+
+  app.get("/sessions/:id/trace/checkpoints/:checkpointId/diff", async (c) => {
+    const path = c.req.query("path");
+    if (!path) return c.json({ error: "path required" }, 400);
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    try {
+      const diff = await manager.getTraceCheckpointDiff(id, c.req.param("checkpointId"), path);
+      return diff === undefined ? c.json({ error: "not found" }, 404) : c.json({ diff });
+    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  });
+
+  app.get("/sessions/:id/trace/checkpoints/:checkpointId/restore-preview", async (c) => {
+    const id = c.req.param("id");
+    await manager.ensureLoaded(id);
+    try {
+      const preview = await manager.getTraceRestorePreview(id, c.req.param("checkpointId"));
+      return preview ? c.json(preview) : c.json({ error: "not found" }, 404);
+    } catch (error) { return c.json({ error: (error as Error).message }, 400); }
+  });
+
+  app.post("/sessions/:id/trace/checkpoints/:checkpointId/restore", async (c) => {
+    const id = c.req.param("id");
+    const parsed = TraceStateTokenRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "stateToken required" }, 400);
+    await manager.ensureLoaded(id);
+    try {
+      const result = await manager.restoreTraceCheckpoint(id, c.req.param("checkpointId"), parsed.data.stateToken);
+      return result ? c.json(result) : c.json({ error: "not found" }, 404);
+    } catch (error) {
+      const code = (error as Error & { code?: string }).code;
+      return c.json({ error: (error as Error).message, code }, code === "SESSION_ACTIVE" || code === "STALE_WORKSPACE" ? 409 : 400);
+    }
   });
 
   // Per-run + per-session usage stats — see RUNTIME_ROUTES.getSessionStats.
