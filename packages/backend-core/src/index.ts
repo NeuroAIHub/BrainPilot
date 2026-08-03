@@ -50,6 +50,22 @@ export { RuntimeClient, buildPath } from "./runtime-client.js";
 export type { RuntimeClientOptions, ForwardOptions } from "./runtime-client.js";
 
 export {
+  installPlugin,
+  listInstalledPlugins,
+  listMarketplace,
+  listMarketplaceSourceStatuses,
+  listPluginUpdates,
+  loadMarketplaceSources,
+  pluginsDir,
+  preflightPluginCompatibility,
+  rollbackPlugin,
+  setPluginEnabled,
+  uninstallPlugin,
+  updatePlugin,
+} from "./plugins.js";
+export type { MarketplaceSourceStatus } from "./plugins.js";
+
+export {
   resolveProvider,
   readLocalSettings,
   writeLocalSettings,

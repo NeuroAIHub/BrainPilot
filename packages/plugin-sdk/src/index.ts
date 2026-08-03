@@ -1,4 +1,4 @@
-import { satisfies, valid, validRange } from "semver";
+import { compare, satisfies, valid, validRange } from "semver";
 
 export const PLUGIN_API_VERSION = "1" as const;
 export const PREVIEW_RPC_VERSION = "1" as const;
@@ -128,6 +128,16 @@ export interface MarketplaceEntry {
   source?: { id: string; type: "builtin" | "local" | "https" };
 }
 
+export interface MarketplaceSourceStatus {
+  id: string;
+  type: "builtin" | "local" | "https";
+  enabled: boolean;
+  status: "ready" | "error";
+  pluginCount: number;
+  url?: string;
+  error?: string;
+}
+
 export interface InstalledPlugin {
   manifest: PluginManifest;
   publisher: string;
@@ -197,13 +207,14 @@ const ENVIRONMENTS = new Set<PluginEnvironment>(["local", "cloud", "browser"]);
 function object(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
 function stringArray(value: unknown): string[] | null { return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : null; }
 function uniqueIds(values: Array<{ id: string }>): boolean { return new Set(values.map((value) => value.id)).size === values.length; }
+export function isPluginVersion(value: string): boolean { return valid(value) === value; }
 export function isSafePluginPath(value: string): boolean { return Boolean(value) && !value.startsWith("/") && !value.startsWith("\\") && !/^[A-Za-z]:/.test(value) && !value.split(/[\\/]/).includes(".."); }
 export function previewerExtensions(value: PreviewerContribution): string[] { return value.match?.extensions ?? value.extensions ?? []; }
 
 export function parsePluginManifest(value: unknown): PluginManifest | null {
   if (!object(value)) return null;
   const { id, version, apiVersion, displayName, description } = value;
-  if (typeof id !== "string" || !ID.test(id) || typeof version !== "string" || valid(version) !== version || apiVersion !== PLUGIN_API_VERSION || typeof displayName !== "string" || !displayName.trim() || typeof description !== "string" || !description.trim()) return null;
+  if (typeof id !== "string" || !ID.test(id) || typeof version !== "string" || !isPluginVersion(version) || apiVersion !== PLUGIN_API_VERSION || typeof displayName !== "string" || !displayName.trim() || typeof description !== "string" || !description.trim()) return null;
   const kind = value.kind === undefined ? undefined : value.kind;
   if (kind !== undefined && (typeof kind !== "string" || !KINDS.has(kind as LegacyPluginKind))) return null;
   const categories = value.categories === undefined ? undefined : stringArray(value.categories);
@@ -326,4 +337,8 @@ export function isBrainPilotVersionRange(range: string | undefined): range is st
 export function isBrainPilotVersionCompatible(range: string | undefined, current: string): boolean {
   if (!range?.trim()) return true;
   return valid(current) !== null && satisfies(current, range);
+}
+
+export function comparePluginVersions(left: string, right: string): number {
+  return compare(left, right);
 }
