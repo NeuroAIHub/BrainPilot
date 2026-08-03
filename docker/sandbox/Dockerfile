@@ -43,8 +43,8 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # (protocol ← runtime), not the whole monorepo (web/cli/backend-core).
 RUN npx tsc -b packages/runtime
 
-# ---- python-baseline: node + python3 + pip + curl + 镜像源 ----
-#   cpu 链的根，也是 gpu-base 的父（python+curl 层只构建一次，被两条链复用）。
+# ---- python-baseline: node + python3 + pip + curl + Git + 镜像源 ----
+#   cpu 链的根，也是 gpu-base 的父（共享运行时依赖只构建一次，被两条链复用）。
 FROM node:22-slim AS python-baseline
 ARG APT_MIRROR=""
 ARG PIP_INDEX_URL=""
