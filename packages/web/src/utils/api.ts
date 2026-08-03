@@ -700,7 +700,7 @@ export const api = {
       );
     },
 
-    async interrupt(sessionId: string): Promise<{ interrupted: boolean; reason?: "already_idle" }> {
+    async interrupt(sessionId: string, agent?: string): Promise<{ interrupted: boolean; reason?: "already_idle" }> {
       if (runtimeConfig.useMockBackend) {
         return { interrupted: true };
       }
@@ -712,7 +712,7 @@ export const api = {
         await apiFetch(`${API_BASE}/sessions/${sessionId}/interrupt`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },
-          body: JSON.stringify({}),
+          body: JSON.stringify(agent ? { agent } : {}),
         }),
       );
     },

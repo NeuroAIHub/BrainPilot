@@ -157,6 +157,20 @@ export class MockAgentSession implements IAgentSession {
       }
     }
 
+    // Leaf sessions have one mandatory delivery channel. Auto-submit in mock
+    // mode so lifecycle tests do not depend on model tool-selection behavior.
+    if (!m && !this.aborted) {
+      const submit = this.toolMap.get("submit_result");
+      if (submit) {
+        await submit.execute({
+          summary: script,
+          findings: [`mock result from ${this.cfg.agentName}`],
+          artifacts: [],
+          caveats: [],
+        });
+      }
+    }
+
     this.emit({ type: "turn_end" });
     this.emit({ type: "agent_end", messages: [], willRetry: false });
   }

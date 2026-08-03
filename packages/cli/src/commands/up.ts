@@ -250,6 +250,11 @@ export async function up(
   if (!(await isScaffolded(dataDir))) {
     log(pc.dim(`Scaffolding ${dataDir} ...`));
     await scaffold(dataDir, { port });
+  } else {
+    // Idempotent upgrade pass: add newly introduced template files (for
+    // example subagent profiles) without overwriting user edits or repeating
+    // the expensive skills/KB materialization.
+    await scaffold(dataDir, { port, skipSkillCopy: true });
   }
 
   // 2b. Non-blocking banner if any on-disk prompt overrides have drifted from

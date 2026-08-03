@@ -114,17 +114,19 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // closure state is naturally per-agent). Only the real factory loads it — the
   // mock factory has no Pi event loop, so behavioural hooks are verified in real
   // mode (design §7 / T2).
-  const traceReminder = makeTraceReminderExt({
-    role: params.role,
-    name: params.agentName,
-    onUnreplied: params.onUnreplied ?? (() => {}),
-    hasPendingTasks: params.hasPendingTasks,
-    claimTaskReminder: params.claimTaskReminder,
-  });
   // #97: inject a fresh team-status block at the top of every turn, but only for
   // the agent the host supplied a renderer for (the principal). The `context`
   // hook recomputes per turn and the rewrite is ephemeral (never persisted).
-  const extensionFactories: unknown[] = [traceReminder];
+  const extensionFactories: unknown[] = [];
+  if (!params.suppressCoordinationHooks) {
+    extensionFactories.push(makeTraceReminderExt({
+      role: params.role,
+      name: params.agentName,
+      onUnreplied: params.onUnreplied ?? (() => {}),
+      hasPendingTasks: params.hasPendingTasks,
+      claimTaskReminder: params.claimTaskReminder,
+    }));
+  }
   if (params.renderAgentStatus) {
     extensionFactories.push(makeAgentStatusExt({ renderStatus: params.renderAgentStatus }));
   }

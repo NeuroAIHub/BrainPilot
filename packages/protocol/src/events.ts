@@ -308,6 +308,8 @@ export const CUSTOM_EVENT = {
   COMPACTION: "compaction",
   /** Auditable, content-free domain tool / skill usage edge. */
   DOMAIN_RESOURCE_USAGE: "domain_resource_usage",
+  /** Lifecycle snapshot for one context-isolated child session. */
+  SUBAGENT_STATE: "subagent_state",
 } as const;
 
 export const TaskStatusSchema = z.enum(["pending", "completed", "cancelled"]);

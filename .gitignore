@@ -9,6 +9,7 @@ docs/*
 !docs/plan/
 docs/plan/*
 !docs/plan/task-ledger.md
+!docs/plan/subagents.md
 !packages/docs/
 !packages/docs/**
 plans/

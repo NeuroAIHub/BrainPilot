@@ -173,6 +173,8 @@ export type AgentSessionFactory = (params: {
   allowedToolNames: string[];
   /** System prompt for the agent. */
   systemPrompt: string;
+  /** Leaf sessions use submit_result and must not receive persistent-expert coordination hooks. */
+  suppressCoordinationHooks?: boolean;
   /**
    * Explicit skill directories to load through Pi's native skill pipeline
    * (`additionalSkillPaths`). Host-global auto-discovery stays disabled

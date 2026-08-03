@@ -30,6 +30,9 @@ describe("scaffold", () => {
 
     expect(await exists(paths.bpTemplate)).toBe(true);
     expect(await exists(paths.bpTemplateAgents)).toBe(true);
+    expect(await exists(paths.bpTemplateSubagents)).toBe(true);
+    expect(await exists(join(paths.bpTemplateSubagents, "repo-scout", "prompt.md"))).toBe(true);
+    expect(await exists(join(paths.bpTemplateSubagents, "repo-scout", "profile.json"))).toBe(true);
     expect(await exists(join(paths.bpTemplateAgents, "README.md"))).toBe(true);
     expect(await exists(paths.bpTemplateProviders)).toBe(true);
     expect(await exists(paths.bpTemplateMcpServers)).toBe(true);
@@ -73,6 +76,15 @@ describe("scaffold", () => {
     const md = await readFile(join(paths.bpTemplateAgents, "README.md"), "utf8");
     expect(md).toContain("template reset");
     expect(md).toContain("agents/<name>/prompt.md");
+  });
+
+  it("preserves local subagent profile edits", async () => {
+    const root = join(dir, "brainpilot");
+    const { paths } = await scaffold(root);
+    const prompt = join(paths.bpTemplateSubagents, "repo-scout", "prompt.md");
+    await writeFile(prompt, "# Local repo scout", "utf8");
+    await scaffold(root);
+    expect(await readFile(prompt, "utf8")).toBe("# Local repo scout");
   });
 
   it("ships an empty mcp_servers.json ready for user config", async () => {

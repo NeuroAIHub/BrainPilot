@@ -7934,6 +7934,29 @@ button {
   padding: 2px 7px;
 }
 
+.agent-network__subagents li {
+  display: grid;
+  grid-template-columns: minmax(8rem, 1fr) minmax(10rem, 1.5fr) auto auto auto;
+  gap: 0.65rem;
+  align-items: center;
+}
+
+.agent-network__subagents li > span {
+  color: var(--color-text-muted);
+}
+
+.agent-network__subagent-stop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  border: 0;
+  border-radius: 0.35rem;
+  padding: 0.25rem 0.45rem;
+  color: var(--color-text);
+  background: var(--color-surface-soft);
+  cursor: pointer;
+}
+
 .agent-network__legend-dot {
   display: inline-block;
   width: 8px;

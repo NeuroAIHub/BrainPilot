@@ -14,6 +14,7 @@ import type {
   Session,
   DomainResources,
   AgentStatus,
+  SubagentStatus,
   SessionStateSnapshot,
   SessionTokenUsage,
   TokenUsage,
@@ -56,6 +57,7 @@ export type {
   Session,
   DomainResources,
   AgentStatus,
+  SubagentStatus,
   SessionStateSnapshot,
   SessionTokenUsage,
   TokenUsage,
@@ -997,12 +999,32 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     }
     return normalized;
   });
+  const subagentsRaw = Array.isArray(camelized.subagents) ? camelized.subagents : [];
+  const subagents: SubagentStatus[] = subagentsRaw.map((entry) => {
+    const child = asDict(entry);
+    return {
+      id: stringValue(child.id),
+      parentAgent: stringValue(child.parentAgent),
+      rootRunId: optionalString(child.rootRunId) ?? null,
+      profile: stringValue(child.profile),
+      label: stringValue(child.label),
+      task: stringValue(child.task),
+      status: stringValue(child.status, "interrupted") as SubagentStatus["status"],
+      startedAt: optionalString(child.startedAt),
+      finishedAt: optionalString(child.finishedAt),
+      durationMs: optionalNumber(child.durationMs),
+      resultSummary: optionalString(child.resultSummary),
+      artifacts: normalizeStringArray(child.artifacts),
+      error: optionalString(child.error),
+    };
+  });
   const out: SessionStateSnapshot = {
     runState: {
       active: rs.active === true,
       runId: optionalString(rs.runId) ?? null,
     },
     agents,
+    subagents,
     lastActivityTs: stringValue(camelized.lastActivityTs, ""),
     domainResources: camelized.domainResources === "base" ? "base" : "full",
   };
