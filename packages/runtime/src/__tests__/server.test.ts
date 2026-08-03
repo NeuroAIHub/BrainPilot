@@ -300,7 +300,15 @@ describe("workspace file routes", () => {
     // read raw bytes
     const raw = await a.request("/sessions/s1/files/raw?path=/workspace/img.bin");
     expect(raw.status).toBe(200);
+    expect(raw.headers.get("accept-ranges")).toBe("bytes");
     expect(new Uint8Array(await raw.arrayBuffer())).toEqual(new Uint8Array([1, 2, 3, 4]));
+
+    const range = await a.request("/sessions/s1/files/raw?path=/workspace/img.bin", { headers: { range: "bytes=1-2" } });
+    expect(range.status).toBe(206);
+    expect(range.headers.get("content-range")).toBe("bytes 1-2/4");
+    expect(new Uint8Array(await range.arrayBuffer())).toEqual(new Uint8Array([2, 3]));
+
+    expect((await a.request("/sessions/s1/files/raw?path=/workspace/img.bin", { headers: { range: "bytes=-2" } })).status).toBe(416);
 
     // delete
     const del = await a.request("/sessions/s1/files?path=/workspace/a.txt", { method: "DELETE" });

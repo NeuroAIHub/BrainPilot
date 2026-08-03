@@ -94,6 +94,18 @@ describe("Hono app — REST forwarding", () => {
     expect(res.status).toBe(201);
   });
 
+  it("forwards byte Range headers and preserves partial-content metadata", async () => {
+    const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
+      expect(url).toBe("http://runtime.test/sessions/s1/files/raw?path=%2Fworkspace%2Fscan.nii");
+      expect((init.headers as Record<string, string>).range).toBe("bytes=0-347");
+      return new Response(new Uint8Array([1, 2]), { status: 206, headers: { "content-range": "bytes 0-1/4096", "content-type": "application/octet-stream" } });
+    });
+    const app = createApp({ orchestrator: fakeOrchestrator(), fetchFn: fetchFn as never, serveWeb: false });
+    const response = await app.request("/api/sandbox/s1/files/raw?path=%2Fworkspace%2Fscan.nii", { headers: { range: "bytes=0-347" } });
+    expect(response.status).toBe(206);
+    expect(response.headers.get("content-range")).toBe("bytes 0-1/4096");
+  });
+
   // #256: a raw octet-stream upload must be streamed to the runtime BYTE-FOR-BYTE
   // (query carried, octet content-type preserved). Routing it through the
   // buffered `text()` forward would UTF-8-decode and corrupt binary payloads.

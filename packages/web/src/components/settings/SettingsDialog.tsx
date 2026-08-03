@@ -1,11 +1,11 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
-import { Check, Database, Eye, EyeOff, Loader2, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
+import { Check, Database, Eye, EyeOff, Loader2, Package, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { McpByokStatus, McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
+import { api, type InstalledPluginApiEntry } from "../../utils/api";
 import { runtimeConfig } from "../../config";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
@@ -22,7 +22,7 @@ import {
 } from "./providerFormValidation";
 import { listFocusable, resolveEscapeLayer, trapFocusKeyDown } from "./settingsModalStack";
 
-export type SettingsTab = "account" | "providers" | "mcp" | "knowledgeBase" | "preferences";
+export type SettingsTab = "account" | "providers" | "mcp" | "plugins" | "knowledgeBase" | "preferences";
 
 type SettingsDialogProps = {
   isOpen: boolean;
@@ -40,6 +40,7 @@ const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> =
   // stability; the label + icon shift to a generic tool motif since the tab
   // now covers more than MCP.
   { id: "mcp", labelKey: "settings.tab.mcp", icon: Wrench },
+  { id: "plugins", labelKey: "settings.tab.plugins", icon: Package },
   { id: "knowledgeBase", labelKey: "settings.tab.knowledgeBase", icon: Database },
   { id: "preferences", labelKey: "settings.tab.preferences", icon: Settings },
 ];
@@ -100,6 +101,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   const [activeTab, setActiveTab] = useState<SettingsTab>(tabs[0].id);
   const [providers, setProviders] = useState<ProviderProfile[]>([]);
   const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
+  const [installedPlugins, setInstalledPlugins] = useState<InstalledPluginApiEntry[]>([]);
   // #377: preset BYOK. `null` = this deployment has no `/api/mcp-servers/byok`
   // (self-hosted) → presets behave exactly as before, no BYOK cards. An array
   // (possibly empty) = hosted deployment; each row tells us whether the user
@@ -141,15 +143,17 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     setIsLoading(true);
     setError(null);
     try {
-      const [nextProviders, nextMcpServers, healthProfiles, nextByok] = await Promise.all([
+      const [nextProviders, nextMcpServers, healthProfiles, nextInstalledPlugins, nextByok] = await Promise.all([
         api.providers.list(),
         api.mcpServers.list(),
         api.providers.health().catch(() => [] as ProviderProfile[]),
+        api.plugins.installed(),
         // Probe never rejects — it resolves to null when unsupported (#377).
         api.mcpByok.support(),
       ]);
       setProviders(mergeHealth(nextProviders, healthProfiles));
       setMcpServers(nextMcpServers);
+      setInstalledPlugins(nextInstalledPlugins);
       setMcpByokStatus(nextByok);
     } catch (err) {
       setError(err instanceof Error ? err.message : t("settings.loadFailed"));
@@ -763,6 +767,38 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                 )}
                 </section>
               </>
+            ) : null}
+
+            {activeTab === "plugins" ? (
+              <section className="settings-section">
+                <div className="settings-section__header">
+                  <div><h3>{t("settings.plugins.title")}</h3><p>{t("settings.plugins.description")}</p></div>
+                </div>
+                {installedPlugins.length === 0 ? (
+                  <div className="settings-empty"><Package size={22} /><strong>{t("settings.plugins.empty")}</strong><p>{t("settings.plugins.emptyHint")}</p></div>
+                ) : (
+                  <div className="settings-list">
+                    {installedPlugins.map((plugin) => (
+                      <article className="settings-list-item" key={plugin.manifest.id}>
+                        <div>
+                          <strong>{plugin.manifest.displayName}{plugin.verified ? ` · ${t("marketplace.verified")}` : ""}{!plugin.compatibility.compatible ? ` · ${t("marketplace.incompatible")}` : ""}</strong>
+                          <span>{plugin.manifest.description} · {plugin.publisher} · v{plugin.activeVersion}</span>
+                          <small>{plugin.compatibility.declared ? t("marketplace.requiresBrainPilot", { range: plugin.compatibility.requiredRange ?? "?" }) : t("marketplace.compatibilityUndeclared")}</small>
+                        </div>
+                        <div className="settings-list-item__actions">
+                          <button
+                            disabled={!plugin.compatibility.compatible && !plugin.enabled}
+                            onClick={() => void api.plugins.setEnabled(plugin.manifest.id, !plugin.enabled).then(loadSettings).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}
+                            type="button"
+                          >
+                            {t(plugin.enabled ? "marketplace.disable" : "marketplace.enable")}
+                          </button>
+                        </div>
+                      </article>
+                    ))}
+                  </div>
+                )}
+              </section>
             ) : null}
 
             {runtimeConfig.knowledgeBaseSettingsEnabled && activeTab === "knowledgeBase" ? (

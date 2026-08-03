@@ -694,3 +694,40 @@ describe("api.mcpByok save/clear", () => {
     await expect(api.mcpByok.save("tavily", "nope")).rejects.toThrow("invalid api key");
   });
 });
+
+describe("api.plugins marketplace lifecycle", () => {
+  it("reads an explicit file range and parses Content-Range", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([2, 3]), {
+      status: 206,
+      headers: { "content-type": "application/octet-stream", "content-range": "bytes 1-2/4" },
+    }));
+    const result = await api.sandbox.readRawFileRange("s1", "/workspace/scan.nii", 1, 2);
+    expect(result.offset).toBe(1);
+    expect(result.totalSize).toBe(4);
+    expect(new Uint8Array(await result.blob.arrayBuffer())).toEqual(new Uint8Array([2, 3]));
+    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>).Range).toBe("bytes=1-2");
+  });
+
+  it("loads the catalogue from the control-plane endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: [] }));
+    await expect(api.plugins.marketplace()).resolves.toEqual([]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/plugins/marketplace");
+  });
+
+  it("installs a selected immutable version", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { activeVersion: "1.2.0" } }));
+    await api.plugins.install("org.example.viewer", "1.2.0");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/plugins/install");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ id: "org.example.viewer", version: "1.2.0" });
+  });
+
+  it("encodes plugin ids when changing activation state", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { enabled: true } }));
+    await api.plugins.setEnabled("org.example/weird", true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/plugins/org.example%2Fweird/enabled");
+    expect(init.method).toBe("PUT");
+  });
+});
