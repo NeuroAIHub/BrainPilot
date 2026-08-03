@@ -471,27 +471,6 @@ export const TraceDependencySchema = z.object({
 });
 export type TraceDependency = z.infer<typeof TraceDependencySchema>;
 
-export const TraceSemanticLinkTypeSchema = z.enum([
-  "sequence_after",
-  "restored_from",
-  "supports",
-  "contradicts",
-  "supersedes",
-  "references",
-  "legacy",
-]);
-export type TraceSemanticLinkType = z.infer<typeof TraceSemanticLinkTypeSchema>;
-
-export const TraceSemanticLinkSchema = z.object({
-  id: z.string(),
-  fromId: z.string(),
-  toId: z.string(),
-  type: TraceSemanticLinkTypeSchema,
-  reason: z.string().optional(),
-  createdAt: z.string().optional(),
-});
-export type TraceSemanticLink = z.infer<typeof TraceSemanticLinkSchema>;
-
 /** Presentation-only grouping. Membership is owned by node.primaryEpisodeId. */
 export const TraceEpisodeSchema = z.object({
   id: z.string(),
@@ -609,7 +588,6 @@ export type TraceDocumentV2 = z.infer<typeof TraceDocumentV2Schema>;
 export const TraceGraphViewV2Schema = z.object({
   ...TraceDocumentV2Shape,
   dependencies: z.array(TraceDependencySchema),
-  semanticLinks: z.array(TraceSemanticLinkSchema),
 });
 export type TraceGraphViewV2 = z.infer<typeof TraceGraphViewV2Schema>;
 
@@ -623,7 +601,7 @@ export const TraceDeltaV2Schema = z.object({
   revision: z.number().int().nonnegative(),
   op: z.enum(["snapshot", "upsert", "remove"]),
   graph: TraceGraphV2Schema.optional(),
-  entity: z.enum(["node", "dependency", "semantic_link", "episode", "artifact"]).optional(),
+  entity: z.enum(["node", "dependency", "episode", "artifact"]).optional(),
   id: z.string().optional(),
 });
 export type TraceDeltaV2 = z.infer<typeof TraceDeltaV2Schema>;
@@ -636,7 +614,6 @@ export const TraceGraphSchema = z.object({
   nodes: z.array(TraceNodeSchema),
   /** V2 derived collections exposed alongside the legacy node projection. */
   dependencies: z.array(TraceDependencySchema).optional(),
-  semanticLinks: z.array(TraceSemanticLinkSchema).optional(),
   episodes: z.array(TraceEpisodeSchema).optional(),
   artifacts: z.array(TraceArtifactV2Schema).optional(),
 });

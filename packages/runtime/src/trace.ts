@@ -1,9 +1,9 @@
 /**
  * TraceGraphV2 — canonical Graph of Trace storage.
  *
- * Nodes own their causal parent references. Legacy dependency/semantic-link
- * collections are compatibility projections only and are never persisted by
- * new writes. `getGraph()` still materializes the old shape for older clients.
+ * Nodes own their causal parent references. The legacy dependency collection
+ * is a compatibility projection only and is never persisted by new writes.
+ * `getGraph()` still materializes the old shape for older clients.
  */
 import { appendFile, copyFile, mkdir, readFile, rename, rm, stat, writeFile } from "node:fs/promises";
 import { createHash, randomUUID } from "node:crypto";
@@ -28,8 +28,6 @@ import type {
   TraceNodeRecord,
   TraceNodeReviewConclusion,
   TraceNodeV2,
-  TraceSemanticLink,
-  TraceSemanticLinkType,
   TraceDeltaV2,
 } from "@brainpilot/protocol";
 function now(): string {
@@ -88,18 +86,6 @@ function isDeterministicHostEvidence(evidence: readonly TraceDependencyEvidence[
   );
 }
 
-function semanticTypeForLegacyRelation(relation: string | undefined): TraceSemanticLinkType {
-  switch (relation) {
-    case "follows": return "sequence_after";
-    case "restored_from": return "restored_from";
-    case "supports": return "supports";
-    case "contradicts": return "contradicts";
-    case "supersedes": return "supersedes";
-    case "references": return "references";
-    default: return "legacy";
-  }
-}
-
 /** Legacy callback operation retained for older hosting code and tests. */
 export type TraceChangeOp = "created" | "updated";
 
@@ -134,7 +120,6 @@ export interface TraceArtifactInput {
 export interface TraceNodeDetail {
   node: TraceNodeV2;
   dependencies: { incoming: TraceDependency[]; outgoing: TraceDependency[] };
-  semanticLinks: { incoming: TraceSemanticLink[]; outgoing: TraceSemanticLink[] };
   episode?: TraceEpisode;
   artifacts: TraceArtifactV2[];
 }
@@ -163,7 +148,6 @@ type TraceChangeDraft = Omit<TraceChange, "id" | "revision" | "createdAt">;
 export class GraphOfTrace {
   private readonly nodes = new Map<string, TraceNodeV2>();
   private readonly dependencies = new Map<string, TraceDependency>();
-  private readonly semanticLinks = new Map<string, TraceSemanticLink>();
   private readonly episodes = new Map<string, TraceEpisode>();
   private readonly artifacts = new Map<string, TraceArtifactV2>();
   private readonly changes: TraceChange[] = [];
@@ -297,7 +281,7 @@ export class GraphOfTrace {
     return this.getNode(id)!;
   }
 
-  /** Creates a sequence semantic link, not an implied dependency. */
+  /** Creates the next presentation milestone without manufacturing causality. */
   createChainedNode(input: {
     title: string;
     type?: string;
@@ -306,14 +290,12 @@ export class GraphOfTrace {
     description?: string;
     metadata?: Record<string, unknown>;
   }): TraceNode {
-    const parent = this.lastNodeId ? this.nodes.get(this.lastNodeId) : undefined;
     return this.createNode({
       title: input.title,
       type: input.type ?? "milestone",
       status: input.status ?? "completed",
       agent: input.agent,
       description: input.description,
-      parents: parent ? [{ id: parent.id, relation: "follows" }] : undefined,
       metadata: { auto: true, ...input.metadata },
     });
   }
@@ -626,23 +608,7 @@ export class GraphOfTrace {
         evidence: [{ source: "legacy", kind: relation, detail: explanation }],
       }).ok;
     }
-    const link = this.addSemanticLink(fromId, toId, semanticTypeForLegacyRelation(relation), explanation);
-    return Boolean(link);
-  }
-
-  addSemanticLink(fromId: string, toId: string, type: TraceSemanticLinkType, reason?: string): TraceSemanticLink | undefined {
-    if (!this.nodes.has(fromId) || !this.nodes.has(toId)) return undefined;
-    const id = stableId("semantic", fromId, toId, type);
-    const existing = this.semanticLinks.get(id);
-    if (existing) {
-      if (reason) existing.reason = reason;
-      this.commit("updated", toId);
-      return clone(existing);
-    }
-    const link: TraceSemanticLink = { id, fromId, toId, type, ...(reason ? { reason } : {}), createdAt: now() };
-    this.semanticLinks.set(id, link);
-    this.commit("updated", toId);
-    return clone(link);
+    return false;
   }
 
   createEpisode(input: { title: string; description?: string; id?: string }): TraceEpisode {
@@ -728,12 +694,9 @@ export class GraphOfTrace {
     if (!node || (!includeRevoked && node.revoked)) return undefined;
     const incoming = [...this.dependencies.values()].filter((edge) => edge.dependentId === id);
     const outgoing = [...this.dependencies.values()].filter((edge) => edge.prerequisiteId === id);
-    const semanticIncoming = [...this.semanticLinks.values()].filter((edge) => edge.toId === id);
-    const semanticOutgoing = [...this.semanticLinks.values()].filter((edge) => edge.fromId === id);
     return {
       node: clone(node),
       dependencies: { incoming: clone(incoming), outgoing: clone(outgoing) },
-      semanticLinks: { incoming: clone(semanticIncoming), outgoing: clone(semanticOutgoing) },
       ...(node.primaryEpisodeId && this.episodes.get(node.primaryEpisodeId)
         ? { episode: clone(this.episodes.get(node.primaryEpisodeId)!) }
         : {}),
@@ -741,16 +704,16 @@ export class GraphOfTrace {
     };
   }
 
-  getNeighborhood(id: string, depth = 1): { nodes: TraceNodeV2[]; dependencies: TraceDependency[]; semanticLinks: TraceSemanticLink[] } | undefined {
+  getNeighborhood(id: string, depth = 1): { nodes: TraceNodeV2[]; dependencies: TraceDependency[] } | undefined {
     if (!this.nodes.has(id) || this.nodes.get(id)?.revoked) return undefined;
     const requestedDepth = Math.max(0, Math.min(4, Math.trunc(depth)));
     const seen = new Set<string>([id]);
     let frontier = [id];
     for (let level = 0; level < requestedDepth; level++) {
       const next = new Set<string>();
-      for (const edge of [...this.dependencies.values(), ...this.semanticLinks.values()]) {
-        const from = "prerequisiteId" in edge ? edge.prerequisiteId : edge.fromId;
-        const to = "dependentId" in edge ? edge.dependentId : edge.toId;
+      for (const edge of this.dependencies.values()) {
+        const from = edge.prerequisiteId;
+        const to = edge.dependentId;
         if (frontier.includes(from) && !seen.has(to)) next.add(to);
         if (frontier.includes(to) && !seen.has(from)) next.add(from);
       }
@@ -761,7 +724,6 @@ export class GraphOfTrace {
     return {
       nodes: clone([...this.nodes.values()].filter((node) => seen.has(node.id) && !node.revoked)),
       dependencies: clone([...this.dependencies.values()].filter((edge) => included(edge.prerequisiteId) && included(edge.dependentId) && !this.nodes.get(edge.prerequisiteId)?.revoked && !this.nodes.get(edge.dependentId)?.revoked)),
-      semanticLinks: clone([...this.semanticLinks.values()].filter((edge) => included(edge.fromId) && included(edge.toId))),
     };
   }
 
@@ -790,7 +752,6 @@ export class GraphOfTrace {
       meta: clone(this.meta),
       nodes: [...this.nodes.values()].map((node) => this.materializeNode(node)),
       dependencies: clone([...this.dependencies.values()]),
-      semanticLinks: clone([...this.semanticLinks.values()]),
       episodes: clone([...this.episodes.values()]),
       artifacts: clone([...this.artifacts.values()]),
     };
@@ -808,13 +769,12 @@ export class GraphOfTrace {
         childIds: node.childIds.filter((id) => activeIds.has(id)),
       })),
       dependencies: graph.dependencies?.filter((edge) => activeIds.has(edge.prerequisiteId) && activeIds.has(edge.dependentId)),
-      semanticLinks: [],
       artifacts: graph.artifacts?.filter((artifact) => !artifact.producerNodeId || activeIds.has(artifact.producerNodeId)),
     };
   }
 
-  /** Persisted V2 data. Node.parents is the causal source of truth; legacy
-   * dependency/link collections remain only as a compatibility projection. */
+  /** Persisted V2 data. Node.parents is the causal source of truth; the legacy
+   * dependency collection remains only as a compatibility projection. */
   getGraphV2(): TraceGraphV2 {
     return {
       schemaVersion: "2.0",
@@ -822,7 +782,6 @@ export class GraphOfTrace {
       meta: clone(this.meta),
       nodes: clone([...this.nodes.values()]),
       dependencies: clone([...this.dependencies.values()]),
-      semanticLinks: clone([...this.semanticLinks.values()]),
       episodes: clone([...this.episodes.values()]),
       artifacts: clone([...this.artifacts.values()]),
     };
@@ -830,7 +789,7 @@ export class GraphOfTrace {
 
   /** Disk shape: embedded parents are canonical; legacy edge collections stay out. */
   private getPersistedGraph(pendingChanges: TraceChange[] = []): TraceDocumentV2 {
-    const { dependencies: _dependencies, semanticLinks: _semanticLinks, ...canonical } = this.getGraphV2();
+    const { dependencies: _dependencies, ...canonical } = this.getGraphV2();
     return {
       ...canonical,
       ...(pendingChanges.length ? { pendingChanges: clone(pendingChanges) } : {}),
@@ -845,44 +804,46 @@ export class GraphOfTrace {
   async recoverChanges(): Promise<void> {
     const path = this.changeLogPath();
     if (!path) return;
+    let raw = "";
     try {
-      const raw = await readFile(path, "utf8");
-      this.changes.length = 0;
-      const ids = new Set<string>();
-      for (const line of raw.split("\n")) {
-        if (!line.trim()) continue;
+      raw = await readFile(path, "utf8");
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code !== "ENOENT") return;
+      await mkdir(dirname(path), { recursive: true }).catch(() => {});
+    }
+
+    this.changes.length = 0;
+    const ids = new Set<string>();
+    for (const line of raw.split("\n")) {
+      if (!line.trim()) continue;
+      try {
+        const value = JSON.parse(line) as TraceChange;
+        if (value?.id && typeof value.revision === "number" && !ids.has(value.id)) {
+          ids.add(value.id);
+          this.changes.push(value);
+        }
+      } catch {
+        // JSONL is intentionally record-oriented: preserve valid entries
+        // before and after a torn/corrupt append.
+      }
+    }
+    for (const change of this.pendingChanges) {
+      if (!ids.has(change.id)) {
         try {
-          const value = JSON.parse(line) as TraceChange;
-          if (value?.id && typeof value.revision === "number" && !ids.has(value.id)) {
-            ids.add(value.id);
-            this.changes.push(value);
-          }
+          await appendFile(path, `${JSON.stringify(change)}\n`, "utf8");
+          ids.add(change.id);
         } catch {
-          // JSONL is intentionally record-oriented: preserve valid entries
-          // before and after a torn/corrupt append.
+          // Keep this and every later record embedded in trace.json. A future
+          // mutation or restart can retry without losing the audit trail.
+          break;
         }
       }
-      for (const change of this.pendingChanges) {
-        if (ids.has(change.id)) continue;
-        await appendFile(path, `${JSON.stringify(change)}\n`, "utf8");
-        ids.add(change.id);
-        this.changes.push(clone(change));
-      }
-      if (this.pendingChanges.length > 0 && this.persistPath) {
-        this.pendingChanges = [];
-        await this.writeSnapshot(this.getPersistedGraph());
-      }
-    } catch {
-      // A missing audit log must not make the materialized graph unavailable.
-      if (this.pendingChanges.length > 0) {
-        await mkdir(dirname(path), { recursive: true }).catch(() => {});
-        for (const change of this.pendingChanges) {
-          await appendFile(path, `${JSON.stringify(change)}\n`, "utf8").catch(() => {});
-          this.changes.push(clone(change));
-        }
-        this.pendingChanges = [];
-        if (this.persistPath) await this.writeSnapshot(this.getPersistedGraph()).catch(() => {});
-      }
+      if (!this.changes.some((item) => item.id === change.id)) this.changes.push(clone(change));
+    }
+    const remaining = this.pendingChanges.filter((change) => !ids.has(change.id));
+    if (remaining.length !== this.pendingChanges.length && this.persistPath) {
+      this.pendingChanges = remaining;
+      await this.writeSnapshot(this.getPersistedGraph(this.pendingChanges)).catch(() => {});
     }
   }
 
@@ -967,7 +928,6 @@ export class GraphOfTrace {
   private clear(): void {
     this.nodes.clear();
     this.dependencies.clear();
-    this.semanticLinks.clear();
     this.episodes.clear();
     this.artifacts.clear();
     this.changes.length = 0;
@@ -1049,20 +1009,7 @@ export class GraphOfTrace {
       const id = asString(edge.id, stableId("dependency", prerequisiteId, dependentId));
       const state = edge.state === "active" || edge.state === "rejected" ? edge.state : "proposed";
       // Never hydrate a malformed persisted cycle into the canonical graph.
-      // Retain a non-authoritative historical hint rather than manufacturing an
-      // official edge from corrupt external JSON.
       if (state !== "rejected" && this.wouldCreateCycle(prerequisiteId, dependentId)) {
-        const legacyId = stableId("semantic", prerequisiteId, dependentId, "legacy");
-        if (!this.semanticLinks.has(legacyId)) {
-          this.semanticLinks.set(legacyId, {
-            id: legacyId,
-            fromId: prerequisiteId,
-            toId: dependentId,
-            type: "legacy",
-            ...(typeof edge.reason === "string" ? { reason: edge.reason } : {}),
-            createdAt: now(),
-          });
-        }
         continue;
       }
       const dependency: TraceDependency = {
@@ -1084,18 +1031,6 @@ export class GraphOfTrace {
         this.syncParentFromDependency(dependency);
       }
     }
-    for (const item of Array.isArray(raw.semanticLinks) ? raw.semanticLinks : []) {
-      const link = asRecord(item);
-      const fromId = asString(link.fromId);
-      const toId = asString(link.toId);
-      if (!fromId || !toId || !this.nodes.has(fromId) || !this.nodes.has(toId)) continue;
-      const type = this.validSemanticType(link.type);
-      const id = asString(link.id, stableId("semantic", fromId, toId, type));
-      this.semanticLinks.set(id, { id, fromId, toId, type, ...(typeof link.reason === "string" ? { reason: link.reason } : {}), ...(typeof link.createdAt === "string" ? { createdAt: link.createdAt } : {}) });
-    }
-    // Semantic links are not causal and are intentionally not part of the new
-    // graph. The untouched legacy file/one-time backup remains their archive.
-    this.semanticLinks.clear();
     this.normalizeCausalGraph();
     for (const item of Array.isArray(raw.episodes) ? raw.episodes : []) {
       const episode = asRecord(item);
@@ -1218,16 +1153,9 @@ export class GraphOfTrace {
         seen.add(key);
         this.addLegacyRelationInternal(prerequisiteId, dependentId, relation, typeof parent.explanation === "string" ? parent.explanation : undefined, "legacy");
       }
-      // Some very old files only carried parentIds. Preserve their existence as
-      // an explicitly legacy semantic relation rather than inventing a fact.
-      for (const prerequisiteId of asStringArray(source.parentIds)) {
-        const key = `${prerequisiteId}\u0000legacy`;
-        if (!prerequisiteId || seen.has(key)) continue;
-        seen.add(key);
-        this.addLegacyRelationInternal(prerequisiteId, dependentId, "legacy", undefined, "legacy");
-      }
+      // parentIds without a typed relation are intentionally ignored: they do
+      // not carry enough evidence to manufacture a causal claim.
     }
-    this.semanticLinks.clear();
     this.normalizeCausalGraph();
     this.revision = 0;
   }
@@ -1265,13 +1193,6 @@ export class GraphOfTrace {
           reason,
           evidence: [{ source: "trace", kind: relation, ...(reason ? { detail: reason } : {}) }],
         });
-      } else {
-        const type = semanticTypeForLegacyRelation(relation);
-        const id = stableId("semantic", prerequisiteId, dependentId, type);
-        if (!this.semanticLinks.has(id)) {
-          const stamp = this.nodes.get(dependentId)?.createdAt;
-          this.semanticLinks.set(id, { id, fromId: prerequisiteId, toId: dependentId, type, ...(reason ? { reason } : {}), ...(stamp ? { createdAt: stamp } : {}) });
-        }
       }
       return;
     }
@@ -1281,13 +1202,6 @@ export class GraphOfTrace {
       this.upsertMigrationDependency(prerequisiteId, dependentId, "host", "high", "active", reason, "delegation");
     } else if (relation === "necessitated_by" || relation === "used") {
       this.upsertMigrationDependency(prerequisiteId, dependentId, "legacy", "medium", "proposed", reason, relation);
-    } else {
-      const type = semanticTypeForLegacyRelation(relation);
-      const id = stableId("semantic", prerequisiteId, dependentId, type);
-      if (!this.semanticLinks.has(id)) {
-        const stamp = this.nodes.get(dependentId)?.createdAt;
-        this.semanticLinks.set(id, { id, fromId: prerequisiteId, toId: dependentId, type, ...(reason ? { reason } : {}), ...(stamp ? { createdAt: stamp } : {}) });
-      }
     }
   }
 
@@ -1300,16 +1214,7 @@ export class GraphOfTrace {
     reason: string | undefined,
     kind: string,
   ): void {
-    if (this.wouldCreateCycle(prerequisiteId, dependentId)) {
-      // A corrupt V1 cycle must not become a V2 dependency cycle. Keep the
-      // historical hint as a semantic legacy edge instead of dropping it.
-      const id = stableId("semantic", prerequisiteId, dependentId, "legacy");
-      if (!this.semanticLinks.has(id)) {
-        const stamp = this.nodes.get(dependentId)?.createdAt;
-        this.semanticLinks.set(id, { id, fromId: prerequisiteId, toId: dependentId, type: "legacy", ...(reason ? { reason } : {}), ...(stamp ? { createdAt: stamp } : {}) });
-      }
-      return;
-    }
+    if (this.wouldCreateCycle(prerequisiteId, dependentId)) return;
     const id = stableId("dependency", prerequisiteId, dependentId);
     const existing = this.dependencies.get(id);
     if (existing) {
@@ -1372,7 +1277,10 @@ export class GraphOfTrace {
     const conclusion: TraceCausalParent["conclusion"] = dependency.state === "active" && (
       dependency.origin === "user" ||
       dependency.origin === "explicit" ||
-      (dependency.origin === "host" && isDeterministicHostEvidence(dependency.evidence))
+      (dependency.origin === "host" && isDeterministicHostEvidence(dependency.evidence)) ||
+      (dependency.origin === "legacy" && dependency.evidence.some((item) =>
+        item.source === "v1" && item.kind === "legacy_depends_on"
+      ))
     )
       ? "confirmed"
       : dependency.state === "rejected"
@@ -1788,10 +1696,6 @@ export class GraphOfTrace {
     return value === "agent_report" || value === "explicit" || value === "host" || value === "user" || value === "legacy" ? value : "trace";
   }
 
-  private validSemanticType(value: unknown): TraceSemanticLinkType {
-    return value === "sequence_after" || value === "restored_from" || value === "supports" || value === "contradicts" || value === "supersedes" || value === "references" ? value : "legacy";
-  }
-
   private coerceEvidence(value: unknown): TraceDependencyEvidence[] {
     if (!Array.isArray(value)) return [];
     return value.map(asRecord).map((item) => ({
@@ -1836,11 +1740,14 @@ export class GraphOfTrace {
 
   private persist(change?: TraceChange): void {
     if (!this.persistPath) return;
-    // Capture both states now. Using live in-memory state after an awaited
-    // append could otherwise persist a later revision before its own journal
-    // tail has been embedded.
-    const cleanGraph = this.getPersistedGraph();
-    const graph = change ? { ...cleanGraph, pendingChanges: [clone(change)] } : cleanGraph;
+    if (change && !this.pendingChanges.some((item) => item.id === change.id)) {
+      this.pendingChanges.push(clone(change));
+    }
+    // Every snapshot carries the complete non-durable journal tail. If an
+    // earlier append failed, a later mutation therefore cannot overwrite and
+    // lose that older change.
+    const pending = clone(this.pendingChanges);
+    const graph = this.getPersistedGraph(pending);
     this.writeChain = this.writeChain
       .then(async () => {
         await mkdir(dirname(this.persistPath!), { recursive: true });
@@ -1858,11 +1765,33 @@ export class GraphOfTrace {
           this.wroteV2AfterV1 = true;
         }
         await this.writeSnapshot(graph);
-        if (change) {
-          await appendFile(this.changeLogPath()!, `${JSON.stringify(change)}\n`, "utf8");
-          // Clear the embedded journal only after the append succeeds. A crash
-          // before this rewrite is repaired idempotently by recoverChanges().
-          await this.writeSnapshot(cleanGraph);
+        if (pending.length > 0) {
+          const journalPath = this.changeLogPath()!;
+          let journal = "";
+          try {
+            journal = await readFile(journalPath, "utf8");
+          } catch (error) {
+            if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error;
+          }
+          const durableIds = new Set<string>();
+          for (const line of journal.split("\n")) {
+            try {
+              const value = JSON.parse(line) as TraceChange;
+              if (typeof value?.id === "string") durableIds.add(value.id);
+            } catch {
+              // Ignore torn/corrupt records; valid records remain deduplicated.
+            }
+          }
+          for (const item of pending) {
+            if (!durableIds.has(item.id)) {
+              await appendFile(journalPath, `${JSON.stringify(item)}\n`, "utf8");
+              durableIds.add(item.id);
+            }
+          }
+          this.pendingChanges = this.pendingChanges.filter((item) => !durableIds.has(item.id));
+          // Use the current in-memory graph so a queued later mutation stays
+          // embedded while this earlier write finishes.
+          await this.writeSnapshot(this.getPersistedGraph(this.pendingChanges));
         }
       })
       // Persistence is best-effort by historical contract. The in-memory graph

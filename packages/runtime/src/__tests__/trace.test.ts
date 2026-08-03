@@ -99,7 +99,7 @@ describe("GraphOfTrace onChange (#79)", () => {
     );
   });
 
-  it("does not reorder non-depends_on relations (parent/follows left intact)", () => {
+  it("ignores non-causal legacy relations", () => {
     const g = new GraphOfTrace("s");
     const mk = (id: string, ts: string): TraceNode => ({
       id, title: id, type: "task", status: "completed",
@@ -110,13 +110,8 @@ describe("GraphOfTrace onChange (#79)", () => {
       meta: { sessionId: "s" },
       nodes: [mk("early", "2026-01-01T00:00:00.000Z"), mk("late", "2026-01-02T00:00:00.000Z")],
     });
-    // A 'parent' edge from the later node is a legitimate hierarchy link; the
-    // chronology guard only applies to depends_on and must leave this as-is.
-    expect(g.addRelation("late", "early", "hierarchy", "parent")).toBe(true);
+    expect(g.addRelation("late", "early", "hierarchy", "parent")).toBe(false);
     expect(g.getNode("early")!.parentIds).not.toContain("late");
-    expect(g.getNodeDetail("early")!.semanticLinks.incoming).toContainEqual(
-      expect.objectContaining({ fromId: "late" }),
-    );
   });
 
   it("load() tracks the latest node without manufacturing lineage", () => {

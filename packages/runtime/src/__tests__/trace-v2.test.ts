@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { TraceGraph, TraceNode } from "@brainpilot/protocol";
@@ -79,7 +79,7 @@ describe("TraceGraphV2 storage and audit semantics", () => {
         { id: "b", title: "B", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "a", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
         { id: "orphan", title: "Orphan", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "missing", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
       ],
-      dependencies: [], semanticLinks: [], episodes: [], artifacts: [],
+      dependencies: [], episodes: [], artifacts: [],
     });
 
     const normalized = graph.getGraphV2();
@@ -113,6 +113,10 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       graph.load(original);
 
       expect(await readFile(tracePath, "utf8")).toBe(JSON.stringify(original, null, 2));
+      expect(graph.getNodeV2("b")?.parents).toContainEqual(
+        expect.objectContaining({ nodeId: "a", conclusion: "confirmed" }),
+      );
+      expect(graph.getNode("b")?.parentIds).toContain("a");
       graph.createNode({ title: "first V2 write" });
       await graph.flush();
 
@@ -148,6 +152,35 @@ describe("TraceGraphV2 storage and audit semantics", () => {
         expect.objectContaining({ action: "node_created" }),
         expect.objectContaining({ action: "node_reviewed" }),
       ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains the complete pending journal tail after an append failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-trace-pending-"));
+    try {
+      const tracePath = join(root, "trace.json");
+      const journalPath = join(root, "trace-changes.jsonl");
+      await mkdir(journalPath);
+      const graph = new GraphOfTrace("s", tracePath);
+      graph.createNode({ title: "First change" });
+      graph.createNode({ title: "Second change" });
+      await graph.flush();
+
+      const failedSnapshot = JSON.parse(await readFile(tracePath, "utf8")) as { pendingChanges?: unknown[] };
+      expect(failedSnapshot.pendingChanges).toHaveLength(2);
+
+      await rm(journalPath, { recursive: true, force: true });
+      const restored = new GraphOfTrace("s", tracePath);
+      restored.load(failedSnapshot);
+      await restored.recoverChanges();
+
+      const actions = (await readFile(journalPath, "utf8"))
+        .trim().split("\n").map((line) => JSON.parse(line) as { action: string });
+      expect(actions.filter((change) => change.action === "node_created")).toHaveLength(2);
+      const recoveredSnapshot = JSON.parse(await readFile(tracePath, "utf8")) as Record<string, unknown>;
+      expect(recoveredSnapshot).not.toHaveProperty("pendingChanges");
     } finally {
       await rm(root, { recursive: true, force: true });
     }
