@@ -7,6 +7,7 @@
   "license": "AGPL-3.0-only",
   "workspaces": [
     "packages/protocol",
+    "packages/plugin-sdk",
     "packages/runtime",
     "packages/backend-core",
     "packages/cli",
@@ -22,7 +23,7 @@
     "docs:build": "npm run build -w @brainpilot/docs",
     "docs:check": "npm run check:secrets -w @brainpilot/docs && npm run typecheck -w @brainpilot/docs",
     "docs:dev": "npm run dev -w @brainpilot/docs --",
-    "typecheck": "tsc -b packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
+    "typecheck": "tsc -b packages/plugin-sdk packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
     "test": "vitest run",
     "test:watch": "vitest",
     "bp": "node packages/cli/dist/bin.js",
@@ -30,7 +31,7 @@
     "version:check": "node scripts/sync-versions.js --check",
     "release:build": "npm run build",
     "release:dry": "npm publish --workspaces --if-present --dry-run --access public",
-    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/skills --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
+    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
