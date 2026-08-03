@@ -197,4 +197,29 @@ describe("plugin marketplace control plane", () => {
     const preflight = await preflightResponse.json() as Array<{ compatibility: { compatible: boolean } }>;
     expect(preflight[0]?.compatibility.compatible).toBe(true);
   });
+
+  it("installs and serves the immutable built-in NIfTI previewer only while enabled", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-nifti-"));
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false });
+    const id = "org.brainpilot.nifti-viewer";
+    const marketplace = await (await app.request("/api/plugins/marketplace")).json() as Array<{ manifest: { id: string; version: string }; releases: Array<{ version: string }> }>;
+    const entry = marketplace.find((candidate) => candidate.manifest.id === id);
+    expect(entry?.manifest.version).toBe("0.1.0");
+    expect(entry?.releases.map((release) => release.version)).toEqual(["0.1.0"]);
+
+    const asset = `/api/plugins/${id}/0.1.0/assets/ui/index.html`;
+    expect((await app.request(asset)).status).toBe(404);
+    expect((await app.request("/api/plugins/install", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) })).status).toBe(201);
+    expect((await app.request(`/api/plugins/${id}/enabled`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }) })).status).toBe(200);
+
+    const previewers = await (await app.request("/api/plugins/enabled-previewers")).json() as Array<{ pluginId: string; previewer: { delivery: string; match: { extensions: string[] } } }>;
+    expect(previewers).toEqual([expect.objectContaining({ pluginId: id, previewer: expect.objectContaining({ delivery: "range", match: { extensions: [".nii"] } }) })]);
+    const enabledAsset = await app.request(asset);
+    expect(enabledAsset.status).toBe(200);
+    expect(enabledAsset.headers.get("content-security-policy")).toContain("connect-src 'none'");
+    expect(await enabledAsset.text()).toContain("Neuroscience Data Viewer");
+
+    await app.request(`/api/plugins/${id}/enabled`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: false }) });
+    expect((await app.request(asset)).status).toBe(404);
+  });
 });

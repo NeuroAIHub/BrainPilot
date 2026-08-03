@@ -19,6 +19,7 @@ import {
   parsePluginManifest,
   parsePublishablePluginManifest,
   type LegacyPluginKind,
+  type EnabledPreviewer,
   type InstalledPlugin,
   type MarketplaceEntry,
   type MarketplaceRelease,
@@ -58,7 +59,15 @@ interface BuiltinPluginRelease {
 // PR4 adds immutable built-in release directories here. Every source directory
 // contains the exact manifest and files for that version; versions are never
 // synthesized by rewriting the current bundle.
-const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [];
+const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
+  {
+    plugin: "nifti-viewer",
+    source: "nifti-viewer/0.1.0",
+    version: "0.1.0",
+    publishedAt: "2026-08-03T00:00:00.000Z",
+    releaseNotes: "Initial range-backed NIfTI-1 metadata and central axial slice preview.",
+  },
+];
 const TEST_PLUGIN_SOURCES = new Set<string>();
 
 export function pluginsDir(dataDir: string): string {
@@ -605,4 +614,28 @@ export async function uninstallPlugin(dataDir: string, id: string): Promise<bool
     await fs.rm(path.join(pluginsDir(dataDir), "installed", installed.manifest.id), { recursive: true, force: true });
     return true;
   });
+}
+
+export async function listEnabledPreviewers(dataDir: string): Promise<EnabledPreviewer[]> {
+  return (await listInstalledPlugins(dataDir)).flatMap((plugin) =>
+    plugin.enabled && plugin.compatibility?.compatible
+      ? (plugin.manifest.contributes?.previewers ?? []).map((previewer) => ({
+          pluginId: plugin.manifest.id,
+          pluginVersion: plugin.activeVersion,
+          displayName: plugin.manifest.displayName,
+          previewer,
+        }))
+      : [],
+  );
+}
+
+export async function readEnabledPluginAsset(dataDir: string, id: string, version: string, asset: string): Promise<Buffer | null> {
+  const plugin = (await listInstalledPlugins(dataDir)).find((candidate) =>
+    candidate.enabled && candidate.compatibility?.compatible && candidate.manifest.id === id && candidate.activeVersion === version,
+  );
+  if (!plugin || !isSafePluginPath(asset) || asset === "manifest.json") return null;
+  const root = path.resolve(installedVersionPath(dataDir, plugin.manifest));
+  const target = path.resolve(root, asset);
+  if (!target.startsWith(`${root}${path.sep}`)) return null;
+  try { return await fs.readFile(target); } catch { return null; }
 }

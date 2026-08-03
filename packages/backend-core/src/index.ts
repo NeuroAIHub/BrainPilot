@@ -51,6 +51,7 @@ export type { RuntimeClientOptions, ForwardOptions } from "./runtime-client.js";
 
 export {
   installPlugin,
+  listEnabledPreviewers,
   listInstalledPlugins,
   listMarketplace,
   listMarketplaceSourceStatuses,
@@ -58,6 +59,7 @@ export {
   loadMarketplaceSources,
   pluginsDir,
   preflightPluginCompatibility,
+  readEnabledPluginAsset,
   rollbackPlugin,
   setPluginEnabled,
   uninstallPlugin,

@@ -200,9 +200,21 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     const path = c.req.query("path");
     if (!path) return c.json({ error: "path required" }, 400);
     try {
+      const range = c.req.header("range");
+      if (range) {
+        const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+        if (!match) return c.json({ error: "only one explicit bytes range is supported" }, 416);
+        const result = await manager.readSessionFileRange(c.req.param("id"), path, Number(match[1]), match[2] ? Number(match[2]) : undefined);
+        c.header("Content-Type", "application/octet-stream");
+        c.header("Content-Length", String(result.buffer.length));
+        c.header("Content-Range", `bytes ${result.start}-${result.end}/${result.totalSize}`);
+        c.header("Accept-Ranges", "bytes");
+        return c.body(result.buffer as unknown as ArrayBuffer, 206);
+      }
       const buf = await manager.readSessionFileRaw(c.req.param("id"), path);
       c.header("Content-Type", "application/octet-stream");
       c.header("Content-Length", String(buf.length));
+      c.header("Accept-Ranges", "bytes");
       return c.body(buf as unknown as ArrayBuffer);
     } catch (err) {
       return c.json({ error: (err as Error).message }, 404);

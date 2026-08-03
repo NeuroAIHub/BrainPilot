@@ -28,6 +28,8 @@ import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
+import { PluginPreviewHost } from "./PluginPreviewHost";
+import { matchEnabledPreviewer, type EnabledPreviewer } from "./previewerRegistry";
 
 /** #305: in-flight persistent-library upload state for the progress row. */
 type DataUploadState = {
@@ -953,13 +955,26 @@ function FilePreviewPanel({
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
   const [blobError, setBlobError] = useState<string | null>(null);
   const [isDownloading, setIsDownloading] = useState(false);
+  const [enabledPreviewers, setEnabledPreviewers] = useState<EnabledPreviewer[]>([]);
   const previewResizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const previewKind = file ? getPreviewKind(file.name) : "download";
+  const pluginPreviewer = file ? matchEnabledPreviewer(file.name, enabledPreviewers) : null;
+
+  useEffect(() => {
+    let cancelled = false;
+    const load = () => void api.plugins.enabledPreviewers()
+      .then((previewers) => { if (!cancelled) setEnabledPreviewers(previewers); })
+      .catch(() => { if (!cancelled) setEnabledPreviewers([]); });
+    load();
+    window.addEventListener("brainpilot:plugins-changed", load);
+    return () => { cancelled = true; window.removeEventListener("brainpilot:plugins-changed", load); };
+  }, []);
 
   useEffect(() => {
     if (
       !file ||
       !sandboxId ||
+      pluginPreviewer !== null ||
       (previewKind !== "image" && previewKind !== "pdf") ||
       file.size > MAX_BINARY_PREVIEW
     ) {
@@ -994,7 +1009,7 @@ function FilePreviewPanel({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [file?.path, previewKind, sandboxId]);
+  }, [file?.path, pluginPreviewer, previewKind, sandboxId]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -1113,15 +1128,26 @@ function FilePreviewPanel({
         </div>
       </dl>
 
-      <FilePreviewView
-        name={file.name}
-        source={previewSource}
-        renderMarkdown={isMarkdown(file.name)}
-        error={blobError}
-        t={t}
-        onDownload={sandboxId ? () => void downloadFile() : undefined}
-        isDownloading={isDownloading}
-      />
+      {pluginPreviewer && sandboxId ? (
+        <PluginPreviewHost
+          key={`${pluginPreviewer.pluginId}:${pluginPreviewer.pluginVersion}:${file.path}`}
+          previewer={pluginPreviewer}
+          sandboxId={sandboxId}
+          path={file.path}
+          name={file.name}
+          size={file.size}
+        />
+      ) : (
+        <FilePreviewView
+          name={file.name}
+          source={previewSource}
+          renderMarkdown={isMarkdown(file.name)}
+          error={blobError}
+          t={t}
+          onDownload={sandboxId ? () => void downloadFile() : undefined}
+          isDownloading={isDownloading}
+        />
+      )}
     </section>
   );
 }

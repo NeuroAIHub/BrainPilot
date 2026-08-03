@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<style>
+  :root { color-scheme: light dark; font: 13px system-ui,sans-serif; }
+  body { margin:0; padding:16px; color:CanvasText; background:Canvas; }
+  h1 { margin:0; font-size:16px; } #status { color:GrayText; }
+  #error { color:#d92d20; white-space:pre-wrap; }
+  #result[hidden] { display:none; }
+  canvas { display:block; width:min(100%,720px); height:auto; margin:14px auto; background:#111; }
+  dl { display:grid; grid-template-columns:max-content 1fr; gap:6px 14px; }
+  dt { color:GrayText; } dd { margin:0; overflow-wrap:anywhere; }
+  #note { padding:10px; border-left:3px solid #b88900; background:color-mix(in srgb,CanvasText 6%,transparent); line-height:1.45; }
+</style>
+<h1>Neuroscience Data Viewer</h1>
+<p id="status">Waiting for file…</p>
+<p id="error" role="alert"></p>
+<section id="result" hidden><canvas id="slice"></canvas><dl id="metadata"></dl><p id="note"></p></section>
+<script>
+(() => {
+  const token = decodeURIComponent(location.hash.slice(1));
+  const status = document.querySelector("#status");
+  const error = document.querySelector("#error");
+  const result = document.querySelector("#result");
+  const canvas = document.querySelector("#slice");
+  const metadata = document.querySelector("#metadata");
+  let openRequestId = "";
+  let header = null;
+
+  const fail = (message, requestId = openRequestId) => {
+    status.textContent = "Preview failed";
+    error.textContent = message;
+    parent.postMessage({ type:"preview/error", rpcVersion:"1", token, requestId, message }, "*");
+  };
+  const requestRange = (requestId, offset, length) => {
+    parent.postMessage({ type:"preview/read-range", rpcVersion:"1", token, requestId, handle:"primary", offset, length }, "*");
+  };
+  const rows = (entries) => metadata.replaceChildren(...entries.flatMap(([key,value]) => {
+    const dt=document.createElement("dt"), dd=document.createElement("dd");
+    dt.textContent=key; dd.textContent=String(value); return [dt,dd];
+  }));
+  const readVoxel = (view, at, datatype, little) => {
+    if (datatype===2) return view.getUint8(at);
+    if (datatype===4) return view.getInt16(at,little);
+    if (datatype===8) return view.getInt32(at,little);
+    if (datatype===16) return view.getFloat32(at,little);
+    if (datatype===64) return view.getFloat64(at,little);
+    if (datatype===256) return view.getInt8(at);
+    if (datatype===512) return view.getUint16(at,little);
+    if (datatype===768) return view.getUint32(at,little);
+    return NaN;
+  };
+  const bytesByType = {2:1,4:2,8:4,16:4,64:8,256:1,512:2,768:4};
+  const namesByType = {2:"uint8",4:"int16",8:"int32",16:"float32",64:"float64",256:"int8",512:"uint16",768:"uint32"};
+
+  addEventListener("message", (event) => {
+    const message = event.data;
+    if (event.source !== parent || message?.token !== token || message?.rpcVersion !== "1") return;
+    if (message.type === "preview/initialize") {
+      parent.postMessage({type:"preview/ready",rpcVersion:"1",token}, "*");
+      return;
+    }
+    if (message.type === "preview/open") {
+      openRequestId = message.requestId;
+      error.textContent = "";
+      result.hidden = true;
+      status.textContent = "Reading NIfTI header…";
+      requestRange("nifti-header", 0, 348);
+      return;
+    }
+    if (message.type === "preview/range-error") {
+      fail(message.message);
+      return;
+    }
+    if (message.type !== "preview/range-result") return;
+
+    try {
+      if (message.requestId === "nifti-header") {
+        if (message.buffer.byteLength < 348) throw new Error("File is too small for a NIfTI-1 header.");
+        const view = new DataView(message.buffer);
+        const little = view.getInt32(0,true) === 348;
+        if (!little && view.getInt32(0,false) !== 348) throw new Error("Unsupported NIfTI header. Only NIfTI-1 .nii files are supported.");
+        const magic = new TextDecoder("latin1").decode(new Uint8Array(message.buffer,344,4)).replace(/\0/g,"");
+        if (!magic.startsWith("n+1")) throw new Error("Expected a single-file NIfTI-1 .nii image.");
+        const rank = Math.max(1,Math.min(7,view.getInt16(40,little)));
+        const dims = Array.from({length:rank},(_,index)=>view.getInt16(42+index*2,little));
+        const width=dims[0], height=dims[1], depth=dims[2] || 1;
+        const datatype=view.getInt16(70,little), bytes=bytesByType[datatype];
+        if (!width || !height || !depth || !bytes) throw new Error("Unsupported NIfTI dimensions or datatype.");
+        const voxOffset=Math.max(352,Math.floor(view.getFloat32(108,little)));
+        const sliceIndex=Math.floor(depth/2), sliceBytes=width*height*bytes;
+        if (sliceBytes > 8*1024*1024) throw new Error("The central slice exceeds the 8 MiB preview range limit.");
+        const pixdim=[view.getFloat32(80,little),view.getFloat32(84,little),view.getFloat32(88,little)];
+        header={little,dims,width,height,depth,datatype,bytes,voxOffset,sliceIndex,sliceBytes,pixdim,
+          slope:view.getFloat32(112,little), intercept:view.getFloat32(116,little), totalSize:message.totalSize};
+        const offset=voxOffset+sliceIndex*sliceBytes;
+        if (offset+sliceBytes>message.totalSize) throw new Error("NIfTI voxel data is truncated.");
+        status.textContent = "Reading central axial slice…";
+        requestRange("nifti-slice", offset, sliceBytes);
+        return;
+      }
+      if (message.requestId === "nifti-slice" && header) {
+        if (message.buffer.byteLength !== header.sliceBytes) throw new Error("Central slice range is incomplete.");
+        const view=new DataView(message.buffer), values=[];
+        let min=Infinity,max=-Infinity;
+        for(let i=0;i<header.width*header.height;i++){
+          let value=readVoxel(view,i*header.bytes,header.datatype,header.little);
+          if (header.slope) value=value*header.slope+header.intercept;
+          values.push(value);
+          if(Number.isFinite(value)){min=Math.min(min,value);max=Math.max(max,value);}
+        }
+        const image=canvas.getContext("2d").createImageData(header.width,header.height);
+        canvas.width=header.width; canvas.height=header.height;
+        const span=max>min?max-min:1;
+        values.forEach((value,index)=>{
+          const gray=Math.max(0,Math.min(255,Math.round((value-min)/span*255)));
+          const x=index%header.width, y=Math.floor(index/header.width);
+          const pixel=(x+header.width*(header.height-y-1))*4;
+          image.data[pixel]=image.data[pixel+1]=image.data[pixel+2]=gray; image.data[pixel+3]=255;
+        });
+        canvas.getContext("2d").putImageData(image,0,0);
+        rows([
+          ["Format","NIfTI-1 (.nii)"],
+          ["Dimensions",header.dims.join(" × ")],
+          ["Voxel size",header.pixdim.map(value=>Number(value).toPrecision(4)).join(" × ")+" mm"],
+          ["Datatype",namesByType[header.datatype] || header.datatype],
+          ["Displayed slice","z = "+header.sliceIndex],
+          ["Intensity range",min+" … "+max],
+          ["File size",header.totalSize.toLocaleString()+" bytes"]
+        ]);
+        document.querySelector("#note").textContent="Central axial slice, displayed without orientation transforms. NIfTI-2, compressed .nii.gz, overlays, and time navigation are not included in this first host contract.";
+        result.hidden=false; status.textContent="Read-only preview";
+        parent.postMessage({type:"preview/rendered",rpcVersion:"1",token,requestId:openRequestId,metadata:{format:"nifti-1",slice:header.sliceIndex}}, "*");
+      }
+    } catch (cause) {
+      fail(cause instanceof Error ? cause.message : String(cause));
+    }
+  });
+})();
+</script>
+</html>

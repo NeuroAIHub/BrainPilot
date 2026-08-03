@@ -696,6 +696,18 @@ describe("api.mcpByok save/clear", () => {
 });
 
 describe("api.plugins marketplace lifecycle", () => {
+  it("reads an explicit file range and parses Content-Range", async () => {
+    fetchMock.mockResolvedValueOnce(new Response(new Uint8Array([2, 3]), {
+      status: 206,
+      headers: { "content-type": "application/octet-stream", "content-range": "bytes 1-2/4" },
+    }));
+    const result = await api.sandbox.readRawFileRange("s1", "/workspace/scan.nii", 1, 2);
+    expect(result.offset).toBe(1);
+    expect(result.totalSize).toBe(4);
+    expect(new Uint8Array(await result.blob.arrayBuffer())).toEqual(new Uint8Array([2, 3]));
+    expect((fetchMock.mock.calls[0][1].headers as Record<string, string>).Range).toBe("bytes=1-2");
+  });
+
   it("loads the catalogue from the control-plane endpoint", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: [] }));
     await expect(api.plugins.marketplace()).resolves.toEqual([]);
