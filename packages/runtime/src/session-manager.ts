@@ -9,7 +9,7 @@
  * Persistence (§5): config/history/state live under `<dataRoot>/.bp/{sid}/`,
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
-import { mkdir, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
+import { mkdir, open, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
 import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
@@ -937,6 +937,27 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const abs = this.resolveManagedPath(sid, rel).abs;
     return readFile(abs);
+  }
+
+  /** Read one bounded byte range without buffering the full workspace file. */
+  async readSessionFileRange(sid: string, rel: string, start: number, requestedEnd?: number): Promise<{ buffer: Buffer; start: number; end: number; totalSize: number }> {
+    if (!Number.isSafeInteger(start) || start < 0 || (requestedEnd !== undefined && (!Number.isSafeInteger(requestedEnd) || requestedEnd < start))) {
+      throw new Error("invalid file byte range");
+    }
+    await this.ensureLayoutForPath(rel);
+    const abs = this.resolveManagedPath(sid, rel).abs;
+    const info = await stat(abs);
+    if (!info.isFile() || start >= info.size) throw new Error("file byte range is outside the file");
+    const maxBytes = 8 * 1024 * 1024;
+    const end = Math.min(requestedEnd ?? start + maxBytes - 1, start + maxBytes - 1, info.size - 1);
+    const buffer = Buffer.allocUnsafe(end - start + 1);
+    const handle = await open(abs, "r");
+    try {
+      const { bytesRead } = await handle.read(buffer, 0, buffer.length, start);
+      return { buffer: buffer.subarray(0, bytesRead), start, end: start + bytesRead - 1, totalSize: info.size };
+    } finally {
+      await handle.close();
+    }
   }
 
   /** Delete a workspace file. Returns false if it was already gone. */

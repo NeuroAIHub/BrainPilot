@@ -65,11 +65,13 @@ import {
 import { computeKbInventory } from "./kb-inventory.js";
 import {
   installPlugin,
+  listEnabledPreviewers,
   listInstalledPlugins,
   listMarketplace,
   listMarketplaceSourceStatuses,
   listPluginUpdates,
   preflightPluginCompatibility,
+  readEnabledPluginAsset,
   rollbackPlugin,
   setPluginEnabled,
   uninstallPlugin,
@@ -228,7 +230,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // `/sessions/:id/files*` routes. `?path=` is carried through verbatim.
   api.get("/sandbox/:id/files", forward("listFiles", { idParam: "id", withQuery: true }));
   api.get("/sandbox/:id/files/content", forward("readFile", { idParam: "id", withQuery: true }));
-  api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true }));
+  api.get("/sandbox/:id/files/raw", forward("readRawFile", { idParam: "id", withQuery: true, withRange: true }));
   api.delete("/sandbox/:id/files", forward("deleteFile", { idParam: "id", withQuery: true }));
   // #47/#256: file upload. A base64 JSON body goes through the buffered
   // `forward` helper; a raw `application/octet-stream` body is streamed to the
@@ -438,6 +440,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/plugins/sources", async (c) => c.json(await listMarketplaceSourceStatuses(dataDir)));
   api.get("/plugins/installed", async (c) => c.json(await listInstalledPlugins(dataDir)));
   api.get("/plugins/updates", async (c) => c.json(await listPluginUpdates(dataDir)));
+  api.get("/plugins/enabled-previewers", async (c) => c.json(await listEnabledPreviewers(dataDir)));
   api.get("/plugins/compatibility", async (c) => {
     try {
       const version = c.req.query("brainpilotVersion") ?? pkg.version;
@@ -488,6 +491,26 @@ export function createApp(options: CreateAppOptions): Hono {
     return await uninstallPlugin(dataDir, c.req.param("id"))
       ? c.body(null, 204)
       : c.json({ error: "plugin not installed" }, 404);
+  });
+  api.get("/plugins/:id/:version/assets/*", async (c) => {
+    const encodedAsset = c.req.path.split("/assets/")[1] ?? "";
+    let asset: string;
+    try { asset = encodedAsset.split("/").map(decodeURIComponent).join("/"); }
+    catch { return c.json({ error: "invalid plugin asset path" }, 400); }
+    const bytes = await readEnabledPluginAsset(dataDir, c.req.param("id"), c.req.param("version"), asset);
+    if (!bytes) return c.json({ error: "enabled plugin asset not found" }, 404);
+    const extension = asset.split(".").pop()?.toLowerCase();
+    const contentType = extension === "html" ? "text/html; charset=utf-8"
+      : extension === "js" || extension === "mjs" ? "text/javascript; charset=utf-8"
+        : extension === "css" ? "text/css; charset=utf-8"
+          : extension === "json" ? "application/json; charset=utf-8"
+            : extension === "wasm" ? "application/wasm"
+              : "application/octet-stream";
+    c.header("Content-Type", contentType);
+    c.header("Cache-Control", "no-store");
+    c.header("X-Content-Type-Options", "nosniff");
+    if (extension === "html") c.header("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; worker-src 'self' blob:; font-src 'self'; frame-ancestors 'self'");
+    return c.body(bytes as unknown as ArrayBuffer);
   });
 
   // ---- Built-in tool toggles (disk-backed: bp_template/tool_toggles.json) ----
@@ -850,7 +873,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   function forward(
     route: keyof typeof RUNTIME_ROUTES,
-    opts: { idParam?: string; withBody?: boolean; withQuery?: boolean } = {},
+    opts: { idParam?: string; withBody?: boolean; withQuery?: boolean; withRange?: boolean } = {},
   ) {
     return async (c: import("hono").Context) => {
       const rc = await getClient(c);
@@ -860,6 +883,8 @@ export function createApp(options: CreateAppOptions): Hono {
       const headers: Record<string, string> = {};
       const ct = c.req.header("content-type");
       if (ct) headers["content-type"] = ct;
+      const range = opts.withRange ? c.req.header("range") : undefined;
+      if (range) headers.range = range;
       const query = opts.withQuery ? new URL(c.req.url).search.replace(/^\?/, "") : undefined;
       const upstream = await rc.forward(route, {
         params,

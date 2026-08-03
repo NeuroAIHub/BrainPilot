@@ -5228,6 +5228,19 @@ button {
   word-break: break-word;
 }
 
+.plugin-preview-host {
+  position: relative;
+  min-height: 360px;
+  flex: 1;
+}
+
+.plugin-preview-host iframe {
+  width: 100%;
+  min-height: 480px;
+  border: 0;
+  background: var(--color-surface);
+}
+
 .search-modal {
   position: fixed;
   inset: 0;

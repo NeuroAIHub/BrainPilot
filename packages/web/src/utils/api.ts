@@ -37,6 +37,7 @@ import {
 import { runtimeConfig } from "../config";
 import { mockBackend } from "../mocks/backend";
 import { RawAgUiEvent } from "../contracts/demoBundle";
+import type { EnabledPreviewer } from "@brainpilot/plugin-sdk/preview";
 import type {
   InstalledPlugin,
   MarketplaceEntry,
@@ -540,6 +541,21 @@ export const api = {
       return res.blob();
     },
 
+    async readRawFileRange(sandboxId: string, path: string, offset: number, length: number): Promise<{ blob: Blob; offset: number; totalSize: number }> {
+      if (runtimeConfig.useMockBackend) {
+        const whole = await mockBackend.readRawFile(sandboxId, path);
+        return { blob: whole.slice(offset, offset + length), offset, totalSize: whole.size };
+      }
+      const params = new URLSearchParams({ path });
+      const res = await apiFetch(`${API_BASE}/sandbox/${sandboxId}/files/raw?${params}`, {
+        headers: { ...authHeaders(false), Range: `bytes=${offset}-${offset + length - 1}` },
+      });
+      if (!res.ok) throw new Error(await parseError(res));
+      const contentRange = /^bytes (\d+)-(\d+)\/(\d+)$/.exec(res.headers.get("content-range") ?? "");
+      if (!contentRange) throw new Error("The preview host did not return a valid Content-Range header.");
+      return { blob: await res.blob(), offset: Number(contentRange[1]), totalSize: Number(contentRange[3]) };
+    },
+
     async readFileBlob(sandboxId: string, path: string): Promise<Blob> {
       return this.readRawFile(sandboxId, path);
     },
@@ -974,6 +990,11 @@ export const api = {
       return handleJson(await apiFetch(`${API_BASE}/plugins/installed`, { headers: authHeaders() }));
     },
 
+    async enabledPreviewers(): Promise<EnabledPreviewer[]> {
+      if (runtimeConfig.useMockBackend) return [];
+      return handleJson(await apiFetch(`${API_BASE}/plugins/enabled-previewers`, { headers: authHeaders() }));
+    },
+
     async sources(): Promise<MarketplaceSourceStatus[]> {
       if (runtimeConfig.useMockBackend) return [];
       return handleJson(await apiFetch(`${API_BASE}/plugins/sources`, { headers: authHeaders() }));
@@ -1019,6 +1040,11 @@ export const api = {
     async remove(id: string): Promise<void> {
       await handleJson<void>(await apiFetch(`${API_BASE}/plugins/${encodeURIComponent(id)}`, { method: "DELETE", headers: authHeaders(false) }));
       notifyPluginsChanged();
+    },
+
+    previewAssetUrl(pluginId: string, version: string, asset: string): string {
+      const encodedAsset = asset.split("/").map(encodeURIComponent).join("/");
+      return `${API_BASE}/plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(version)}/assets/${encodedAsset}`;
     },
   },
 
