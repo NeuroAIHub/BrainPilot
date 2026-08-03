@@ -1,0 +1,209 @@
+import { describe, expect, it } from "vitest";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { TraceGraph, TraceNode } from "@brainpilot/protocol";
+import { TraceDocumentV2Schema } from "@brainpilot/protocol";
+import { GraphOfTrace } from "../trace.js";
+
+function legacyNode(id: string, createdAt: string, parents: TraceNode["parents"] = []): TraceNode {
+  return {
+    id,
+    title: id,
+    type: "task",
+    status: "completed",
+    parents,
+    artifacts: [],
+    parentIds: parents.map((parent) => parent.id),
+    childIds: [],
+    createdAt,
+    updatedAt: createdAt,
+    toolCalls: [],
+  };
+}
+
+function v1Graph(): TraceGraph {
+  const a = legacyNode("a", "2026-01-01T00:00:00.000Z");
+  const b = legacyNode("b", "2026-01-01T00:01:00.000Z", [
+    { id: "a", relation: "depends_on" },
+  ]);
+  return {
+    meta: { sessionId: "s", createdAt: "2026-01-01T00:00:00.000Z" },
+    nodes: [a, b],
+  };
+}
+
+describe("TraceGraphV2 storage and audit semantics", () => {
+  it("creates one protected Session Start root as the confirmed fallback", () => {
+    const graph = new GraphOfTrace("s");
+    const rootId = graph.getGraphV2().meta.rootNodeId!;
+    expect(graph.getNodeV2(rootId)).toMatchObject({
+      type: "session_start",
+      reviewConclusion: "approved",
+      revoked: false,
+      parents: [],
+    });
+
+    const evidence = graph.createNode({ title: "Evidence" });
+    const conclusion = graph.createNode({ title: "Conclusion" });
+    expect(graph.getNode(evidence.id)?.parentIds).toEqual([rootId]);
+    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([rootId]);
+    expect(graph.updateNode(rootId, { title: "Changed" })).toBeUndefined();
+    expect(graph.listPendingAuditTargets().some((target) => target.nodeId === rootId)).toBe(false);
+
+    expect(graph.proposeCausalParent(
+      conclusion.id,
+      evidence.id,
+      "Conclusion consumes this evidence.",
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([rootId]);
+    expect(graph.review(
+      conclusion.id,
+      "approve",
+      "Direct evidence confirmed.",
+      { type: "agent", name: "auditor" },
+      evidence.id,
+    )).toBe(true);
+    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([evidence.id]);
+  });
+
+  it("repairs rootless and cyclic V2 data into a root-reachable active DAG", () => {
+    const graph = new GraphOfTrace("s");
+    graph.load({
+      schemaVersion: "2.0",
+      revision: 4,
+      meta: { sessionId: "s" },
+      nodes: [
+        { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "b", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
+        { id: "b", title: "B", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "a", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
+        { id: "orphan", title: "Orphan", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], records: [], parents: [{ nodeId: "missing", conclusion: "confirmed" }], executionResult: "completed", revoked: false, reviewConclusion: "approved" },
+      ],
+      dependencies: [], episodes: [], artifacts: [],
+    });
+
+    const normalized = graph.getGraphV2();
+    const rootId = normalized.meta.rootNodeId!;
+    const activeParents = new Map(normalized.nodes.map((node) => [
+      node.id,
+      node.parents.filter((parent) => parent.conclusion === "confirmed").map((parent) => parent.nodeId),
+    ]));
+    const reachesRoot = (start: string): boolean => {
+      const seen = new Set<string>();
+      const visit = (id: string): boolean => {
+        if (id === rootId) return true;
+        if (seen.has(id)) return false;
+        seen.add(id);
+        return (activeParents.get(id) ?? []).some(visit);
+      };
+      return visit(start);
+    };
+    expect(normalized.nodes.filter((node) => node.id !== rootId).every((node) => reachesRoot(node.id))).toBe(true);
+    expect(normalized.nodes.flatMap((node) => node.parents).some((parent) => parent.reason?.includes("confirmed cycle rejected"))).toBe(true);
+    expect(graph.getNode("orphan")?.parentIds).toEqual([rootId]);
+  });
+
+  it("migrates V1 lazily and persists only nodes[].parents as authoritative relationships", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-trace-v2-"));
+    try {
+      const tracePath = join(root, "trace.json");
+      const original = v1Graph();
+      await writeFile(tracePath, JSON.stringify(original, null, 2), "utf8");
+      const graph = new GraphOfTrace("s", tracePath);
+      graph.load(original);
+
+      expect(await readFile(tracePath, "utf8")).toBe(JSON.stringify(original, null, 2));
+      expect(graph.getNodeV2("b")?.parents).toContainEqual(
+        expect.objectContaining({ nodeId: "a", conclusion: "confirmed" }),
+      );
+      expect(graph.getNode("b")?.parentIds).toContain("a");
+      graph.createNode({ title: "first V2 write" });
+      await graph.flush();
+
+      const persisted = JSON.parse(await readFile(tracePath, "utf8")) as Record<string, unknown>;
+      expect(persisted.schemaVersion).toBe("2.0");
+      expect(JSON.stringify(persisted)).not.toContain('"parentIds"');
+      expect(JSON.stringify(persisted)).not.toContain('"childIds"');
+      expect(persisted).not.toHaveProperty("dependencies");
+      expect(persisted).not.toHaveProperty("semanticLinks");
+      expect(TraceDocumentV2Schema.safeParse(persisted).success).toBe(true);
+      expect(JSON.parse(await readFile(join(root, "trace.v1.json.bak"), "utf8"))).toEqual(original);
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists and recovers the append-only modification log", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-trace-changes-"));
+    try {
+      const tracePath = join(root, "trace.json");
+      const graph = new GraphOfTrace("s", tracePath);
+      const node = graph.createNode({ title: "Model ablation", changeActor: { type: "agent", name: "trace" } });
+      graph.review(node.id, "approve", "evidence is sufficient", { type: "agent", name: "auditor" });
+      await graph.flush();
+
+      const raw = await readFile(join(root, "trace-changes.jsonl"), "utf8");
+      expect(raw).toContain('"action":"node_created"');
+      expect(raw).toContain('"action":"node_reviewed"');
+      const restored = new GraphOfTrace("s", tracePath);
+      restored.load(JSON.parse(await readFile(tracePath, "utf8")));
+      await restored.recoverChanges();
+      expect(restored.getChanges()).toEqual(expect.arrayContaining([
+        expect.objectContaining({ action: "node_created" }),
+        expect.objectContaining({ action: "node_reviewed" }),
+      ]));
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("retains the complete pending journal tail after an append failure", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-trace-pending-"));
+    try {
+      const tracePath = join(root, "trace.json");
+      const journalPath = join(root, "trace-changes.jsonl");
+      await mkdir(journalPath);
+      const graph = new GraphOfTrace("s", tracePath);
+      graph.createNode({ title: "First change" });
+      graph.createNode({ title: "Second change" });
+      await graph.flush();
+
+      const failedSnapshot = JSON.parse(await readFile(tracePath, "utf8")) as { pendingChanges?: unknown[] };
+      expect(failedSnapshot.pendingChanges).toHaveLength(2);
+
+      await rm(journalPath, { recursive: true, force: true });
+      const restored = new GraphOfTrace("s", tracePath);
+      restored.load(failedSnapshot);
+      await restored.recoverChanges();
+
+      const actions = (await readFile(journalPath, "utf8"))
+        .trim().split("\n").map((line) => JSON.parse(line) as { action: string });
+      expect(actions.filter((change) => change.action === "node_created")).toHaveLength(2);
+      const recoveredSnapshot = JSON.parse(await readFile(tracePath, "utf8")) as Record<string, unknown>;
+      expect(recoveredSnapshot).not.toHaveProperty("pendingChanges");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("requires current fingerprints and hides revoked nodes from active graphs", () => {
+    const graph = new GraphOfTrace("s");
+    const node = graph.createNode({
+      title: "Model ablation",
+      confidence: "low",
+      confidenceReason: "One incomplete run.",
+    });
+    const stale = graph.listPendingAuditTargets().find((target) => target.nodeId === node.id)!;
+    graph.updateNode(node.id, {
+      summary: "Three seeds now agree.",
+      confidence: "high",
+      confidenceReason: "Three independent records agree.",
+    }, { type: "agent", name: "trace" });
+
+    expect(graph.review(node.id, "approve", "stale", { type: "agent", name: "auditor" }, undefined, stale.fingerprint)).toBe(false);
+    const current = graph.listPendingAuditTargets().find((target) => target.nodeId === node.id)!;
+    expect(graph.review(node.id, "approve", "supported", { type: "agent", name: "auditor" }, undefined, current.fingerprint)).toBe(true);
+    graph.updateNode(node.id, { revoked: true }, { type: "host" });
+    expect(graph.getActiveGraph().nodes.some((candidate) => candidate.id === node.id)).toBe(false);
+  });
+});
