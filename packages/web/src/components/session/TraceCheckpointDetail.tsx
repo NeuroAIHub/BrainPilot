@@ -1,6 +1,6 @@
 import { AlertTriangle, FileDiff, GitCommit, Loader2, RotateCcw } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
-import type { TraceCausalRollbackPreview, TraceCheckpointDetail, TraceCheckpointRef, TraceNode, TraceRestorePreview } from "../../contracts/backend";
+import type { TraceCausalRollbackPreview, TraceChange, TraceCheckpointDetail, TraceCheckpointRef, TraceNode, TraceRestorePreview } from "../../contracts/backend";
 import { api } from "../../utils/api";
 
 interface Props {
@@ -10,6 +10,22 @@ interface Props {
   onRestored?: () => Promise<void> | void;
   t: (key: string, vars?: Record<string, string | number>) => string;
 }
+
+/** Latest causal rollback for this node that has not been consumed by Undo. */
+export function findPendingCausalRollback(changes: TraceChange[], nodeId: string): string | null {
+  const undone = new Set(changes.flatMap((change) =>
+    change.action === "causal_rollback_undo" && typeof change.metadata?.rollbackChangeId === "string"
+      ? [change.metadata.rollbackChangeId]
+      : [],
+  ));
+  for (let index = changes.length - 1; index >= 0; index--) {
+    const change = changes[index]!;
+    if (change.action !== "causal_rollback" || change.target.nodeId !== nodeId || undone.has(change.id)) continue;
+    if (typeof change.metadata?.recoveryCheckpointId === "string") return change.metadata.recoveryCheckpointId;
+  }
+  return null;
+}
+
 export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRestored, t }: Props) {
   const embedded = node.checkpoints ?? [];
   const [details, setDetails] = useState<TraceCheckpointDetail[]>([]);
@@ -32,14 +48,21 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     setCausalPreview(null);
     setError(null);
     setRecoveryId(typeof node.metadata?.recoveryCheckpointId === "string" ? node.metadata.recoveryCheckpointId : null);
-    if (!sessionId || embedded.length === 0) {
+    if (!sessionId) {
       setDetails([]);
       return;
     }
     let cancelled = false;
     setLoading(true);
-    void api.sessions.getTraceNodeCheckpoints(sessionId, node.id)
-      .then((value) => { if (!cancelled) setDetails(value); })
+    const detailRequest = embedded.length > 0
+      ? api.sessions.getTraceNodeCheckpoints(sessionId, node.id)
+      : Promise.resolve([] as TraceCheckpointDetail[]);
+    void Promise.all([detailRequest, api.sessions.getTraceChanges(sessionId, 500)])
+      .then(([value, changes]) => {
+        if (cancelled) return;
+        setDetails(value);
+        setRecoveryId(findPendingCausalRollback(changes, node.id));
+      })
       .catch((reason) => { if (!cancelled) setError(reason instanceof Error ? reason.message : String(reason)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };

@@ -1,7 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { describe, expect, it } from "vitest";
-import type { TraceNode } from "../contracts/backend";
-import { TraceCheckpointDetail } from "../components/session/TraceCheckpointDetail";
+import type { TraceChange, TraceNode } from "../contracts/backend";
+import { findPendingCausalRollback, TraceCheckpointDetail } from "../components/session/TraceCheckpointDetail";
 
 const t = (key: string, vars?: Record<string, string | number>) => vars ? `${key}:${JSON.stringify(vars)}` : key;
 
@@ -28,6 +28,24 @@ function node(): TraceNode {
 }
 
 describe("TraceCheckpointDetail", () => {
+  const change = (id: string, action: string, metadata?: Record<string, unknown>): TraceChange => ({
+    id, revision: Number(id.replace(/\D/g, "")) || 1, actor: { type: "user" }, action,
+    target: { nodeId: "n1" }, metadata, createdAt: "2026-07-21T00:00:00.000Z",
+  });
+
+  it("rehydrates only the latest causal rollback that has not been undone", () => {
+    const changes = [
+      change("change_1", "causal_rollback", { recoveryCheckpointId: "recovery_1" }),
+      change("change_2", "causal_rollback_undo", { rollbackChangeId: "change_1" }),
+      change("change_3", "causal_rollback", { recoveryCheckpointId: "recovery_2" }),
+    ];
+    expect(findPendingCausalRollback(changes, "n1")).toBe("recovery_2");
+    expect(findPendingCausalRollback([
+      ...changes,
+      change("change_4", "causal_rollback_undo", { rollbackChangeId: "change_3" }),
+    ], "n1")).toBeNull();
+  });
+
   it("renders checkpoint state and remains read-only without a live session", () => {
     const html = renderToStaticMarkup(<TraceCheckpointDetail node={node()} t={t} />);
     expect(html).toContain("trace.checkpoint.title");

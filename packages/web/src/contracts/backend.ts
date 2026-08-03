@@ -33,7 +33,6 @@ import type {
   TraceTimestamp,
   TraceGraph,
   TraceDependency,
-  TraceSemanticLink,
   TraceEpisode,
   TraceArtifactV2,
   TraceDeltaV2,
@@ -76,7 +75,6 @@ export type {
   TraceTimestamp,
   TraceGraph,
   TraceDependency,
-  TraceSemanticLink,
   TraceEpisode,
   TraceArtifactV2,
   TraceDeltaV2,
@@ -852,13 +850,15 @@ export function normalizeTraceNode(rawValue: unknown): TraceNode {
   const parents = Array.isArray(raw.parents)
     ? raw.parents.map((parent) => {
         const item = asDict(parent);
+        const canonicalId = stringValue(item.nodeId ?? item.node_id);
+        const conclusion = optionalString(item.conclusion);
         return {
-          id: stringValue(item.id),
-          relation: optionalString(item.relation),
-          explanation: optionalString(item.explanation),
-          edgeType: optionalString(item.edgeType ?? item.edge_type),
+          id: stringValue(item.id, canonicalId),
+          relation: optionalString(item.relation) ?? (canonicalId ? "depends_on" : undefined),
+          explanation: optionalString(item.explanation ?? item.reason),
+          edgeType: optionalString(item.edgeType ?? item.edge_type) ?? conclusion,
         };
-      }).filter((parent) => parent.id)
+      }).filter((parent) => parent.id && parent.edgeType !== "rejected")
     : [];
   const artifacts = Array.isArray(raw.artifacts)
     ? raw.artifacts.map((artifact) => {
@@ -1061,14 +1061,6 @@ export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
             if (dependentId !== id || !prerequisiteId || edge.state === "rejected") return [];
             return [{ id: prerequisiteId, relation: "depends_on", explanation: edge.reason, edgeType: edge.state }];
           }),
-          ...(Array.isArray(raw.semanticLinks ?? raw.semantic_links) ? (raw.semanticLinks ?? raw.semantic_links) as unknown[] : []).flatMap((linkValue) => {
-            const link = asDict(linkValue);
-            const toId = stringValue(link.toId ?? link.to_id);
-            const fromId = stringValue(link.fromId ?? link.from_id);
-            if (toId !== id || !fromId) return [];
-            const type = stringValue(link.type, "legacy");
-            return [{ id: fromId, relation: type === "sequence_after" ? "follows" : type, explanation: link.reason, edgeType: "semantic" }];
-          }),
         ];
         return normalizeTraceNode({
           ...node,
@@ -1089,9 +1081,6 @@ export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
   }
   const dependencies = Array.isArray(raw.dependencies)
     ? camelizeObject(raw.dependencies) as TraceDependency[]
-    : undefined;
-  const semanticLinks = Array.isArray(raw.semanticLinks ?? raw.semantic_links)
-    ? camelizeObject(raw.semanticLinks ?? raw.semantic_links) as TraceSemanticLink[]
     : undefined;
   const episodes = Array.isArray(raw.episodes)
     ? camelizeObject(raw.episodes) as TraceEpisode[]
@@ -1115,7 +1104,6 @@ export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
       childIds: node.childIds.length ? node.childIds : Array.from(childIdsByParent.get(node.id) ?? []),
     })),
     ...(dependencies ? { dependencies } : {}),
-    ...(semanticLinks ? { semanticLinks } : {}),
     ...(episodes ? { episodes } : {}),
     ...(traceArtifacts ? { artifacts: traceArtifacts } : {}),
   };

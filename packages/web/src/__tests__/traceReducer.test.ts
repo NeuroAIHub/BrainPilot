@@ -20,7 +20,7 @@ const traceEv = (op: string, n: Record<string, unknown>): WebSocketEvent =>
   ({ type: "CUSTOM", name: "trace_node", value: { op, node: n } } as unknown as WebSocketEvent);
 
 describe("reduceTraceForEvent (#79)", () => {
-  it("accepts a canonical V2 trace_delta and materializes active/proposed/semantic edges", () => {
+  it("accepts runtime-shaped canonical parents in a V2 trace_delta", () => {
     const delta = {
       type: "CUSTOM",
       name: "trace_delta",
@@ -33,14 +33,14 @@ describe("reduceTraceForEvent (#79)", () => {
           revision: 4,
           meta: { sessionId: "s" },
           nodes: [
-            { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [] },
-            { id: "b", title: "B", type: "task", status: "pending", toolCalls: [], artifactIds: [], episodeTags: [] },
+            { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], parents: [] },
+            { id: "b", title: "B", type: "task", status: "pending", toolCalls: [], artifactIds: [], episodeTags: [], parents: [{ nodeId: "a", conclusion: "confirmed", reason: "direct evidence" }] },
+            { id: "c", title: "C", type: "task", status: "pending", toolCalls: [], artifactIds: [], episodeTags: [], parents: [{ nodeId: "b", conclusion: "candidate" }] },
           ],
           dependencies: [
             { id: "official", prerequisiteId: "a", dependentId: "b", origin: "host", confidence: "high", state: "active", evidence: [] },
-            { id: "candidate", prerequisiteId: "b", dependentId: "a", origin: "trace", confidence: "low", state: "proposed", evidence: [] },
+            { id: "candidate", prerequisiteId: "b", dependentId: "c", origin: "trace", confidence: "low", state: "proposed", evidence: [] },
           ],
-          semanticLinks: [{ id: "sequence", fromId: "a", toId: "b", type: "sequence_after" }],
           episodes: [],
           artifacts: [],
         },
@@ -49,14 +49,10 @@ describe("reduceTraceForEvent (#79)", () => {
     const out = reduceTraceForEvent(null, delta, "s")!;
     expect(out).toMatchObject({ schemaVersion: "2.0", revision: 4 });
     const b = out.nodes.find((item) => item.id === "b")!;
-    expect(b.parents).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "a", edgeType: "active" }),
-      expect.objectContaining({ id: "a", edgeType: "semantic" }),
-    ]));
-    const a = out.nodes.find((item) => item.id === "a")!;
-    expect(a.parents).toEqual(expect.arrayContaining([
-      expect.objectContaining({ id: "b", edgeType: "proposed" }),
-    ]));
+    expect(b.parents).toContainEqual(expect.objectContaining({ id: "a", edgeType: "confirmed", explanation: "direct evidence" }));
+    expect(b.parentIds).toEqual(["a"]);
+    const c = out.nodes.find((item) => item.id === "c")!;
+    expect(c.parents).toContainEqual(expect.objectContaining({ id: "b", edgeType: "candidate" }));
   });
 
   it("does not let a replayed stale V2 revision overwrite a newer graph", () => {
@@ -64,7 +60,7 @@ describe("reduceTraceForEvent (#79)", () => {
     const stale = {
       type: "CUSTOM", name: "trace_delta", value: {
         schemaVersion: "2.0", revision: 4, op: "snapshot",
-        graph: { schemaVersion: "2.0", revision: 4, meta: { sessionId: "s" }, nodes: [], dependencies: [], semanticLinks: [], episodes: [], artifacts: [] },
+        graph: { schemaVersion: "2.0", revision: 4, meta: { sessionId: "s" }, nodes: [], dependencies: [], episodes: [], artifacts: [] },
       },
     } as unknown as WebSocketEvent;
     expect(reduceTraceForEvent(start, stale, "s")).toBe(start);

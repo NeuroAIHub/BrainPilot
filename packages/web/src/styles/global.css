@@ -6679,8 +6679,7 @@ button {
   accent-color: var(--color-accent);
 }
 
-/* TraceGraphV2: official dependencies are solid; candidates remain visibly
- * tentative; semantic links are independently toggleable and lighter. */
+/* TraceGraphV2: official dependencies are solid; candidates remain tentative. */
 .trace-edge--active path {
   stroke: color-mix(in srgb, var(--color-success) 68%, var(--color-border-strong));
   stroke-width: 2.25;
@@ -6690,13 +6689,6 @@ button {
 .trace-edge--candidate path {
   stroke: color-mix(in srgb, var(--color-warning) 72%, var(--color-border-strong));
   stroke-dasharray: 6 4;
-}
-
-.trace-edge--semantic path {
-  stroke: color-mix(in srgb, var(--color-text-subtle) 58%, var(--color-border));
-  stroke-dasharray: 2 5;
-  stroke-width: 1.4;
-  opacity: 0.78;
 }
 
 .trace-map-node--episode rect {

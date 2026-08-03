@@ -147,7 +147,6 @@ export function TracePanel() {
   const [playbackIndex, setPlaybackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [fitToken, setFitToken] = useState(0);
-  const [showSemanticLinks, setShowSemanticLinks] = useState(true);
   const [showProposedDependencies, setShowProposedDependencies] = useState(true);
   const [collapseEpisodes, setCollapseEpisodes] = useState(false);
   const wasUserAdjustedRef = useRef(false);
@@ -408,10 +407,6 @@ export function TracePanel() {
                 <span>{t("trace.toggle.candidates")}</span>
               </label>
               <label className="trace-control trace-control--toggle">
-                <input checked={showSemanticLinks} onChange={(event) => setShowSemanticLinks(event.target.checked)} type="checkbox" />
-                <span>{t("trace.toggle.semantic")}</span>
-              </label>
-              <label className="trace-control trace-control--toggle">
                 <input checked={collapseEpisodes} onChange={(event) => setCollapseEpisodes(event.target.checked)} type="checkbox" />
                 <span>{t("trace.toggle.episodes")}</span>
               </label>
@@ -429,7 +424,6 @@ export function TracePanel() {
                   fitToken={fitToken}
                   emptyLabel={emptyLabel}
                   formatKind={formatNodeKind}
-                  showSemanticLinks={showSemanticLinks}
                   showProposedDependencies={showProposedDependencies}
                   zoomLabels={{
                     controls: t("trace.aria.zoomControls"),

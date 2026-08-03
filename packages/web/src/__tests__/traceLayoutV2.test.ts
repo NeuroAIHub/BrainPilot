@@ -7,11 +7,11 @@ function node(id: string, parents: TraceNode["parents"]): TraceNode {
 }
 
 describe("V2 trace layout", () => {
-  it("does not let reciprocal semantic links participate in dependency rank", () => {
-    const a = node("a", [{ id: "b", relation: "supports", edgeType: "semantic" }]);
-    const b = node("b", [{ id: "a", relation: "contradicts", edgeType: "semantic" }]);
+  it("ranks canonical causal parents before their children", () => {
+    const a = node("a", []);
+    const b = node("b", [{ id: "a", relation: "depends_on", edgeType: "candidate" }]);
     const layout = buildTraceLayout([a, b], "LR");
     expect(layout.positioned).toHaveLength(2);
-    expect(layout.positioned.map((item) => item.x)).toEqual([72, 72]);
+    expect(layout.byId.get("a")!.x).toBeLessThan(layout.byId.get("b")!.x);
   });
 });

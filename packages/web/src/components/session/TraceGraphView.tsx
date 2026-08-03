@@ -33,8 +33,6 @@ interface TraceGraphViewProps {
     zoomOut?: string;
     reset?: string;
   };
-  /** V2 semantic links are independently view-toggleable. */
-  showSemanticLinks?: boolean;
   /** Proposed candidates are visible by default but distinguishable from official edges. */
   showProposedDependencies?: boolean;
 }
@@ -55,7 +53,6 @@ export function TraceGraphView({
   emptyLabel,
   formatKind,
   zoomLabels,
-  showSemanticLinks = true,
   showProposedDependencies = true,
 }: TraceGraphViewProps) {
   const [nodeOffsets, setNodeOffsets] = useState<Map<string, { dx: number; dy: number }>>(new Map());
@@ -249,10 +246,6 @@ export function TraceGraphView({
           {adjustedLayout.positioned.flatMap(({ node }) =>
             node.parents
               .filter((parentRef) => {
-                const semantic = parentRef.edgeType === "semantic" || [
-                  "follows", "restored_from", "supports", "contradicts", "supersedes", "references", "legacy",
-                ].includes(parentRef.relation ?? "");
-                if (semantic) return showSemanticLinks;
                 if (parentRef.edgeType === "proposed" || parentRef.edgeType === "candidate") return showProposedDependencies;
                 return true;
               })
@@ -274,10 +267,7 @@ export function TraceGraphView({
               const midY = (startY + endY) / 2;
               const labelText = parentRef.relation ? (relationLabels[parentRef.relation] || parentRef.relation) : "";
               const labelWidth = Math.max(48, labelText.length * 5.5 + 10);
-              const semantic = parentRef.edgeType === "semantic" || [
-                "follows", "restored_from", "supports", "contradicts", "supersedes", "references", "legacy",
-              ].includes(parentRef.relation ?? "");
-              const edgeKind = parentRef.edgeType || (semantic ? "semantic" : parentRef.relation || "necessitated_by");
+              const edgeKind = parentRef.edgeType || parentRef.relation || "necessitated_by";
               return (
                 <g className={`trace-edge trace-edge--${edgeKind} trace-edge--${parentRef.relation || "necessitated_by"}`} key={`${parentRef.id}-${node.id}-${parentRef.edgeType || ""}`}>
                   <path d={path} />

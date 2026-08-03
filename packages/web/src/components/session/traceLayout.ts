@@ -130,13 +130,7 @@ export interface TraceLayout {
 export function buildTraceLayout(nodes: TraceNode[], direction: TraceLayoutDirection): TraceLayout {
   const byId = new Map(nodes.map((node) => [node.id, node]));
   const levelCache = new Map<string, number>();
-  // Semantic links deliberately do not define dependency rank. They may be
-  // reciprocal (supports/contradicts/references) even though official and
-  // proposed dependencies are cycle-checked, so feeding them into the DAG
-  // recursion would make the renderer recurse forever.
-  const layoutParents = (node: TraceNode): string[] => node.parents
-    .filter((parent) => parent.edgeType !== "semantic")
-    .map((parent) => parent.id);
+  const layoutParents = (node: TraceNode): string[] => node.parents.map((parent) => parent.id);
   const getLevel = (node: TraceNode): number => {
     if (levelCache.has(node.id)) {
       return levelCache.get(node.id) as number;

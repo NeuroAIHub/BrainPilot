@@ -49,17 +49,11 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
   const childNodes = node.childIds
     .map((id) => ({ id, title: nodeById.get(id)?.title }))
     .filter((item) => item.title);
-  const isSemanticParent = (parent: TraceNode["parents"][number]) =>
-    parent.edgeType === "semantic" || [
-      "follows", "restored_from", "supports", "contradicts", "supersedes", "references", "legacy",
-    ].includes(parent.relation ?? "");
   const v2Dependencies = graph?.dependencies?.filter((edge) => edge.dependentId === node.id) ?? [];
   const officialDependencies = v2Dependencies.length
     ? v2Dependencies.filter((edge) => edge.state === "active")
-    : node.parents.filter((parent) => !isSemanticParent(parent) && parent.edgeType !== "proposed" && parent.edgeType !== "candidate");
+    : node.parents.filter((parent) => parent.edgeType !== "proposed" && parent.edgeType !== "candidate" && parent.edgeType !== "rejected");
   const candidateDependencies = v2Dependencies.filter((edge) => edge.state === "proposed");
-  const semanticLinks = graph?.semanticLinks?.filter((link) => link.fromId === node.id || link.toId === node.id)
-    ?? node.parents.filter(isSemanticParent).map((parent) => ({ id: `legacy-${parent.id}-${node.id}`, fromId: parent.id, toId: node.id, type: parent.relation || "legacy", reason: parent.explanation }));
   const episode = node.primaryEpisodeId ? graph?.episodes?.find((item) => item.id === node.primaryEpisodeId) : undefined;
   const renderDependency = (dependency: TraceDependency | { prerequisiteId: string; reason?: string; confidence?: string; origin?: string }) => {
     const prerequisiteId = dependency.prerequisiteId;
@@ -176,17 +170,6 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
                 ) : null}
               </div>
             ))}
-          </div>
-        </section>
-      ) : null}
-      {semanticLinks.length > 0 ? (
-        <section className="trace-detail__section">
-          <h4><ArrowRight size={13} /> Semantic links</h4>
-          <div className="trace-relation-list">
-            {semanticLinks.map((link) => {
-              const peer = link.fromId === node.id ? link.toId : link.fromId;
-              return <button key={link.id} onClick={() => onSelectNode(peer)} title={peer} type="button"><strong>{parentLabel(peer)}</strong><span>{link.type}</span>{link.reason ? <small>{link.reason}</small> : null}</button>;
-            })}
           </div>
         </section>
       ) : null}
