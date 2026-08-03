@@ -52,6 +52,11 @@ interface TreeSnapshot {
   skipped: Skipped[];
 }
 
+interface PreparedTree {
+  tempDir: string;
+  sourceRoot: string;
+}
+
 export interface CheckpointFileProvenance extends TraceCheckpointFileChange {
   baseBlobId?: string;
   resultBlobId?: string;
@@ -646,7 +651,7 @@ export class WorkspaceCheckpointStore {
   restoreCausal(
     checkpointIds: string[],
     expectedStateToken: string,
-    onPrepared?: () => Promise<void>,
+    onCommitted?: () => Promise<void>,
   ): Promise<void> {
     return this.exclusive(async () => {
       const plan = await this.synthesizeCausalTree(checkpointIds);
@@ -664,19 +669,43 @@ export class WorkspaceCheckpointStore {
       const recoveryRef = await this.captureUnlocked("system", "recovery");
       const index = await this.index();
       const recovery = index.checkpoints[recoveryRef.id];
-      if (!recovery?.ref.commitId) throw new Error("failed to create recovery checkpoint");
-      // All validation and recovery capture have succeeded. Callers can now
-      // commit related destructive state (for example clearing queued tasks)
-      // without risking a predictable checkpoint failure afterwards.
-      await onPrepared?.();
+      if (!recovery?.ref.commitId || !recovery.treeId) throw new Error("failed to create recovery checkpoint");
+      const recoveryTree: TreeSnapshot = {
+        treeId: recovery.treeId,
+        files: await this.treeFiles(recovery.treeId),
+        skipped: recovery.skipped,
+      };
+      let preparedTarget: PreparedTree | undefined;
+      let preparedRecovery: PreparedTree | undefined;
       try {
-        await this.applyTree(plan.target, plan.current);
+        // Materialize both directions before touching the workspace. Missing
+        // or corrupt Git objects therefore cannot consume queued work or leave
+        // a half-applied target without a ready recovery tree.
+        preparedTarget = await this.prepareTree(plan.target);
+        preparedRecovery = await this.prepareTree(recoveryTree);
+        await this.applyPreparedTree(plan.target, plan.current, preparedTarget);
         const baseline = await this.captureUnlocked("system", "baseline");
         if (!baseline.commitId) throw new Error(baseline.error ?? "failed to create post-restore baseline");
+        // The workspace and its new baseline are now committed. Only at this
+        // point may the caller durably cancel work from the old workspace.
+        await onCommitted?.();
       } catch (error) {
         const failedState = await this.buildTree().catch(() => plan.current);
-        await this.applyRecord(recovery, failedState).catch(() => undefined);
+        try {
+          preparedRecovery ??= await this.prepareTree(recoveryTree);
+          await this.applyPreparedTree(recoveryTree, failedState, preparedRecovery);
+          await this.setHeadCheckpoint(recoveryRef.id);
+        } catch (recoveryError) {
+          const fatal = new Error(`workspace restore failed and automatic recovery failed: ${errorText(recoveryError)}`);
+          (fatal as Error & { code?: string; cause?: unknown }).code = "WORKSPACE_RECOVERY_FAILED";
+          (fatal as Error & { cause?: unknown }).cause = error;
+          throw fatal;
+        }
         throw error;
+      } finally {
+        await Promise.all([preparedTarget, preparedRecovery]
+          .filter((tree): tree is PreparedTree => Boolean(tree))
+          .map((tree) => rm(tree.tempDir, { recursive: true, force: true })));
       }
     });
   }
@@ -697,54 +726,58 @@ export class WorkspaceCheckpointStore {
     });
   }
 
-  private async materializeTree(treeish: string): Promise<string> {
+  private async prepareTree(tree: TreeSnapshot): Promise<PreparedTree> {
     const temp = await mkdtemp(join(tmpdir(), `bp-restore-${this.sessionId}-`));
     const indexFile = join(temp, "index");
     const outputDir = join(temp, "tree");
-    await mkdir(outputDir);
-    await this.runGit(["read-tree", this.gitObject(treeish)], undefined, { GIT_INDEX_FILE: indexFile });
-    await this.runGit(["checkout-index", "-a", `--prefix=${outputDir}/`], undefined, { GIT_INDEX_FILE: indexFile });
-    return temp;
-  }
-
-  private async applyTree(target: TreeSnapshot, current: TreeSnapshot): Promise<void> {
-    const temp = await this.materializeTree(target.treeId);
-    const sourceRoot = join(temp, "tree");
-    const targetFiles = new Set(target.files);
-    const protectedEntries = [...target.skipped, ...current.skipped];
     try {
-      for (const path of current.files) {
-        if (!targetFiles.has(path) && !this.isSkipped(path, protectedEntries)) {
-          await rm(this.workspacePath(path), { force: true, recursive: true });
-        }
-      }
-      for (const path of target.files) {
-        if (this.isSkipped(path, protectedEntries)) continue;
-        const source = join(sourceRoot, path);
-        const destination = this.workspacePath(path);
-        const info = await lstat(source);
-        await mkdir(dirname(destination), { recursive: true });
-        await rm(destination, { force: true, recursive: true });
-        if (info.isSymbolicLink()) await symlink(await readlink(source), destination);
-        else {
-          await copyFile(source, destination);
-          await chmod(destination, info.mode & 0o777);
-        }
-      }
-    } finally {
+      await mkdir(outputDir);
+      await this.runGit(["read-tree", this.gitObject(tree.treeId)], undefined, { GIT_INDEX_FILE: indexFile });
+      await this.runGit(["checkout-index", "-a", `--prefix=${outputDir}/`], undefined, { GIT_INDEX_FILE: indexFile });
+      await Promise.all(tree.files
+        .filter((path) => !this.isSkipped(path, tree.skipped))
+        .map((path) => lstat(join(outputDir, path))));
+      return { tempDir: temp, sourceRoot: outputDir };
+    } catch (error) {
       await rm(temp, { recursive: true, force: true });
+      throw error;
     }
   }
 
-  private async applyRecord(record: CheckpointRecord, current: TreeSnapshot): Promise<void> {
-    if (!record.treeId) throw new Error("checkpoint has no Git tree");
-    await this.applyTree({ treeId: record.treeId, files: await this.treeFiles(record.treeId), skipped: record.skipped }, current);
+  private async applyPreparedTree(target: TreeSnapshot, current: TreeSnapshot, prepared: PreparedTree): Promise<void> {
+    const targetFiles = new Set(target.files);
+    const protectedEntries = [...target.skipped, ...current.skipped];
+    for (const path of current.files) {
+      if (!targetFiles.has(path) && !this.isSkipped(path, protectedEntries)) {
+        await rm(this.workspacePath(path), { force: true, recursive: true });
+      }
+    }
+    for (const path of target.files) {
+      if (this.isSkipped(path, protectedEntries)) continue;
+      const source = join(prepared.sourceRoot, path);
+      const destination = this.workspacePath(path);
+      const info = await lstat(source);
+      await mkdir(dirname(destination), { recursive: true });
+      await rm(destination, { force: true, recursive: true });
+      if (info.isSymbolicLink()) await symlink(await readlink(source), destination);
+      else {
+        await copyFile(source, destination);
+        await chmod(destination, info.mode & 0o777);
+      }
+    }
+  }
+
+  private async setHeadCheckpoint(id: string): Promise<void> {
+    const index = await this.index();
+    if (!index.checkpoints[id]) throw new Error(`checkpoint ${id} disappeared`);
+    index.headCheckpointId = id;
+    await this.saveIndex(index);
   }
 
   restore(
     id: string,
     expectedStateToken: string,
-    onPrepared?: () => Promise<void>,
+    onCommitted?: () => Promise<void>,
   ): Promise<{ restoredCheckpointId: string }> {
     return this.exclusive(async () => {
       const index = await this.index();
@@ -758,16 +791,39 @@ export class WorkspaceCheckpointStore {
       }
       const recoveryRef = await this.captureUnlocked("system", "recovery");
       const recovery = index.checkpoints[recoveryRef.id];
-      if (!recovery?.ref.commitId) throw new Error("failed to create recovery checkpoint");
-      await onPrepared?.();
+      if (!recovery?.ref.commitId || !recovery.treeId) throw new Error("failed to create recovery checkpoint");
+      const targetTree: TreeSnapshot = { treeId: target.treeId, files: await this.treeFiles(target.treeId), skipped: target.skipped };
+      const recoveryTree: TreeSnapshot = {
+        treeId: recovery.treeId,
+        files: await this.treeFiles(recovery.treeId),
+        skipped: recovery.skipped,
+      };
+      let preparedTarget: PreparedTree | undefined;
+      let preparedRecovery: PreparedTree | undefined;
       try {
-        await this.applyRecord(target, current);
+        preparedTarget = await this.prepareTree(targetTree);
+        preparedRecovery = await this.prepareTree(recoveryTree);
+        await this.applyPreparedTree(targetTree, current, preparedTarget);
         const baseline = await this.captureUnlocked("system", "baseline");
         if (!baseline.commitId) throw new Error(baseline.error ?? "failed to create post-restore baseline");
+        await onCommitted?.();
       } catch (error) {
         const failedState = await this.buildTree().catch(() => current);
-        await this.applyRecord(recovery, failedState).catch(() => undefined);
+        try {
+          preparedRecovery ??= await this.prepareTree(recoveryTree);
+          await this.applyPreparedTree(recoveryTree, failedState, preparedRecovery);
+          await this.setHeadCheckpoint(recoveryRef.id);
+        } catch (recoveryError) {
+          const fatal = new Error(`workspace restore failed and automatic recovery failed: ${errorText(recoveryError)}`);
+          (fatal as Error & { code?: string; cause?: unknown }).code = "WORKSPACE_RECOVERY_FAILED";
+          (fatal as Error & { cause?: unknown }).cause = error;
+          throw fatal;
+        }
         throw error;
+      } finally {
+        await Promise.all([preparedTarget, preparedRecovery]
+          .filter((tree): tree is PreparedTree => Boolean(tree))
+          .map((tree) => rm(tree.tempDir, { recursive: true, force: true })));
       }
       return { restoredCheckpointId: id };
     });

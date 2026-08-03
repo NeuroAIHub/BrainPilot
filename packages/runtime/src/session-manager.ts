@@ -2800,6 +2800,7 @@ export class SessionManager {
     const entry = this.sessions.get(sessionId);
     if (!entry) return undefined;
     this.beginWorkspaceOperation(entry, "roll back");
+    let releaseWorkspace = true;
     try {
       const plan = entry.trace.getCausalRollbackPlan(nodeId);
       if (!plan) return undefined;
@@ -2817,8 +2818,11 @@ export class SessionManager {
         metadata: { affectedNodeIds: plan.affectedNodeIds },
       });
       return { nodeId, affectedNodeIds: plan.affectedNodeIds, changeId: change.id };
+    } catch (error) {
+      if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
+      throw error;
     } finally {
-      this.endWorkspaceOperation(entry);
+      if (releaseWorkspace) this.endWorkspaceOperation(entry);
     }
   }
 
@@ -2826,6 +2830,7 @@ export class SessionManager {
     const entry = this.sessions.get(sessionId);
     if (!entry) return undefined;
     this.beginWorkspaceOperation(entry, "restore");
+    let releaseWorkspace = true;
     try {
       const restored = await entry.checkpoints.restore(checkpointId, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
@@ -2842,8 +2847,11 @@ export class SessionManager {
         metadata: { restoredCheckpointId: checkpointId },
       });
       return { ...restored, changeId: change.id };
+    } catch (error) {
+      if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
+      throw error;
     } finally {
-      this.endWorkspaceOperation(entry);
+      if (releaseWorkspace) this.endWorkspaceOperation(entry);
     }
   }
 

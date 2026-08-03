@@ -60,9 +60,12 @@ describe("WorkspaceCheckpointStore", () => {
 
     const preview = await store.preview(old.id);
     expect(preview?.files.some((item) => item.path === "later.txt" && item.status === "deleted")).toBe(true);
-    let prepared = 0;
-    await store.restore(old.id, preview!.stateToken, async () => { prepared++; });
-    expect(prepared).toBe(1);
+    let committed = 0;
+    await store.restore(old.id, preview!.stateToken, async () => {
+      expect(await readFile(join(workspace, "tracked.txt"), "utf8")).toBe("old\n");
+      committed++;
+    });
+    expect(committed).toBe(1);
     expect(await readFile(join(workspace, "tracked.txt"), "utf8")).toBe("old\n");
     await expect(readFile(join(workspace, "later.txt"), "utf8")).rejects.toThrow();
     expect(await readFile(join(workspace, "keep.local"), "utf8")).toBe("untouched\n");
@@ -87,6 +90,44 @@ describe("WorkspaceCheckpointStore", () => {
     let prepared = false;
     await expect(store.restore(target.id, preview!.stateToken, async () => { prepared = true; })).rejects.toMatchObject({ code: "STALE_WORKSPACE" });
     expect(prepared).toBe(false);
+  });
+
+  it("does not commit caller state when the target Git tree cannot materialize", async () => {
+    const { workspace, state, store } = await fixture();
+    await writeFile(join(workspace, "value.txt"), "old\n", "utf8");
+    const target = await store.capture("principal");
+    await writeFile(join(workspace, "value.txt"), "current\n", "utf8");
+    await store.capture("principal");
+    const preview = await store.preview(target.id);
+    const index = JSON.parse(await readFile(join(state, "workspace-checkpoints.json"), "utf8")) as {
+      checkpoints: Record<string, { treeId: string }>;
+    };
+    const treeId = index.checkpoints[target.id]!.treeId;
+    await rm(join(state, "workspace-checkpoints.git", "objects", treeId.slice(0, 2), treeId.slice(2)), { force: true });
+
+    let committed = false;
+    await expect(store.restore(target.id, preview!.stateToken, async () => { committed = true; })).rejects.toThrow();
+    expect(committed).toBe(false);
+    expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("current\n");
+  });
+
+  it("restores the original workspace when the final commit callback fails", async () => {
+    const { workspace, store } = await fixture();
+    await writeFile(join(workspace, "value.txt"), "old\n", "utf8");
+    const target = await store.capture("principal");
+    await writeFile(join(workspace, "value.txt"), "current\n", "utf8");
+    await store.capture("principal");
+    const preview = await store.preview(target.id);
+
+    await expect(store.restore(target.id, preview!.stateToken, async () => {
+      expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("old\n");
+      throw new Error("ledger commit failed");
+    })).rejects.toThrow("ledger commit failed");
+    expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("current\n");
+
+    await writeFile(join(workspace, "after-failure.txt"), "after\n", "utf8");
+    const next = await store.capture("writer");
+    expect(next.stats).toMatchObject({ files: 1, added: 1, modified: 0, deleted: 0 });
   });
 
   it("marks oversized and binary files correctly and reloads its index after restart", async () => {
