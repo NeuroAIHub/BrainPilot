@@ -202,6 +202,7 @@ describe("tool access control (§9)", () => {
         "list_pending_trace_reviews",
         "get_trace_node",
         "get_trace_neighborhood",
+        "get_trace_diff",
         "edit_trace_review",
         "submit_audit_report",
         "skill_search",

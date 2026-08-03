@@ -80,6 +80,13 @@ export { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 export { materializeSkills, resolveBundledSkillsDir } from "./materialize-skills.js";
 export type { MaterializeSkillsResult } from "./materialize-skills.js";
 
+export { WorkspaceCheckpointStore } from "./workspace-checkpoints.js";
+export type {
+  WorkspaceCheckpointOptions,
+  CheckpointFileProvenance,
+  CausalWorkspacePreview,
+} from "./workspace-checkpoints.js";
+
 export {
   materializeKb,
   resolveBundledKbDir,

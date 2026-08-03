@@ -30,6 +30,11 @@ import {
   type SessionTokenUsage,
   type TokenUsage,
   type TraceGraph,
+  type TraceCausalRollbackPreview,
+  type TraceCausalRollbackResult,
+  type TraceCheckpointDetail,
+  type TraceRestorePreview,
+  type TraceRestoreResult,
   type TraceNodeRecord,
   type UserInputCancellationReason,
 } from "@brainpilot/protocol";
@@ -41,6 +46,7 @@ import {
   type TaskRecord,
 } from "./task-ledger.js";
 import { GraphOfTrace, type TraceAuditTarget } from "./trace.js";
+import { WorkspaceCheckpointStore } from "./workspace-checkpoints.js";
 import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import {
   addStatsDelta,
@@ -270,6 +276,8 @@ interface SessionEntry {
   bus: EventBus;
   taskLedger: TaskLedger;
   trace: GraphOfTrace;
+  checkpoints: WorkspaceCheckpointStore;
+  workspaceOperationActive: boolean;
   /** Host-bound source record while Trace processes one durable event. */
   currentTraceRecord?: TraceNodeRecord;
   /** Host-bound immutable target for one Auditor turn. */
@@ -944,6 +952,9 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
+    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+      throw new Error("workspace restore is in progress");
+    }
     try {
       await rm(abs, { recursive: true });
       return true;
@@ -992,6 +1003,9 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
+    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+      throw new Error("workspace restore is in progress");
+    }
     await mkdir(dirname(abs), { recursive: true });
     await writeFile(abs, buf);
     return { path: this.relManagedPath(abs, root, prefix), size: buf.byteLength };
@@ -1021,6 +1035,9 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
+    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+      throw new Error("workspace restore is in progress");
+    }
     await mkdir(dirname(abs), { recursive: true });
 
     // Normalize either stream flavor to a Node Readable.
@@ -1275,6 +1292,11 @@ export class SessionManager {
         bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_DELTA, delta));
       },
     );
+    const checkpoints = new WorkspaceCheckpointStore(
+      id,
+      this.workspaceDir(id),
+      persistBase ?? join(this.dataRoot, ".bp", id),
+    );
 
     const entry: SessionEntry = {
       id,
@@ -1285,6 +1307,8 @@ export class SessionManager {
       bus,
       taskLedger,
       trace,
+      checkpoints,
+      workspaceOperationActive: false,
       currentTraceRecord: undefined,
       currentTraceAuditTarget: undefined,
       traceAuditQueued: new Set(),
@@ -1479,6 +1503,7 @@ export class SessionManager {
   ): Promise<{ accepted: boolean; runId?: string; queued?: boolean }> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
+    if (entry.workspaceOperationActive) return { accepted: false };
     this.touch(entry);
     // §R-4: refuse new runs past the soft memory threshold. The HTTP `accepted`
     // flag alone isn't surfaced by the web, so also emit a system message.
@@ -2048,6 +2073,7 @@ export class SessionManager {
       sessionId,
       fromAgent: name,
       trace: entry.trace,
+      checkpoints: entry.checkpoints,
       currentTraceRecord: () => entry.currentTraceRecord,
       currentTraceAuditTarget: () => entry.currentTraceAuditTarget,
       dispatchTask: async (target, content) => {
@@ -2291,7 +2317,7 @@ export class SessionManager {
    */
   private wakeAgent(sessionId: string, name: string): void {
     const current = this.sessions.get(sessionId);
-    if (!current || current.taskLedger.isPaused(name)) return;
+    if (!current || current.workspaceOperationActive || current.taskLedger.isPaused(name)) return;
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
     this.deliveryLoops.add(key);
@@ -2640,6 +2666,36 @@ export class SessionManager {
     return false;
   }
 
+  /** Restore gate includes Trace, queued work, and active tool execution. */
+  private hasAnyAgentActivity(entry: SessionEntry): boolean {
+    if (entry.runActive || entry.userInputs.active || entry.userInputs.queue.length > 0) return true;
+    for (const agent of entry.agents.values()) {
+      if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
+    }
+    if ([...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`))) return true;
+    return entry.taskLedger.notificationTargets().some((agent) => !entry.taskLedger.isPaused(agent));
+  }
+
+  private beginWorkspaceOperation(entry: SessionEntry, action: "restore" | "roll back"): void {
+    if (entry.workspaceOperationActive) {
+      const error = new Error(`cannot ${action} while another workspace operation is active`);
+      (error as Error & { code?: string }).code = "SESSION_ACTIVE";
+      throw error;
+    }
+    entry.workspaceOperationActive = true;
+    if (this.hasAnyAgentActivity(entry)) {
+      entry.workspaceOperationActive = false;
+      const error = new Error(`cannot ${action} while an agent or queued task is active`);
+      (error as Error & { code?: string }).code = "SESSION_ACTIVE";
+      throw error;
+    }
+  }
+
+  private endWorkspaceOperation(entry: SessionEntry): void {
+    entry.workspaceOperationActive = false;
+    for (const agent of entry.taskLedger.notificationTargets()) this.wakeAgent(entry.id, agent);
+  }
+
   /**
    * #70/#76: emit the authoritative live snapshot as a `CUSTOM:session_state`
    * event. This is the wholesale source the web Agents panel replaces its
@@ -2705,6 +2761,91 @@ export class SessionManager {
 
   getAuditReports(sessionId: string): AuditReport[] | undefined {
     return this.sessions.get(sessionId)?.trace.getAuditReports();
+  }
+
+  decideTraceDependency(
+    sessionId: string,
+    dependencyId: string,
+    decision: "accept" | "reject",
+    reason?: string,
+  ): import("@brainpilot/protocol").TraceDependency | undefined {
+    return this.sessions.get(sessionId)?.trace.decideDependency(dependencyId, decision, reason);
+  }
+
+  async getTraceNodeCheckpoints(sessionId: string, nodeId: string): Promise<TraceCheckpointDetail[] | undefined> {
+    const entry = this.sessions.get(sessionId);
+    const node = entry?.trace.getNode(nodeId);
+    if (!entry || !node) return undefined;
+    const details = await Promise.all((node.checkpoints ?? []).map((checkpoint) => entry.checkpoints.detail(checkpoint.id)));
+    return details.filter((item): item is TraceCheckpointDetail => Boolean(item));
+  }
+
+  async getTraceCheckpointDiff(sessionId: string, checkpointId: string, path: string): Promise<string | undefined> {
+    return this.sessions.get(sessionId)?.checkpoints.diff(checkpointId, path);
+  }
+
+  async getTraceRestorePreview(sessionId: string, checkpointId: string): Promise<TraceRestorePreview | undefined> {
+    return this.sessions.get(sessionId)?.checkpoints.preview(checkpointId);
+  }
+
+  async getTraceCausalRollbackPreview(sessionId: string, nodeId: string): Promise<TraceCausalRollbackPreview | undefined> {
+    const entry = this.sessions.get(sessionId);
+    const plan = entry?.trace.getCausalRollbackPlan(nodeId);
+    if (!entry || !plan) return undefined;
+    const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+    const preview = await entry.checkpoints.previewCausal(checkpointIds);
+    return { nodeId, affectedNodeIds: plan.affectedNodeIds, affectedCheckpointIds: checkpointIds, ...preview };
+  }
+
+  async rollbackTraceNode(sessionId: string, nodeId: string, stateToken: string): Promise<TraceCausalRollbackResult | undefined> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    this.beginWorkspaceOperation(entry, "roll back");
+    try {
+      const plan = entry.trace.getCausalRollbackPlan(nodeId);
+      if (!plan) return undefined;
+      const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+      const restored = await entry.checkpoints.restoreCausal(checkpointIds, stateToken);
+      const previousStatuses = entry.trace.markNodesRolledBack(plan.affectedNodeIds, nodeId);
+      const change = entry.trace.recordChange({
+        actor: { type: "user" },
+        action: "causal_rollback",
+        target: { nodeId },
+        reason: `Revoked ${plan.affectedNodeIds.length} causal descendants.`,
+        metadata: { affectedNodeIds: plan.affectedNodeIds, previousRevoked: previousStatuses, recoveryCheckpointId: restored.recoveryCheckpointId },
+      });
+      return { nodeId, affectedNodeIds: plan.affectedNodeIds, recoveryCheckpointId: restored.recoveryCheckpointId, changeId: change.id };
+    } finally {
+      this.endWorkspaceOperation(entry);
+    }
+  }
+
+  async restoreTraceCheckpoint(sessionId: string, checkpointId: string, stateToken: string): Promise<TraceRestoreResult | undefined> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) return undefined;
+    this.beginWorkspaceOperation(entry, "restore");
+    try {
+      const restored = await entry.checkpoints.restore(checkpointId, stateToken);
+      const [checkpoint] = await entry.checkpoints.refs([checkpointId]);
+      if (!checkpoint) throw new Error("restored checkpoint disappeared");
+      const targetNode = entry.trace.getGraph().nodes.find((node) => node.checkpoints?.some((item) => item.id === checkpointId));
+      const rollbackChange = [...entry.trace.getChanges(2_000)].reverse().find((change) =>
+        change.action === "causal_rollback" && change.metadata?.recoveryCheckpointId === checkpointId);
+      const causalStatuses = rollbackChange?.metadata?.previousRevoked && typeof rollbackChange.metadata.previousRevoked === "object"
+        ? rollbackChange.metadata.previousRevoked as Record<string, boolean>
+        : undefined;
+      if (causalStatuses) entry.trace.restoreNodeStatuses(causalStatuses);
+      const change = entry.trace.recordChange({
+        actor: { type: "user" },
+        action: causalStatuses ? "causal_rollback_undo" : "workspace_restore",
+        target: targetNode ? { nodeId: targetNode.id } : {},
+        reason: `Restored workspace checkpoint ${checkpointId}.`,
+        metadata: { restoredCheckpointId: checkpointId, recoveryCheckpointId: restored.recoveryCheckpointId, ...(rollbackChange ? { rollbackChangeId: rollbackChange.id } : {}) },
+      });
+      return { ...restored, changeId: change.id };
+    } finally {
+      this.endWorkspaceOperation(entry);
+    }
   }
 
   /**

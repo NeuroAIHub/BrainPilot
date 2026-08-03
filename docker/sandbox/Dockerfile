@@ -75,6 +75,8 @@ CMD ["node", "packages/runtime/dist/server.js"]
 #   不在此安装 → monorepo 代码变更只重建下面的业务层，base 层完全复用。
 #   ⚠️ base tag 写死（经典构建器不支持 FROM ${ARG}）；升级须同步三处（见文件头）。
 FROM ghcr.io/neuroaihub/brainpilot-gpu-base:cu124-torch2.6.0 AS gpu
+# Older published GPU base tags may predate workspace checkpoints.
+RUN command -v git >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*)
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages

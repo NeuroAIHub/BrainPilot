@@ -30,6 +30,16 @@ import type {
   TraceNodeV2,
   TraceDeltaV2,
 } from "@brainpilot/protocol";
+interface CheckpointFileProvenance {
+  path: string;
+  previousPath?: string;
+  status: "added" | "modified" | "deleted" | "renamed";
+  additions?: number;
+  deletions?: number;
+  binary: boolean;
+  baseBlobId?: string;
+  resultBlobId?: string;
+}
 function now(): string {
   return new Date().toISOString();
 }
@@ -502,6 +512,79 @@ export class GraphOfTrace {
         }
       : this.auditNodeEvidence(node);
     return createHash("sha256").update(JSON.stringify(payload)).digest("hex");
+  }
+
+  attachCheckpoint(id: string, checkpoint: TraceCheckpointRef, files: CheckpointFileProvenance[] = []): TraceNode | undefined {
+    if (!this.nodes.has(id)) return undefined;
+    this.registerArtifactInternal(id, {
+      path: `checkpoint:${checkpoint.id}`,
+      kind: "checkpoint",
+      type: "checkpoint",
+      checkpointId: checkpoint.id,
+      checkpoint,
+      exists: checkpoint.status === "ready" || checkpoint.status === "partial" ? "present" : "unknown",
+      verificationStatus: "reserved",
+      role: "checkpoint",
+    });
+    this.attachCheckpointFilesInternal(id, checkpoint, files);
+    this.nodes.get(id)!.updatedAt = now();
+    this.commit("updated", id);
+    return this.getNode(id);
+  }
+
+  getCausalRollbackPlan(targetNodeId: string): { affectedNodeIds: string[]; checkpointIds: string[] } | undefined {
+    if (!this.nodes.has(targetNodeId) || this.nodes.get(targetNodeId)?.revoked || this.isSessionRoot(targetNodeId)) return undefined;
+    const visited = new Set<string>([targetNodeId]);
+    const queue = [targetNodeId];
+    const affected: string[] = [];
+    while (queue.length > 0) {
+      const current = queue.shift()!;
+      const children = [...this.nodes.values()]
+        .filter((node) => !node.revoked && node.parents.some((parent) => parent.nodeId === current && parent.conclusion === "confirmed"))
+        .map((node) => node.id);
+      for (const child of children) {
+        if (visited.has(child)) continue;
+        visited.add(child);
+        queue.push(child);
+        affected.push(child);
+      }
+    }
+    const checkpointIds = unique(affected.flatMap((nodeId) => this.nodes.get(nodeId)?.artifactIds.flatMap((artifactId) => {
+      const id = this.artifacts.get(artifactId)?.checkpointId;
+      return id ? [id] : [];
+    }) ?? []));
+    return { affectedNodeIds: affected, checkpointIds };
+  }
+
+  markNodesRolledBack(nodeIds: string[], targetNodeId: string): Record<string, boolean> {
+    const previous: Record<string, boolean> = {};
+    for (const id of nodeIds) {
+      const node = this.nodes.get(id);
+      if (!node || this.isSessionRoot(id)) continue;
+      previous[id] = node.revoked;
+      node.revoked = true;
+      this.normalizeCausalGraph();
+      node.updatedAt = now();
+      this.commit("updated", id, {
+        actor: { type: "user" }, action: "node_revoked", target: { nodeId: id },
+        before: false, after: true, reason: `Causal rollback to ${targetNodeId}`,
+      });
+    }
+    return previous;
+  }
+
+  restoreNodeStatuses(statuses: Record<string, boolean>): void {
+    for (const [id, revoked] of Object.entries(statuses)) {
+      const node = this.nodes.get(id);
+      if (!node || this.isSessionRoot(id)) continue;
+      node.revoked = revoked;
+      this.normalizeCausalGraph();
+      node.updatedAt = now();
+      this.commit("updated", id, {
+        actor: { type: "user" }, action: "node_revocation_undone", target: { nodeId: id },
+        before: !revoked, after: revoked,
+      });
+    }
   }
 
   /** Register an artifact and attach it to a node. IDs are stable across V1 migration. */
@@ -1568,6 +1651,29 @@ export class GraphOfTrace {
     const node = this.nodes.get(nodeId);
     if (node) node.artifactIds = unique([...node.artifactIds, id]);
     return artifact;
+  }
+
+  private attachCheckpointFilesInternal(
+    nodeId: string,
+    checkpoint: TraceCheckpointRef,
+    files: CheckpointFileProvenance[],
+  ): void {
+    for (const file of files) {
+      this.registerArtifactInternal(nodeId, {
+        path: file.path,
+        previousPath: file.previousPath,
+        kind: file.binary ? "binary" : "file",
+        type: file.binary ? "binary" : "file",
+        checkpointId: checkpoint.id,
+        blobHash: file.resultBlobId,
+        changeStatus: file.status,
+        exists: file.status === "deleted" ? "missing" : "present",
+        verificationStatus: file.status === "deleted" ? "missing" : "verified",
+        role: "output",
+        createdAt: checkpoint.capturedAt,
+        updatedAt: checkpoint.capturedAt,
+      });
+    }
   }
 
   private attachArtifactInputInternal(nodeId: string, input: TraceArtifactInput): TraceArtifactV2 {
