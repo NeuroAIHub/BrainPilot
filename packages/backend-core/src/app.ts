@@ -204,6 +204,29 @@ export function createApp(options: CreateAppOptions): Hono {
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
   api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
+  api.get("/sessions/:id/trace/changes", forward("getTraceChanges", { idParam: "id", withQuery: true }));
+  api.get("/sessions/:id/audits", forward("getAuditReports", { idParam: "id" }));
+  api.post("/sessions/:id/trace/dependencies/:dependencyId/decision", forward("decideTraceDependency", {
+    params: { id: "id", dependencyId: "dependencyId" }, withBody: true,
+  }));
+  api.get("/sessions/:id/trace/nodes/:nodeId/checkpoints", forward("getTraceNodeCheckpoints", {
+    params: { id: "id", nodeId: "nodeId" },
+  }));
+  api.get("/sessions/:id/trace/nodes/:nodeId/rollback-preview", forward("getTraceCausalRollbackPreview", {
+    params: { id: "id", nodeId: "nodeId" },
+  }));
+  api.post("/sessions/:id/trace/nodes/:nodeId/rollback", forward("rollbackTraceNode", {
+    params: { id: "id", nodeId: "nodeId" }, withBody: true,
+  }));
+  api.get("/sessions/:id/trace/checkpoints/:checkpointId/diff", forward("getTraceCheckpointDiff", {
+    params: { id: "id", checkpointId: "checkpointId" }, withQuery: true,
+  }));
+  api.get("/sessions/:id/trace/checkpoints/:checkpointId/restore-preview", forward("getTraceRestorePreview", {
+    params: { id: "id", checkpointId: "checkpointId" },
+  }));
+  api.post("/sessions/:id/trace/checkpoints/:checkpointId/restore", forward("restoreTraceCheckpoint", {
+    params: { id: "id", checkpointId: "checkpointId" }, withBody: true,
+  }));
   api.get("/sessions/:id/stats", forward("getSessionStats", { idParam: "id" }));
   // Persisted event tail for chat rehydrate after a restart. SSE replays only
   // the in-memory ring; this endpoint reads events.jsonl on disk. Carries the
@@ -873,12 +896,21 @@ export function createApp(options: CreateAppOptions): Hono {
 
   function forward(
     route: keyof typeof RUNTIME_ROUTES,
-    opts: { idParam?: string; withBody?: boolean; withQuery?: boolean; withRange?: boolean } = {},
+    opts: {
+      idParam?: string;
+      params?: Record<string, string>;
+      withBody?: boolean;
+      withQuery?: boolean;
+      withRange?: boolean;
+    } = {},
   ) {
     return async (c: import("hono").Context) => {
       const rc = await getClient(c);
       const params: Record<string, string> = {};
       if (opts.idParam) params.id = c.req.param(opts.idParam) ?? "";
+      for (const [runtimeKey, requestKey] of Object.entries(opts.params ?? {})) {
+        params[runtimeKey] = c.req.param(requestKey) ?? "";
+      }
       const body = opts.withBody ? await c.req.text() : undefined;
       const headers: Record<string, string> = {};
       const ct = c.req.header("content-type");

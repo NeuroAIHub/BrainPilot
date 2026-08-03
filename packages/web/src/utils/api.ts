@@ -15,6 +15,14 @@ import {
   SettingsData,
   ToolToggles,
   TraceGraph,
+  TraceChange,
+  AuditReport,
+  TraceDependency,
+  TraceCheckpointDetail,
+  TraceCausalRollbackPreview,
+  TraceCausalRollbackResult,
+  TraceRestorePreview,
+  TraceRestoreResult,
   normalizeFileContent,
   normalizeFileEntry,
   normalizeMcpServer,
@@ -814,6 +822,72 @@ export const api = {
         await apiFetch(`${API_BASE}/sessions/${sessionId}/trace`, { headers: authHeaders() }),
       );
       return normalizeTraceGraph(raw);
+    },
+
+    async getTraceChanges(sessionId: string, limit = 200): Promise<TraceChange[]> {
+      if (runtimeConfig.useMockBackend) return [];
+      const raw = await handleJson<{ changes: TraceChange[] }>(
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/trace/changes?limit=${encodeURIComponent(limit)}`, { headers: authHeaders() }),
+      );
+      return raw.changes ?? [];
+    },
+
+    async getAuditReports(sessionId: string): Promise<AuditReport[]> {
+      if (runtimeConfig.useMockBackend) return [];
+      const raw = await handleJson<{ reports: AuditReport[] }>(
+        await apiFetch(`${API_BASE}/sessions/${sessionId}/audits`, { headers: authHeaders() }),
+      );
+      return raw.reports ?? [];
+    },
+
+    async decideTraceDependency(sessionId: string, dependencyId: string, decision: "accept" | "reject", reason?: string): Promise<TraceDependency> {
+      return handleJson<TraceDependency>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/dependencies/${encodeURIComponent(dependencyId)}/decision`,
+        { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ decision, ...(reason ? { reason } : {}) }) },
+      ));
+    },
+
+    async getTraceNodeCheckpoints(sessionId: string, nodeId: string): Promise<TraceCheckpointDetail[]> {
+      if (runtimeConfig.useMockBackend) return [];
+      const raw = await handleJson<{ checkpoints: TraceCheckpointDetail[] }>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/nodes/${encodeURIComponent(nodeId)}/checkpoints`, { headers: authHeaders() },
+      ));
+      return raw.checkpoints ?? [];
+    },
+
+    async getTraceCausalRollbackPreview(sessionId: string, nodeId: string): Promise<TraceCausalRollbackPreview> {
+      return handleJson<TraceCausalRollbackPreview>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/nodes/${encodeURIComponent(nodeId)}/rollback-preview`, { headers: authHeaders() },
+      ));
+    },
+
+    async rollbackTraceNode(sessionId: string, nodeId: string, stateToken: string): Promise<TraceCausalRollbackResult> {
+      return handleJson<TraceCausalRollbackResult>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/nodes/${encodeURIComponent(nodeId)}/rollback`,
+        { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ stateToken }) },
+      ));
+    },
+
+    async getTraceCheckpointDiff(sessionId: string, checkpointId: string, path: string): Promise<string> {
+      if (runtimeConfig.useMockBackend) return "";
+      const raw = await handleJson<{ diff: string }>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/checkpoints/${encodeURIComponent(checkpointId)}/diff?${new URLSearchParams({ path })}`,
+        { headers: authHeaders() },
+      ));
+      return raw.diff;
+    },
+
+    async getTraceRestorePreview(sessionId: string, checkpointId: string): Promise<TraceRestorePreview> {
+      return handleJson<TraceRestorePreview>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/checkpoints/${encodeURIComponent(checkpointId)}/restore-preview`, { headers: authHeaders() },
+      ));
+    },
+
+    async restoreTraceCheckpoint(sessionId: string, checkpointId: string, stateToken: string): Promise<TraceRestoreResult> {
+      return handleJson<TraceRestoreResult>(await apiFetch(
+        `${API_BASE}/sessions/${sessionId}/trace/checkpoints/${encodeURIComponent(checkpointId)}/restore`,
+        { method: "POST", headers: { ...authHeaders(), "Content-Type": "application/json" }, body: JSON.stringify({ stateToken }) },
+      ));
     },
 
     async getEvents(sessionId: string): Promise<RawAgUiEvent[]> {

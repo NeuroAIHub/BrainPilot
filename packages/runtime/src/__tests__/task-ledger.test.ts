@@ -111,6 +111,20 @@ describe("TaskLedger", () => {
     expect(ledger.peekBatch("engineer")).toEqual([]);
   });
 
+  it("cancels pending tasks and clears every queued notification before rollback", async () => {
+    const ledger = new TaskLedger("s");
+    const pending = await ledger.dispatch("principal", "engineer", "uses the old workspace");
+    const completed = await ledger.dispatch("principal", "writer", "finished work");
+    await ledger.complete(completed.id, "writer", "done");
+    await ledger.pauseDelivery();
+
+    const cancelled = await ledger.cancelAllPending("workspace rolled back");
+    expect(cancelled.map((task) => task.id)).toEqual([pending.id]);
+    expect(ledger.get(pending.id)).toMatchObject({ status: "cancelled", reply: "workspace rolled back" });
+    expect(ledger.get(completed.id)).toMatchObject({ status: "completed" });
+    expect(ledger.notificationTargets()).toEqual([]);
+  });
+
   it("treats a missing ledger as empty but rejects corruption without overwriting it", async () => {
     const dir = await mkdtemp(join(tmpdir(), "task-ledger-corrupt-"));
     dirs.push(dir);
