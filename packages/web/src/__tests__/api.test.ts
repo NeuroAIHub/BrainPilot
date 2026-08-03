@@ -694,3 +694,28 @@ describe("api.mcpByok save/clear", () => {
     await expect(api.mcpByok.save("tavily", "nope")).rejects.toThrow("invalid api key");
   });
 });
+
+describe("api.plugins marketplace lifecycle", () => {
+  it("loads the catalogue from the control-plane endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: [] }));
+    await expect(api.plugins.marketplace()).resolves.toEqual([]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/plugins/marketplace");
+  });
+
+  it("installs a selected immutable version", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { activeVersion: "1.2.0" } }));
+    await api.plugins.install("org.example.viewer", "1.2.0");
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/plugins/install");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ id: "org.example.viewer", version: "1.2.0" });
+  });
+
+  it("encodes plugin ids when changing activation state", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { enabled: true } }));
+    await api.plugins.setEnabled("org.example/weird", true);
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/plugins/org.example%2Fweird/enabled");
+    expect(init.method).toBe("PUT");
+  });
+});

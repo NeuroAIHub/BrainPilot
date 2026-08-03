@@ -15,12 +15,13 @@ import profile from "./messages/profile";
 import contexts from "./messages/contexts";
 import terminal from "./messages/terminal";
 import demo from "./messages/demo";
+import marketplace from "./messages/marketplace";
 
 /** Fallback locale used when a key is missing in the active locale. */
 export const DEFAULT_LOCALE: Locale = "zh-CN";
 
 /** All namespace bundles. Keys are already fully-qualified (e.g. "sidebar.newChat"). */
-const bundles: Bundle[] = [sidebar, sandbox, shell, settings, chat, search, quota, files, trace, analytics, network, profile, contexts, terminal, demo];
+const bundles: Bundle[] = [sidebar, sandbox, shell, settings, chat, search, quota, files, trace, analytics, network, profile, contexts, terminal, demo, marketplace];
 
 function build(locale: Locale): Dict {
   return Object.assign({}, ...bundles.map((bundle) => bundle[locale]));

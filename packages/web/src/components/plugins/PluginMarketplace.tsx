@@ -1,0 +1,318 @@
+import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  BookOpen,
+  CheckCircle2,
+  Database,
+  LayoutDashboard,
+  Loader2,
+  Package,
+  RefreshCw,
+  Search,
+  ShieldCheck,
+  Sparkles,
+  Workflow,
+  X,
+  type LucideIcon,
+} from "lucide-react";
+import { useT } from "../../i18n/useT";
+import { api } from "../../utils/api";
+
+export type MarketplaceCategory = "skills" | "knowledge" | "plugins";
+type MarketplaceEntry = Awaited<ReturnType<typeof api.plugins.marketplace>>[number];
+type InstalledEntry = Awaited<ReturnType<typeof api.plugins.installed>>[number];
+type PluginUpdate = Awaited<ReturnType<typeof api.plugins.updates>>[number];
+
+const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "plugins"];
+
+export function categoryForPluginKind(kind: string): MarketplaceCategory {
+  if (kind === "skill-pack") return "skills";
+  if (kind === "knowledge-base" || kind === "literature-provider") return "knowledge";
+  return "plugins";
+}
+
+export function categoryForMarketplaceEntry(entry: MarketplaceEntry): MarketplaceCategory {
+  const contributions = entry.manifest.contributes;
+  if (contributions?.skills?.length || entry.manifest.categories?.includes("skills")) return "skills";
+  if (contributions?.knowledgeBases?.length || contributions?.literatureProviders?.length || entry.manifest.categories?.includes("knowledge")) return "knowledge";
+  return categoryForPluginKind(entry.manifest.kind ?? "plugin");
+}
+
+export function matchesMarketplaceQuery(entry: MarketplaceEntry, query: string): boolean {
+  const normalized = query.trim().toLocaleLowerCase();
+  if (!normalized) return true;
+  return [entry.manifest.displayName, entry.manifest.description, entry.manifest.id, entry.publisher, entry.manifest.kind, ...(entry.manifest.categories ?? [])]
+    .some((value) => value?.toLocaleLowerCase().includes(normalized));
+}
+
+function kindIcon(kind: string): LucideIcon {
+  if (kind === "skill-pack") return Sparkles;
+  if (kind === "knowledge-base") return Database;
+  if (kind === "literature-provider") return BookOpen;
+  if (kind === "ui-panel") return LayoutDashboard;
+  if (kind === "workflow") return Workflow;
+  return Package;
+}
+
+function kindLabelKey(kind: string): string {
+  const supported = ["skill-pack", "knowledge-base", "literature-provider", "previewer", "ui-panel", "workflow"];
+  return `marketplace.kind.${supported.includes(kind) ? kind : "plugin"}`;
+}
+
+export function PluginMarketplace() {
+  const t = useT();
+  const [marketplace, setMarketplace] = useState<MarketplaceEntry[]>([]);
+  const [installed, setInstalled] = useState<InstalledEntry[]>([]);
+  const [updates, setUpdates] = useState<PluginUpdate[]>([]);
+  const [category, setCategory] = useState<MarketplaceCategory>("plugins");
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [busyPluginId, setBusyPluginId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [nextMarketplace, nextInstalled, nextUpdates] = await Promise.all([
+        api.plugins.marketplace(),
+        api.plugins.installed(),
+        api.plugins.updates(),
+      ]);
+      setMarketplace(nextMarketplace);
+      setInstalled(nextInstalled);
+      setUpdates(nextUpdates);
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+    const refresh = () => void load();
+    window.addEventListener("brainpilot:plugins-changed", refresh);
+    return () => window.removeEventListener("brainpilot:plugins-changed", refresh);
+  }, [load]);
+
+  const installedById = useMemo(() => new Map(installed.map((entry) => [entry.manifest.id, entry])), [installed]);
+  const updatesById = useMemo(() => new Map(updates.map((entry) => [entry.pluginId, entry])), [updates]);
+  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [marketplace]);
+  const visible = useMemo(() => marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === category && matchesMarketplaceQuery(entry, query)), [category, marketplace, query]);
+  const enabledCount = installed.filter((entry) => entry.enabled).length;
+  const selectedEntry = marketplace.find((entry) => entry.manifest.id === selectedPluginId) ?? null;
+  const selectedInstalled = selectedEntry ? installedById.get(selectedEntry.manifest.id) : undefined;
+  const selectedUpdate = selectedEntry ? updatesById.get(selectedEntry.manifest.id) : undefined;
+  const selectedCompatibility = selectedInstalled?.compatibility ?? selectedEntry?.compatibility;
+
+  useEffect(() => {
+    if (!selectedEntry) return;
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") setSelectedPluginId(null);
+    };
+    window.addEventListener("keydown", closeOnEscape);
+    return () => window.removeEventListener("keydown", closeOnEscape);
+  }, [selectedEntry]);
+
+  const install = async (id: string) => {
+    setBusyPluginId(id);
+    setError(null);
+    try {
+      await api.plugins.install(id);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyPluginId(null);
+    }
+  };
+
+  const toggle = async (id: string, enabled: boolean) => {
+    setBusyPluginId(id);
+    setError(null);
+    try {
+      await api.plugins.setEnabled(id, enabled);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyPluginId(null);
+    }
+  };
+
+  const update = async (id: string) => {
+    setBusyPluginId(id);
+    setError(null);
+    try {
+      await api.plugins.update(id);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyPluginId(null);
+    }
+  };
+
+  const rollback = async (id: string) => {
+    setBusyPluginId(id);
+    setError(null);
+    try {
+      await api.plugins.rollback(id);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyPluginId(null);
+    }
+  };
+
+  const uninstall = async (id: string) => {
+    if (!window.confirm(t("marketplace.uninstallConfirm"))) return;
+    setBusyPluginId(id);
+    setError(null);
+    try {
+      await api.plugins.remove(id);
+      setSelectedPluginId(null);
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setBusyPluginId(null);
+    }
+  };
+
+  return (
+    <main className="plugin-market" aria-labelledby="plugin-market-title">
+      <header className="plugin-market__hero">
+        <div>
+          <span className="plugin-market__eyebrow">{t("marketplace.eyebrow")}</span>
+          <h1 id="plugin-market-title">{t("marketplace.title")}</h1>
+          <p>{t("marketplace.subtitle")}</p>
+        </div>
+        <button className="plugin-market__refresh" disabled={loading} onClick={() => void load()} title={t("marketplace.refresh")} type="button">
+          <RefreshCw className={loading ? "is-spinning" : ""} size={16} />
+          <span>{t("marketplace.refresh")}</span>
+        </button>
+      </header>
+
+      <section className="plugin-market__summary" aria-label={t("marketplace.title")}>
+        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length}</strong></div>
+        <div><span>{t("marketplace.summary.installed")}</span><strong>{installed.length}</strong></div>
+        <div><span>{t("marketplace.summary.enabled")}</span><strong>{enabledCount}</strong></div>
+      </section>
+
+      <section className="plugin-market__catalog">
+        <div className="plugin-market__toolbar">
+          <div className="plugin-market__categories" role="tablist" aria-label={t("marketplace.title")}>
+            {CATEGORIES.map((item) => (
+              <button aria-selected={category === item} className={category === item ? "is-active" : ""} key={item} onClick={() => setCategory(item)} role="tab" type="button">
+                <span>{t(`marketplace.category.${item}`)}</span><small>{counts[item]}</small>
+              </button>
+            ))}
+          </div>
+          <label className="plugin-market__search">
+            <Search size={16} />
+            <input aria-label={t("marketplace.search")} onChange={(event) => setQuery(event.target.value)} placeholder={t("marketplace.search")} type="search" value={query} />
+          </label>
+        </div>
+
+        {error ? <div className="plugin-market__notice plugin-market__notice--error"><span>{error}</span><button onClick={() => void load()} type="button">{t("marketplace.retry")}</button></div> : null}
+        {loading && marketplace.length === 0 ? <div className="plugin-market__empty"><Loader2 className="is-spinning" size={24} /><strong>{t("marketplace.loading")}</strong></div> : null}
+        {!loading && visible.length === 0 ? <div className="plugin-market__empty"><Package size={24} /><strong>{t("marketplace.empty")}</strong><p>{t("marketplace.emptyHint")}</p></div> : null}
+
+        <div className="plugin-market__grid">
+          {visible.map((entry) => {
+            const kind = entry.manifest.kind ?? "plugin";
+            const Icon = kindIcon(kind);
+            const installedEntry = installedById.get(entry.manifest.id);
+            const pluginUpdate = updatesById.get(entry.manifest.id);
+            const compatibility = installedEntry?.compatibility ?? entry.compatibility;
+            const incompatible = !compatibility.compatible;
+            const compatibilityWarning = compatibility.status === "warning";
+            const busy = busyPluginId === entry.manifest.id;
+            return (
+              <article className="plugin-card" key={entry.manifest.id}>
+                <button className="plugin-card__details-trigger" onClick={() => setSelectedPluginId(entry.manifest.id)} title={t("marketplace.details")} type="button">
+                  <span className="sr-only">{entry.manifest.displayName} · {t("marketplace.details")}</span>
+                </button>
+                <div className="plugin-card__head">
+                  <div className={`plugin-card__icon plugin-card__icon--${category}`}><Icon size={22} /></div>
+                  <div className="plugin-card__identity">
+                    <div><h2>{entry.manifest.displayName}</h2>{entry.verified ? <ShieldCheck aria-label={t("marketplace.verified")} className="plugin-card__verified" size={16} /> : null}{entry.status === "test" ? <span className="plugin-card__test">{t("marketplace.testPlugin")}</span> : null}</div>
+                    <span>{t(kindLabelKey(kind))}</span>
+                  </div>
+                </div>
+                <p className="plugin-card__description">{entry.manifest.description}</p>
+                <div className="plugin-card__meta">
+                  <span>{t("marketplace.publisher", { publisher: entry.publisher, version: entry.manifest.version })}</span>
+                  {installedEntry || incompatible || compatibilityWarning ? <span className={`plugin-card__state ${incompatible ? "is-incompatible" : compatibilityWarning ? "is-warning" : pluginUpdate?.updateAvailable ? "is-update" : installedEntry?.enabled ? "is-enabled" : ""}`}>
+                    {installedEntry?.enabled && !pluginUpdate?.updateAvailable && !incompatible && !compatibilityWarning ? <CheckCircle2 size={13} /> : null}{t(incompatible ? "marketplace.incompatible" : compatibilityWarning ? "marketplace.compatibilityWarning" : pluginUpdate?.updateAvailable ? "marketplace.updateAvailable" : installedEntry?.enabled ? "marketplace.enabled" : "marketplace.disabled")}
+                  </span> : null}
+                </div>
+                <div className="plugin-card__actions">
+                  {pluginUpdate?.updateAvailable ? <button className="plugin-card__button" disabled={busy} onClick={() => void update(entry.manifest.id)} type="button">{busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.update")}</button> : null}
+                  {installedEntry ? (
+                    <button className={`plugin-card__button ${pluginUpdate?.updateAvailable ? "plugin-card__button--ghost" : ""}`} disabled={busy || (incompatible && !installedEntry.enabled)} onClick={() => void toggle(entry.manifest.id, !installedEntry.enabled)} type="button">
+                      {busy ? <Loader2 className="is-spinning" size={14} /> : null}{t(installedEntry.enabled ? "marketplace.disable" : "marketplace.enable")}
+                    </button>
+                  ) : (
+                    <button className="plugin-card__button" disabled={busy || !entry.latestCompatibleVersion} onClick={() => void install(entry.manifest.id)} type="button" title={!entry.latestCompatibleVersion ? t("marketplace.requiresBrainPilot", { range: compatibility.requiredRange ?? "?" }) : undefined}>
+                      {busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.install")}
+                    </button>
+                  )}
+                </div>
+              </article>
+            );
+          })}
+        </div>
+      </section>
+
+      {selectedEntry ? (() => {
+        const kind = selectedEntry.manifest.kind ?? "plugin";
+        const Icon = kindIcon(kind);
+        const busy = busyPluginId === selectedEntry.manifest.id;
+        return (
+          <div className="plugin-detail-layer" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedPluginId(null); }}>
+            <section aria-labelledby="plugin-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
+              <header className="plugin-detail__header">
+                <div className={`plugin-card__icon plugin-card__icon--${category}`}><Icon size={24} /></div>
+                <div><span>{t(kindLabelKey(kind))}</span><h2 id="plugin-detail-title">{selectedEntry.manifest.displayName}</h2></div>
+                <div className="plugin-detail__badges">{selectedEntry.status === "test" ? <span className="plugin-detail__test">{t("marketplace.testPlugin")}</span> : null}{selectedEntry.verified ? <span className="plugin-detail__verified"><ShieldCheck size={15} />{t("marketplace.verified")}</span> : null}</div>
+                <button className="plugin-detail__close" onClick={() => setSelectedPluginId(null)} title={t("marketplace.close")} type="button"><X size={17} /><span className="sr-only">{t("marketplace.close")}</span></button>
+              </header>
+              <div className="plugin-detail__body">
+                <section><h3>{t("marketplace.details.about")}</h3><p>{selectedEntry.manifest.description}</p></section>
+                <dl className="plugin-detail__facts">
+                  <div><dt>{t("marketplace.details.identifier")}</dt><dd>{selectedEntry.manifest.id}</dd></div>
+                  <div><dt>{t("marketplace.details.publisher")}</dt><dd>{selectedEntry.publisher}</dd></div>
+                  <div><dt>{t("marketplace.details.currentVersion")}</dt><dd>{selectedInstalled?.activeVersion ?? t("marketplace.details.notInstalled")}</dd></div>
+                  <div><dt>{t("marketplace.details.latestVersion")}</dt><dd>{selectedEntry.manifest.version}</dd></div>
+                  <div><dt>{t("marketplace.details.type")}</dt><dd>{t(kindLabelKey(kind))}</dd></div>
+                  <div><dt>{t("marketplace.details.status")}</dt><dd>{t(selectedCompatibility?.compatible === false ? "marketplace.incompatible" : selectedInstalled ? selectedInstalled.enabled ? "marketplace.enabled" : "marketplace.disabled" : "marketplace.details.notInstalled")}</dd></div>
+                  <div><dt>{t("marketplace.details.compatibility")}</dt><dd>{selectedCompatibility?.requiredRange ?? t("marketplace.compatibilityUndeclared")}</dd></div>
+                  <div><dt>{t("marketplace.currentBrainPilot")}</dt><dd>{selectedCompatibility?.brainpilotVersion ?? "-"} · {t(selectedCompatibility?.compatible === false ? "marketplace.incompatible" : "marketplace.compatible")}</dd></div>
+                  <div><dt>{t("marketplace.details.source")}</dt><dd>{selectedEntry.source ? `${selectedEntry.source.type}:${selectedEntry.source.id}` : "-"}</dd></div>
+                </dl>
+                {selectedEntry.manifest.protocols ? <section><h3>{t("marketplace.details.protocols")}</h3><div className="plugin-detail__chips">{Object.entries(selectedEntry.manifest.protocols).map(([name, version]) => <span key={name}>{name} v{version}</span>)}</div></section> : null}
+                {selectedEntry.manifest.environments?.length ? <section><h3>{t("marketplace.details.environments")}</h3><div className="plugin-detail__chips">{selectedEntry.manifest.environments.map((environment) => <span key={environment}>{environment}</span>)}</div></section> : null}
+                {selectedCompatibility?.issues.length ? <section><h3>{t("marketplace.details.compatibilityIssues")}</h3><ul>{selectedCompatibility.issues.map((issue, index) => <li key={`${issue.code}-${index}`}>{issue.message}</li>)}</ul></section> : null}
+                {selectedEntry.manifest.categories?.length ? <section><h3>{t("marketplace.details.categories")}</h3><div className="plugin-detail__chips">{selectedEntry.manifest.categories.map((item) => <span key={item}>{item}</span>)}</div></section> : null}
+                {selectedEntry.manifest.permissions?.length ? <section><h3>{t("marketplace.details.permissions")}</h3><div className="plugin-detail__chips">{selectedEntry.manifest.permissions.map((item) => <span key={item}>{item}</span>)}</div></section> : null}
+                {selectedUpdate?.releaseNotes ? <section><h3>{t("marketplace.details.releaseNotes")}</h3><p>{selectedUpdate.releaseNotes}</p></section> : null}
+                {selectedEntry.releases?.length ? <section><h3>{t("marketplace.details.releaseHistory")}</h3><div className="plugin-detail__releases">{selectedEntry.releases.map((release) => <article key={release.version}><div><strong>v{release.version}</strong><time dateTime={release.publishedAt}>{release.publishedAt ? new Date(release.publishedAt).toLocaleDateString() : ""}</time></div><p>{release.releaseNotes}</p></article>)}</div></section> : null}
+              </div>
+              <footer className="plugin-detail__actions">
+                {selectedInstalled ? <button className="plugin-card__button plugin-card__button--danger" disabled={busy} onClick={() => void uninstall(selectedEntry.manifest.id)} type="button">{t("marketplace.uninstall")}</button> : null}
+                {selectedUpdate?.previousVersion ? <button className="plugin-card__button plugin-card__button--ghost" disabled={busy} onClick={() => void rollback(selectedEntry.manifest.id)} type="button">{t("marketplace.rollback")} · v{selectedUpdate.previousVersion}</button> : null}
+                {selectedInstalled ? <button className="plugin-card__button plugin-card__button--ghost" disabled={busy || (selectedCompatibility?.compatible === false && !selectedInstalled.enabled)} onClick={() => void toggle(selectedEntry.manifest.id, !selectedInstalled.enabled)} type="button">{t(selectedInstalled.enabled ? "marketplace.disable" : "marketplace.enable")}</button> : null}
+                {selectedUpdate?.updateAvailable ? <button className="plugin-card__button" disabled={busy} onClick={() => void update(selectedEntry.manifest.id)} type="button">{busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.update")} · v{selectedUpdate.latestVersion}</button> : !selectedInstalled ? <button className="plugin-card__button" disabled={busy || !selectedEntry.latestCompatibleVersion} onClick={() => void install(selectedEntry.manifest.id)} type="button">{busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.install")}</button> : null}
+              </footer>
+            </section>
+          </div>
+        );
+      })() : null}
+
+    </main>
+  );
+}
