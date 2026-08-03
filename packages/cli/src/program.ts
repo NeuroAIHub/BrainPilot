@@ -14,6 +14,7 @@ import { init } from "./commands/init.js";
 import { logs } from "./commands/logs.js";
 import { runList, runDiff, runReset } from "./commands/template.js";
 import { spawnDetachedBackend } from "./spawn-backend.js";
+import { pluginCreate, pluginPack, pluginTest, pluginValidate } from "./commands/plugin.js";
 
 /** Hooks injectable for tests so `run()` never touches a real server/process. */
 export interface ProgramDeps {
@@ -151,6 +152,38 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
     .action(async (opts) => {
       await templateListFn({ dir: opts.dir });
     });
+
+  const plugin = program
+    .command("plugin")
+    .description("Create, validate, test, and package BrainPilot plugins");
+
+  plugin
+    .command("create <directory>")
+    .requiredOption("--id <id>", "reverse-domain plugin id, e.g. org.example.viewer")
+    .description("Create a Preview Plugin SDK v1 project")
+    .action(async (directory, opts) => pluginCreate({ dir: directory, id: opts.id }));
+
+  plugin
+    .command("validate [directory]")
+    .description("Validate a plugin manifest")
+    .action(async (directory = ".") => pluginValidate({ dir: directory }));
+
+  plugin
+    .command("pack [directory]")
+    .option("-o, --output <path>", "bundle output path")
+    .description("Validate and create a marketplace bundle")
+    .action(async (directory = ".", opts) => pluginPack({ dir: directory, output: opts.output }));
+
+  plugin
+    .command("test [directory]")
+    .option("--environment <environment>", "host shape: local | cloud | browser", (value) => {
+      if (value !== "local" && value !== "cloud" && value !== "browser") {
+        throw new Error(`Invalid plugin environment: ${value}`);
+      }
+      return value as "local" | "cloud" | "browser";
+    }, "local")
+    .description("Run plugin conformance and host compatibility checks")
+    .action(async (directory = ".", opts) => pluginTest({ dir: directory, environment: opts.environment }));
 
   template
     .command("diff [agent]")
