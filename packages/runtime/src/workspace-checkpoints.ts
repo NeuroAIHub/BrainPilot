@@ -453,13 +453,21 @@ export class WorkspaceCheckpointStore {
     const id = `checkpoint_${randomUUID()}`;
     const capturedAt = new Date().toISOString();
     const index = await this.index();
+    const previousHeadCheckpointId = index.headCheckpointId;
     const base = index.headCheckpointId ? index.checkpoints[index.headCheckpointId] : undefined;
     try {
-      const repositoryBytes = await this.repositoryBytes();
-      if (repositoryBytes >= this.maxRepositoryBytes) {
-        throw new Error(`checkpoint repository quota exceeded: ${repositoryBytes} bytes >= ${this.maxRepositoryBytes} bytes`);
+      let repositoryBudgetBytes: number | undefined;
+      if (kind === "trace") {
+        const repositoryBytes = await this.repositoryBytes();
+        if (repositoryBytes >= this.maxRepositoryBytes) {
+          throw new Error(`checkpoint repository quota exceeded: ${repositoryBytes} bytes >= ${this.maxRepositoryBytes} bytes`);
+        }
+        repositoryBudgetBytes = this.maxRepositoryBytes - repositoryBytes;
       }
-      const tree = await this.buildTree(this.maxRepositoryBytes - repositoryBytes);
+      // Recovery and post-restore baseline commits are correctness metadata,
+      // not user history growth. They must remain available even when the
+      // ordinary Trace checkpoint quota has been reached.
+      const tree = await this.buildTree(repositoryBudgetBytes);
       const args = ["commit-tree", tree.treeId];
       if (base?.ref.commitId) args.push("-p", this.gitObject(base.ref.commitId));
       const commitId = (await this.runGit(args, `BrainPilot ${kind} checkpoint ${id}\n`, {
@@ -486,6 +494,7 @@ export class WorkspaceCheckpointStore {
       await this.saveIndex(index);
       return ref;
     } catch (error) {
+      index.headCheckpointId = previousHeadCheckpointId;
       const unavailable = error instanceof Error && /ENOENT|spawn git/.test(error.message);
       const ref: TraceCheckpointRef = {
         id,
@@ -637,6 +646,7 @@ export class WorkspaceCheckpointStore {
   restoreCausal(
     checkpointIds: string[],
     expectedStateToken: string,
+    onPrepared?: () => Promise<void>,
   ): Promise<void> {
     return this.exclusive(async () => {
       const plan = await this.synthesizeCausalTree(checkpointIds);
@@ -655,6 +665,10 @@ export class WorkspaceCheckpointStore {
       const index = await this.index();
       const recovery = index.checkpoints[recoveryRef.id];
       if (!recovery?.ref.commitId) throw new Error("failed to create recovery checkpoint");
+      // All validation and recovery capture have succeeded. Callers can now
+      // commit related destructive state (for example clearing queued tasks)
+      // without risking a predictable checkpoint failure afterwards.
+      await onPrepared?.();
       try {
         await this.applyTree(plan.target, plan.current);
         const baseline = await this.captureUnlocked("system", "baseline");
@@ -727,7 +741,11 @@ export class WorkspaceCheckpointStore {
     await this.applyTree({ treeId: record.treeId, files: await this.treeFiles(record.treeId), skipped: record.skipped }, current);
   }
 
-  restore(id: string, expectedStateToken: string): Promise<{ restoredCheckpointId: string }> {
+  restore(
+    id: string,
+    expectedStateToken: string,
+    onPrepared?: () => Promise<void>,
+  ): Promise<{ restoredCheckpointId: string }> {
     return this.exclusive(async () => {
       const index = await this.index();
       const target = index.checkpoints[id];
@@ -741,6 +759,7 @@ export class WorkspaceCheckpointStore {
       const recoveryRef = await this.captureUnlocked("system", "recovery");
       const recovery = index.checkpoints[recoveryRef.id];
       if (!recovery?.ref.commitId) throw new Error("failed to create recovery checkpoint");
+      await onPrepared?.();
       try {
         await this.applyRecord(target, current);
         const baseline = await this.captureUnlocked("system", "baseline");

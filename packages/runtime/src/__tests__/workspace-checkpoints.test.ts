@@ -60,7 +60,9 @@ describe("WorkspaceCheckpointStore", () => {
 
     const preview = await store.preview(old.id);
     expect(preview?.files.some((item) => item.path === "later.txt" && item.status === "deleted")).toBe(true);
-    await store.restore(old.id, preview!.stateToken);
+    let prepared = 0;
+    await store.restore(old.id, preview!.stateToken, async () => { prepared++; });
+    expect(prepared).toBe(1);
     expect(await readFile(join(workspace, "tracked.txt"), "utf8")).toBe("old\n");
     await expect(readFile(join(workspace, "later.txt"), "utf8")).rejects.toThrow();
     expect(await readFile(join(workspace, "keep.local"), "utf8")).toBe("untouched\n");
@@ -82,7 +84,9 @@ describe("WorkspaceCheckpointStore", () => {
     await writeFile(join(workspace, "a.txt"), "b\n", "utf8");
     const preview = await store.preview(target.id);
     await writeFile(join(workspace, "a.txt"), "c\n", "utf8");
-    await expect(store.restore(target.id, preview!.stateToken)).rejects.toMatchObject({ code: "STALE_WORKSPACE" });
+    let prepared = false;
+    await expect(store.restore(target.id, preview!.stateToken, async () => { prepared = true; })).rejects.toMatchObject({ code: "STALE_WORKSPACE" });
+    expect(prepared).toBe(false);
   });
 
   it("marks oversized and binary files correctly and reloads its index after restart", async () => {
@@ -112,10 +116,17 @@ describe("WorkspaceCheckpointStore", () => {
     const { workspace, state } = await fixture();
     await writeFile(join(workspace, "value.txt"), "one\n", "utf8");
     const store = new WorkspaceCheckpointStore("s1", workspace, state, { maxRepositoryBytes: 1024 });
-    expect((await store.capture("principal")).status).toBe("ready");
+    const first = await store.capture("principal");
+    expect(first.status).toBe("ready");
     const blocked = await store.capture("principal");
     expect(blocked.status).toBe("failed");
     expect(blocked.error).toContain("repository quota exceeded");
+
+    // A full history quota must never prevent restoring an existing point.
+    await writeFile(join(workspace, "value.txt"), "two\n", "utf8");
+    const preview = await store.preview(first.id);
+    await store.restore(first.id, preview!.stateToken);
+    expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("one\n");
   });
 
   it("migrates a V1 index without retaining duplicated file lists", async () => {
@@ -200,7 +211,9 @@ describe("WorkspaceCheckpointStore", () => {
     expect(preview.conflicts).toEqual([
       expect.objectContaining({ path: "shared.txt", checkpointIds: [branchA.id] }),
     ]);
-    await expect(store.restoreCausal([branchA.id], preview.stateToken)).rejects.toMatchObject({ code: "CAUSAL_CONFLICT" });
+    let prepared = false;
+    await expect(store.restoreCausal([branchA.id], preview.stateToken, async () => { prepared = true; })).rejects.toMatchObject({ code: "CAUSAL_CONFLICT" });
+    expect(prepared).toBe(false);
     expect(await readFile(join(workspace, "shared.txt"), "utf8")).toBe("independent-current\n");
   });
 });

@@ -2804,9 +2804,10 @@ export class SessionManager {
       const plan = entry.trace.getCausalRollbackPlan(nodeId);
       if (!plan) return undefined;
       const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
-      await entry.checkpoints.restoreCausal(checkpointIds, stateToken);
-      await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
-      this.emitTaskSnapshot(entry);
+      await entry.checkpoints.restoreCausal(checkpointIds, stateToken, async () => {
+        await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
+        this.emitTaskSnapshot(entry);
+      });
       entry.trace.markNodesRolledBack(plan.affectedNodeIds, nodeId);
       const change = entry.trace.recordChange({
         actor: { type: "user" },
@@ -2826,9 +2827,10 @@ export class SessionManager {
     if (!entry) return undefined;
     this.beginWorkspaceOperation(entry, "restore");
     try {
-      const restored = await entry.checkpoints.restore(checkpointId, stateToken);
-      await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
-      this.emitTaskSnapshot(entry);
+      const restored = await entry.checkpoints.restore(checkpointId, stateToken, async () => {
+        await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
+        this.emitTaskSnapshot(entry);
+      });
       const [checkpoint] = await entry.checkpoints.refs([checkpointId]);
       if (!checkpoint) throw new Error("restored checkpoint disappeared");
       const targetNode = entry.trace.getGraph().nodes.find((node) => node.checkpoints?.some((item) => item.id === checkpointId));
