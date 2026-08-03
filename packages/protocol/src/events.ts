@@ -288,8 +288,9 @@ export type CustomEvent = z.infer<typeof CustomEventSchema>;
  * - `session_state` — authoritative live agent/run snapshot (#70).
  * - `session_title` — title update.
  * - `session_heartbeat` — liveness timestamp.
- * - `trace_node` — a Graph-of-Trace node was created/updated (#79); `value` is
+ * - `trace_node` — transitional V1 Graph-of-Trace node projection; `value` is
  *   `{ op: "created" | "updated", node: TraceNode }`.
+ * - `trace_delta` — derived TraceGraphV2 API-view revision update.
  * - `task_state` — flat task-ledger snapshot or one created/completed/cancelled edge.
  * - `compaction` — Pi SDK auto/manual context compaction lifecycle. `value` is
  *   `CompactionStartValue | CompactionEndValue`. Emitted verbatim from the
@@ -302,6 +303,7 @@ export const CUSTOM_EVENT = {
   SESSION_TITLE: "session_title",
   SESSION_HEARTBEAT: "session_heartbeat",
   TRACE_NODE: "trace_node",
+  TRACE_DELTA: "trace_delta",
   TASK_STATE: "task_state",
   COMPACTION: "compaction",
   /** Auditable, content-free domain tool / skill usage edge. */
