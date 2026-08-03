@@ -63,6 +63,18 @@ import {
   subscribeKbBuild,
 } from "./kb-builder.js";
 import { computeKbInventory } from "./kb-inventory.js";
+import {
+  installPlugin,
+  listInstalledPlugins,
+  listMarketplace,
+  listMarketplaceSourceStatuses,
+  listPluginUpdates,
+  preflightPluginCompatibility,
+  rollbackPlugin,
+  setPluginEnabled,
+  uninstallPlugin,
+  updatePlugin,
+} from "./plugins.js";
 
 export interface CreateAppOptions {
   orchestrator: Orchestrator;
@@ -442,6 +454,63 @@ export function createApp(options: CreateAppOptions): Hono {
     const ok = await deleteMcpServer(dataDir, name);
     if (!ok) return c.json({ error: "not found" }, 404);
     return c.body(null, 204);
+  });
+
+  // ---- Plugin marketplace control plane -------------------------------
+  api.get("/plugins/marketplace", async (c) => c.json(await listMarketplace(dataDir)));
+  api.get("/plugins/sources", async (c) => c.json(await listMarketplaceSourceStatuses(dataDir)));
+  api.get("/plugins/installed", async (c) => c.json(await listInstalledPlugins(dataDir)));
+  api.get("/plugins/updates", async (c) => c.json(await listPluginUpdates(dataDir)));
+  api.get("/plugins/compatibility", async (c) => {
+    try {
+      const version = c.req.query("brainpilotVersion") ?? pkg.version;
+      const requested = c.req.query("environment");
+      const environment = requested === "cloud" || requested === "browser" ? requested : "local";
+      return c.json(await preflightPluginCompatibility(dataDir, version, environment));
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.post("/plugins/install", async (c) => {
+    const body = await safeJson(c);
+    if (typeof body.id !== "string" || !body.id) return c.json({ error: "plugin id is required" }, 400);
+    try {
+      const installed = await installPlugin(dataDir, body.id, typeof body.version === "string" ? body.version : undefined);
+      return installed ? c.json(installed, 201) : c.json({ error: "plugin not found in marketplace" }, 404);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.put("/plugins/:id/enabled", async (c) => {
+    const body = await safeJson(c);
+    if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be boolean" }, 400);
+    try {
+      const installed = await setPluginEnabled(dataDir, c.req.param("id"), body.enabled);
+      return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.post("/plugins/:id/update", async (c) => {
+    try {
+      const installed = await updatePlugin(dataDir, c.req.param("id"));
+      return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.post("/plugins/:id/rollback", async (c) => {
+    try {
+      const installed = await rollbackPlugin(dataDir, c.req.param("id"));
+      return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.delete("/plugins/:id", async (c) => {
+    return await uninstallPlugin(dataDir, c.req.param("id"))
+      ? c.body(null, 204)
+      : c.json({ error: "plugin not installed" }, 404);
   });
 
   // ---- Built-in tool toggles (disk-backed: bp_template/tool_toggles.json) ----
