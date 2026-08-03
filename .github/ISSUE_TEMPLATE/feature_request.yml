@@ -38,7 +38,7 @@ body:
       description: Which area of the project does this relate to?
       options:
         - CLI / launch (brainpilot up, init)
-        - Agents / orchestration (Principal, specialists, mailbox)
+        - Agents / orchestration (Principal, specialists, task ledger, subagents)
         - Web UI
         - MCP / tools
         - Skills library

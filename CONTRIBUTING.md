@@ -140,7 +140,7 @@ We follow [Conventional Commits](https://www.conventionalcommits.org/):
 Examples:
 
 ```
-feat(runtime): add result_deliver mailbox message type
+feat(runtime): add task completion notifications
 fix(web): stop trace panel from resetting on session switch
 docs: add bilingual README and CONTRIBUTING
 ```
@@ -160,19 +160,22 @@ AI-assisted PRs are held to the same quality standard as any other PR.
 
 ## Project Structure
 
-BrainPilot is a TypeScript monorepo of six packages under `packages/`:
+BrainPilot is a TypeScript monorepo of 10 packages under `packages/`:
 
 ```
 BrainPilot/
 ├── packages/
 │   ├── protocol/        # zod wire SSOT: AG-UI events, domain types, HTTP route contract
-│   ├── runtime/         # Pi SDK orchestration, SessionManager, mailbox, system tools,
-│   │                    #   MCP bridge, Hono + SSE server
+│   ├── plugin-sdk/      # Plugin schemas, authoring helpers, and CLI tooling
+│   ├── runtime/         # Pi SDK orchestration, state authority, task ledger, isolated
+│   │                    #   subagents, GoT/checkpoints, tools, MCP bridge, Hono + SSE
 │   ├── backend-core/    # Hono REST + SSE passthrough, Orchestrator (Local/Static/Docker)
 │   ├── web/             # React/Vite SPA (AG-UI consumer)
 │   ├── cli/             # @brainpilot/app — `brainpilot` / `bnpt` Docker-free launch
 │   ├── client-cli/      # @brainpilot/client-cli — headless verification client (private)
-│   └── skills/          # @brainpilot/skills — built-in skills content library
+│   ├── skills/          # @brainpilot/skills — built-in skills content library
+│   ├── kb-scripts/      # Publishable knowledge-base build and indexing scripts
+│   └── docs/            # Static public documentation site (private workspace package)
 ├── docker/              # Dockerfiles & sandbox build hooks
 ├── scripts/            # smoke tests, release tooling
 └── .github/            # issue/PR templates, CI workflows
@@ -202,10 +205,10 @@ The `contribute-skills-via-pr` and `verify-skill` Meta-Skills document the full 
 npm login                 # account with @brainpilot scope access
 npm run version:check     # verify all workspace package versions are aligned
 npm run release:dry       # pack-preview all public packages (no upload)
-npm run release           # version-sync, build, then publish protocol → runtime → backend-core → web → app
+npm run release           # version-sync, build, then publish all eight public packages in dependency order
 ```
 
-`@brainpilot/client-cli` stays private and is never published.
+`@brainpilot/client-cli` and `@brainpilot/docs` stay private and are never published.
 
 ### Docker images
 

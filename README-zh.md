@@ -59,6 +59,7 @@ BrainPilot 是一个面向脑科学的开源人工智能研究工作台，帮助
 
 - **🧠 面向脑科学研究** — 支持从文献综述、假设细化、实验设计到数据分析、论文写作和科学审查的完整科研流程。
 - **🤝 PI 智能体协调专业智能体团队** — PI 智能体统一理解用户需求、规划任务，并协调文献、实验、工程、写作和审查智能体协同工作。
+- **⚙️ 持久且有界的编排机制** — 长期专业智能体通过 session 级任务账本协作，并可启动数量受限、上下文隔离的子智能体，并行完成检索与验证。
 - **📚 整合领域知识与科研技能** — 集成脑科学相关知识、研究方法、分析流程、写作规范和工具接口，使智能体能够调用专业知识完成具体科研任务。
 - **🛡️ 审查智能体提升科研可靠性** — 审查科学结论、证据链、引用来源、幻觉风险、遗漏信息和缺乏支撑的推理，帮助研究者发现潜在问题。
 - **🔭 [Graph of Trace](https://aclanthology.org/2026.acl-demo.29/) 展示研究过程** — 将任务结构、智能体行为、工具调用、证据流向和关键决策点可视化，方便研究者检查、回溯和干预。
@@ -507,16 +508,18 @@ harness–model 组合。ALE 显示出明确的成本优势，而 BrainPilotBenc
 完整指南（开发环境、分支模型、从源码运行、测试、发布流程）见
 **[CONTRIBUTING.md](CONTRIBUTING.md)**；私下报告安全漏洞见 **[SECURITY.md](SECURITY.md)**。
 
-BrainPilot 是一个 8 包的 TypeScript monorepo：
+BrainPilot 是一个包含 10 个包的 TypeScript monorepo：
 
 | 包 | 角色 |
 |---------|------|
 | `@brainpilot/protocol` | zod 线协议 SSOT：AG-UI 事件联合、领域类型、HTTP 路由契约 |
-| `@brainpilot/runtime` | Pi SDK 编排、SessionManager（状态权威）、mailbox、系统工具、MCP bridge、Hono+SSE 服务 |
+| `@brainpilot/plugin-sdk` | 插件 manifest schema、创作辅助接口与 CLI 工具 |
+| `@brainpilot/runtime` | Pi SDK 编排、SessionManager（状态权威）、持久化任务账本、隔离 subagent、GoT、系统工具、MCP bridge、Hono+SSE 服务 |
 | `@brainpilot/backend-core` | Hono REST + SSE 字节透传、Orchestrator 抽象（Local / Static / Docker） |
 | `@brainpilot/web` | React/Vite SPA（AG-UI 消费端） |
 | `@brainpilot/app` | `brainpilot` / `bnpt` —— 免 Docker 本地启动 |
 | `@brainpilot/skills` | 内置技能内容库（物化到数据目录，经 Pi 原生 skill 流水线加载） |
+| `@brainpilot/kb-scripts` | 可发布的知识库构建与索引脚本 |
 | `@brainpilot/client-cli` | `bp-client` —— 无头端到端验证客户端 |
 | `@brainpilot/docs` | 面向 `brainpilot.chat/docs` 的静态公开文档站点 |
 

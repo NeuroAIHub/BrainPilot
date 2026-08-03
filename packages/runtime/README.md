@@ -14,10 +14,28 @@ byte-passthrough) and, in hosted deployments, by the platform layer.
 - `SessionManager` — session lifecycle, agent registry, **state authority**
   (`status = idle | running | error | stopped`), `metrics()`.
 - `MasAgent` — per-agent wrapper over a Pi `AgentSession`; emits AG-UI events.
-- System tools + access control, the external-MCP bridge, Graph-of-Trace.
+- `TaskLedger` — durable, session-scoped expert assignments and completion delivery.
+- `SubagentManager` — bounded, short-lived leaf workers with isolated context and scratch space.
+- Graph-of-Trace V2, workspace checkpoints, system tools + access control, and the external-MCP bridge.
 - The Hono server (`./server`) with the SSE event stream.
 
 All wire types come from `@brainpilot/protocol` (the zod SSOT).
+
+## Coordination model
+
+BrainPilot has two execution tiers:
+
+1. **Persistent specialists** keep their own Pi conversation history and coordinate
+   through `dispatch_task` / `complete_task`. The flat task ledger persists task state,
+   notification delivery, and reminders in `.bp/<sessionId>/tasks.json`.
+2. **Isolated subagents** are bounded leaf workers launched by a specialist for parallel,
+   self-contained work. Each child gets a fresh conversation and scratch workspace, has a
+   profile-controlled tool allowlist, cannot message agents or users, and returns exactly
+   one structured result through `submit_result`.
+
+Both tiers are owned by `SessionManager` and share the per-session provider concurrency
+budget. See [`docs/plan/task-ledger.md`](../../docs/plan/task-ledger.md) and
+[`docs/plan/subagents.md`](../../docs/plan/subagents.md) for the detailed contracts.
 
 ## Persistent storage contract
 

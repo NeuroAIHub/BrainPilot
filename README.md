@@ -58,6 +58,7 @@ BrainPilot is an open-source AI research workspace for brain science. It helps r
 
 - 🧠 Built for brain science research — supports workflows across literature review, hypothesis refinement, experiment design, data analysis, writing, and audit.
 - 🤝 PI Agent + specialist agents — the coordinating PI works with a librarian, experimentalist, engineer, writer, and auditor.
+- ⚙️ Durable, bounded orchestration — persistent specialists coordinate through a session-scoped task ledger and can fan out bounded, context-isolated leaf workers for parallel research and verification.
 - 📚 Integrated domain knowledge and skills — brings together brain-science knowledge, methodological skills, analysis procedures, writing conventions, and tool interfaces.
 - 🛡️ Auditor Agent for scientific reliability — reviews claims, evidence chains, citations, hallucination risks, omitted information, and unsupported reasoning.
 - 🔭 Traceable research process — represents each session as an inspectable [Graph of Trace](https://aclanthology.org/2026.acl-demo.29/), making task structure, agent actions, evidence flow, and decision points visible.
@@ -548,16 +549,18 @@ See **[CONTRIBUTING.md](CONTRIBUTING.md)** for the full guide (dev setup, branch
 running from source, tests, and the release process), and
 **[SECURITY.md](SECURITY.md)** to report a vulnerability privately.
 
-BrainPilot is an 8-package TypeScript monorepo:
+BrainPilot is a 10-package TypeScript monorepo:
 
 | Package | Role |
 |---------|------|
 | `@brainpilot/protocol` | zod wire SSOT: AG-UI event union, domain types, HTTP route contract |
-| `@brainpilot/runtime` | Pi SDK orchestration, SessionManager (state authority), mailbox, system tools, MCP bridge, Hono+SSE server |
+| `@brainpilot/plugin-sdk` | plugin manifest schemas, authoring helpers, and CLI tooling |
+| `@brainpilot/runtime` | Pi SDK orchestration, SessionManager (state authority), durable task ledger, isolated subagents, GoT, system tools, MCP bridge, Hono+SSE server |
 | `@brainpilot/backend-core` | Hono REST + SSE byte-passthrough, Orchestrator abstraction (Local / Static / Docker) |
 | `@brainpilot/web` | React/Vite SPA (AG-UI consumer) |
 | `@brainpilot/app` | `brainpilot` / `bnpt` — Docker-free local launch |
 | `@brainpilot/skills` | built-in skills content library (materialized into the data dir, loaded via Pi's native skill pipeline) |
+| `@brainpilot/kb-scripts` | publishable knowledge-base build and indexing scripts |
 | `@brainpilot/client-cli` | `bp-client` — headless end-to-end verification client |
 | `@brainpilot/docs` | static public documentation site for `brainpilot.chat/docs` |
 

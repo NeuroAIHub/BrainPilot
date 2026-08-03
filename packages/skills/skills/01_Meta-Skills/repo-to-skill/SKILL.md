@@ -97,13 +97,20 @@ Skim test files to discover edge cases, expected behaviors, and usage patterns t
 
 ### Exploration Strategy
 
-Use the Agent tool with `subagent_type=Explore` for broad exploration, or launch multiple parallel subagents to cover different areas simultaneously:
+When `repo-scout` appears in `list_subagent_profiles`, use `spawn_subagent` to run independent exploration slices in parallel. Pass the repository path and all required background explicitly because leaf workers do not inherit the parent conversation. For example:
 
 ```
-Agent 1: Explore top-level structure + README + core __init__.py files
-Agent 2: Explore tutorials/ and examples/ directories, read representative files
-Agent 3: Explore docs/ for API reference, read key module documentation
+spawn_subagent(
+  context="Repository root: <path>. Explore read-only and cite file paths.",
+  tasks=[
+    {name: "api-map", profile: "repo-scout", task: "Map top-level structure, README, and public entry points."},
+    {name: "examples", profile: "repo-scout", task: "Inspect tutorials and examples; extract representative usage patterns."},
+    {name: "docs", profile: "repo-scout", task: "Inspect API documentation and identify key module references."}
+  ]
+)
 ```
+
+If `repo-scout` is unavailable, explore with your own read/search tools or delegate a self-contained repository-mapping task to the engineer through `dispatch_task`.
 
 The goal is to collect:
 - Complete list of public API (classes, functions, constants)

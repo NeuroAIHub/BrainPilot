@@ -1929,7 +1929,7 @@ export class SessionManager {
   /**
    * Interrupt a session (or a specific agent).
    *
-   * Targeted (`agentName` given): abort just that agent. Mailboxes and the
+   * Targeted (`agentName` given): abort just that agent. The task ledger and
    * principal are left untouched — a narrow "stop this one expert" contract.
    *
    * Whole-session (`agentName` omitted, the Stop button — #90 / #327): abort
