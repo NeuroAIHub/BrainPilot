@@ -129,6 +129,8 @@ export class MasAgent {
   private abortRequested = false;
   private currentRunId: string | undefined;
   private currentMessageId: string | undefined;
+  /** User follow-ups waiting for Pi to inject them after the current turn. */
+  private pendingFollowUps: Array<{ id: string; text: string }> = [];
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
   /** Runtime authority for live tools; chat events are only its persisted projection. */
@@ -424,13 +426,27 @@ export class MasAgent {
    * Falls back to a normal `prompt()` if the run has already drained (not
    * streaming anymore) by the time this lands, so a race can't drop the message.
    */
-  followUp(text: string): Promise<void> {
+  followUp(text: string, messageId?: string): Promise<void> {
     if (!this.session.isStreaming) {
       // Race: the run finished between the caller's check and here — just start
       // a normal run so the message isn't lost.
+      if (messageId) {
+        this.bus.emit(
+          ev.textMessageChunk(
+            { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId },
+            messageId,
+            text,
+            "user",
+          ),
+        );
+      }
       return this.prompt(text);
     }
+    if (messageId) this.pendingFollowUps.push({ id: messageId, text });
     return this.session.prompt(text, { streamingBehavior: "followUp" }).catch((err) => {
+      if (messageId) {
+        this.pendingFollowUps = this.pendingFollowUps.filter((item) => item.id !== messageId);
+      }
       const raw = (err as Error)?.message ?? String(err);
       const { message, details } = normalizeAgentError(raw);
       this.recordError(message, details, raw);
@@ -688,6 +704,19 @@ export class MasAgent {
           this.currentMessageId = newMessageId();
           this.inReasoning = false;
           this.bus.emit(ev.textMessageStart(ctx, this.currentMessageId));
+        } else if (msg.message?.role === "user" && this.pendingFollowUps.length > 0) {
+          // Pi has now consumed the queued follow-up. Only at this point does
+          // it become part of the visible/persisted conversation; until then
+          // the Web UI keeps it in the queue above the composer.
+          const text = (msg.message.content ?? [])
+            .filter((block) => block.type === "text" && typeof block.text === "string")
+            .map((block) => block.text)
+            .join("");
+          const index = this.pendingFollowUps.findIndex((item) => item.text === text);
+          if (index >= 0) {
+            const [injected] = this.pendingFollowUps.splice(index, 1);
+            this.bus.emit(ev.textMessageChunk(ctx, injected!.id, injected!.text, "user"));
+          }
         }
         return;
       }

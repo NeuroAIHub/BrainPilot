@@ -81,6 +81,7 @@ export async function startServer(
   // so the published port (DNAT'd to the container IP) can reach the server.
   const hostname = options.hostname ?? process.env.BP_HOST ?? "127.0.0.1";
   const orchestrator = buildServerOrchestrator(options);
+  const shutdown = new AbortController();
 
   const app = createApp({
     orchestrator,
@@ -89,6 +90,7 @@ export async function startServer(
     fetchFn: options.fetchFn,
     serveWeb: options.serveWeb,
     env: options.env,
+    shutdownSignal: shutdown.signal,
   });
 
   const providerDataDir = options.dataDir ?? process.env.BP_DATA_DIR ?? "./brainpilot";
@@ -119,11 +121,31 @@ export async function startServer(
 
   const server = serve({ fetch: app.fetch, port, hostname });
 
-  const stop = async (): Promise<void> => {
-    await new Promise<void>((resolve) => {
-      server.close(() => resolve());
-    });
-    await orchestrator.stopRuntime();
+  let stopPromise: Promise<void> | null = null;
+  const stop = (): Promise<void> => {
+    if (stopPromise) return stopPromise;
+    stopPromise = (async () => {
+      // Stop long-lived SSE proxy responses first. Otherwise server.close()
+      // waits forever for browser tabs and the CLI reaches its SIGKILL timeout.
+      shutdown.abort();
+      const nodeServer = server as ServerType & {
+        closeIdleConnections?: () => void;
+        closeAllConnections?: () => void;
+      };
+      const closed = new Promise<void>((resolve) => nodeServer.close(() => resolve()));
+      nodeServer.closeIdleConnections?.();
+      // Belt-and-braces fallback for a connection that ignores stream abort.
+      // Ordinary requests get a short grace window before forced socket close.
+      const forceTimer = setTimeout(() => nodeServer.closeAllConnections?.(), 1_000);
+      forceTimer.unref?.();
+      try {
+        await closed;
+      } finally {
+        clearTimeout(forceTimer);
+      }
+      await orchestrator.stopRuntime();
+    })();
+    return stopPromise;
   };
 
   // Graceful shutdown on signals. Containers run no PM2 inside; a fatal/OOM

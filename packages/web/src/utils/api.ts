@@ -746,12 +746,12 @@ export const api = {
     async postMessage(
       sessionId: string,
       payload: { content: string; uuid: string; timestamp: string; type?: string },
-    ): Promise<{ status: string }> {
+    ): Promise<{ accepted: boolean; runId?: string; queued?: boolean }> {
       if (runtimeConfig.useMockBackend) {
         // Mock path: route through the existing mock helper if needed by the UI.
-        return { status: "ok" };
+        return { accepted: true };
       }
-      return handleJson<{ status: string }>(
+      return handleJson<{ accepted: boolean; runId?: string; queued?: boolean }>(
         await apiFetch(`${API_BASE}/sessions/${sessionId}/messages`, {
           method: "POST",
           headers: { ...authHeaders(), "Content-Type": "application/json" },

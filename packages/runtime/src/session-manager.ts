@@ -1625,10 +1625,7 @@ export class SessionManager {
     // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
     if (agent.isStreaming) {
       const runId = entry.activeRunId ?? undefined;
-      entry.bus.emit(
-        ev.textMessageChunk({ sessionId, agentName, runId }, opts.uuid ?? randomUUID(), content, "user"),
-      );
-      void agent.followUp(content).finally(() => {
+      void agent.followUp(content, opts.uuid ?? randomUUID()).finally(() => {
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
         }
@@ -1636,7 +1633,10 @@ export class SessionManager {
       return { accepted: true, runId, queued: true };
     }
 
-    entry.runActive = true;
+    // runState tracks the Principal's user-facing turn for status/timing/Stop.
+    // It does not disable the composer: another user message is accepted above
+    // through Pi's followUp queue while the Principal is still streaming.
+    entry.runActive = agentName === "principal";
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
     // #70: emit an initial session_state frame here — onStatusChange only fires
@@ -2820,29 +2820,16 @@ export class SessionManager {
   }
 
   /**
-   * #76: a session is "running" whenever ANY non-trace agent is running, or a
-   * task-event delivery loop is pending for a non-trace target (the loop is
-   * registered synchronously inside `dispatch_task`, so this closes the await gap
-   * between the sender finishing its turn and the delegated target starting —
-   * without it the flag would flicker false in that window). The trace agent is
-   * a real spawned agent (record_trace dispatches `trace_event` envelopes into
-   * its internal trace event and it owns the Graph of Trace as editor, see
-   * `system-tools.ts:createRecordTraceTool`), but it is excluded from the
-   * AGGREGATE: a trace recording isn't "the user's task is still running". It
-   * is still LISTED in `agents[]` with its own status so the Agents panel shows
-   * its idle/running transitions live.
+   * #405: runState represents only whether the Principal is working; it drives
+   * status/timing/Stop but does not lock the composer. Every expert (including
+   * Auditor and Trace) remains listed in agents[] with live status. The Principal's delivery-loop
+   * key is counted as well as its running status so there is no false-idle gap
+   * between a task completion notification and the Principal starting again.
    */
   private deriveRunActive(entry: SessionEntry): boolean {
     if (entry.runActive) return true;
-    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "running")) return true;
-    for (const a of entry.agents.values()) {
-      if (a.role !== "trace" && a.status === "running") return true;
-    }
-    for (const key of this.deliveryLoops) {
-      const sep = entry.id.length;
-      // key === `${sid}:${name}` — match this session, exclude the trace target.
-      if (key.startsWith(`${entry.id}:`) && key.slice(sep + 1) !== "trace") return true;
-    }
+    if (entry.agents.get("principal")?.status === "running") return true;
+    if (this.deliveryLoops.has(`${entry.id}:principal`)) return true;
     return false;
   }
 

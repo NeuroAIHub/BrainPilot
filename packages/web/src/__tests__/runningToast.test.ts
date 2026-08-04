@@ -10,9 +10,9 @@ describe("runningToastLabel (#76)", () => {
   });
 
   it("joins multiple working agents", () => {
-    expect(runningToastLabel(["principal", "librarian"])).toEqual({
+    expect(runningToastLabel(["principal", "trace"])).toEqual({
       key: "chat.agentsWorking",
-      vars: { names: "principal、librarian" },
+      vars: { names: "principal、trace" },
     });
   });
 
@@ -38,6 +38,20 @@ describe("runningToastLabel (#76)", () => {
     ).toEqual({
       key: "chat.agentRetrying",
       vars: { name: "principal", attempt: 2, max: 5, sec: 5 },
+    });
+  });
+
+  it("keeps other running agent names visible while one agent retries", () => {
+    expect(
+      runningToastLabel(["principal", "trace"], "、", {
+        name: "principal",
+        attempt: 2,
+        maxAttempts: 5,
+        delayMs: 4_001,
+      }),
+    ).toEqual({
+      key: "chat.agentsWorkingRetrying",
+      vars: { names: "trace", name: "principal", attempt: 2, max: 5, sec: 5 },
     });
   });
 });

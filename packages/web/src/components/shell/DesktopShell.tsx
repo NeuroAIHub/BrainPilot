@@ -8,6 +8,7 @@ import { runtimeConfig } from "../../config";
 import { PromptComposer } from "../chat/PromptComposer";
 import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
+import { fileSidebarScopeKey } from "../files/fileSidebarScope";
 import { IconButton } from "../primitives/IconButton";
 import { SearchDialog } from "../search/SearchDialog";
 import { SettingsDialog, type SettingsTab } from "../settings/SettingsDialog";
@@ -245,6 +246,10 @@ export function DesktopShell() {
         {currentView === "agents" ? <AgentsPanel /> : null}
         {currentView === "trace" ? <TracePanel /> : null}
         <FileSidebar
+          // #403: session-owned tree/selection/preview state must never cross
+          // chat boundaries. Remounting invalidates late async state writes
+          // while preserving the shell-owned open preference and width.
+          key={fileSidebarScopeKey(currentSession?.id)}
           isOpen={isFilesOpen}
           onClose={() => setIsFilesOpen(false)}
           onResize={setFileSidebarWidth}
