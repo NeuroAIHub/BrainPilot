@@ -48,6 +48,9 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     const conclusion = graph.createNode({ title: "Conclusion" });
     expect(graph.getNode(evidence.id)?.parentIds).toEqual([rootId]);
     expect(graph.getNode(conclusion.id)?.parentIds).toEqual([rootId]);
+    expect(graph.getNodeV2(conclusion.id)?.parents).toContainEqual(
+      expect.objectContaining({ nodeId: rootId, origin: "host_fallback" }),
+    );
     expect(graph.updateNode(rootId, { title: "Changed" })).toBeUndefined();
     expect(graph.listPendingAuditTargets().some((target) => target.nodeId === rootId)).toBe(false);
 
@@ -57,7 +60,7 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       "Conclusion consumes this evidence.",
       { type: "agent", name: "trace" },
     )).toBe(true);
-    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([rootId]);
+    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([]);
     expect(graph.review(
       conclusion.id,
       "approve",
@@ -66,6 +69,49 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       evidence.id,
     )).toBe(true);
     expect(graph.getNode(conclusion.id)?.parentIds).toEqual([evidence.id]);
+  });
+
+  it("allows Trace to replace the root fallback with an audited root candidate", () => {
+    const graph = new GraphOfTrace("s");
+    const rootId = graph.getGraphV2().meta.rootNodeId!;
+    const node = graph.createNode({ title: "Independent observation" });
+
+    expect(graph.proposeCausalParent(
+      node.id,
+      rootId,
+      "This observation depends only on the session's initial context.",
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.getNodeV2(node.id)?.parents).toEqual([
+      expect.objectContaining({ nodeId: rootId, conclusion: "candidate", origin: "trace" }),
+    ]);
+    expect(graph.listPendingAuditTargets([node.id])).toContainEqual(
+      expect.objectContaining({ nodeId: node.id, parentNodeId: rootId }),
+    );
+    expect(graph.review(
+      node.id,
+      "approve",
+      "No upstream research unit is required.",
+      { type: "agent", name: "auditor" },
+      rootId,
+    )).toBe(true);
+    expect(graph.getNodeV2(node.id)?.parents).toEqual([
+      expect.objectContaining({ nodeId: rootId, conclusion: "confirmed", origin: "trace" }),
+    ]);
+  });
+
+  it("does not restore the Host root fallback while any non-root parent state exists", () => {
+    const graph = new GraphOfTrace("s");
+    const rootId = graph.getGraphV2().meta.rootNodeId!;
+    const parent = graph.createNode({ title: "Evidence" });
+    const child = graph.createNode({ title: "Conclusion" });
+    graph.proposeCausalParent(child.id, parent.id, "possible evidence", { type: "agent", name: "trace" });
+    expect(graph.getNodeV2(child.id)?.parents.some((item) => item.nodeId === rootId)).toBe(false);
+
+    graph.review(child.id, "uncertain", "relationship is unresolved", { type: "agent", name: "auditor" }, parent.id);
+    expect(graph.getNodeV2(child.id)?.parents).toEqual([
+      expect.objectContaining({ nodeId: parent.id, conclusion: "uncertain" }),
+    ]);
   });
 
   it("repairs rootless and cyclic V2 data into one all-state DAG", () => {
@@ -84,9 +130,9 @@ describe("TraceGraphV2 storage and audit semantics", () => {
 
     const normalized = graph.getGraphV2();
     const rootId = normalized.meta.rootNodeId!;
-    const activeParents = new Map(normalized.nodes.map((node) => [
+    const allParents = new Map(normalized.nodes.map((node) => [
       node.id,
-      node.parents.filter((parent) => parent.conclusion === "confirmed").map((parent) => parent.nodeId),
+      node.parents.map((parent) => parent.nodeId),
     ]));
     const reachesRoot = (start: string): boolean => {
       const seen = new Set<string>();
@@ -94,17 +140,17 @@ describe("TraceGraphV2 storage and audit semantics", () => {
         if (id === rootId) return true;
         if (seen.has(id)) return false;
         seen.add(id);
-        return (activeParents.get(id) ?? []).some(visit);
+        return (allParents.get(id) ?? []).some(visit);
       };
       return visit(start);
     };
     expect(normalized.nodes.filter((node) => node.id !== rootId).every((node) => reachesRoot(node.id))).toBe(true);
-    const allParents = new Map(normalized.nodes.map((node) => [node.id, node.parents.map((parent) => parent.nodeId)]));
+    const parentMap = new Map(normalized.nodes.map((node) => [node.id, node.parents.map((parent) => parent.nodeId)]));
     const isAcyclic = (start: string, visiting = new Set<string>(), visited = new Set<string>()): boolean => {
       if (visiting.has(start)) return false;
       if (visited.has(start)) return true;
       const nextVisiting = new Set(visiting).add(start);
-      if (!(allParents.get(start) ?? []).every((parentId) => isAcyclic(parentId, nextVisiting, visited))) return false;
+      if (!(parentMap.get(start) ?? []).every((parentId) => isAcyclic(parentId, nextVisiting, visited))) return false;
       visited.add(start);
       return true;
     };

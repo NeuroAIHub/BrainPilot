@@ -92,11 +92,21 @@ describe("tool access control (§9)", () => {
     await expect(tool.execute({ question: "   " })).resolves.toMatchObject({ isError: true });
   });
 
-  it("principal gets comms + record_trace, not graph mutation tools", () => {
+  it("principal gets comms, record_trace, and read-only GoT tools", () => {
     const names = systemToolNamesForRole("principal", "principal");
-    expect(names).toEqual(expect.arrayContaining(["dispatch_task", "complete_task", "create_agent", "destroy_agent", "record_trace"]));
+    expect(names).toEqual(expect.arrayContaining([
+      "dispatch_task",
+      "complete_task",
+      "create_agent",
+      "destroy_agent",
+      "record_trace",
+      "get_trace_graph",
+      "get_trace_node",
+      "get_trace_neighborhood",
+      "get_trace_diff",
+    ]));
     expect(names).not.toContain("create_trace_node");
-    expect(names).not.toContain("get_trace_graph");
+    expect(names).not.toContain("update_trace_node");
   });
 
   it("principal can ask_user; experts and trace cannot", () => {
@@ -277,15 +287,26 @@ describe("tool access control (§9)", () => {
     const node = d.trace.getGraphV2().nodes.find((item) => item.type !== "session_start")!;
     const agentGraph = JSON.parse((await tools.get("get_trace_graph")!.execute({})).content[0]!.text) as {
       revision: number;
+      rootNodeId?: string;
       nodes: Array<{ id: string; parents: unknown[] }>;
       dependencies?: unknown;
       artifacts?: unknown;
     };
     expect(agentGraph.nodes).toEqual([expect.objectContaining({ id: node.id, parents: [] })]);
+    expect(agentGraph.rootNodeId).toBe(d.trace.getGraphV2().meta.rootNodeId);
     expect(agentGraph).not.toHaveProperty("dependencies");
     expect(agentGraph).not.toHaveProperty("artifacts");
     expect(agentGraph.nodes[0]).not.toHaveProperty("records");
     expect((await tools.get("update_trace_node")!.execute({ node_id: node.id, summary: "updated" })).isError).toBe(true);
+
+    const rootId = d.trace.getGraphV2().meta.rootNodeId!;
+    d.trace.proposeCausalParent(node.id, rootId, "Depends only on initial context.", { type: "agent", name: "trace" });
+    const withExplicitRoot = JSON.parse((await tools.get("get_trace_graph")!.execute({})).content[0]!.text) as {
+      nodes: Array<{ id: string; parents: Array<{ nodeId: string; origin?: string }> }>;
+    };
+    expect(withExplicitRoot.nodes.find((item) => item.id === node.id)?.parents).toContainEqual(
+      expect.objectContaining({ nodeId: rootId, origin: "trace" }),
+    );
   });
 });
 
@@ -339,6 +360,10 @@ describe("tool toggles", () => {
       "create_agent",
       "destroy_agent",
       "dispatch_task",
+      "get_trace_diff",
+      "get_trace_graph",
+      "get_trace_neighborhood",
+      "get_trace_node",
       "record_trace",
     ].sort());
   });

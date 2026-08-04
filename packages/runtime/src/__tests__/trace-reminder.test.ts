@@ -66,16 +66,16 @@ describe("trace-reminder: event-driven trace gating", () => {
     (tool) => expect(runOnce("principal", [tool]).kinds).toEqual([]),
   );
 
-  it("substantive PI work needs trace and delegation in one reminder", () => {
-    expect(runOnce("principal", ["bash"]).kinds).toEqual(["merged"]);
+  it("substantive PI work only needs a trace reminder", () => {
+    expect(runOnce("principal", ["bash"]).kinds).toEqual(["trace"]);
   });
 
-  it("recorded substantive PI work only needs delegation", () => {
-    expect(runOnce("principal", ["write", "record_trace"]).kinds).toEqual(["delegate"]);
+  it("recorded substantive PI work needs no reminder", () => {
+    expect(runOnce("principal", ["write", "record_trace"]).kinds).toEqual([]);
   });
 
-  it("creating an agent is not itself a delegation", () => {
-    expect(runOnce("principal", ["bash", "create_agent"]).kinds).toEqual(["merged"]);
+  it("creating an agent does not suppress the trace reminder", () => {
+    expect(runOnce("principal", ["bash", "create_agent"]).kinds).toEqual(["trace"]);
   });
 
   it("sending a task counts as delegation", () => {
@@ -87,7 +87,7 @@ describe("trace-reminder: event-driven trace gating", () => {
 
   it("tool-name case does not matter", () => {
     expect(runOnce("principal", ["READ"]).kinds).toEqual([]);
-    expect(runOnce("principal", ["WRITE", "record_trace"]).kinds).toEqual(["delegate"]);
+    expect(runOnce("principal", ["WRITE", "record_trace"]).kinds).toEqual([]);
   });
 });
 
