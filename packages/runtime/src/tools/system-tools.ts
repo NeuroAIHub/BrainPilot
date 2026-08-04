@@ -474,7 +474,7 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
     description:
       "Create one new active Graph of Trace node only when the current host-bound record represents a distinct, durable scientific unit that is not already in the active graph. " +
       "Do not create nodes for coordination, delegation, progress, presentation, reformatting, or repetition. The Host attaches the current source record and checkpoint automatically. " +
-      "The Host also attaches the session root whenever no more specific causal parent has been confirmed; never submit the session root as a parent candidate. " +
+      "The Host attaches the session root only when no parent is present. The session root ID is exposed by get_trace_graph and may be proposed when the unit directly depends on the session's initial context. " +
       "One Trace Event may call this tool more than once only when it explicitly contains multiple independently meaningful scientific units with enough content to describe each accurately.",
     parameters: {
       type: "object",
@@ -602,6 +602,7 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
       return ok(JSON.stringify({
         schemaVersion: graph.schemaVersion,
         revision: graph.revision,
+        rootNodeId: rootId,
         nodes: graph.nodes
           .filter((node) => activeIds.has(node.id))
           .map((node) => ({
@@ -616,10 +617,15 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
             reviewConclusion: node.reviewConclusion,
             updatedAt: node.updatedAt,
             parents: node.parents
-              .filter((parent) => parent.nodeId !== rootId && activeIds.has(parent.nodeId))
+              .filter((parent) =>
+                parent.nodeId === rootId
+                  ? parent.origin === "trace"
+                  : activeIds.has(parent.nodeId)
+              )
               .map((parent) => ({
                 nodeId: parent.nodeId,
                 conclusion: parent.conclusion,
+                ...(parent.origin ? { origin: parent.origin } : {}),
                 ...(parent.reason ? { reason: parent.reason } : {}),
               })),
           })),
@@ -628,7 +634,7 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
   };
 }
 
-/** Principal-only bounded trace readers; no Principal full-graph tool exists. */
+/** Bounded trace readers shared by Principal, Trace, and Auditor as allowed below. */
 export function createGetTraceNodeTool(deps: ToolDeps): SystemTool {
   return {
     name: "get_trace_node",
@@ -880,6 +886,10 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "create_agent",
     "destroy_agent",
     "record_trace",
+    "get_trace_graph",
+    "get_trace_node",
+    "get_trace_neighborhood",
+    "get_trace_diff",
     "ask_user",
     "skill_search",
     "get_domain_knowledge_local",

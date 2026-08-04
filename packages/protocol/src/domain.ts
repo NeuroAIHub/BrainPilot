@@ -436,6 +436,8 @@ export type TraceNodeRecord = z.infer<typeof TraceNodeRecordSchema>;
 export const TraceCausalParentSchema = z.object({
   nodeId: z.string(),
   conclusion: TraceParentConclusionSchema,
+  /** Distinguishes the structural fallback from a parent explicitly proposed by Trace. */
+  origin: z.enum(["host_fallback", "trace"]).optional(),
   /** Current concise reason; earlier reasons remain in TraceChangeLog. */
   reason: z.string().optional(),
 });

@@ -69,6 +69,7 @@ import {
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { renderTaskListBlock } from "./extensions/task-context.js";
+import { renderGoTAuditContext, renderPrincipalGoTContext } from "./extensions/got-context.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
@@ -2380,6 +2381,12 @@ export class SessionManager {
       renderAgentStatus:
         name === "principal" ? () => this.renderAgentStatus(entry) : undefined,
       renderTaskContext: () => this.renderTaskContext(entry, name),
+      renderGoTContext:
+        name === "principal"
+          ? () => renderPrincipalGoTContext(entry.trace.getGraphV2())
+          : name === "auditor"
+            ? () => this.renderGoTAuditContext(entry)
+            : undefined,
     });
 
     const agent = new MasAgent({
@@ -2475,6 +2482,20 @@ export class SessionManager {
       entry.taskLedger.pendingCreatedBy(name),
       TASK_CONTEXT_MAX_CHARS,
     );
+  }
+
+  private renderGoTAuditContext(entry: SessionEntry): string {
+    const target = entry.currentTraceAuditTarget;
+    if (!target) return "";
+    return renderGoTAuditContext({
+      graph: entry.trace.getGraphV2(),
+      target,
+      targetNode: entry.trace.getNodeDetail(target.nodeId),
+      ...(target.parentNodeId
+        ? { parentNode: entry.trace.getNodeDetail(target.parentNodeId) }
+        : {}),
+      neighborhood: entry.trace.getNeighborhood(target.nodeId, 2),
+    });
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {

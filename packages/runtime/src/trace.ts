@@ -412,18 +412,20 @@ export class GraphOfTrace {
   proposeCausalParent(childNodeId: string, parentNodeId: string, reason: string, actor: TraceChangeActor): boolean {
     const child = this.nodes.get(childNodeId);
     const parent = this.nodes.get(parentNodeId);
-    if (!child || !parent || child.revoked || parent.revoked || this.isSessionRoot(childNodeId) || this.isSessionRoot(parentNodeId) || childNodeId === parentNodeId) return false;
+    if (!child || !parent || child.revoked || parent.revoked || this.isSessionRoot(childNodeId) || childNodeId === parentNodeId) return false;
     const existing = child.parents.find((item) => item.nodeId === parentNodeId);
     if (existing?.conclusion === "rejected") return false;
     if (!existing && this.wouldCreateCycle(parentNodeId, childNodeId)) return false;
     const before = existing ? clone(existing) : undefined;
     if (existing) {
-      if (existing.conclusion === "confirmed" && existing.reason === reason) return true;
+      if (existing.conclusion === "candidate" && existing.reason === reason && existing.origin === "trace") return true;
       existing.conclusion = "candidate";
       existing.reason = reason;
+      existing.origin = "trace";
     } else {
-      child.parents.push({ nodeId: parentNodeId, conclusion: "candidate", ...(reason ? { reason } : {}) });
+      child.parents.push({ nodeId: parentNodeId, conclusion: "candidate", origin: "trace", ...(reason ? { reason } : {}) });
     }
+    this.normalizeCausalGraph();
     this.syncCompatibilityDependency(parentNodeId, childNodeId, "candidate", reason);
     child.updatedAt = now();
     this.commit("updated", childNodeId, {
@@ -463,7 +465,6 @@ export class GraphOfTrace {
       });
       return true;
     }
-    if (this.isSessionRoot(parentNodeId)) return false;
     const parent = this.nodes.get(parentNodeId);
     const ref = node.parents.find((item) => item.nodeId === parentNodeId);
     if (!parent || parent.revoked || !ref) return false;
@@ -1053,7 +1054,10 @@ export class GraphOfTrace {
           const conclusion = parent.conclusion === "confirmed" || parent.conclusion === "rejected" || parent.conclusion === "uncertain"
             ? parent.conclusion
             : "candidate";
-          return [{ nodeId, conclusion, ...(typeof parent.reason === "string" ? { reason: parent.reason } : {}) }];
+          const origin = parent.origin === "trace" || parent.origin === "host_fallback"
+            ? parent.origin
+            : undefined;
+          return [{ nodeId, conclusion, ...(origin ? { origin } : {}), ...(typeof parent.reason === "string" ? { reason: parent.reason } : {}) }];
         }),
         executionResult: node.executionResult === "failed" || node.status === "failed" || node.status === "error" ? "failed" : "completed",
         revoked: node.revoked === true || node.status === "rolled_back" || node.status === "inactive",
@@ -1502,28 +1506,30 @@ export class GraphOfTrace {
       node.parents = accepted;
     }
 
-    // A real confirmed parent replaces the temporary root link. Otherwise the
-    // Host supplies the root as an immediately confirmed fallback.
+    // The Host supplies a root fallback only when no parent of any conclusion
+    // exists. A root explicitly proposed by Trace is a normal reviewable edge.
     for (const node of this.nodes.values()) {
       if (node.revoked || node.id === root.id) continue;
-      const hasRealConfirmedParent = node.parents.some((parent) => {
-        const parentNode = this.nodes.get(parent.nodeId);
-        return parent.nodeId !== root.id && parent.conclusion === "confirmed" && parentNode && !parentNode.revoked;
-      });
-      if (hasRealConfirmedParent) {
-        node.parents = node.parents.filter((parent) => parent.nodeId !== root.id);
+      const hasNonRootParent = node.parents.some((parent) => parent.nodeId !== root.id);
+      if (hasNonRootParent) {
+        node.parents = node.parents.filter((parent) =>
+          parent.nodeId !== root.id || parent.origin === "trace"
+        );
+        continue;
+      }
+      const rootRef = node.parents.find((parent) => parent.nodeId === root.id);
+      if (rootRef?.origin === "trace") continue;
+      if (rootRef) {
+        rootRef.conclusion = "confirmed";
+        rootRef.origin = "host_fallback";
+        rootRef.reason = "No parent was proposed; attached to the session root by the Host.";
       } else {
-        const rootRef = node.parents.find((parent) => parent.nodeId === root.id);
-        if (rootRef) {
-          rootRef.conclusion = "confirmed";
-          rootRef.reason = "No more specific confirmed causal parent; attached to the session root by the Host.";
-        } else {
-          node.parents.unshift({
-            nodeId: root.id,
-            conclusion: "confirmed",
-            reason: "No more specific confirmed causal parent; attached to the session root by the Host.",
-          });
-        }
+        node.parents.unshift({
+          nodeId: root.id,
+          conclusion: "confirmed",
+          origin: "host_fallback",
+          reason: "No parent was proposed; attached to the session root by the Host.",
+        });
       }
     }
     this.rebuildCompatibilityDependencies();

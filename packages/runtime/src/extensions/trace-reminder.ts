@@ -1,4 +1,4 @@
-/** Event-driven reminders for trace capture, expert replies, and PI delegation. */
+/** Event-driven reminders for trace capture and expert task replies. */
 import type { AgentRole } from "../types.js";
 
 interface ToolStartLike {
@@ -79,21 +79,9 @@ const MERGED_REMINDER = SYS(
   "Before finishing, record the substantive milestone with record_trace and complete the pending task " +
     "with complete_task using its exact ID.",
 );
-const DELEGATE_REMINDER = SYS(
-  "delegate",
-  "As the Principal, delegate substantive execution to an expert before finishing.",
-);
-const PI_MERGED_REMINDER = SYS(
-  "merged",
-  "As the Principal, record this substantive step with record_trace and delegate the execution " +
-    "to an expert before finishing.",
-);
-
 interface RunState {
   traced: boolean;
-  delegated: boolean;
   traceWorthy: boolean;
-  didSubstantiveWork: boolean;
   dispatched: boolean;
   reminded: boolean;
 }
@@ -101,9 +89,7 @@ interface RunState {
 function freshState(): RunState {
   return {
     traced: false,
-    delegated: false,
     traceWorthy: false,
-    didSubstantiveWork: false,
     dispatched: false,
     reminded: false,
   };
@@ -111,7 +97,7 @@ function freshState(): RunState {
 
 /**
  * A reminder starts one internal follow-up agent loop. State survives that one
- * loop so a satisfied reply/trace/delegation is observed and no second reminder
+ * loop so a satisfied reply/trace is observed and no second reminder
  * is injected. The next external run starts clean.
  */
 export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionApi) => void {
@@ -155,14 +141,12 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
 
       if (tool === "dispatch_task") {
         state.dispatched = true;
-        state.delegated = true;
         state.traceWorthy = true;
         return;
       }
 
       if (!NON_TRACE_TOOLS.has(tool)) {
         state.traceWorthy = true;
-        if (deps.role === "principal") state.didSubstantiveWork = true;
       }
     });
 
@@ -178,21 +162,16 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       const needReply =
         (deps.hasPendingTasks?.() ?? false) &&
         !state.dispatched;
-      const needDelegate =
-        deps.role === "principal" && state.didSubstantiveWork && !state.delegated;
-
       const sendReminder = (reminder: string): void => {
         state.reminded = true;
         continuingFollowUp = true;
         pi.sendUserMessage(reminder, { deliverAs: "followUp" });
       };
 
-      if (!state.reminded && (needTrace || needReply || needDelegate)) {
+      if (!state.reminded && (needTrace || needReply)) {
         let reminder: string;
         if (needReply && needTrace) reminder = MERGED_REMINDER;
         else if (needReply) reminder = REPLY_REMINDER;
-        else if (needTrace && needDelegate) reminder = PI_MERGED_REMINDER;
-        else if (needDelegate) reminder = DELEGATE_REMINDER;
         else reminder = TRACE_REMINDER;
 
         if (needReply && deps.claimTaskReminder) {

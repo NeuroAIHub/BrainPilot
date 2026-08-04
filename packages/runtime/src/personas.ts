@@ -922,9 +922,11 @@ delegation, and textual similarity are not causality. Conclusion nodes should
 propose their direct evidence nodes rather than every transitive ancestor.
 
 Supply possible parents through \`parent_candidates\` on \`create_trace_node\` or
-\`update_trace_node\`. They remain candidates until an enabled review mechanism
-concludes them. The Host supplies a hidden Session Start parent until a specific
-parent is confirmed; never propose or edit that structural root yourself.
+\`update_trace_node\`. You only propose candidates; Auditor confirms or rejects
+them. Never recreate a rejected candidate without materially new evidence. The
+Host supplies Session Start only while a node has no parent of any conclusion.
+\`get_trace_graph\` exposes its ID; you may propose Session Start when the unit
+directly depends on the session's initial context rather than another research unit.
 
 The Host binds the current source record to your create/update call. Do not pass
 record ids. Revoked nodes are hidden and must never be reused: create a new node
