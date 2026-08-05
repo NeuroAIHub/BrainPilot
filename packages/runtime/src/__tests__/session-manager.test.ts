@@ -168,16 +168,16 @@ describe("SessionManager (mock mode)", () => {
     expect(PERSONAS.experimentalist).toContain("long-running training");
   });
 
-  it("routes PI and expert results directly through the Auditor feedback loop", () => {
-    expect(PERSONAS.principal).toContain("intermediate result audit");
-    expect(PERSONAS.principal).toContain("never ask the user to relay it");
-    expect(PERSONAS.principal).toContain("request another audit");
+  it("routes expert outputs through writer drafts before audit", () => {
+    expect(PERSONAS.principal).toContain("do NOT send raw expert output directly to the `auditor`");
+    expect(PERSONAS.principal).toContain("first form an auditable draft");
+    expect(PERSONAS.principal).toContain("`writer` to write or polish a report");
+    expect(PERSONAS.principal).toContain("Do not audit raw expert output.");
     expect(PERSONAS.librarian).toContain("## Writer handoff packet");
     expect(PERSONAS.experimentalist).toContain("## Writer handoff packet");
     expect(PERSONAS.engineer).toContain("## Writer handoff packet");
     expect(PERSONAS.writer).not.toContain("## Writer handoff packet");
-    expect(PERSONAS.auditor).toContain("Raw expert output is a valid intermediate audit target");
-    expect(PERSONAS.auditor).toContain("Send actionable findings directly to PI");
+    expect(PERSONAS.auditor).toContain("If PI gives you only raw expert output");
     expect(PERSONAS.auditor).not.toContain("## Writer handoff packet");
     expect(PERSONAS.trace).not.toContain("## Writer handoff packet");
   });

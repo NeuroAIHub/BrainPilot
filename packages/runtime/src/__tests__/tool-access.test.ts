@@ -62,11 +62,6 @@ describe("tool access control (§9)", () => {
     await expect(dispatch.execute({ to: "engineer", content: "self" })).resolves.toMatchObject({ isError: true });
     await expect(dispatch.execute({ to: "trace", content: "wrong" })).resolves.toMatchObject({ isError: true });
 
-    const auditorDeps = deps("auditor");
-    const auditorDispatch = createDispatchTaskTool(auditorDeps);
-    await expect(auditorDispatch.execute({ to: "principal", content: "Audit found a blocking flaw." }))
-      .resolves.not.toMatchObject({ isError: true });
-
     const complete = createCompleteTaskTool(d);
     expect((complete.parameters.required as string[])).toEqual(["task_id", "reply"]);
     expect((await complete.execute({ task_id: "task_000001", reply: "done" })).isError).toBeUndefined();
@@ -218,7 +213,6 @@ describe("tool access control (§9)", () => {
     const names = systemToolNamesForRole("expert", "auditor");
     expect(names.sort()).toEqual(
       [
-        "dispatch_task",
         "complete_task",
         "list_pending_trace_reviews",
         "get_trace_node",
@@ -278,9 +272,7 @@ describe("tool access control (§9)", () => {
     expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
     await tools.get("submit_audit_report")!.execute({ risk: "low", summary: "Evidence is consistent.", report: "# Audit\nEvidence is consistent." });
     expect(d.trace.getAuditReports()).toContainEqual(expect.objectContaining({ kind: "trace", target: { nodeId: node.id } }));
-    expect(tools.has("dispatch_task")).toBe(true);
-    await expect(tools.get("dispatch_task")!.execute({ to: "principal", content: "Bound review result" }))
-      .resolves.toMatchObject({ isError: true });
+    expect(tools.has("dispatch_task")).toBe(false);
   });
 
   it("requires confidence and returns only a compact active graph to Trace", async () => {

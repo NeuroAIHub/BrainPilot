@@ -204,9 +204,9 @@ Stale local routing rule.`;
     // Bash is filesystem-inspection only
     expect(a).toContain("filesystem inspection");
     expect(a).toContain("grep");
-    // Audit reports are persisted without granting workspace write access.
-    expect(a).toContain("submit_audit_report");
-    expect(a).toContain("Report directly to PI");
+    // Audit report path discipline
+    expect(a).toContain(".audit/");
+    expect(a).toContain("ISO8601");
     // Followup limit (2 different agents) — robust to whitespace/newline.
     expect(a.toLowerCase()).toMatch(/two different\s+agents/);
     // And the explicit "2 different agents" cap line.
