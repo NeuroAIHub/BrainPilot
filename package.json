@@ -26,6 +26,7 @@
     "docs:dev": "npm run dev -w @brainpilot/docs --",
     "typecheck": "tsc -b packages/plugin-sdk packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
     "test": "vitest run",
+    "test:datasets": "npm run build -w @brainpilot/backend-core && node scripts/test-public-dataset-downloads.mjs",
     "test:watch": "vitest",
     "bp": "node packages/cli/dist/bin.js",
     "version:sync": "node scripts/sync-versions.js",
