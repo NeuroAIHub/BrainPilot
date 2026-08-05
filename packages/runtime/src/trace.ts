@@ -418,6 +418,11 @@ export class GraphOfTrace {
     if (!existing && this.wouldCreateCycle(parentNodeId, childNodeId)) return false;
     const before = existing ? clone(existing) : undefined;
     if (existing) {
+      if (
+        existing.conclusion === "confirmed" &&
+        existing.reason === reason &&
+        existing.origin !== "host_fallback"
+      ) return true;
       if (existing.conclusion === "candidate" && existing.reason === reason && existing.origin === "trace") return true;
       existing.conclusion = "candidate";
       existing.reason = reason;

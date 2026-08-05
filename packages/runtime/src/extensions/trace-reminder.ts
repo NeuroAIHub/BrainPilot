@@ -59,6 +59,9 @@ const NON_TRACE_TOOLS = new Set([
   "create_agent",
   "destroy_agent",
   "get_trace_graph",
+  "get_trace_node",
+  "get_trace_neighborhood",
+  "get_trace_diff",
 ]);
 
 const SYS = (kind: string, body: string): string =>
