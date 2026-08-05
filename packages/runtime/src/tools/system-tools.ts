@@ -133,9 +133,6 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       if (deps.fromAgent === "auditor" && deps.currentTraceAuditTarget?.()) {
         return { ...ok("A bound GoT audit is a single-turn review and cannot delegate tasks"), isError: true };
       }
-      if (deps.fromAgent === "auditor" && to === "principal") {
-        return { ...ok("Auditor reports are user-gated and cannot be sent directly to PI"), isError: true };
-      }
       await deps.ensureAgent(to);
       try {
         const task = await deps.dispatchTask(to, content);
@@ -783,7 +780,7 @@ export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
 export function createSubmitAuditReportTool(deps: ToolDeps): SystemTool {
   return {
     name: "submit_audit_report",
-    description: "Persist the completed audit for the user. This never notifies PI.",
+    description: "Persist the completed audit for inspection. For an assigned deliverable audit, also use complete_task to send actionable findings directly to PI.",
     parameters: {
       type: "object",
       properties: {
@@ -923,9 +920,11 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
-  // Auditor gets bounded Trace readers, review-only mutation tools, and
-  // isolated leaf workers. It cannot mutate ordinary Trace nodes.
+  // Auditor gets direct task communication, bounded Trace readers,
+  // review-only mutation tools, and isolated leaf workers. It cannot mutate
+  // ordinary Trace nodes. Bound GoT turns reject dispatch at execution time.
   auditor: [
+    "dispatch_task",
     "complete_task",
     "spawn_subagent",
     "wait_subagent",
@@ -997,7 +996,7 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],
   // Auditor: read-only inspection. Reports are persisted through the
-  // user-gated submit_audit_report tool; no workspace write/edit access.
+  // submit_audit_report tool; no workspace write/edit access.
   // `bash` is included for
   // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
   // enforced by the auditor persona, not by the tool whitelist.
