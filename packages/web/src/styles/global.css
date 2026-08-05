@@ -1909,6 +1909,14 @@ button {
   background: var(--accent-soft, rgba(99, 102, 241, 0.12));
   color: var(--accent-strong, inherit);
 }
+.composer__attachment-preview {
+  width: 28px;
+  height: 28px;
+  margin: -1px 1px -1px -5px;
+  border-radius: 999px;
+  object-fit: cover;
+  background: var(--surface-2, rgba(127, 127, 127, 0.12));
+}
 .composer__chip-name {
   overflow: hidden;
   text-overflow: ellipsis;
