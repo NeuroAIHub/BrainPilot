@@ -140,16 +140,17 @@ describe("SessionManager (mock mode)", () => {
     expect(PERSONAS.experimentalist).toContain("long-running training");
   });
 
-  it("routes expert outputs through writer drafts before audit", () => {
-    expect(PERSONAS.principal).toContain("do NOT send raw expert output directly to the `auditor`");
-    expect(PERSONAS.principal).toContain("first form an auditable draft");
-    expect(PERSONAS.principal).toContain("`writer` to write or polish a report");
-    expect(PERSONAS.principal).toContain("Do not audit raw expert output.");
+  it("routes PI and Expert results through the audit feedback skill", () => {
+    expect(PERSONAS.principal).toContain("`audit-feedback-loop` skill");
+    expect(PERSONAS.principal).toContain("valid intermediate audit target");
+    expect(PERSONAS.principal).toContain("never ask the user to relay them");
     expect(PERSONAS.librarian).toContain("## Writer handoff packet");
     expect(PERSONAS.experimentalist).toContain("## Writer handoff packet");
     expect(PERSONAS.engineer).toContain("## Writer handoff packet");
     expect(PERSONAS.writer).not.toContain("## Writer handoff packet");
-    expect(PERSONAS.auditor).toContain("If PI gives you only raw expert output");
+    expect(PERSONAS.auditor).toContain("`audit-feedback-loop` skill");
+    expect(PERSONAS.auditor).toContain("Raw Expert output is a valid");
+    expect(PERSONAS.auditor).toContain("directly to PI");
     expect(PERSONAS.auditor).not.toContain("## Writer handoff packet");
     expect(PERSONAS.trace).not.toContain("## Writer handoff packet");
   });

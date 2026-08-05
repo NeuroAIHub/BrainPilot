@@ -209,7 +209,6 @@ describe("tool access control (§9)", () => {
         "get_trace_neighborhood",
         "get_trace_diff",
         "edit_trace_review",
-        "submit_audit_report",
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
@@ -227,11 +226,12 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("destroy_agent");
   });
 
-  it("auditor builtins are read-only and reports use a system tool", () => {
+  it("auditor builtins are read-only and separate report submission is disabled", () => {
     const a = builtinToolNamesForRole("expert", "auditor");
     expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash"]));
     expect(a).not.toContain("write");
     expect(a).not.toContain("edit");
+    expect(systemToolNamesForRole("expert", "auditor")).not.toContain("submit_audit_report");
   });
 
   it("lets Auditor list pending node and parent reviews without rebinding", async () => {
@@ -250,7 +250,7 @@ describe("tool access control (§9)", () => {
     expect(d.currentTraceAuditTarget).toBeUndefined();
   });
 
-  it("binds Auditor targets in the Host and persists a report", async () => {
+  it("binds Auditor targets in the Host without exposing report submission", async () => {
     const d = deps("auditor");
     const node = d.trace.createNode({ title: "Conclusion", confidence: "medium", confidenceReason: "One result file." });
     const target = d.trace.listPendingAuditTargets()[0]!;
@@ -260,8 +260,8 @@ describe("tool access control (§9)", () => {
     expect((await tools.get("edit_trace_review")!.execute({ conclusion: "approve", reason: "The bound evidence supports this node." })).isError)
       .not.toBe(true);
     expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
-    await tools.get("submit_audit_report")!.execute({ risk: "low", summary: "Evidence is consistent.", report: "# Audit\nEvidence is consistent." });
-    expect(d.trace.getAuditReports()).toContainEqual(expect.objectContaining({ kind: "trace", target: { nodeId: node.id } }));
+    expect(tools.has("submit_audit_report")).toBe(false);
+    expect(d.trace.getAuditReports()).toEqual([]);
     expect(tools.has("dispatch_task")).toBe(false);
   });
 

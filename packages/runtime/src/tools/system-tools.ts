@@ -928,7 +928,6 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_trace_diff",
     // "search_trace", // temporarily disabled; see allSystemTools above
     "edit_trace_review",
-    "submit_audit_report",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
@@ -986,8 +985,8 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],
-  // Auditor: read-only inspection. Reports are persisted through the
-  // user-gated submit_audit_report tool; no workspace write/edit access.
+  // Auditor: read-only inspection. Deliverable audit findings return to PI
+  // through complete_task; no separate report tool or workspace write access.
   // `bash` is included for
   // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
   // enforced by the auditor persona, not by the tool whitelist.

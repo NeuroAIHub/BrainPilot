@@ -103,10 +103,10 @@ describe("personas", () => {
       "experimentalist",
       "engineer",
       "writer",
-      "auditor",
     ]) {
       expect(PERSONAS[name]!.match(/^## Handoffs$/gm), name).toHaveLength(1);
     }
+    expect(PERSONAS.auditor!).not.toContain("## Handoffs");
     expect(PERSONAS.trace!).not.toContain("## Handoffs");
     expect(personaFor("statistician", "expert").match(/^## Handoffs$/gm)).toHaveLength(1);
   });
@@ -160,7 +160,7 @@ Stale local routing rule.`;
     expect(p).toContain("MUST");
     expect(p).toContain("auditor");
     expect(p).toContain("expert deliverable");
-    expect(p).toContain("original user need");
+    expect(p).toContain("request template from `audit-feedback-loop`");
     expect(p).toContain("Do NOT personally perform fabrication/reliability audit");
     // The exemption clause keeps the audit out of pure conversational turns.
     expect(p.toLowerCase()).toContain("exemption");
@@ -170,7 +170,7 @@ Stale local routing rule.`;
     const p = PERSONAS.principal!;
     expect(p.toLowerCase()).toContain("leakage");
     expect(p.toLowerCase()).toContain("cross-validation");
-    expect(p).toContain("data-split");
+    expect(p).toContain("incremental re-review procedure");
   });
 
   it("principal and writer personas keep internal status out of user-facing prose", () => {
@@ -195,46 +195,24 @@ Stale local routing rule.`;
     expect(writer).toContain("ask the engineer");
   });
 
-  it("auditor persona constrains scope, bash, and followup count", () => {
+  it("auditor persona delegates workflow to the skill and keeps hard boundaries", () => {
     const a = PERSONAS.auditor!;
-    // Three claim categories explicitly named
-    expect(a.toLowerCase()).toContain("numeric");
-    expect(a.toLowerCase()).toContain("file");
-    expect(a.toLowerCase()).toContain("citation");
-    // Bash is filesystem-inspection only
+    expect(a).toContain("`audit-feedback-loop` skill");
+    expect(a).toContain("`complete_task`");
+    expect(a).toContain("directly to PI");
     expect(a).toContain("filesystem inspection");
     expect(a).toContain("grep");
-    // Audit report path discipline
-    expect(a).toContain(".audit/");
-    expect(a).toContain("ISO8601");
-    // Followup limit (2 different agents) — robust to whitespace/newline.
-    expect(a.toLowerCase()).toMatch(/two different\s+agents/);
-    // And the explicit "2 different agents" cap line.
-    expect(a).toMatch(/2 different agents/);
-    // Verdict vocabulary
-    expect(a).toContain("confirmed");
     expect(a).toContain("unverified");
-    expect(a).toContain("disputed");
-    // The persona deliberately tells the auditor it CANNOT call
-    // get_trace_graph (so the model doesn't try). Assert the explicit
-    // "cannot call" disclaimer rather than that the name is absent.
-    expect(a).toMatch(/cannot call\s+`?get_trace_graph`?/);
+    expect(a).toContain("`edit_trace_review`");
+    expect(a).not.toContain("submit_audit_report");
   });
 
-  it("auditor persona audits scientific-reliability defects, open-ended", () => {
+  it("auditor persona preserves evidence and reliability scope", () => {
     const a = PERSONAS.auditor!;
-    // Still an evidence/fabrication auditor …
-    expect(a.toLowerCase()).toContain("fabrication");
-    // … now also a bounded-but-open reliability reviewer.
+    expect(a.toLowerCase()).toContain("evidence");
     expect(a.toLowerCase()).toContain("reliability");
-    expect(a.toLowerCase()).toContain("leakage");
-    expect(a.toLowerCase()).toContain("baseline");
-    expect(a.toLowerCase()).toContain("metric");
-    // Reliability verdict vocabulary.
-    expect(a).toContain("concern");
-    expect(a).toContain("flaw");
-    // Scope is explicitly non-exhaustive.
-    expect(a.toLowerCase()).toMatch(/not exhaustive|including but not limited/);
+    expect(a).toContain("Never rerun experiments");
+    expect(a).toMatch(/not\s+novelty/);
   });
 
   it("authoring experts mention their write/run capability", () => {

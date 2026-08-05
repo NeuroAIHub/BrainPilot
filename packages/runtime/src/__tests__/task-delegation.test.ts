@@ -94,6 +94,42 @@ describe("flat task delegation", () => {
     expect(prompts.filter((prompt) => prompt.agent === "principal")).toHaveLength(2);
   });
 
+  it("returns Auditor findings directly to PI for a correction cycle", async () => {
+    const prompts: Array<{ agent: string; text: string }> = [];
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: scriptedFactory({
+        principal: { onPrompt: (text) => text === "AUDIT" ? {
+          tool: "dispatch_task",
+          args: {
+            to: "auditor",
+            content: "Target type: expert-result\nTarget: raw engineer result\nClaims: accuracy = 0.94",
+          },
+        } : undefined },
+        auditor: { onPrompt: (text) => {
+          const id = text.match(/task_id="(task_\d+)"/)?.[1];
+          return id ? {
+            tool: "complete_task",
+            args: {
+              task_id: id,
+              reply: "Verdict: revise\nA1 owner: engineer\nRequired change: cite the result file.",
+            },
+          } : undefined;
+        } },
+      }, prompts),
+    });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "AUDIT");
+    await waitFor(() => prompts.filter((prompt) => prompt.agent === "principal").length >= 2);
+
+    const auditPrompt = prompts.find((prompt) => prompt.agent === "auditor")!;
+    expect(auditPrompt.text).toContain("Target: raw engineer result");
+    const piFeedback = prompts.filter((prompt) => prompt.agent === "principal")[1]!;
+    expect(piFeedback.text).toContain('<task_event kind="completed" task_id="task_000001" from="auditor">');
+    expect(piFeedback.text).toContain("A1 owner: engineer");
+    expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "completed", assigned_to: "auditor" });
+  });
+
   it("keeps direct user-to-agent prompts outside the task event path", async () => {
     const prompts: Array<{ agent: string; text: string }> = [];
     const manager = new SessionManager({ persist: false, agentFactory: scriptedFactory({ librarian: {} }, prompts) });
