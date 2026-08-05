@@ -449,5 +449,9 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(agent.status).toBe("error");
     const types = captured.map((e) => e.type);
     expect(types).toContain("TEXT_MESSAGE_END"); // bubble still closed cleanly
+    expect(types).toContain("RUN_ERROR");
+    expect(types).not.toContain("RUN_FINISHED");
+    const runError = captured.find((e) => e.type === "RUN_ERROR") as { message?: string } | undefined;
+    expect(runError?.message).toMatch(/404.*no route/i);
   });
 });
