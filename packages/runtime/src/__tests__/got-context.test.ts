@@ -49,6 +49,24 @@ describe("GoT ephemeral context", () => {
     expect(block).not.toContain('"type":"session_start"');
   });
 
+  it("renders an explicit empty active graph", () => {
+    const trace = new GraphOfTrace("s");
+    const block = renderPrincipalGoTContext(trace.getGraphV2());
+    expect(block).toContain(`revision="${trace.getGraphV2().revision}"`);
+    expect(block).toContain("<active_nodes>\n</active_nodes>");
+  });
+
+  it("omits parent links to revoked nodes from the compact graph", () => {
+    const trace = new GraphOfTrace("s");
+    const parent = trace.createNode({ title: "Revoked evidence" });
+    const child = trace.createNode({ title: "Conclusion" });
+    trace.proposeCausalParent(child.id, parent.id, "consumed evidence", { type: "agent", name: "trace" });
+    trace.updateNode(parent.id, { revoked: true }, { type: "agent", name: "trace" });
+    const block = renderPrincipalGoTContext(trace.getGraphV2());
+    expect(block).toContain(`"id":"${child.id}"`);
+    expect(block).not.toContain(`"nodeId":"${parent.id}"`);
+  });
+
   it("injects a fresh block and strips an older ephemeral snapshot", () => {
     let block = '<graph_of_trace revision="1">old</graph_of_trace>';
     const { pi, fire } = fakePi();

@@ -52,7 +52,11 @@ function shorten(value: string | undefined, max: number): string | undefined {
   return value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`;
 }
 
-function compactNode(node: TraceNodeV2, rootId: string | undefined): Record<string, unknown> {
+function compactNode(
+  node: TraceNodeV2,
+  rootId: string | undefined,
+  activeIds: ReadonlySet<string>,
+): Record<string, unknown> {
   return {
     id: node.id,
     title: node.title,
@@ -63,7 +67,10 @@ function compactNode(node: TraceNodeV2, rootId: string | undefined): Record<stri
     reviewConclusion: node.reviewConclusion,
     updatedAt: node.updatedAt,
     parents: node.parents
-      .filter((parent) => parent.nodeId !== rootId || parent.origin === "trace")
+      .filter((parent) =>
+        activeIds.has(parent.nodeId) ||
+        (parent.nodeId === rootId && parent.origin === "trace"),
+      )
       .map((parent) => ({
         nodeId: parent.nodeId,
         conclusion: parent.conclusion,
@@ -76,10 +83,11 @@ function compactNode(node: TraceNodeV2, rootId: string | undefined): Record<stri
 function compactGraphLines(graph: TraceGraphV2, maxChars: number): string[] {
   const rootId = graph.meta.rootNodeId;
   const nodes = graph.nodes.filter((node) => !node.revoked && node.id !== rootId);
+  const activeIds = new Set(nodes.map((node) => node.id));
   const lines: string[] = [];
   let used = 0;
   for (const node of nodes) {
-    const line = JSON.stringify(compactNode(node, rootId));
+    const line = JSON.stringify(compactNode(node, rootId, activeIds));
     if (used + line.length + 1 > maxChars) break;
     lines.push(line);
     used += line.length + 1;
@@ -96,8 +104,6 @@ export function renderPrincipalGoTContext(
   maxChars = 24_000,
 ): string {
   const rootId = graph.meta.rootNodeId;
-  const active = graph.nodes.filter((node) => !node.revoked && node.id !== rootId);
-  if (active.length === 0) return "";
   const header = [
     `<graph_of_trace revision="${graph.revision}" root_node_id="${rootId ?? ""}">`,
     "This is the current compact Graph of Trace. Use it when planning, synthesizing expert results, handling new evidence, and checking whether work already exists.",

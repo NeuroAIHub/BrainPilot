@@ -61,7 +61,18 @@ function runOnce(
 }
 
 describe("trace-reminder: event-driven trace gating", () => {
-  it.each(["read", "grep", "glob", "ls", "find", "skill_search"])(
+  it.each([
+    "read",
+    "grep",
+    "glob",
+    "ls",
+    "find",
+    "skill_search",
+    "get_trace_graph",
+    "get_trace_node",
+    "get_trace_neighborhood",
+    "get_trace_diff",
+  ])(
     "read-only/lookup tool %s does not arm a trace reminder",
     (tool) => expect(runOnce("principal", [tool]).kinds).toEqual([]),
   );

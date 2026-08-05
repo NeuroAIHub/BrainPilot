@@ -100,6 +100,39 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     ]);
   });
 
+  it("keeps an already confirmed explicit parent idempotent", () => {
+    const graph = new GraphOfTrace("s");
+    const parent = graph.createNode({ title: "Evidence" });
+    const child = graph.createNode({ title: "Conclusion" });
+    const reason = "Evidence directly supports the conclusion.";
+    expect(graph.proposeCausalParent(
+      child.id,
+      parent.id,
+      reason,
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.review(
+      child.id,
+      "approve",
+      reason,
+      { type: "agent", name: "auditor" },
+      parent.id,
+    )).toBe(true);
+
+    expect(graph.proposeCausalParent(
+      child.id,
+      parent.id,
+      reason,
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.getNodeV2(child.id)?.parents).toContainEqual(
+      expect.objectContaining({ nodeId: parent.id, conclusion: "confirmed", origin: "trace" }),
+    );
+    expect(graph.listPendingAuditTargets([child.id])).not.toContainEqual(
+      expect.objectContaining({ parentNodeId: parent.id }),
+    );
+  });
+
   it("does not restore the Host root fallback while any non-root parent state exists", () => {
     const graph = new GraphOfTrace("s");
     const rootId = graph.getGraphV2().meta.rootNodeId!;
