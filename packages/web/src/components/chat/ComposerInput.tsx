@@ -1,8 +1,9 @@
 import { useEffect, useId, useMemo, useRef, useState } from "react";
-import type { KeyboardEvent, ChangeEvent, SyntheticEvent } from "react";
+import type { KeyboardEvent, ChangeEvent, ClipboardEvent, SyntheticEvent } from "react";
 import { useDraft } from "../../contexts/draftStore";
 import { useT } from "../../i18n/useT";
 import { MentionPicker } from "./MentionPicker";
+import { extractClipboardImages } from "./clipboardImages";
 import {
   applyMention,
   buildMentionItems,
@@ -28,6 +29,8 @@ interface ComposerInputProps {
   ariaLabel: string;
   /** MCP + file sources for `@` mentions (#316). Optional for standalone use. */
   mentionSources?: MentionSources;
+  /** Receives image files physically present in a paste event. */
+  onPasteImages?: (files: File[]) => void;
 }
 
 /**
@@ -49,6 +52,7 @@ export function ComposerInput({
   placeholder,
   ariaLabel,
   mentionSources,
+  onPasteImages,
 }: ComposerInputProps) {
   const t = useT();
   const [draft, setDraft] = useDraft(sessionId);
@@ -215,6 +219,16 @@ export function ComposerInput({
     setMention(null);
   };
 
+  const handlePaste = (event: ClipboardEvent<HTMLTextAreaElement>) => {
+    if (!onPasteImages) return;
+    const images = extractClipboardImages(event.clipboardData);
+    if (images.length === 0) return;
+    // Image clipboard payloads often also contain an HTML/text fallback. Once
+    // the actual image is accepted, do not paste that fallback into the draft.
+    event.preventDefault();
+    onPasteImages(images);
+  };
+
   const activeOptionId =
     menuOpen && activeIndex >= 0 && items[activeIndex]
       ? `${listboxId}-${activeIndex}`
@@ -236,6 +250,7 @@ export function ComposerInput({
         onClick={handleSelect}
         onKeyUp={handleSelect}
         onBlur={handleBlur}
+        onPaste={handlePaste}
         placeholder={placeholder}
         role="combobox"
         aria-autocomplete="list"

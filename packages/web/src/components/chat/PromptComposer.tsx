@@ -13,6 +13,7 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
+import { renamePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
@@ -37,6 +38,18 @@ type ComposerUploadState = {
   percent: number | null;
   phase: UploadProgress["phase"];
 };
+
+type ComposerAttachment = {
+  name: string;
+  type?: string;
+  previewUrl?: string;
+};
+
+function revokeAttachmentPreview(attachment: ComposerAttachment): void {
+  if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
 
 type PromptComposerProps = {
   /** Open Settings deep-linked to the Providers tab — wired to the
@@ -72,7 +85,8 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // present; only this composer UI was removed in #160. It now lives in the
   // left tool cluster, not the send cluster guarded by composerSendTools.test.)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [attachments, setAttachments] = useState<string[]>([]);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const attachmentsRef = useRef<ComposerAttachment[]>([]);
   // #305: replace boolean busy with full progress UI state; null = idle.
   const [uploadState, setUploadState] = useState<ComposerUploadState | null>(null);
   const uploadAbortRef = useRef<AbortController | null>(null);
@@ -89,6 +103,15 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => () => {
+    uploadAbortRef.current?.abort();
+    attachmentsRef.current.forEach(revokeAttachmentPreview);
+  }, []);
 
   // #316: sources for the `@` mention picker. Loaded here (not in ComposerInput)
   // so keystroke state stays off this render path; only status flips re-render.
@@ -411,7 +434,9 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     // #47: if files were uploaded this turn, prepend a notice so the agent knows
     // they exist in its workspace and can `read` them. Cleared after send.
     const notice =
-      attachments.length > 0 ? `${t("chat.upload.notice", { names: attachments.join(", ") })}\n\n` : "";
+      attachments.length > 0
+        ? `${t("chat.upload.notice", { names: attachments.map((item) => item.name).join(", ") })}\n\n`
+        : "";
     const sentAttachments = attachments;
     if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
@@ -430,6 +455,8 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
       if (sentAttachments.length > 0) {
         setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
       }
+    } else {
+      sentAttachments.forEach(revokeAttachmentPreview);
     }
   };
 
@@ -444,7 +471,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // #305: sequential multi-file with progress + cancel (one AbortController for
   // the whole batch). Abort is not treated as a failure toast; successful chips
   // already added are kept.
-  const handleFilesChosen = async (files: FileList | null) => {
+  const handleFilesChosen = async (files: FileList | readonly File[] | null) => {
     if (!files || files.length === 0) return;
     const uploadId = currentSession?.id ?? currentSandbox?.id;
     if (!uploadId) return;
@@ -474,7 +501,22 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             );
           },
         });
-        setAttachments((prev) => (prev.includes(file.name) ? prev : [...prev, file.name]));
+        const previewUrl = file.type.startsWith("image/")
+          && typeof URL !== "undefined"
+          && typeof URL.createObjectURL === "function"
+          ? URL.createObjectURL(file)
+          : undefined;
+        const attachment: ComposerAttachment = {
+          name: file.name,
+          type: file.type || undefined,
+          previewUrl,
+        };
+        setAttachments((prev) => {
+          const existing = prev.find((item) => item.name === attachment.name);
+          if (!existing) return [...prev, attachment];
+          if (existing.previewUrl !== attachment.previewUrl) revokeAttachmentPreview(existing);
+          return prev.map((item) => item.name === attachment.name ? attachment : item);
+        });
       }
     } catch (e) {
       if (!isUploadAbortError(e)) {
@@ -490,6 +532,25 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
 
   const cancelUpload = () => {
     uploadAbortRef.current?.abort();
+  };
+
+  const handlePastedImages = (images: File[]) => {
+    const renamed = renamePastedImages(images, attachments.map((item) => item.name));
+    void handleFilesChosen(renamed);
+  };
+
+  const removeAttachment = (name: string) => {
+    setAttachments((prev) => {
+      const removed = prev.find((item) => item.name === name);
+      if (removed) revokeAttachmentPreview(removed);
+      return prev.filter((item) => item.name !== name);
+    });
+    const uploadId = currentSession?.id ?? currentSandbox?.id;
+    if (!uploadId) return;
+    void api.sandbox.deleteFile(uploadId, `/attachments/${name}`).catch((e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      setComposerError(t("chat.upload.removeFailed", { msg }));
+    });
   };
 
   // Writes to the draft store from non-text controls (slash command picks,
@@ -576,6 +637,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             placeholder={composerPlaceholder}
             ariaLabel={t("chat.srAsk")}
             mentionSources={mentionSources}
+            onPasteImages={handlePastedImages}
           />
 
           {attachments.length > 0 || uploadState ? (
@@ -584,15 +646,23 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                 <Paperclip size={11} />
                 {t("chat.attachments.label")}
               </span>
-              {attachments.map((name) => (
-                <span className="composer__chip composer__chip--attachment" key={name}>
-                  <Paperclip size={12} />
-                  <span className="composer__chip-name">{name}</span>
+              {attachments.map((attachment) => (
+                <span className="composer__chip composer__chip--attachment" key={attachment.name}>
+                  {attachment.previewUrl ? (
+                    <img
+                      className="composer__attachment-preview"
+                      src={attachment.previewUrl}
+                      alt=""
+                    />
+                  ) : (
+                    <Paperclip size={12} />
+                  )}
+                  <span className="composer__chip-name">{attachment.name}</span>
                   <button
                     type="button"
                     className="composer__chip-remove"
                     aria-label={t("chat.aria.removeAttachment")}
-                    onClick={() => setAttachments((prev) => prev.filter((n) => n !== name))}
+                    onClick={() => removeAttachment(attachment.name)}
                   >
                     <X size={12} />
                   </button>
