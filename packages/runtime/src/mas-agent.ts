@@ -536,6 +536,9 @@ export class MasAgent {
       // `abort()`'s own cleanup path (see abort()); if we reach here with a
       // clean or error path, either way we have a well-formed snapshot.
       this.emitRunStats(runOutcome);
+      // Pi drains accepted follow-ups before the run terminates. Anything left
+      // here was cancelled or never injected and must not leak into a later run.
+      this.pendingFollowUps = [];
       this.currentRunId = undefined;
       this.currentMessageId = undefined;
       this.runStartSnapshot = undefined;
@@ -600,6 +603,7 @@ export class MasAgent {
       /* prompt() is error-isolated; nothing to surface */
     }
     this.finishDanglingTools("task_interrupted");
+    this.pendingFollowUps = [];
     // Keep abortRequested true until prompt() has fully unwound so both Pi's
     // resolving and rejecting abort paths are recorded as "aborted". A future
     // prompt resets it synchronously at run start.
@@ -607,6 +611,7 @@ export class MasAgent {
   }
 
   stop(): void {
+    this.pendingFollowUps = [];
     this.unsubscribe();
     this.session.dispose();
     this.finishDanglingTools("agent_interrupted");

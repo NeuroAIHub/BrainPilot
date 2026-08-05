@@ -107,7 +107,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   );
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
-  const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
+  const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
 
   // #316: sources for the `@` mention picker. Loaded here (not in ComposerInput)
   // so keystroke state stays off this render path; only status flips re-render.
@@ -432,6 +432,16 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
       return { ...current, [sessionId]: next };
     });
   }, [messages, sessionId, queuedPrompts.length]);
+
+  // Pi consumes every accepted follow-up before the foreground run ends. If a
+  // run terminates with a queued chip still visible, it was cancelled/rejected.
+  useEffect(() => {
+    if (!sessionId || runActive) return;
+    setQueuedPromptsBySession((current) => {
+      if ((current[sessionId] ?? []).length === 0) return current;
+      return { ...current, [sessionId]: [] };
+    });
+  }, [runActive, sessionId, queuedPrompts.length]);
 
   // #99: whole-turn timer — spans user input → every agent finished (runState
   // settles false), debounced against hook/system re-wakes.

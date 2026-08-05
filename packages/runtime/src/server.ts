@@ -529,8 +529,20 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
 // main-module check so it works on Windows too — a naive `file://${argv[1]}`
 // never matches import.meta.url there (backslashes, drive letter, file:///).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void startServer().then(({ port }) => {
+  void startServer().then((running) => {
     // eslint-disable-next-line no-console
-    console.log(`[runtime] listening on :${port} (mock=${process.env.BP_MOCK ?? "0"})`);
+    console.log(`[runtime] listening on :${running.port} (mock=${process.env.BP_MOCK ?? "0"})`);
+    let stopping = false;
+    const stop = async (): Promise<void> => {
+      if (stopping) return;
+      stopping = true;
+      try {
+        await running.manager.emergencySaveAll();
+      } finally {
+        await running.close();
+      }
+    };
+    process.once("SIGTERM", () => void stop());
+    process.once("SIGINT", () => void stop());
   });
 }
