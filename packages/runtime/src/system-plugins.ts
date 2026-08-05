@@ -2,7 +2,9 @@ import { createRequire } from "node:module";
 import { dirname, isAbsolute, relative, resolve } from "node:path";
 import { readFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
+import { fileURLToPath } from "node:url";
 import {
+  isBrainPilotVersionCompatible,
   parsePublishablePluginManifest,
   type AgentInstructionContribution,
   type PluginManifest,
@@ -14,6 +16,7 @@ export const SYSTEM_PLUGIN_DISABLE_ENV = "BP_EXPERIMENT_DISABLE_PLUGINS";
 
 export interface SystemPluginSnapshot {
   id: string;
+  /** Installed version resolved for this session; informational, not pinned. */
   version: string;
   enabled: boolean;
   reason: "default" | "experiment-override";
@@ -54,6 +57,9 @@ function safeEntry(root: string, entry: string): string {
 
 export function loadBundledSystemPlugins(
   env: Record<string, string | undefined> = process.env,
+  brainpilotVersion = JSON.parse(
+    readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), "../package.json"), "utf8"),
+  ).version as string,
 ): BundledSystemPlugin[] {
   const disabled = disabledPluginIds(env[SYSTEM_PLUGIN_DISABLE_ENV]);
   return SPECS.map((spec) => {
@@ -65,6 +71,12 @@ export function loadBundledSystemPlugins(
     if (!manifest) throw new Error(`invalid bundled system plugin: ${spec.packageName}`);
     if (pkg.version !== manifest.version) {
       throw new Error(`system plugin package/manifest version mismatch: ${spec.packageName}`);
+    }
+    if (!isBrainPilotVersionCompatible(manifest.engines?.brainpilot, brainpilotVersion)) {
+      throw new Error(
+        `system plugin ${manifest.id}@${manifest.version} requires BrainPilot ` +
+        `${manifest.engines?.brainpilot}, current ${brainpilotVersion}`,
+      );
     }
     for (const contribution of [
       ...(manifest.contributes?.skills ?? []),
@@ -102,7 +114,7 @@ function activePlugin(
 ): BundledSystemPlugin | undefined {
   const state = snapshot.find((plugin) => plugin.id === id && plugin.enabled);
   return state
-    ? plugins.find((plugin) => plugin.manifest.id === id && plugin.manifest.version === state.version)
+    ? plugins.find((plugin) => plugin.manifest.id === id)
     : undefined;
 }
 

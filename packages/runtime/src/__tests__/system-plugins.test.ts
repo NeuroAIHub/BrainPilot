@@ -19,6 +19,22 @@ describe("bundled system plugins", () => {
       .toContain("Auditor feedback loop");
   });
 
+  it("rejects a bundled plugin outside its declared BrainPilot range", () => {
+    expect(() => loadBundledSystemPlugins({}, "9.0.0")).toThrow(
+      /requires BrainPilot .* current 9\.0\.0/,
+    );
+  });
+
+  it("uses the current compatible plugin version for a stored assignment", async () => {
+    const plugins = loadBundledSystemPlugins({});
+    const stored = snapshotSystemPlugins(plugins).map((plugin) => ({
+      ...plugin,
+      version: "0.0.1",
+    }));
+    expect(await systemPluginInstructions(plugins, stored, "principal"))
+      .toEqual(expect.arrayContaining([expect.stringContaining("Auditor feedback loop")]));
+  });
+
   it("removes all Auditor contributions under the experiment override", async () => {
     const plugins = loadBundledSystemPlugins({
       BP_EXPERIMENT_DISABLE_PLUGINS: AUDITOR_PLUGIN_ID,

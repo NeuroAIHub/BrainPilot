@@ -68,6 +68,29 @@ export function withLanguageDirective(persona: string): string {
 }
 
 /**
+ * Remove Auditor instructions that older BrainPilot releases scaffolded into
+ * editable on-disk personas. The current system plugin appends the maintained
+ * contract afterwards; stripping only these known legacy blocks preserves all
+ * unrelated user customization and prevents two conflicting audit protocols.
+ */
+export function withoutLegacyAuditorInstructions(persona: string): string {
+  return persona
+    .replace(
+      /Do NOT personally perform fabrication\/reliability audit on expert claims\.[\s\S]*?Pre-delivery audit below when the draft contains hard claims\.\r?\n\r?\n/,
+      "",
+    )
+    .replace(
+      /\r?\n## Pre-delivery audit \(mandatory\)\r?\n[\s\S]*?(?=\r?\n## User-facing communication style(?:\r?\n|$))/,
+      "\n",
+    )
+    .replace(" Auditor review is independent.", "")
+    .replace(
+      "You only propose candidates; Auditor confirms or rejects them. Never recreate a rejected candidate without materially new evidence.",
+      "They remain candidates until an enabled review mechanism concludes them.",
+    );
+}
+
+/**
  * Persistent cross-session storage directive (#257; flattened by #287). Your
  * working directory is the per-session workspace — anything there is scoped to
  * THIS session. A separate persistent root, given here as an absolute path, is

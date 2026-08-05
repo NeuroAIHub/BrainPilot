@@ -4,6 +4,7 @@ import {
   BUILTIN_PERSONA_NAMES,
   personaFor,
   sharedRootDirective,
+  withoutLegacyAuditorInstructions,
   withCoreCoordinationProtocols,
   withSharedRootDirective,
 } from "../personas.js";
@@ -187,6 +188,15 @@ Stale local routing rule.`;
     expect(a).toContain("System plugin agent");
     expect(a).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(a).not.toMatch(/reliability|audit-feedback-loop|edit_trace_review/i);
+  });
+
+  it("neutralizes legacy Trace Auditor wording without removing other guidance", () => {
+    const legacy = `Keep this custom guidance. Auditor review is independent.\n\n` +
+      "You only propose candidates; Auditor confirms or rejects them. Never recreate a rejected candidate without materially new evidence.";
+    const migrated = withoutLegacyAuditorInstructions(legacy);
+    expect(migrated).toContain("Keep this custom guidance.");
+    expect(migrated).not.toContain("Auditor review is independent");
+    expect(migrated).toContain("enabled review mechanism");
   });
 
   it("authoring experts mention their write/run capability", () => {

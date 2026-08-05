@@ -62,6 +62,7 @@ import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
   personaFor,
   withLanguageDirective,
+  withoutLegacyAuditorInstructions,
   withCoreCoordinationProtocols,
   withPersistentRootDirective,
   withSharedRootDirective,
@@ -1253,7 +1254,7 @@ export class SessionManager {
     // #97: append the language-following directive here (not in the persona text
     // / on-disk prompt.md) so it also reaches users who scaffolded earlier, and
     // applies whether the persona came from disk or the built-in constant.
-    const selected = base ?? personaFor(name, role);
+    const selected = withoutLegacyAuditorInstructions(base ?? personaFor(name, role));
     let filtered = selected;
     if (domainResources === "base") {
       // Stronger isolation: no skills, no router, no local KB instructions.
@@ -3257,6 +3258,9 @@ export class SessionManager {
   private resolveSessionSystemPlugins(
     stored?: readonly SystemPluginSnapshot[],
   ): SystemPluginSnapshot[] {
+    // Freeze only the experiment assignment. System plugins are shipped in
+    // lockstep with BrainPilot, so restored sessions use the currently
+    // installed compatible implementation and record its resolved version.
     return this.defaultSystemPlugins.map((current) => {
       const previous = stored?.find((plugin) => plugin.id === current.id);
       if (!previous || typeof previous.enabled !== "boolean") return { ...current };
