@@ -14,7 +14,7 @@ import { init } from "./commands/init.js";
 import { logs } from "./commands/logs.js";
 import { runList, runDiff, runReset } from "./commands/template.js";
 import { spawnDetachedBackend } from "./spawn-backend.js";
-import { pluginCreate, pluginPack, pluginTest, pluginValidate } from "./commands/plugin.js";
+import { pluginCreate, pluginImport, pluginPack, pluginTest, pluginValidate } from "./commands/plugin.js";
 
 /** Hooks injectable for tests so `run()` never touches a real server/process. */
 export interface ProgramDeps {
@@ -156,6 +156,17 @@ export function buildProgram(deps: ProgramDeps = {}): Command {
   const plugin = program
     .command("plugin")
     .description("Create, validate, test, and package BrainPilot plugins");
+
+  plugin
+    .command("import <directory>")
+    .option("--format <format>", "source format: auto | codex | claude-code | pi-package", "auto")
+    .option("-d, --dir <path>", "data directory (default ./brainpilot)")
+    .description("Import a local Codex, Claude Code, or Pi package")
+    .action(async (directory, opts) => {
+      const format = String(opts.format);
+      if (format !== "auto" && format !== "codex" && format !== "claude-code" && format !== "pi-package") throw new Error(`Invalid plugin format: ${format}`);
+      await pluginImport({ source: directory, dataDir: opts.dir, format });
+    });
 
   plugin
     .command("create <directory>")

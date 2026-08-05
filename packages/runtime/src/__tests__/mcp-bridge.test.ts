@@ -38,6 +38,34 @@ describe("loadMcpServersConfig", () => {
     const root = await mkdtemp(join(tmpdir(), "bp-mcp-"));
     expect(await loadMcpServersConfig(root)).toBeNull();
   });
+
+  it("merges enabled plugin MCP servers and injects plugin root aliases", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-plugin-"));
+    const pluginRoot = join(root, "plugins", "execution", "demo", "1.0.0");
+    const pluginData = join(root, "plugins", "data", "demo", "1.0.0");
+    const runtimeDir = join(root, "plugins", "runtime");
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(runtimeDir, { recursive: true });
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { memory: { command: "node", args: ["server.js"] } } }));
+    await writeFile(join(runtimeDir, "demo.json"), JSON.stringify({ schemaVersion: 1, id: "demo", version: "1.0.0", format: "claude-code", root: pluginRoot, dataDir: pluginData, mcpConfigPath }));
+    const cfg = await loadMcpServersConfig(root);
+    expect(cfg?.mcpServers.memory).toEqual(expect.objectContaining({ command: "node", env: expect.objectContaining({ PLUGIN_ROOT: pluginRoot, BRAINPILOT_PLUGIN_DATA: pluginData }) }));
+  });
+
+  it("rejects MCP server name conflicts between global and plugin configs", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-conflict-"));
+    const pluginRoot = join(root, "plugin");
+    const runtimeDir = join(root, "plugins", "runtime");
+    await mkdir(join(root, "bp_template"), { recursive: true });
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(runtimeDir, { recursive: true });
+    await writeFile(join(root, "bp_template", "mcp_servers.json"), JSON.stringify({ mcpServers: { duplicate: { command: "node" } } }));
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { duplicate: { command: "node" } } }));
+    await writeFile(join(runtimeDir, "demo.json"), JSON.stringify({ schemaVersion: 1, id: "demo", version: "1.0.0", format: "codex", root: pluginRoot, dataDir: join(root, "data"), mcpConfigPath }));
+    await expect(loadMcpServersConfig(root)).rejects.toThrow(/MCP server name conflict/);
+  });
 });
 
 describe("McpBridge", () => {

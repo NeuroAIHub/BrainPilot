@@ -70,6 +70,7 @@ import {
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { renderTaskListBlock } from "./extensions/task-context.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { loadCompatPluginProjections } from "./compat-hooks.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
 import { materializeKb } from "./materialize-kb.js";
@@ -817,6 +818,43 @@ export class SessionManager {
     return join(this.dataRoot, "bp_template", "agents", name, "prompt.md");
   }
 
+  /** BrainPilot-native compatibility projection; cross-host instructions use Agent Skills. */
+  private async loadAgentInstructionFragments(name: string, role: AgentRole): Promise<string[]> {
+    const root = join(this.dataRoot, "bp_template", "agent-instructions");
+    const matches: Array<{ priority: number; pluginId: string; contributionId: string; title: string; body: string }> = [];
+    let plugins: string[];
+    try { plugins = (await readdir(root)).sort(); } catch { return []; }
+    for (const pluginDir of plugins) {
+      let contributions: string[];
+      try { contributions = (await readdir(join(root, pluginDir))).sort(); } catch { continue; }
+      for (const contributionDir of contributions) {
+        const dir = join(root, pluginDir, contributionDir);
+        try {
+          const metadata = JSON.parse(await readFile(join(dir, "metadata.json"), "utf8")) as Record<string, unknown>;
+          const targets = Array.isArray(metadata.targets)
+            ? metadata.targets.filter((target): target is string => typeof target === "string")
+            : [];
+          if (!targets.includes("*") && !targets.includes(name) && !targets.includes(`role:${role}`)) continue;
+          const body = (await readFile(join(dir, "instructions.md"), "utf8")).trim();
+          if (!body) continue;
+          matches.push({
+            priority: typeof metadata.priority === "number" && Number.isFinite(metadata.priority) ? metadata.priority : 0,
+            pluginId: typeof metadata.pluginId === "string" ? metadata.pluginId : pluginDir,
+            contributionId: typeof metadata.contributionId === "string" ? metadata.contributionId : contributionDir,
+            title: typeof metadata.title === "string" ? metadata.title : contributionDir,
+            body,
+          });
+        } catch {
+          // Ignore incomplete projections; enable/disable reconciliation rewrites them atomically.
+        }
+      }
+    }
+    matches.sort((left, right) => left.priority - right.priority
+      || left.pluginId.localeCompare(right.pluginId)
+      || left.contributionId.localeCompare(right.contributionId));
+    return matches.map((item) => `## Plugin instruction: ${item.title}\n\n${item.body}`);
+  }
+
   /* ----------------------------- workspace files ----------------------------- */
 
   /**
@@ -1281,6 +1319,12 @@ export class SessionManager {
       // agents where it lives (absolute path) so they can read/use it as input.
       if (this.sharedDir) {
         persona = withSharedRootDirective(persona, this.sharedDir);
+      }
+      if (domainResources === "full") {
+        const pluginInstructions = await this.loadAgentInstructionFragments(name, role);
+        if (pluginInstructions.length) {
+          persona = `${persona.trim()}\n\n# Enabled plugin instructions\n\n${pluginInstructions.join("\n\n")}`;
+        }
       }
     }
     return persona;
@@ -2357,6 +2401,9 @@ export class SessionManager {
         skillSearchEnabled,
       ),
       skillPaths,
+      compatPluginProjections: name === "principal"
+        ? await loadCompatPluginProjections(this.dataRoot)
+        : undefined,
       // #346: map logical /workspace (and /data, …) onto durable roots so Pi
       // write/edit/bash do not land on the ephemeral container layer.
       managedPathRoots: {

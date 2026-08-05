@@ -27,6 +27,8 @@
     "typecheck": "tsc -b packages/plugin-sdk packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
     "test": "vitest run",
     "test:watch": "vitest",
+    "test:claude-mem": "bash scripts/test-claude-mem-plugin.sh",
+    "check:claude-mem-upstream": "bash scripts/check-claude-mem-upstream.sh",
     "bp": "node packages/cli/dist/bin.js",
     "version:sync": "node scripts/sync-versions.js",
     "version:check": "node scripts/sync-versions.js --check",

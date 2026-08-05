@@ -2,6 +2,7 @@ import { resolve } from "node:path";
 import { createRequire } from "node:module";
 import { createPreviewerPlugin, packPlugin, readPluginManifest } from "@brainpilot/plugin-sdk/node";
 import { testPlugin } from "@brainpilot/plugin-sdk/testing";
+import { importExternalPlugin, type ImportablePluginSourceFormat } from "@brainpilot/backend-core";
 
 const brainpilotVersion = (createRequire(import.meta.url)("../../package.json") as { version: string }).version;
 
@@ -27,4 +28,18 @@ export async function pluginTest(options: { dir: string; environment?: "local" |
   for (const issue of result.issues) log(`${issue.severity.toUpperCase()} ${issue.code}: ${issue.message}`);
   log(`Plugin conformance: ${result.status}`);
   if (result.status === "failed") throw new Error("plugin conformance failed");
+}
+
+export async function pluginImport(
+  options: { source: string; dataDir?: string; format?: ImportablePluginSourceFormat | "auto" },
+  log: (message: string) => void = console.log,
+): Promise<void> {
+  const installed = await importExternalPlugin(
+    resolve(options.dataDir ?? "./brainpilot"),
+    resolve(options.source),
+    options.format ?? "auto",
+    "local",
+  );
+  log(`Imported ${installed.manifest.id}@${installed.activeVersion} (${installed.sourceFormat})`);
+  if (installed.unsupported?.length) log(`Unsupported contributions: ${installed.unsupported.join(", ")}`);
 }

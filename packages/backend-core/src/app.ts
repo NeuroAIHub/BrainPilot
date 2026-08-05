@@ -65,6 +65,7 @@ import {
 import { computeKbInventory } from "./kb-inventory.js";
 import {
   installPlugin,
+  importExternalPlugin,
   listEnabledPreviewers,
   listInstalledPlugins,
   listMarketplace,
@@ -480,6 +481,21 @@ export function createApp(options: CreateAppOptions): Hono {
     try {
       const installed = await installPlugin(dataDir, body.id, typeof body.version === "string" ? body.version : undefined);
       return installed ? c.json(installed, 201) : c.json({ error: "plugin not found in marketplace" }, 404);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.post("/plugins/import", async (c) => {
+    const body = await safeJson(c);
+    const directory = typeof body.path === "string" ? body.path : "";
+    const format = body.format === undefined || body.format === "auto" ? "auto"
+      : body.format === "codex" || body.format === "claude-code" || body.format === "pi-package" ? body.format
+        : null;
+    if (!directory) return c.json({ error: "plugin path is required" }, 400);
+    if (!format) return c.json({ error: "format must be auto, codex, claude-code, or pi-package" }, 400);
+    try {
+      const environment = (options.env?.BP_LOCAL_MODE ?? process.env.BP_LOCAL_MODE) === "0" ? "cloud" as const : "local" as const;
+      return c.json(await importExternalPlugin(dataDir, directory, format, environment), 201);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }

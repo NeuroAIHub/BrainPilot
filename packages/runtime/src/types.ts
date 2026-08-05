@@ -182,6 +182,17 @@ export type AgentSessionFactory = (params: {
    * entry: `<dataRoot>/bp_template/skills`. Omitted by the mock factory.
    */
   skillPaths?: string[];
+  /** Enabled foreign-plugin lifecycle projections loaded for a new principal session. */
+  compatPluginProjections?: Array<{
+    schemaVersion: 1;
+    id: string;
+    version: string;
+    format: "pi-package" | "codex" | "claude-code";
+    root: string;
+    dataDir: string;
+    mcpConfigPath?: string;
+    hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+  }>;
   /**
    * #309: when true, register the router-skill-guard extension so generic file
    * tools cannot read `<dataRoot>/bp_template/skills-router`. Set when
