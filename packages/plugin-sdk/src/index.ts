@@ -31,7 +31,7 @@ export interface PluginDependency {
 }
 
 export interface EntryContribution { id: string; title: string; entry: string; }
-export interface SkillContribution extends EntryContribution { description?: string; }
+export interface SkillContribution extends EntryContribution { description?: string; targets?: string[]; }
 export interface KnowledgeBaseContribution extends EntryContribution { format?: "html" | "markdown" | "json"; }
 export interface PanelContribution extends EntryContribution { placement?: "marketplace" | "workspace"; }
 export interface LiteratureProviderContribution extends EntryContribution { format?: "html" | "csl-json"; }
@@ -217,8 +217,26 @@ export function parsePluginManifest(value: unknown): PluginManifest | null {
       if (!uniqueIds(previewers)) return null;
       contributes.previewers = previewers;
     }
+    if (value.contributes.skills !== undefined) {
+      if (!Array.isArray(value.contributes.skills)) return null;
+      const skills: SkillContribution[] = [];
+      for (const item of value.contributes.skills) {
+        if (!object(item) || typeof item.id !== "string" || !item.id.trim() || typeof item.entry !== "string" || !isSafePluginPath(item.entry)) return null;
+        const targets = item.targets === undefined ? undefined : stringArray(item.targets);
+        if (item.targets !== undefined && (!targets?.length || targets.some((target) => !target.trim()))) return null;
+        skills.push({
+          id: item.id,
+          title: typeof item.title === "string" && item.title.trim() ? item.title.trim() : item.id,
+          entry: item.entry,
+          ...(typeof item.description === "string" && item.description.trim() ? { description: item.description.trim() } : {}),
+          ...(targets ? { targets: [...new Set(targets.map((target) => target.trim()))] } : {}),
+        });
+      }
+      if (!uniqueIds(skills)) return null;
+      contributes.skills = skills;
+    }
     const entryGroups = [
-      ["skills", false], ["knowledgeBases", true], ["panels", true], ["literatureProviders", true], ["workflows", true],
+      ["knowledgeBases", true], ["panels", true], ["literatureProviders", true], ["workflows", true],
     ] as const;
     for (const [key, titleRequired] of entryGroups) {
       const group = value.contributes[key];

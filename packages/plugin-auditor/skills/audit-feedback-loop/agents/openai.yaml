@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Feedback Loop"
+  short_description: "Coordinate evidence-based PI and Auditor review cycles"
+  default_prompt: "Use $audit-feedback-loop to audit this result and run the revision loop."

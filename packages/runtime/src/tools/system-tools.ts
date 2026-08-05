@@ -136,8 +136,8 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       if (deps.fromAgent === "auditor" && to === "principal") {
         return { ...ok("Auditor reports are user-gated and cannot be sent directly to PI"), isError: true };
       }
-      await deps.ensureAgent(to);
       try {
+        await deps.ensureAgent(to);
         const task = await deps.dispatchTask(to, content);
         deps.wakeAgent(to);
         return ok(`task ${task.id} dispatched to ${to}`);
@@ -928,7 +928,6 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_trace_diff",
     // "search_trace", // temporarily disabled; see allSystemTools above
     "edit_trace_review",
-    "submit_audit_report",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
@@ -986,8 +985,8 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],
-  // Auditor: read-only inspection. Reports are persisted through the
-  // user-gated submit_audit_report tool; no workspace write/edit access.
+  // Auditor: read-only inspection. Deliverable audit findings return to PI
+  // through complete_task; no separate report tool or workspace write access.
   // `bash` is included for
   // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
   // enforced by the auditor persona, not by the tool whitelist.
