@@ -56,10 +56,12 @@ function compactNode(
   node: TraceNodeV2,
   rootId: string | undefined,
   activeIds: ReadonlySet<string>,
+  episodeTitle: string | undefined,
 ): Record<string, unknown> {
   return {
     id: node.id,
     title: node.title,
+    ...(episodeTitle ? { episode: episodeTitle } : {}),
     type: node.type,
     status: node.status,
     ...(node.description ? { description: shorten(node.description, 600) } : {}),
@@ -84,10 +86,16 @@ function compactGraphLines(graph: TraceGraphV2, maxChars: number): string[] {
   const rootId = graph.meta.rootNodeId;
   const nodes = graph.nodes.filter((node) => !node.revoked && node.id !== rootId);
   const activeIds = new Set(nodes.map((node) => node.id));
+  const episodeTitles = new Map(graph.episodes.map((episode) => [episode.id, episode.title]));
   const lines: string[] = [];
   let used = 0;
   for (const node of nodes) {
-    const line = JSON.stringify(compactNode(node, rootId, activeIds));
+    const line = JSON.stringify(compactNode(
+      node,
+      rootId,
+      activeIds,
+      node.primaryEpisodeId ? episodeTitles.get(node.primaryEpisodeId) : undefined,
+    ));
     if (used + line.length + 1 > maxChars) break;
     lines.push(line);
     used += line.length + 1;
@@ -139,6 +147,7 @@ export function renderGoTAuditContext(
   const header = [
     `<got_audit_context revision="${graph.revision}">`,
     "Review exactly the bound target. Check internal consistency, conflicts with other active/approved nodes, whether evidence supports strong words such as unique/direct/proves/refutes, and whether a proposed parent is a real evidential or computational prerequisite rather than chronology or similarity.",
+    "Also check whether the node is too coarse or too fine, whether independently reviewable settings/results/analyses/findings were improperly merged, whether settings in one ablation were falsely chained, and whether result-to-analysis-to-finding-to-conclusion dependencies skip necessary direct evidence. Episode membership alone never establishes dependency.",
     "If competing explanations cannot be excluded, return uncertain. Textual traceability alone is not scientific validation.",
     `<bound_target>${clippedJson(target, 2_000)}</bound_target>`,
   ];

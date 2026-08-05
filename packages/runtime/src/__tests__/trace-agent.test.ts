@@ -169,7 +169,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
         // Trace consumes the envelope and writes a node — exercises a real run.
         onPrompt: (text) =>
           text.includes("[Trace Event]")
-            ? { tool: "create_trace_node", args: { title: "a decision", confidence: "medium", confidence_reason: "Source record is available." } }
+            ? { tool: "create_trace_node", args: { title: "a decision", description: "The reported research decision.", episode: "Method Design — decision", confidence: "medium", confidence_reason: "Source record is available." } }
             : undefined,
       },
     });
@@ -210,7 +210,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       trace: {
         onPrompt: (text) =>
           text.includes("[Trace Event]")
-            ? { tool: "create_trace_node", args: { title: "a decision", confidence: "medium", confidence_reason: "Source record is available." } }
+            ? { tool: "create_trace_node", args: { title: "a decision", description: "The reported research decision.", episode: "Method Design — decision", confidence: "medium", confidence_reason: "Source record is available." } }
             : undefined,
       },
     });
@@ -236,7 +236,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Conclusion", confidence: "medium", confidence_reason: "One result file supports it." } }
+          ? { tool: "create_trace_node", args: { title: "Conclusion", description: "The reported conclusion supported by one result.", episode: "Final Synthesis", confidence: "medium", confidence_reason: "One result file supports it." } }
           : undefined,
       },
       auditor: {
@@ -262,7 +262,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Ablation", confidence: "medium", confidence_reason: "One result file." } }
+          ? { tool: "create_trace_node", args: { title: "Ablation", description: "The reported ablation result.", episode: "Ablation — component", confidence: "medium", confidence_reason: "One result file." } }
           : undefined,
       },
     });
@@ -290,7 +290,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Unreviewed", confidence: "medium", confidence_reason: "One source record." } }
+          ? { tool: "create_trace_node", args: { title: "Unreviewed", description: "An unreviewed research conclusion.", episode: "Final Synthesis", confidence: "medium", confidence_reason: "One source record." } }
           : undefined,
       },
       auditor: { onPrompt: () => { auditorTurns += 1; return undefined; } },
@@ -320,7 +320,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Changing", confidence: "medium", confidence_reason: "Initial record." } }
+          ? { tool: "create_trace_node", args: { title: "Changing", description: "A conclusion whose evidence may change.", episode: "Final Synthesis", confidence: "medium", confidence_reason: "Initial record." } }
           : undefined,
       },
       auditor: {

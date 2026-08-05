@@ -197,6 +197,9 @@ appear in the graph. Call it immediately after you produce a real deliverable
 
 Each call should carry a full-sentence \`description\` (subject + action +
 outcome, not a single word) and a \`context\` explaining why the step mattered.
+Prefer one independently meaningful research unit per call. Report distinct
+settings, results, analyses, findings, or conclusions separately when each can
+be inspected or cited on its own.
 Skip process noise — reading one file, a failed attempt you immediately retry,
 or merely acknowledging a task.`;
 
@@ -890,6 +893,23 @@ graph and make zero, one, or multiple node mutations. Make no graph change when
 the record is duplicate or process noise. Create or update multiple nodes only
 when the event contains independently meaningful scientific units.
 
+## Curation procedure
+
+For every Trace Event:
+
+1. Read the active graph and identify existing Episodes and reusable nodes.
+2. Extract units that can be inspected, cited, reproduced, or revoked independently.
+3. Give every new unit one concise, human-facing \`episode\` work-package name.
+   Episode membership is presentation grouping and never creates a dependency.
+4. Create, update, or ignore each unit. Repeated seeds, folds, replicates, and
+   repeated runs of the same setting normally update the same unit.
+5. Keep units parallel when neither consumes the other. Create a dependency
+   only when the downstream unit actually consumes or relies on the upstream one.
+6. Propose only direct parents, never every transitive ancestor.
+
+The optional \`curate-research-trace\` Skill contains detailed Episode-selection,
+splitting, and end-to-end research examples. Read it whenever you judge it useful.
+
 ## What one node means
 
 A node is an independently meaningful research unit: something that can be
@@ -898,16 +918,23 @@ without revoking every sibling result. It is not one tool call or progress
 message. Multiple reports may be curated into the same node.
 
 - Each experimental condition or model variant normally gets its own node.
-- Repeated seeds, folds, and runs normally update that variant node.
-- Each distinct analysis, visualization, or scientific claim gets a node.
+- A setting, its result, a subsequent analysis, an independently meaningful
+  visualization, a finding, and a conclusion are separate nodes when each can
+  be reviewed independently.
+- Multiple metrics from one run remain one result unless they are independently
+  reusable or support independently falsifiable findings.
+- A visualization is a node only when it contains an independent analysis or
+  interpretation; otherwise keep the file as an artifact of its source node.
+- Null findings are valid results.
 - Formatting changes, immediate retries, acknowledgements, and reading one file
   are not nodes.
 - Use \`completed\` for interpretable outputs, including null findings, and
   \`failed\` only for a meaningful execution failure.
 
-Choose the correct granularity when creating a node. Update only when the new
-record belongs to the same research unit; append content and evidence rather
-than duplicating it.
+Choose the correct granularity when creating a node. Every title and description
+must make sense without the surrounding chat. Update only when the new record
+belongs to the same research unit; append content and evidence rather than
+duplicating it. Settings in one ablation are normally parallel, not a chain.
 
 Every \`create_trace_node\` and \`update_trace_node\` call must set \`confidence\`
 and a concrete \`confidence_reason\`. Confidence measures how strongly the node
@@ -918,13 +945,15 @@ probability. Re-evaluate it after every update.
 
 A parent means the current node would cease to be valid or require recomputation
 without that upstream node. Chronology, adjacency, shared authorship,
-delegation, and textual similarity are not causality. Conclusion nodes should
-propose their direct evidence nodes rather than every transitive ancestor.
+delegation, Episode membership, and textual similarity are not causality.
+Results depend on the settings and inputs actually used; analyses depend on the
+results they consume; findings depend on their direct result or analysis evidence;
+conclusions depend on direct findings rather than every transitive ancestor.
 
 Supply possible parents through \`parent_candidates\` on \`create_trace_node\` or
-\`update_trace_node\`. You only propose candidates; Auditor confirms or rejects
-them. Never recreate a rejected candidate without materially new evidence. The
-Host supplies Session Start only while a node has no parent of any conclusion.
+\`update_trace_node\`. You only propose candidates; independent review confirms
+or rejects them. Never recreate a rejected candidate without materially new
+evidence. The Host supplies Session Start only while a node has no parent of any conclusion.
 \`get_trace_graph\` exposes its ID; you may propose Session Start when the unit
 directly depends on the session's initial context rather than another research unit.
 

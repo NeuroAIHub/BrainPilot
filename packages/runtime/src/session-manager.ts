@@ -2321,16 +2321,18 @@ export class SessionManager {
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
     const rawTools = [...systemTools, ...mcpTools];
     // Built-in skills are loaded by Pi natively (not as tools). Materialize the
-    // bundled content into bp_template/skills once, then hand the dir to the
-    // factory as additionalSkillPaths. Trace agent is skill-less (graph-only).
+    // generic bundled library for non-Trace roles. System plugins may still
+    // contribute narrowly targeted skills to Trace without exposing that library.
     let skillPaths: string[] | undefined;
     if (role !== "trace" && entry.domainResources === "full") {
       await this.ensureSkillsMaterialized();
       skillPaths = [this.skillsDir];
     }
-    const pluginSkillPaths = role === "trace"
-      ? []
-      : systemPluginSkillPaths(this.bundledSystemPlugins, entry.systemPlugins, name);
+    const pluginSkillPaths = systemPluginSkillPaths(
+      this.bundledSystemPlugins,
+      entry.systemPlugins,
+      name,
+    );
     if (pluginSkillPaths.length) skillPaths = [...(skillPaths ?? []), ...pluginSkillPaths];
     // #80: guard every tool result against context-window overflow.
     const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
