@@ -76,7 +76,6 @@ describe("personas", () => {
       "experimentalist",
       "engineer",
       "writer",
-      "auditor",
     ]) {
       const p = PERSONAS[name]!;
       expect(p, name).toContain("skill_search");
@@ -90,7 +89,7 @@ describe("personas", () => {
   });
 
   it("expert personas carry the flat task completion contract", () => {
-    for (const name of ["librarian", "engineer", "experimentalist", "writer", "auditor"]) {
+    for (const name of ["librarian", "engineer", "experimentalist", "writer"]) {
       expect(PERSONAS[name], name).toContain('complete_task(task_id="<exact assigned ID>"');
       expect(PERSONAS[name], name).toContain("one run may handle several task");
     }
@@ -154,23 +153,11 @@ Stale local routing rule.`;
     expect(resolved).toContain("<task_list>");
   });
 
-  it("principal persona requires a pre-delivery audit for hard claims", () => {
-    const p = PERSONAS.principal!;
-    expect(p).toContain("Pre-delivery audit");
-    expect(p).toContain("MUST");
-    expect(p).toContain("auditor");
-    expect(p).toContain("expert deliverable");
-    expect(p).toContain("request template from `audit-feedback-loop`");
-    expect(p).toContain("Do NOT personally perform fabrication/reliability audit");
-    // The exemption clause keeps the audit out of pure conversational turns.
-    expect(p.toLowerCase()).toContain("exemption");
-  });
-
-  it("principal audit gate covers analysis/modelling validity risks", () => {
-    const p = PERSONAS.principal!;
-    expect(p.toLowerCase()).toContain("leakage");
-    expect(p.toLowerCase()).toContain("cross-validation");
-    expect(p).toContain("incremental re-review procedure");
+  it("keeps Auditor behavior out of core personas", () => {
+    expect(PERSONAS.principal).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(PERSONAS.trace).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(PERSONAS.librarian).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(PERSONAS.engineer).not.toMatch(/auditor|audit-feedback-loop/i);
   });
 
   it("principal and writer personas keep internal status out of user-facing prose", () => {
@@ -195,24 +182,11 @@ Stale local routing rule.`;
     expect(writer).toContain("ask the engineer");
   });
 
-  it("auditor persona delegates workflow to the skill and keeps hard boundaries", () => {
+  it("keeps only a neutral system-plugin base persona for Auditor", () => {
     const a = PERSONAS.auditor!;
-    expect(a).toContain("`audit-feedback-loop` skill");
-    expect(a).toContain("`complete_task`");
-    expect(a).toContain("directly to PI");
-    expect(a).toContain("filesystem inspection");
-    expect(a).toContain("grep");
-    expect(a).toContain("unverified");
-    expect(a).toContain("`edit_trace_review`");
-    expect(a).not.toContain("submit_audit_report");
-  });
-
-  it("auditor persona preserves evidence and reliability scope", () => {
-    const a = PERSONAS.auditor!;
-    expect(a.toLowerCase()).toContain("evidence");
-    expect(a.toLowerCase()).toContain("reliability");
-    expect(a).toContain("Never rerun experiments");
-    expect(a).toMatch(/not\s+novelty/);
+    expect(a).toContain("System plugin agent");
+    expect(a).toContain('complete_task(task_id="<exact assigned ID>"');
+    expect(a).not.toMatch(/reliability|audit-feedback-loop|edit_trace_review/i);
   });
 
   it("authoring experts mention their write/run capability", () => {

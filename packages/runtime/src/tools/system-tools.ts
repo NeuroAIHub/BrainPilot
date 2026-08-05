@@ -136,8 +136,8 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       if (deps.fromAgent === "auditor" && to === "principal") {
         return { ...ok("Auditor reports are user-gated and cannot be sent directly to PI"), isError: true };
       }
-      await deps.ensureAgent(to);
       try {
+        await deps.ensureAgent(to);
         const task = await deps.dispatchTask(to, content);
         deps.wakeAgent(to);
         return ok(`task ${task.id} dispatched to ${to}`);

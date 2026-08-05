@@ -53,19 +53,6 @@ describe("materializeSkills (split: always-on vs router)", () => {
     expect(res.copied).toBeGreaterThan(0);
     expect(res.routerCopied).toBeGreaterThan(0);
 
-    const auditSkill = join(res.dest, ALWAYS_ON_CATEGORY, "audit-feedback-loop");
-    expect(await exists(join(auditSkill, "SKILL.md"))).toBe(true);
-    expect(await exists(join(auditSkill, "references", "pi-orchestration.md"))).toBe(true);
-    expect(await exists(join(auditSkill, "references", "auditor-review.md"))).toBe(true);
-    expect(await exists(join(auditSkill, "references", "audit-request-template.md"))).toBe(true);
-    expect(await exists(join(auditSkill, "references", "audit-response-template.md"))).toBe(true);
-    expect(await exists(join(auditSkill, "references", "revision-loop.md"))).toBe(true);
-    expect(await readFile(join(auditSkill, "SKILL.md"), "utf8")).toContain("If you are `principal`");
-    expect(await readFile(join(auditSkill, "references", "pi-orchestration.md"), "utf8"))
-      .toContain("Raw Expert output is a valid intermediate target");
-    expect(await readFile(join(auditSkill, "references", "auditor-review.md"), "utf8"))
-      .toContain("return it with `complete_task`");
-
     // A representative router skill (one that does NOT live in 01_Meta-Skills)
     // should land under skills-router, not under skills.
     const sampleRouterCat = routerDirs[0]!;

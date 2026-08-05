@@ -88,6 +88,16 @@ import {
   withoutRouterSkillInstructions,
   resolveDomainResources,
 } from "./domain-resources.js";
+import {
+  AUDITOR_PLUGIN_ID,
+  loadBundledSystemPlugins,
+  snapshotSystemPlugins,
+  systemPluginEnabled,
+  systemPluginInstructions,
+  systemPluginSkillPaths,
+  type BundledSystemPlugin,
+  type SystemPluginSnapshot,
+} from "./system-plugins.js";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -268,6 +278,7 @@ interface SessionMeta {
   updatedAt?: string;
   lastActivityAt?: number;
   domainResources?: DomainResources;
+  systemPlugins?: SystemPluginSnapshot[];
 }
 
 interface SessionEntry {
@@ -303,6 +314,8 @@ interface SessionEntry {
   providerRef: SessionProviderRef;
   /** Frozen per-session domain-resource mode; never read from global state. */
   domainResources: DomainResources;
+  /** Frozen system-plugin state for reproducible experiment sessions. */
+  systemPlugins: SystemPluginSnapshot[];
   /**
    * Cumulative real token usage for this session: whole-session `total` plus a
    * per-agent breakdown (keyed by agent name). Fed by each MasAgent's `onUsage`
@@ -405,6 +418,8 @@ export interface SessionManagerOptions {
    * inject directly.
    */
   sharedDir?: string;
+  /** Backend-only system-plugin experiment environment. Never exposed to the web UI. */
+  systemPluginEnv?: Record<string, string | undefined>;
 }
 
 /** Roles inferred from agent name. */
@@ -499,6 +514,8 @@ export class SessionManager {
   // `materializeSkills`).
   private readonly routerSkillsDir: string;
   private skillsMaterialized = false;
+  private readonly bundledSystemPlugins: BundledSystemPlugin[];
+  private readonly defaultSystemPlugins: SystemPluginSnapshot[];
   private kbMaterialized = false;
 
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
@@ -571,6 +588,14 @@ export class SessionManager {
     // format; `skill_search` reads from here, Pi never sees it.
     this.routerSkillsDir =
       opts.routerSkillsDir ?? join(this.dataRoot, "bp_template", "skills-router");
+    this.bundledSystemPlugins = loadBundledSystemPlugins(opts.systemPluginEnv ?? process.env);
+    this.defaultSystemPlugins = snapshotSystemPlugins(this.bundledSystemPlugins);
+    for (const plugin of this.defaultSystemPlugins) {
+      if (plugin.reason === "experiment-override") {
+        // eslint-disable-next-line no-console
+        console.info(`[system-plugins] ${plugin.id} disabled by experiment override`);
+      }
+    }
 
     this.maxConcurrentAgents = resolveMaxConcurrentAgents(opts.maxConcurrentAgents);
     this.uploadMaxBytes = resolveUploadMaxBytes(opts.uploadMaxBytes);
@@ -1210,6 +1235,7 @@ export class SessionManager {
     name: string,
     role: AgentRole,
     domainResources: DomainResources,
+    systemPlugins: readonly SystemPluginSnapshot[],
     /**
      * #309: when false, strip router / skill_search teaching from the persona
      * (always-on Meta-Skills guidance is kept). Ignored when domainResources
@@ -1237,6 +1263,12 @@ export class SessionManager {
       filtered = withoutRouterSkillInstructions(selected);
     }
     filtered = withCoreCoordinationProtocols(filtered, name, role);
+    const pluginInstructions = await systemPluginInstructions(
+      this.bundledSystemPlugins,
+      systemPlugins,
+      name,
+    );
+    if (pluginInstructions.length) filtered = `${filtered}\n\n${pluginInstructions.join("\n\n")}`;
     let persona = withLanguageDirective(filtered);
     // #257: tell working agents (not the passive trace recorder) where the
     // shared cross-session persistent root lives, by absolute path, so they can
@@ -1262,6 +1294,7 @@ export class SessionManager {
       providerId?: string;
       modelId?: string;
       domainResources?: DomainResources;
+      systemPlugins?: SystemPluginSnapshot[];
     } = {},
     /**
      * Internal restore path (see `restoreFromDisk`): when provided, the entry
@@ -1293,6 +1326,7 @@ export class SessionManager {
     const lastActivityAt = _restore ? _restore.lastActivityAt : Date.now();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
     const domainResources = resolveDomainResources(input.domainResources);
+    const systemPlugins = this.resolveSessionSystemPlugins(input.systemPlugins);
 
     // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
     // (restore path) so reviving a session never clobbers its chosen model.
@@ -1381,6 +1415,7 @@ export class SessionManager {
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       domainResources,
+      systemPlugins,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
       stats: emptySessionStats(id),
     };
@@ -2203,6 +2238,9 @@ export class SessionManager {
   async ensureAgent(sessionId: string, name: string): Promise<MasAgent> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
+    if (name === "auditor" && !systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) {
+      throw new Error("agent unavailable: Auditor system plugin is disabled for this session");
+    }
     const existing = entry.agents.get(name);
     if (existing && existing.status !== "stopped") return existing;
 
@@ -2288,6 +2326,10 @@ export class SessionManager {
       await this.ensureSkillsMaterialized();
       skillPaths = [this.skillsDir];
     }
+    const pluginSkillPaths = role === "trace"
+      ? []
+      : systemPluginSkillPaths(this.bundledSystemPlugins, entry.systemPlugins, name);
+    if (pluginSkillPaths.length) skillPaths = [...(skillPaths ?? []), ...pluginSkillPaths];
     // #80: guard every tool result against context-window overflow.
     const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
     const builtins = builtinToolNamesForRole(role, name);
@@ -2310,6 +2352,7 @@ export class SessionManager {
         name,
         role,
         entry.domainResources,
+        entry.systemPlugins,
         skillSearchEnabled,
       ),
       skillPaths,
@@ -2640,6 +2683,7 @@ export class SessionManager {
 
   private rebuildQueuedTraceAudits(entry: SessionEntry): void {
     entry.traceAuditQueued.clear();
+    if (!systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) return;
     const notifications = entry.taskLedger.peekBatch("auditor", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
     for (const notification of notifications) {
       const target = this.coerceTraceAuditTarget(
@@ -2665,10 +2709,12 @@ export class SessionManager {
   }
 
   private async enqueuePendingTraceAudits(entry: SessionEntry): Promise<void> {
+    if (!systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) return;
     for (const target of entry.trace.listPendingAuditTargets()) await this.enqueueTraceAudit(entry, target);
   }
 
   private async enqueueTraceAudit(entry: SessionEntry, target: TraceAuditTarget): Promise<void> {
+    if (!systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) return;
     const key = this.traceAuditKey(target);
     if (entry.traceAuditQueued.has(key)) return;
     entry.traceAuditQueued.add(key);
@@ -3208,6 +3254,20 @@ export class SessionManager {
     this.lastActivityAt = entry.lastActivityAt;
   }
 
+  private resolveSessionSystemPlugins(
+    stored?: readonly SystemPluginSnapshot[],
+  ): SystemPluginSnapshot[] {
+    return this.defaultSystemPlugins.map((current) => {
+      const previous = stored?.find((plugin) => plugin.id === current.id);
+      if (!previous || typeof previous.enabled !== "boolean") return { ...current };
+      return {
+        ...current,
+        enabled: previous.enabled,
+        reason: previous.reason === "experiment-override" ? "experiment-override" : "default",
+      };
+    });
+  }
+
   private toSession(e: SessionEntry): Session {
     return {
       id: e.id,
@@ -3227,6 +3287,7 @@ export class SessionManager {
       updatedAt: entry.updatedAt,
       lastActivityAt: entry.lastActivityAt,
       domainResources: entry.domainResources,
+      systemPlugins: entry.systemPlugins,
     };
     await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
     await writeFile(join(this.bpDir(entry.id), "meta.json"), JSON.stringify(meta, null, 2), "utf8").catch(() => {});
@@ -3422,6 +3483,7 @@ export class SessionManager {
           id: sid,
           title: meta.title,
           domainResources: resolveDomainResources(meta.domainResources),
+          systemPlugins: meta.systemPlugins,
         },
         {
           createdAt: meta.createdAt ?? now,

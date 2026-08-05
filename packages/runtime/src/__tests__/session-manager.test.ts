@@ -140,19 +140,65 @@ describe("SessionManager (mock mode)", () => {
     expect(PERSONAS.experimentalist).toContain("long-running training");
   });
 
-  it("routes PI and Expert results through the audit feedback skill", () => {
-    expect(PERSONAS.principal).toContain("`audit-feedback-loop` skill");
-    expect(PERSONAS.principal).toContain("valid intermediate audit target");
-    expect(PERSONAS.principal).toContain("never ask the user to relay them");
-    expect(PERSONAS.librarian).toContain("## Writer handoff packet");
-    expect(PERSONAS.experimentalist).toContain("## Writer handoff packet");
-    expect(PERSONAS.engineer).toContain("## Writer handoff packet");
-    expect(PERSONAS.writer).not.toContain("## Writer handoff packet");
-    expect(PERSONAS.auditor).toContain("`audit-feedback-loop` skill");
-    expect(PERSONAS.auditor).toContain("Raw Expert output is a valid");
-    expect(PERSONAS.auditor).toContain("directly to PI");
-    expect(PERSONAS.auditor).not.toContain("## Writer handoff packet");
-    expect(PERSONAS.trace).not.toContain("## Writer handoff packet");
+  it("injects the bundled Auditor plugin by default and removes it for ablation", async () => {
+    const enabledSeen: Parameters<typeof mockAgentFactory>[0][] = [];
+    const enabledFactory: typeof mockAgentFactory = async (params) => {
+      enabledSeen.push(params);
+      return mockAgentFactory(params);
+    };
+    const enabled = new SessionManager({ persist: false, agentFactory: enabledFactory });
+    const enabledSession = await enabled.createSession();
+    await enabled.sendMessage(enabledSession.id, "hello");
+    const enabledPi = enabledSeen.find((params) => params.agentName === "principal")!;
+    expect(enabledPi.systemPrompt).toContain("## Auditor feedback loop");
+    expect(enabledPi.skillPaths).toEqual(expect.arrayContaining([
+      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+    ]));
+
+    const disabledSeen: Parameters<typeof mockAgentFactory>[0][] = [];
+    const disabledFactory: typeof mockAgentFactory = async (params) => {
+      disabledSeen.push(params);
+      return mockAgentFactory(params);
+    };
+    const disabled = new SessionManager({
+      persist: false,
+      agentFactory: disabledFactory,
+      systemPluginEnv: { BP_EXPERIMENT_DISABLE_PLUGINS: "org.brainpilot.auditor" },
+    });
+    const disabledSession = await disabled.createSession();
+    await disabled.sendMessage(disabledSession.id, "hello");
+    const disabledPi = disabledSeen.find((params) => params.agentName === "principal")!;
+    expect(disabledPi.systemPrompt).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(disabledPi.skillPaths ?? []).not.toEqual(expect.arrayContaining([
+      expect.stringMatching(/plugin-auditor/),
+    ]));
+    await expect((disabled as unknown as {
+      ensureAgent(sessionId: string, name: string): Promise<unknown>;
+    }).ensureAgent(disabledSession.id, "auditor")).rejects.toThrow("system plugin is disabled");
+  });
+
+  it("persists the frozen system-plugin experiment state in session metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-system-plugin-meta-"));
+    try {
+      const manager = new SessionManager({
+        dataRoot: root,
+        persist: true,
+        agentFactory: mockAgentFactory,
+        systemPluginEnv: { BP_EXPERIMENT_DISABLE_PLUGINS: "org.brainpilot.auditor" },
+      });
+      const session = await manager.createSession();
+      const meta = JSON.parse(await readFile(join(root, ".bp", session.id, "meta.json"), "utf8")) as {
+        systemPlugins?: Array<{ id: string; enabled: boolean; reason: string }>;
+      };
+      expect(meta.systemPlugins).toContainEqual({
+        id: "org.brainpilot.auditor",
+        enabled: false,
+        reason: "experiment-override",
+        version: "0.1.2",
+      });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("prefers an on-disk bp_template/agents/<name>/prompt.md override", async () => {

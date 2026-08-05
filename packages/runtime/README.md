@@ -19,6 +19,22 @@ byte-passthrough) and, in hosted deployments, by the platform layer.
 
 All wire types come from `@brainpilot/protocol` (the zod SSOT).
 
+## Bundled system plugins and ablation
+
+Official system plugins ship as Runtime npm dependencies and are enabled by
+default. They are not installed from the Marketplace and have no frontend
+toggle. Backend experiment deployments may disable one or more plugins at
+Runtime startup:
+
+```bash
+BP_EXPERIMENT_DISABLE_PLUGINS=org.brainpilot.auditor
+```
+
+The effective plugin set is frozen into each new session's `meta.json`; use a
+new session for each ablation arm. Disabling the Auditor removes its Agent
+instructions, Skill paths, Agent availability, tools, and background GoT review
+dispatch from that session.
+
 ## Persistent storage contract
 
 The runtime is single-user: reusable cross-session files live directly under

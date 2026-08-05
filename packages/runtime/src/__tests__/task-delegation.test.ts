@@ -130,6 +130,25 @@ describe("flat task delegation", () => {
     expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "completed", assigned_to: "auditor" });
   });
 
+  it("rejects Auditor dispatch when the system plugin is disabled", async () => {
+    const prompts: Array<{ agent: string; text: string }> = [];
+    const manager = new SessionManager({
+      persist: false,
+      systemPluginEnv: { BP_EXPERIMENT_DISABLE_PLUGINS: "org.brainpilot.auditor" },
+      agentFactory: scriptedFactory({
+        principal: { onPrompt: () => ({
+          tool: "dispatch_task",
+          args: { to: "auditor", content: "review this" },
+        }) },
+      }, prompts),
+    });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "AUDIT");
+    await waitFor(() => manager.getSessionState(session.id)?.runState.active === false);
+    expect(prompts.some((prompt) => prompt.agent === "auditor")).toBe(false);
+    expect(manager.listTasks(session.id)).toEqual([]);
+  });
+
   it("keeps direct user-to-agent prompts outside the task event path", async () => {
     const prompts: Array<{ agent: string; text: string }> = [];
     const manager = new SessionManager({ persist: false, agentFactory: scriptedFactory({ librarian: {} }, prompts) });

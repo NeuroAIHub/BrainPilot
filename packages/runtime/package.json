@@ -38,6 +38,8 @@
   },
   "dependencies": {
     "@brainpilot/kb-scripts": "^0.1.2",
+    "@brainpilot/plugin-auditor": "^0.1.2",
+    "@brainpilot/plugin-sdk": "^0.1.2",
     "@brainpilot/protocol": "^0.1.2",
     "@brainpilot/skills": "^0.1.2",
     "@earendil-works/pi-coding-agent": "0.80.7",
