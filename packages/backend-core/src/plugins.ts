@@ -56,7 +56,7 @@ interface PluginRuntimeProjection {
   schemaVersion: 1;
   id: string;
   version: string;
-  format: ImportablePluginSourceFormat;
+  format: PluginSourceFormat;
   root: string;
   dataDir: string;
   mcpConfigPath?: string;
@@ -119,6 +119,24 @@ const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
     upstreamCommit: "3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9",
     capabilities: ["skills"],
     requirements: ["Local deployment", "Runs a trusted Pi TypeScript extension", "Git; Bash and Node.js are used by optional workflows"],
+    executesLocalCode: true,
+    status: "test",
+  },
+  {
+    plugin: "playwright-mcp",
+    source: "playwright-mcp/0.0.78",
+    version: "0.0.78",
+    publishedAt: "2026-08-05T00:00:00.000Z",
+    releaseNotes: "Initial BrainPilot wrapper for Microsoft Playwright MCP with an isolated headless browser session.",
+    publisher: "Microsoft",
+    verified: true,
+    sourceFormat: "brainpilot",
+    repositoryUrl: "https://github.com/microsoft/playwright-mcp",
+    license: "Apache-2.0",
+    upstreamRef: "npm:@playwright/mcp@0.0.78",
+    upstreamCommit: "8414d571beed0e12a4b8c7f537bfdab44236ba4c",
+    capabilities: ["mcp"],
+    requirements: ["Local deployment", "Node.js 18+ and npx", "Downloads the pinned npm package on first use", "A Chrome/Chromium executable or BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH"],
     executesLocalCode: true,
     status: "test",
   },
@@ -585,7 +603,7 @@ async function installBundle(dataDir: string, bundle: PluginBundle): Promise<voi
 }
 
 interface ExternalPluginMetadata {
-  format: ImportablePluginSourceFormat;
+  format: PluginSourceFormat;
   unsupported: string[];
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
@@ -713,7 +731,7 @@ async function materializeExternalPlugin(
 
 async function readExternalMetadata(dataDir: string, manifest: PluginManifest): Promise<ExternalPluginMetadata | null> {
   const raw = await readJson(externalMetadataPath(dataDir, manifest));
-  if (!isObject(raw) || (raw.format !== "pi-package" && raw.format !== "codex" && raw.format !== "claude-code")) return null;
+  if (!isObject(raw) || (raw.format !== "brainpilot" && raw.format !== "pi-package" && raw.format !== "codex" && raw.format !== "claude-code")) return null;
   const unsupported = Array.isArray(raw.unsupported) && raw.unsupported.every((entry) => typeof entry === "string") ? raw.unsupported as string[] : [];
   const mcpConfigPath = typeof raw.mcpConfigPath === "string" && isSafePluginPath(raw.mcpConfigPath) ? raw.mcpConfigPath : undefined;
   const hookConfig = isObject(raw.hookConfig)

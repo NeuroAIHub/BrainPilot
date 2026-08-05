@@ -71,6 +71,23 @@ function inheritedEnvironment(): Record<string, string> {
   return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
 }
 
+function expandEnvironment(value: string, env: Record<string, string>): string {
+  return value.replace(/\$\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (match, name: string) => env[name] ?? match);
+}
+
+function materializePluginMcpSpec(spec: McpServerSpec, env: Record<string, string>): McpServerSpec {
+  const expandedEnv = Object.fromEntries(
+    Object.entries(spec.env ?? {}).map(([name, value]) => [name, expandEnvironment(value, env)]),
+  );
+  const mergedEnv = { ...env, ...expandedEnv };
+  return {
+    ...spec,
+    ...(spec.command ? { command: expandEnvironment(spec.command, mergedEnv) } : {}),
+    ...(spec.args ? { args: spec.args.map((arg) => expandEnvironment(arg, mergedEnv)) } : {}),
+    env: mergedEnv,
+  };
+}
+
 /**
  * Options forwarded to the SDK's `callTool(params, resultSchema?, options?)`
  * third parameter. We keep only the fields the bridge actually sets — a
@@ -135,21 +152,16 @@ export async function loadMcpServersConfig(dataRoot: string): Promise<McpServers
       : object as Record<string, McpServerSpec>;
     for (const [name, spec] of Object.entries(servers)) {
       if (merged[name]) throw new Error(`MCP server name conflict: ${name} (${projection.id})`);
-      merged[name] = {
-        ...spec,
-        ...(spec.command ? {
-          env: {
-            ...inheritedEnvironment(),
-            ...spec.env,
-            BRAINPILOT_PLUGIN_ROOT: projection.root,
-            BRAINPILOT_PLUGIN_DATA: projection.dataDir,
-            CLAUDE_PLUGIN_ROOT: projection.root,
-            CLAUDE_PLUGIN_DATA: projection.dataDir,
-            CLAUDE_MEM_DATA_DIR: projection.dataDir,
-            PLUGIN_ROOT: projection.root,
-          },
-        } : {}),
+      const env = {
+        ...inheritedEnvironment(),
+        BRAINPILOT_PLUGIN_ROOT: projection.root,
+        BRAINPILOT_PLUGIN_DATA: projection.dataDir,
+        CLAUDE_PLUGIN_ROOT: projection.root,
+        CLAUDE_PLUGIN_DATA: projection.dataDir,
+        CLAUDE_MEM_DATA_DIR: projection.dataDir,
+        PLUGIN_ROOT: projection.root,
       };
+      merged[name] = spec.command ? materializePluginMcpSpec(spec, env) : spec;
     }
   }
   return Object.keys(merged).length > 0 ? { mcpServers: merged } : null;

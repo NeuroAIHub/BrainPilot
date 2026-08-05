@@ -182,12 +182,12 @@ export type AgentSessionFactory = (params: {
    * entry: `<dataRoot>/bp_template/skills`. Omitted by the mock factory.
    */
   skillPaths?: string[];
-  /** Enabled foreign-plugin lifecycle projections loaded for a new principal session. */
+  /** Enabled plugin runtime projections loaded for a new principal session. */
   compatPluginProjections?: Array<{
     schemaVersion: 1;
     id: string;
     version: string;
-    format: "pi-package" | "codex" | "claude-code";
+    format: "brainpilot" | "pi-package" | "codex" | "claude-code";
     root: string;
     dataDir: string;
     mcpConfigPath?: string;

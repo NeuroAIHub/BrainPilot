@@ -6,7 +6,7 @@ export interface CompatPluginProjection {
   schemaVersion: 1;
   id: string;
   version: string;
-  format: "pi-package" | "codex" | "claude-code";
+  format: "brainpilot" | "pi-package" | "codex" | "claude-code";
   root: string;
   dataDir: string;
   mcpConfigPath?: string;
