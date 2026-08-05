@@ -19,3 +19,11 @@ and optional HTTPS catalogues declared in
 immutable JSON bundle and its SHA-256 digest. Installed state is kept under
 `<dataDir>/plugins/`; incompatible plugins remain installed but cannot be
 enabled. Updates keep one real previous bundle for rollback.
+
+Catalogue entries may also describe provenance without changing Manifest v1:
+`sourceFormat` (`brainpilot`, `codex`, `claude-code`, or `pi-package`), an HTTPS
+`repositoryUrl`, `license`, pinned `upstreamRef` / `upstreamCommit`, compact
+`capabilities` (`skills`, `mcp`, `hooks`), runtime `requirements`, and an
+`unsupported` list. The separate `source` field remains the catalogue transport
+(`builtin`, `local`, or `https`). Older entries default to the BrainPilot source
+format.

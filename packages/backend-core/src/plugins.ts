@@ -190,6 +190,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function optionalHttpsUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try { return new URL(value).protocol === "https:" ? value : undefined; } catch { return undefined; }
+}
+
+function optionalStringList(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+
 function parseMarketplaceEntry(value: unknown): MarketplaceEntry | null {
   if (!isObject(value) || typeof value.publisher !== "string" || !value.publisher.trim()) return null;
   const manifest = parsePublishablePluginManifest(value.manifest);
@@ -210,10 +219,28 @@ function parseMarketplaceEntry(value: unknown): MarketplaceEntry | null {
       releases.push({ version: raw.version, manifest: releaseManifest, artifact: { url: raw.artifact.url, sha256: raw.artifact.sha256.toLowerCase() }, publishedAt: raw.publishedAt, releaseNotes: raw.releaseNotes });
     }
   }
+  const sourceFormat = value.sourceFormat === "brainpilot" || value.sourceFormat === "pi-package" || value.sourceFormat === "codex" || value.sourceFormat === "claude-code"
+    ? value.sourceFormat
+    : undefined;
+  const capabilities = Array.isArray(value.capabilities) && value.capabilities.every((item) => item === "skills" || item === "mcp" || item === "hooks")
+    ? value.capabilities as Array<"skills" | "mcp" | "hooks">
+    : undefined;
+  const repositoryUrl = optionalHttpsUrl(value.repositoryUrl);
+  const homepage = optionalHttpsUrl(value.homepage);
+  const unsupported = optionalStringList(value.unsupported);
+  const requirements = optionalStringList(value.requirements);
   return { manifest, publisher: value.publisher.trim(), ...(artifact ? { artifact } : {}), verified: value.verified === true,
     ...(releases?.length ? { releases } : {}),
     ...(value.status === "test" ? { status: "test" as const } : {}),
-    ...(typeof value.homepage === "string" ? { homepage: value.homepage } : {}) };
+    ...(homepage ? { homepage } : {}),
+    ...(sourceFormat ? { sourceFormat } : {}),
+    ...(repositoryUrl ? { repositoryUrl } : {}),
+    ...(typeof value.license === "string" ? { license: value.license } : {}),
+    ...(typeof value.upstreamRef === "string" ? { upstreamRef: value.upstreamRef } : {}),
+    ...(typeof value.upstreamCommit === "string" ? { upstreamCommit: value.upstreamCommit } : {}),
+    ...(capabilities ? { capabilities } : {}),
+    ...(unsupported ? { unsupported } : {}),
+    ...(requirements ? { requirements } : {}) };
 }
 
 interface MarketplaceSourceDefinition { id: string; type: "https"; url: string; enabled: boolean; }
@@ -342,6 +369,7 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
     if (!manifest || manifest.id !== id || typeof item.publisher !== "string" || typeof item.installedAt !== "string") continue;
     const activeVersion = typeof item.activeVersion === "string" ? item.activeVersion : manifest.version;
     if (activeVersion !== manifest.version) continue;
+    const repositoryUrl = optionalHttpsUrl(item.repositoryUrl);
     plugins[id] = {
       manifest,
       publisher: item.publisher,
@@ -357,6 +385,7 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
       ...(Array.isArray(item.unsupported) && item.unsupported.every((entry) => typeof entry === "string")
         ? { unsupported: item.unsupported as string[] }
         : {}),
+      ...(repositoryUrl ? { repositoryUrl } : {}),
     };
   }
   for (const plugin of Object.values(plugins)) plugin.compatibility = compatibilityFor(plugin.manifest, plugins);
@@ -385,7 +414,19 @@ export async function listMarketplace(dataDir: string): Promise<MarketplaceEntry
     releases.sort((left, right) => comparePluginVersions(right.version, left.version));
     const latest = releases[0]!;
     const plugin = BUILTIN_PLUGIN_RELEASES.find((release) => release.version === latest.version && latest.artifact.url === builtinArtifactUrl(release))?.plugin;
-    return { manifest: latest.manifest, publisher: "BrainPilot", verified: true, artifact: latest.artifact, releases, source: { id: "builtin", type: "builtin" }, ...(plugin && TEST_PLUGIN_SOURCES.has(plugin) ? { status: "test" as const } : {}) };
+    const capabilities = latest.manifest.contributes?.skills?.length ? ["skills" as const] : [];
+    return {
+      manifest: latest.manifest,
+      publisher: "BrainPilot",
+      verified: true,
+      artifact: latest.artifact,
+      releases,
+      source: { id: "builtin", type: "builtin" },
+      sourceFormat: "brainpilot",
+      repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+      ...(capabilities.length ? { capabilities } : {}),
+      ...(plugin && TEST_PLUGIN_SOURCES.has(plugin) ? { status: "test" as const } : {}),
+    };
   });
   const selected = new Map(builtins.map((entry) => [entry.manifest.id, entry]));
   for (const entry of configured) selected.set(entry.manifest.id, entry);
@@ -409,6 +450,15 @@ export async function listMarketplaceSourceStatuses(dataDir: string): Promise<Ma
 export async function listInstalledPlugins(dataDir: string): Promise<InstalledPlugin[]> {
   const registry = await readRegistry(dataDir);
   return Object.values(registry.plugins).sort((a, b) => a.manifest.displayName.localeCompare(b.manifest.displayName));
+}
+
+/** Opt-in gate for sharing the active file/preview context with chat. */
+export async function isFileContextBridgeEnabled(dataDir: string): Promise<boolean> {
+  return (await listInstalledPlugins(dataDir)).some((plugin) =>
+    plugin.enabled
+    && plugin.compatibility?.compatible !== false
+    && plugin.manifest.id === "org.brainpilot.file-context-bridge",
+  );
 }
 
 async function readArtifact(dataDir: string, artifact: NonNullable<MarketplaceEntry["artifact"]>): Promise<Buffer> {
@@ -766,6 +816,7 @@ export async function importExternalPlugin(
       activeVersion: manifest.version,
       sourceFormat: metadata.format,
       unsupported: metadata.unsupported,
+      ...(resolved.repositoryUrl ? { repositoryUrl: resolved.repositoryUrl } : {}),
     };
     installed.compatibility = compatibilityFor(manifest, { ...registry.plugins, [manifest.id]: installed });
     registry.plugins[manifest.id] = installed;
@@ -819,6 +870,9 @@ export async function installPlugin(dataDir: string, id: string, requestedVersio
       enabled: false,
       installedAt: new Date().toISOString(),
       activeVersion: release.version,
+      sourceFormat: entry.sourceFormat ?? "brainpilot",
+      ...(entry.repositoryUrl ? { repositoryUrl: entry.repositoryUrl } : {}),
+      ...(entry.unsupported?.length ? { unsupported: entry.unsupported } : {}),
     };
     installed.compatibility = compatibilityFor(release.manifest, { ...registry.plugins, [id]: installed });
     registry.plugins[id] = installed;

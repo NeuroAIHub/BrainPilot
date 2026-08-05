@@ -28,6 +28,7 @@ export interface ResolvedExternalPlugin extends ResolvedPlugin {
   displayName: string;
   description: string;
   publisher: string;
+  repositoryUrl?: string;
   inlineMcpConfig?: unknown;
   inlineHookConfig?: unknown;
 }
@@ -96,6 +97,19 @@ function authorName(manifest: JsonObject): string {
     : "External plugin";
 }
 
+function repositoryUrl(manifest: JsonObject): string | undefined {
+  const candidate = typeof manifest.repository === "string"
+    ? manifest.repository
+    : object(manifest.repository) && typeof manifest.repository.url === "string"
+      ? manifest.repository.url
+      : typeof manifest.homepage === "string"
+        ? manifest.homepage
+        : undefined;
+  if (!candidate) return undefined;
+  const normalized = candidate.replace(/^git\+/, "").replace(/\.git$/, "");
+  try { return new URL(normalized).protocol === "https:" ? normalized : undefined; } catch { return undefined; }
+}
+
 function unsupportedForManifest(manifest: JsonObject, format: ImportablePluginSourceFormat): string[] {
   const unsupported: string[] = [];
   const keys = format === "pi-package"
@@ -140,6 +154,7 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
   if (hookPath && !await exists(hookPath)) throw new Error(`Hooks config not found: ${hookPath}`);
 
   const unsupported = unsupportedForManifest(manifest, format);
+  const upstreamRepository = repositoryUrl(manifest);
   for (const conventional of ["agents", "commands", "lsp", "monitors", "channels"]) {
     if (!unsupported.includes(conventional) && await exists(path.join(root, conventional))) unsupported.push(conventional);
   }
@@ -153,6 +168,7 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
       : manifest.name,
     description: typeof manifest.description === "string" && manifest.description.trim() ? manifest.description.trim() : `${manifest.name} imported from ${format}`,
     publisher: authorName(manifest),
+    ...(upstreamRepository ? { repositoryUrl: upstreamRepository } : {}),
     skillPaths,
     ...(mcpConfigPath ? { mcpConfigPath } : {}),
     ...(hookPath ? { hookConfig: { dialect: format, path: hookPath } } : {}),
@@ -169,6 +185,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
   const skillLocations = stringList(pi.skills).map((entry) => resolveInside(root, entry, "pi.skills path"));
   const skillPaths = await collectSkillFiles(root, skillLocations);
   const unsupported = unsupportedForManifest(pi, "pi-package");
+  const upstreamRepository = repositoryUrl(manifest);
   return {
     format: "pi-package",
     id: normalizeId(typeof manifest.name === "string" ? manifest.name : path.basename(root)),
@@ -177,6 +194,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
     displayName: typeof manifest.name === "string" ? manifest.name : path.basename(root),
     description: typeof manifest.description === "string" && manifest.description.trim() ? manifest.description : "Pi package imported into BrainPilot",
     publisher: authorName(manifest),
+    ...(upstreamRepository ? { repositoryUrl: upstreamRepository } : {}),
     skillPaths,
     unsupported,
   };

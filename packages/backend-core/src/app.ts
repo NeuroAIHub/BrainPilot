@@ -66,6 +66,7 @@ import { computeKbInventory } from "./kb-inventory.js";
 import {
   installPlugin,
   importExternalPlugin,
+  isFileContextBridgeEnabled,
   listEnabledPreviewers,
   listInstalledPlugins,
   listMarketplace,
@@ -465,6 +466,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/plugins/installed", async (c) => c.json(await listInstalledPlugins(dataDir)));
   api.get("/plugins/updates", async (c) => c.json(await listPluginUpdates(dataDir)));
   api.get("/plugins/enabled-previewers", async (c) => c.json(await listEnabledPreviewers(dataDir)));
+  api.get("/plugins/file-context-enabled", async (c) => c.json({ enabled: await isFileContextBridgeEnabled(dataDir) }));
   api.get("/plugins/compatibility", async (c) => {
     try {
       const version = c.req.query("brainpilotVersion") ?? pkg.version;
