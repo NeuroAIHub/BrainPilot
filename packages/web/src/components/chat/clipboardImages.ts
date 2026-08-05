@@ -74,3 +74,23 @@ export function renamePastedImages(
     lastModified: image.lastModified,
   }));
 }
+
+/** Rename and reserve a paste batch synchronously before any upload starts. */
+export function reservePastedImages(
+  images: readonly File[],
+  reservedNames: Set<string>,
+  now = new Date(),
+): File[] {
+  const renamed = renamePastedImages(images, [...reservedNames], now);
+  for (const file of renamed) reservedNames.add(file.name);
+  return renamed;
+}
+
+/** Offer clipboard images to a receiver; true means the paste was accepted. */
+export function offerClipboardImages(
+  data: ClipboardImageData,
+  receiver: (files: File[]) => boolean,
+): boolean {
+  const images = extractClipboardImages(data);
+  return images.length > 0 && receiver(images);
+}

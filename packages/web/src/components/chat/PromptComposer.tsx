@@ -13,7 +13,7 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
-import { renamePastedImages } from "./clipboardImages";
+import { reservePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
@@ -43,6 +43,11 @@ type ComposerAttachment = {
   name: string;
   type?: string;
   previewUrl?: string;
+};
+
+type QueuedUpload = {
+  file: File;
+  uploadId: string;
 };
 
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
@@ -89,10 +94,14 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
   // #305: replace boolean busy with full progress UI state; null = idle.
   const [uploadState, setUploadState] = useState<ComposerUploadState | null>(null);
+  const [queuedUploadCount, setQueuedUploadCount] = useState(0);
   const uploadAbortRef = useRef<AbortController | null>(null);
+  const uploadQueueRef = useRef<QueuedUpload[]>([]);
+  const uploadWorkerRef = useRef<Promise<void> | null>(null);
+  const reservedUploadNamesRef = useRef(new Set<string>());
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
-  const uploading = uploadState != null;
+  const uploading = uploadState != null || queuedUploadCount > 0;
   const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
@@ -102,7 +111,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   );
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
-  const canSend = sandboxStatus === "running" && !isSending && (isConnected || isDraft);
+  const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
 
   useEffect(() => {
     attachmentsRef.current = attachments;
@@ -110,6 +119,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
 
   useEffect(() => () => {
     uploadAbortRef.current?.abort();
+    uploadQueueRef.current = [];
     attachmentsRef.current.forEach(revokeAttachmentPreview);
   }, []);
 
@@ -427,7 +437,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     event.preventDefault();
     if (!sessionId) return;
     const content = draftStore.get(sessionId).trim();
-    if (!content || !canSend) {
+    if (!content || !canSend || uploadWorkerRef.current) {
       return;
     }
     draftStore.set(sessionId, "");
@@ -457,6 +467,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
       }
     } else {
       sentAttachments.forEach(revokeAttachmentPreview);
+      for (const attachment of sentAttachments) reservedUploadNamesRef.current.delete(attachment.name);
     }
   };
 
@@ -468,78 +479,117 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // real session yet, so uploads land in the `"local"` staging area and the
   // runtime drains them (incl. `.attachments/`) into the real session on send
   // (#60 drainLocalUploads).
-  // #305: sequential multi-file with progress + cancel (one AbortController for
-  // the whole batch). Abort is not treated as a failure toast; successful chips
-  // already added are kept.
-  const handleFilesChosen = async (files: FileList | readonly File[] | null) => {
-    if (!files || files.length === 0) return;
-    const uploadId = currentSession?.id ?? currentSandbox?.id;
-    if (!uploadId) return;
-    const list = Array.from(files);
+  // One worker drains a queue sequentially. New picker selections and paste
+  // batches may append while it is running without replacing progress/cancel
+  // state or racing writes to the same attachment path.
+  const startUploadWorker = () => {
+    if (uploadWorkerRef.current) return;
     const controller = new AbortController();
     uploadAbortRef.current = controller;
     setComposerError(null);
-    try {
-      for (let i = 0; i < list.length; i++) {
-        if (controller.signal.aborted) break;
-        const file = list[i]!;
+    let processed = 0;
+    const worker = (async () => {
+      while (!controller.signal.aborted) {
+        const entry = uploadQueueRef.current.shift();
+        setQueuedUploadCount(uploadQueueRef.current.length);
+        if (!entry) break;
+        const { file, uploadId } = entry;
         setUploadState({
           filename: file.name,
-          fileIndex: i + 1,
-          fileCount: list.length,
+          fileIndex: processed + 1,
+          fileCount: processed + 1 + uploadQueueRef.current.length,
           fileSize: file.size,
           percent: null,
           phase: "uploading",
         });
-        await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file, {
-          signal: controller.signal,
-          onProgress: (p) => {
-            setUploadState((prev) =>
-              prev && prev.filename === file.name
-                ? { ...prev, percent: p.percent, phase: p.phase }
-                : prev,
-            );
-          },
-        });
-        const previewUrl = file.type.startsWith("image/")
-          && typeof URL !== "undefined"
-          && typeof URL.createObjectURL === "function"
-          ? URL.createObjectURL(file)
-          : undefined;
-        const attachment: ComposerAttachment = {
-          name: file.name,
-          type: file.type || undefined,
-          previewUrl,
-        };
-        setAttachments((prev) => {
-          const existing = prev.find((item) => item.name === attachment.name);
-          if (!existing) return [...prev, attachment];
-          if (existing.previewUrl !== attachment.previewUrl) revokeAttachmentPreview(existing);
-          return prev.map((item) => item.name === attachment.name ? attachment : item);
-        });
+        try {
+          await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file, {
+            signal: controller.signal,
+            onProgress: (p) => {
+              setUploadState((prev) =>
+                prev && prev.filename === file.name
+                  ? { ...prev, percent: p.percent, phase: p.phase }
+                  : prev,
+              );
+            },
+          });
+          const previewUrl = file.type.startsWith("image/")
+            && typeof URL !== "undefined"
+            && typeof URL.createObjectURL === "function"
+            ? URL.createObjectURL(file)
+            : undefined;
+          const attachment: ComposerAttachment = {
+            name: file.name,
+            type: file.type || undefined,
+            previewUrl,
+          };
+          setAttachments((prev) => {
+            const existing = prev.find((item) => item.name === attachment.name);
+            if (!existing) return [...prev, attachment];
+            if (existing.previewUrl !== attachment.previewUrl) revokeAttachmentPreview(existing);
+            return prev.map((item) => item.name === attachment.name ? attachment : item);
+          });
+        } catch (e) {
+          reservedUploadNamesRef.current.delete(file.name);
+          if (isUploadAbortError(e)) break;
+          const msg = e instanceof Error ? e.message : String(e);
+          setComposerError(t("chat.upload.failed", { msg }));
+        } finally {
+          processed += 1;
+        }
       }
-    } catch (e) {
-      if (!isUploadAbortError(e)) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setComposerError(t("chat.upload.failed", { msg }));
-      }
-    } finally {
+    })();
+    uploadWorkerRef.current = worker;
+    void worker.finally(() => {
+      if (uploadWorkerRef.current !== worker) return;
+      uploadWorkerRef.current = null;
       uploadAbortRef.current = null;
       setUploadState(null);
-      if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-selecting the same file
+      setQueuedUploadCount(uploadQueueRef.current.length);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      // A file can be appended between the empty read and this finally block.
+      if (uploadQueueRef.current.length > 0) startUploadWorker();
+    });
+  };
+
+  const enqueueFiles = (files: FileList | readonly File[] | null): boolean => {
+    if (!files || files.length === 0) return false;
+    const uploadId = currentSession?.id ?? currentSandbox?.id;
+    if (!uploadId) return false;
+    const list = Array.from(files);
+    for (const file of list) {
+      reservedUploadNamesRef.current.add(file.name);
+      uploadQueueRef.current.push({ file, uploadId });
     }
+    setQueuedUploadCount(uploadQueueRef.current.length);
+    setUploadState((current) => current
+      ? { ...current, fileCount: current.fileIndex + uploadQueueRef.current.length }
+      : current);
+    startUploadWorker();
+    return true;
+  };
+
+  const handleFilesChosen = (files: FileList | readonly File[] | null) => {
+    enqueueFiles(files);
   };
 
   const cancelUpload = () => {
+    for (const entry of uploadQueueRef.current) {
+      reservedUploadNamesRef.current.delete(entry.file.name);
+    }
+    uploadQueueRef.current = [];
+    setQueuedUploadCount(0);
     uploadAbortRef.current?.abort();
   };
 
-  const handlePastedImages = (images: File[]) => {
-    const renamed = renamePastedImages(images, attachments.map((item) => item.name));
-    void handleFilesChosen(renamed);
+  const handlePastedImages = (images: File[]): boolean => {
+    if (!(currentSession?.id ?? currentSandbox?.id)) return false;
+    const renamed = reservePastedImages(images, reservedUploadNamesRef.current);
+    return enqueueFiles(renamed);
   };
 
   const removeAttachment = (name: string) => {
+    reservedUploadNamesRef.current.delete(name);
     setAttachments((prev) => {
       const removed = prev.find((item) => item.name === name);
       if (removed) revokeAttachmentPreview(removed);
@@ -711,7 +761,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
               <IconButton
                 label={t("chat.aria.attachFile")}
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || !currentSandbox}
+                disabled={!currentSandbox}
               >
                 <Paperclip size={17} />
               </IconButton>

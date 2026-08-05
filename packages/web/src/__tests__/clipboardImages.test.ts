@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   extractClipboardImages,
+  offerClipboardImages,
   pastedImageNames,
+  reservePastedImages,
 } from "../components/chat/clipboardImages";
 
 describe("clipboard image paste (#412)", () => {
@@ -50,5 +52,26 @@ describe("clipboard image paste (#412)", () => {
       "pasted-image-20260805-093012-2.jpg",
       "pasted-image-20260805-093012-3.webp",
     ]);
+  });
+
+  it("reserves names across paste batches before uploads complete", () => {
+    const now = new Date(2026, 7, 5, 9, 30, 12);
+    const reserved = new Set<string>();
+    const image = () => new File(["png"], "clipboard.png", { type: "image/png" });
+    const first = reservePastedImages([image()], reserved, now);
+    const second = reservePastedImages([image()], reserved, now);
+    expect(first[0]!.name).toBe("pasted-image-20260805-093012-1.png");
+    expect(second[0]!.name).toBe("pasted-image-20260805-093012-1-2.png");
+    expect([...reserved]).toEqual([first[0]!.name, second[0]!.name]);
+  });
+
+  it("keeps the browser fallback when the receiver cannot accept uploads", () => {
+    const png = new File(["png"], "clipboard.png", { type: "image/png" });
+    const data = {
+      items: [{ kind: "file", type: "image/png", getAsFile: () => png }],
+      files: [],
+    } as unknown as Pick<DataTransfer, "items" | "files">;
+    expect(offerClipboardImages(data, () => false)).toBe(false);
+    expect(offerClipboardImages(data, () => true)).toBe(true);
   });
 });
