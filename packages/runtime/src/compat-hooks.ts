@@ -11,6 +11,7 @@ export interface CompatPluginProjection {
   dataDir: string;
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+  extensionPaths?: string[];
 }
 
 interface HookCommand {

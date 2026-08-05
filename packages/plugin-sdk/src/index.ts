@@ -122,6 +122,8 @@ export interface MarketplaceEntry {
   capabilities?: PluginMarketCapability[];
   unsupported?: string[];
   requirements?: string[];
+  /** Whether enabling the plugin loads executable code into the local agent runtime. */
+  executesLocalCode?: boolean;
 }
 
 export interface MarketplaceSourceStatus {

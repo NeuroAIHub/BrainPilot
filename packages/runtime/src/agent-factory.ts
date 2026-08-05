@@ -162,12 +162,16 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
       }),
     );
   }
+  const additionalExtensionPaths = params.compatPluginProjections
+    ?.flatMap((projection) => projection.extensionPaths ?? []);
   const resourceLoader = new DefaultResourceLoader({
     cwd: params.cwd,
     agentDir,
     settingsManager,
     noSkills: true,
+    noExtensions: true,
     noContextFiles: true,
+    ...(additionalExtensionPaths?.length ? { additionalExtensionPaths } : {}),
     ...(params.skillPaths && params.skillPaths.length > 0
       ? { additionalSkillPaths: params.skillPaths }
       : {}),
@@ -358,10 +362,14 @@ interface PiSdk {
     systemPrompt?: string;
     /** Drop host-global skill auto-discovery (~/.pi/agent/skills, etc.). */
     noSkills?: boolean;
+    /** Drop host-global extension discovery while retaining explicit plugin paths. */
+    noExtensions?: boolean;
     /** Drop the AGENTS.md/CLAUDE.md cwd→root context-file walk (host-dependent identity). */
     noContextFiles?: boolean;
     /** Explicit skill dirs/files; loaded even when noSkills is true, and not trust-gated. */
     additionalSkillPaths?: string[];
+    /** Explicit trusted Pi extension files; loaded even when noExtensions is true. */
+    additionalExtensionPaths?: string[];
     /** Inline Pi extensions: each is called with the per-session ExtensionAPI. */
     extensionFactories?: unknown[];
   }) => { reload(): Promise<void> };
