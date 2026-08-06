@@ -87,7 +87,6 @@ function materializePluginMcpSpec(spec: McpServerSpec, env: Record<string, strin
     env: mergedEnv,
   };
 }
-
 /**
  * Options forwarded to the SDK's `callTool(params, resultSchema?, options?)`
  * third parameter. We keep only the fields the bridge actually sets — a
