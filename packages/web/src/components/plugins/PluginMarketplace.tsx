@@ -19,13 +19,14 @@ import {
 import type { MarketplaceEntry as MarketplaceSdkEntry, PluginMarketCapability, PluginSourceFormat } from "@brainpilot/plugin-sdk";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
+import { DatasetMarketplace } from "./DatasetMarketplace";
 
-export type MarketplaceCategory = "skills" | "knowledge" | "plugins";
+export type MarketplaceCategory = "skills" | "knowledge" | "plugins" | "datasets";
 type MarketplaceEntry = Awaited<ReturnType<typeof api.plugins.marketplace>>[number];
 type InstalledEntry = Awaited<ReturnType<typeof api.plugins.installed>>[number];
 type PluginUpdate = Awaited<ReturnType<typeof api.plugins.updates>>[number];
 
-const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "plugins"];
+const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "datasets", "plugins"];
 export type MarketplaceSourceFilter = "all" | PluginSourceFormat | "verified";
 const SOURCE_FILTERS: MarketplaceSourceFilter[] = ["all", "brainpilot", "codex", "claude-code", "pi-package", "verified"];
 
@@ -102,6 +103,7 @@ export function PluginMarketplace() {
   const [busyPluginId, setBusyPluginId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [datasetCount, setDatasetCount] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -131,7 +133,7 @@ export function PluginMarketplace() {
 
   const installedById = useMemo(() => new Map(installed.map((entry) => [entry.manifest.id, entry])), [installed]);
   const updatesById = useMemo(() => new Map(updates.map((entry) => [entry.pluginId, entry])), [updates]);
-  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [marketplace]);
+  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, item === "datasets" ? datasetCount : marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [datasetCount, marketplace]);
   const visible = useMemo(() => marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === category && matchesMarketplaceSource(entry, sourceFilter) && matchesMarketplaceQuery(entry, query)), [category, marketplace, query, sourceFilter]);
   const enabledCount = installed.filter((entry) => entry.enabled).length;
   const selectedEntry = marketplace.find((entry) => entry.manifest.id === selectedPluginId) ?? null;
@@ -230,7 +232,7 @@ export function PluginMarketplace() {
       </header>
 
       <section className="plugin-market__summary" aria-label={t("marketplace.title")}>
-        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length}</strong></div>
+        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length + datasetCount}</strong></div>
         <div><span>{t("marketplace.summary.installed")}</span><strong>{installed.length}</strong></div>
         <div><span>{t("marketplace.summary.enabled")}</span><strong>{enabledCount}</strong></div>
       </section>
@@ -249,6 +251,7 @@ export function PluginMarketplace() {
             <input aria-label={t("marketplace.search")} onChange={(event) => setQuery(event.target.value)} placeholder={t("marketplace.search")} type="search" value={query} />
           </label>
         </div>
+        {category === "datasets" ? <DatasetMarketplace onCount={setDatasetCount} query={query} /> : <>
         <div className="plugin-market__source-filters" aria-label={t("marketplace.sourceFilter.label")}>
           {SOURCE_FILTERS.map((item) => (
             <button className={sourceFilter === item ? "is-active" : ""} key={item} onClick={() => setSourceFilter(item)} type="button">
@@ -309,6 +312,7 @@ export function PluginMarketplace() {
             );
           })}
         </div>
+        </>}
       </section>
 
       {selectedEntry ? (() => {

@@ -56,6 +56,37 @@ import type {
 
 export type MarketplaceApiEntry = MarketplaceEntry & { compatibility: PluginCompatibility };
 export type InstalledPluginApiEntry = InstalledPlugin & { compatibility: PluginCompatibility };
+export interface DatasetCatalogEntry {
+  id: string;
+  name: string;
+  summary: string;
+  description: string;
+  provider: string;
+  modalities: string[];
+  subjects?: string;
+  size?: string;
+  license: string;
+  access: "direct" | "credentials" | "application";
+  accessNote: string;
+  homepage: string;
+  citation?: string;
+  credentialFields?: Array<{ id: string; label: string; secret?: boolean; required?: boolean; help?: string }>;
+  tool?: string;
+  downloadAvailable?: boolean;
+  downloadCommand?: string;
+}
+export interface DatasetDownloadJob {
+  id: string;
+  datasetId: string;
+  datasetName: string;
+  status: "queued" | "downloading" | "completed" | "failed";
+  targetDir: string;
+  startedAt: string;
+  finishedAt?: string;
+  error?: string;
+  bytesDownloaded?: number;
+  totalBytes?: number;
+}
 
 const API_BASE = "/api";
 
@@ -1124,6 +1155,24 @@ export const api = {
     previewAssetUrl(pluginId: string, version: string, asset: string): string {
       const encodedAsset = asset.split("/").map(encodeURIComponent).join("/");
       return `${API_BASE}/plugins/${encodeURIComponent(pluginId)}/${encodeURIComponent(version)}/assets/${encodedAsset}`;
+    },
+  },
+
+  datasets: {
+    async catalog(): Promise<DatasetCatalogEntry[]> {
+      if (runtimeConfig.useMockBackend) return [];
+      return handleJson(await apiFetch(`${API_BASE}/datasets`, { headers: authHeaders() }));
+    },
+    async downloads(): Promise<DatasetDownloadJob[]> {
+      if (runtimeConfig.useMockBackend) return [];
+      return handleJson(await apiFetch(`${API_BASE}/datasets/downloads`, { headers: authHeaders() }));
+    },
+    async download(id: string, credentials: Record<string, string>): Promise<DatasetDownloadJob> {
+      return handleJson(await apiFetch(`${API_BASE}/datasets/${encodeURIComponent(id)}/download`, {
+        method: "POST",
+        headers: authHeaders(),
+        body: JSON.stringify({ credentials }),
+      }));
     },
   },
 
