@@ -12,6 +12,7 @@ import {
 } from "@brainpilot/plugin-sdk";
 
 export const AUDITOR_PLUGIN_ID = "org.brainpilot.auditor";
+export const GOT_PLUGIN_ID = "org.brainpilot.got";
 export const SYSTEM_PLUGIN_DISABLE_ENV = "BP_EXPERIMENT_DISABLE_PLUGINS";
 
 export interface SystemPluginSnapshot {
@@ -36,6 +37,7 @@ interface SystemPluginSpec {
 
 const SPECS: readonly SystemPluginSpec[] = [
   { packageName: "@brainpilot/plugin-auditor", defaultEnabled: true },
+  { packageName: "@brainpilot/plugin-got", defaultEnabled: true },
 ];
 
 function disabledPluginIds(value: string | undefined): Set<string> {

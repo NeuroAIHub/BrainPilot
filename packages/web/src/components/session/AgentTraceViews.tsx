@@ -25,7 +25,7 @@ import {
 } from "./traceEmptyState";
 
 /** Materialize collapsible V2 episode group nodes without mutating session state. */
-function withEpisodeGroups(nodes: TraceNode[], episodes: Array<{ id: string; title: string }> | undefined, collapsed: boolean): TraceNode[] {
+export function withEpisodeGroups(nodes: TraceNode[], episodes: Array<{ id: string; title: string }> | undefined, collapsed: boolean): TraceNode[] {
   if (!collapsed || !episodes?.length) return nodes;
   const titleByEpisode = new Map(episodes.map((episode) => [episode.id, episode.title]));
   const members = new Map<string, TraceNode[]>();
@@ -157,6 +157,10 @@ export function TracePanel() {
   };
 
   const allNodes = trace?.nodes ?? [];
+  const episodeTitles = useMemo(
+    () => new Map((trace?.episodes ?? []).map((episode) => [episode.id, episode.title])),
+    [trace?.episodes],
+  );
   const playbackNodes = useMemo(() => allNodes.slice(0, playbackIndex), [allNodes, playbackIndex]);
 
   const filteredNodes = useMemo(() => {
@@ -175,12 +179,13 @@ export function TracePanel() {
         node.context,
         node.agent,
         nodeKind,
+        node.primaryEpisodeId ? episodeTitles.get(node.primaryEpisodeId) : undefined,
         ...node.toolCalls,
         ...node.artifacts.map((artifact) => artifact.path),
       ].filter(Boolean).join(" ").toLowerCase();
       return matchesStatus && matchesType && (!normalizedQuery || searchText.includes(normalizedQuery));
     });
-  }, [query, statusFilter, playbackNodes, typeFilter]);
+  }, [query, statusFilter, playbackNodes, typeFilter, episodeTitles]);
 
   const visibleNodeIds = useMemo(() => new Set(filteredNodes.map((node) => node.id)), [filteredNodes]);
   const visibleNodes = useMemo(
@@ -424,6 +429,7 @@ export function TracePanel() {
                   fitToken={fitToken}
                   emptyLabel={emptyLabel}
                   formatKind={formatNodeKind}
+                  episodeTitles={episodeTitles}
                   showProposedDependencies={showProposedDependencies}
                   zoomLabels={{
                     controls: t("trace.aria.zoomControls"),

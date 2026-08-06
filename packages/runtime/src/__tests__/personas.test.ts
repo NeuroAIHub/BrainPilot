@@ -89,6 +89,15 @@ describe("personas", () => {
     expect(PERSONAS.trace!).not.toContain("skill_search");
   });
 
+  it("teaches Trace research-unit granularity and direct dependency rules", () => {
+    const trace = PERSONAS.trace!;
+    expect(trace).toContain("curate-research-trace");
+    expect(trace).toContain("setting, its result");
+    expect(trace).toContain("Settings in one ablation are normally parallel");
+    expect(trace).toContain("Episode membership");
+    expect(trace).toContain("only direct parents");
+  });
+
   it("expert personas carry the flat task completion contract", () => {
     for (const name of ["librarian", "engineer", "experimentalist", "writer"]) {
       expect(PERSONAS[name], name).toContain('complete_task(task_id="<exact assigned ID>"');

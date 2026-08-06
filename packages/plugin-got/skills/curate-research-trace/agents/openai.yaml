@@ -1,0 +1,4 @@
+interface:
+  display_name: "Curate Research Trace"
+  short_description: "Organize research events into clear causal trace nodes"
+  default_prompt: "Use $curate-research-trace to organize this research report into Episodes, nodes, and direct dependencies."
