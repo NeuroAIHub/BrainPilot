@@ -39,12 +39,15 @@ describe("GoT ephemeral context", () => {
     const node = trace.createNode({
       title: "Evidence",
       description: "A durable result",
+      episode: "Ablation — dropout",
       confidence: "high",
       reviewConclusion: "approved",
     });
     const block = renderPrincipalGoTContext(trace.getGraphV2());
     expect(block).toContain(`revision="${trace.getGraphV2().revision}"`);
     expect(block).toContain(`"id":"${node.id}"`);
+    expect(block).toContain('"episode":"Ablation — dropout"');
+    expect(block).not.toContain(String(trace.getNodeV2(node.id)?.primaryEpisodeId));
     expect(block).toContain("get_trace_neighborhood");
     expect(block).not.toContain('"type":"session_start"');
   });
@@ -84,8 +87,8 @@ describe("GoT ephemeral context", () => {
 
   it("renders a bound audit with detailed local and compact global evidence", () => {
     const trace = new GraphOfTrace("s");
-    const parent = trace.createNode({ title: "Evidence" });
-    const child = trace.createNode({ title: "Conclusion" });
+    const parent = trace.createNode({ title: "Evidence", episode: "Main Experiment — accuracy" });
+    const child = trace.createNode({ title: "Conclusion", episode: "Final Synthesis" });
     trace.proposeCausalParent(child.id, parent.id, "consumed evidence", { type: "agent", name: "trace" });
     const target = trace.listPendingAuditTargets().find((item) => item.parentNodeId === parent.id)!;
     const block = renderGoTAuditContext({
@@ -99,6 +102,8 @@ describe("GoT ephemeral context", () => {
     expect(block).toContain("<target_evidence>");
     expect(block).toContain("<local_neighborhood>");
     expect(block).toContain("<compact_active_graph>");
+    expect(block).toContain('"episode": "Final Synthesis"');
     expect(block).toContain("Textual traceability alone is not scientific validation");
+    expect(block).toContain("Episode membership alone never establishes dependency");
   });
 });

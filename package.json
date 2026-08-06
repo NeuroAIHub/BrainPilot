@@ -14,6 +14,8 @@
     "packages/client-cli",
     "packages/web",
     "packages/skills",
+    "packages/plugin-auditor",
+    "packages/plugin-got",
     "packages/kb-scripts",
     "packages/docs"
   ],
@@ -25,13 +27,14 @@
     "docs:dev": "npm run dev -w @brainpilot/docs --",
     "typecheck": "tsc -b packages/plugin-sdk packages/protocol packages/skills packages/runtime packages/backend-core packages/cli packages/client-cli",
     "test": "vitest run",
+    "test:datasets": "npm run build -w @brainpilot/backend-core && node scripts/test-public-dataset-downloads.mjs",
     "test:watch": "vitest",
     "bp": "node packages/cli/dist/bin.js",
     "version:sync": "node scripts/sync-versions.js",
     "version:check": "node scripts/sync-versions.js --check",
     "release:build": "npm run build",
     "release:dry": "npm publish --workspaces --if-present --dry-run --access public",
-    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
+    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/plugin-auditor --workspace @brainpilot/plugin-got --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

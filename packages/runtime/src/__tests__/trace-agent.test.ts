@@ -169,7 +169,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
         // Trace consumes the envelope and writes a node — exercises a real run.
         onPrompt: (text) =>
           text.includes("[Trace Event]")
-            ? { tool: "create_trace_node", args: { title: "a decision", confidence: "medium", confidence_reason: "Source record is available." } }
+            ? { tool: "create_trace_node", args: { title: "a decision", description: "The reported research decision.", episode: "Method Design — decision", confidence: "medium", confidence_reason: "Source record is available." } }
             : undefined,
       },
     });
@@ -210,7 +210,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       trace: {
         onPrompt: (text) =>
           text.includes("[Trace Event]")
-            ? { tool: "create_trace_node", args: { title: "a decision", confidence: "medium", confidence_reason: "Source record is available." } }
+            ? { tool: "create_trace_node", args: { title: "a decision", description: "The reported research decision.", episode: "Method Design — decision", confidence: "medium", confidence_reason: "Source record is available." } }
             : undefined,
       },
     });
@@ -236,7 +236,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Conclusion", confidence: "medium", confidence_reason: "One result file supports it." } }
+          ? { tool: "create_trace_node", args: { title: "Conclusion", description: "The reported conclusion supported by one result.", episode: "Final Synthesis", confidence: "medium", confidence_reason: "One result file supports it." } }
           : undefined,
       },
       auditor: {
@@ -253,6 +253,33 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
     expect(m.listAgents(s.id).map((agent) => agent.name)).toContain("auditor");
   });
 
+  it("does not schedule Auditor review when the system plugin is disabled", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "an ablation conclusion" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: (text) => text.includes("[Trace Event]")
+          ? { tool: "create_trace_node", args: { title: "Ablation", description: "The reported ablation result.", episode: "Ablation — component", confidence: "medium", confidence_reason: "One result file." } }
+          : undefined,
+      },
+    });
+    const m = new SessionManager({
+      persist: false,
+      agentFactory: factory,
+      systemPluginEnv: { BP_EXPERIMENT_DISABLE_PLUGINS: "org.brainpilot.auditor" },
+    });
+    const s = await m.createSession();
+
+    await m.sendMessage(s.id, "go");
+    await waitFor(() => m.getTrace(s.id)?.nodes.some((node) => node.title === "Ablation") ?? false);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.listAgents(s.id).map((agent) => agent.name)).not.toContain("auditor");
+    expect(m.taskNotificationCount(s.id, "auditor")).toBe(0);
+  });
+
   it("keeps an Auditor notification durable when no conclusion is submitted", async () => {
     let auditorTurns = 0;
     const factory = scriptedFactory({
@@ -263,7 +290,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Unreviewed", confidence: "medium", confidence_reason: "One source record." } }
+          ? { tool: "create_trace_node", args: { title: "Unreviewed", description: "An unreviewed research conclusion.", episode: "Final Synthesis", confidence: "medium", confidence_reason: "One source record." } }
           : undefined,
       },
       auditor: { onPrompt: () => { auditorTurns += 1; return undefined; } },
@@ -293,7 +320,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
       },
       trace: {
         onPrompt: (text) => text.includes("[Trace Event]")
-          ? { tool: "create_trace_node", args: { title: "Changing", confidence: "medium", confidence_reason: "Initial record." } }
+          ? { tool: "create_trace_node", args: { title: "Changing", description: "A conclusion whose evidence may change.", episode: "Final Synthesis", confidence: "medium", confidence_reason: "Initial record." } }
           : undefined,
       },
       auditor: {
@@ -354,7 +381,7 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
         enqueuePendingTraceAudits(entry: unknown): Promise<void>;
       };
       const entry2 = internal2.sessions.get(id)!;
-      await waitFor(() => auditorTurns === 1 && entry2.taskLedger.isPaused("auditor"));
+      await waitFor(() => auditorTurns === 1 && entry2.taskLedger.isPaused("auditor"), 5000);
       expect(entry2.traceAuditQueued.has(node.id)).toBe(true);
       await internal2.enqueuePendingTraceAudits(entry2);
       expect(m2.taskNotificationCount(id, "auditor")).toBe(1);

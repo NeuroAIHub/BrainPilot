@@ -1,0 +1,27 @@
+{
+  "name": "@brainpilot/plugin-auditor",
+  "version": "0.1.2",
+  "engines": {
+    "node": ">=22"
+  },
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "description": "BrainPilot built-in Auditor system plugin",
+  "files": [
+    "manifest.json",
+    "prompts",
+    "skills"
+  ],
+  "exports": {
+    "./package.json": "./package.json",
+    "./manifest.json": "./manifest.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/plugin-auditor"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

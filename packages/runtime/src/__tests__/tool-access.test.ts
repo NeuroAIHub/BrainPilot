@@ -219,7 +219,6 @@ describe("tool access control (§9)", () => {
         "get_trace_neighborhood",
         "get_trace_diff",
         "edit_trace_review",
-        "submit_audit_report",
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
@@ -237,11 +236,12 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("destroy_agent");
   });
 
-  it("auditor builtins are read-only and reports use a system tool", () => {
+  it("auditor builtins are read-only and separate report submission is disabled", () => {
     const a = builtinToolNamesForRole("expert", "auditor");
     expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash"]));
     expect(a).not.toContain("write");
     expect(a).not.toContain("edit");
+    expect(systemToolNamesForRole("expert", "auditor")).not.toContain("submit_audit_report");
   });
 
   it("lets Auditor list pending node and parent reviews without rebinding", async () => {
@@ -260,7 +260,7 @@ describe("tool access control (§9)", () => {
     expect(d.currentTraceAuditTarget).toBeUndefined();
   });
 
-  it("binds Auditor targets in the Host and persists a report", async () => {
+  it("binds Auditor targets in the Host without exposing report submission", async () => {
     const d = deps("auditor");
     const node = d.trace.createNode({ title: "Conclusion", confidence: "medium", confidenceReason: "One result file." });
     const target = d.trace.listPendingAuditTargets()[0]!;
@@ -270,8 +270,8 @@ describe("tool access control (§9)", () => {
     expect((await tools.get("edit_trace_review")!.execute({ conclusion: "approve", reason: "The bound evidence supports this node." })).isError)
       .not.toBe(true);
     expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
-    await tools.get("submit_audit_report")!.execute({ risk: "low", summary: "Evidence is consistent.", report: "# Audit\nEvidence is consistent." });
-    expect(d.trace.getAuditReports()).toContainEqual(expect.objectContaining({ kind: "trace", target: { nodeId: node.id } }));
+    expect(tools.has("submit_audit_report")).toBe(false);
+    expect(d.trace.getAuditReports()).toEqual([]);
     expect(tools.has("dispatch_task")).toBe(false);
   });
 
@@ -281,6 +281,8 @@ describe("tool access control (§9)", () => {
     expect((await tools.get("create_trace_node")!.execute({ title: "Missing confidence" })).isError).toBe(true);
     expect((await tools.get("create_trace_node")!.execute({
       title: "Ablation",
+      description: "Evaluate one ablation setting on a complete seed.",
+      episode: "Ablation — regularization",
       confidence: "medium",
       confidence_reason: "One complete seed.",
     })).isError).not.toBe(true);
@@ -288,11 +290,15 @@ describe("tool access control (§9)", () => {
     const agentGraph = JSON.parse((await tools.get("get_trace_graph")!.execute({})).content[0]!.text) as {
       revision: number;
       rootNodeId?: string;
-      nodes: Array<{ id: string; parents: unknown[] }>;
+      episodes?: string[];
+      nodes: Array<{ id: string; parents: unknown[]; episode?: string }>;
       dependencies?: unknown;
       artifacts?: unknown;
     };
     expect(agentGraph.nodes).toEqual([expect.objectContaining({ id: node.id, parents: [] })]);
+    expect(agentGraph.episodes).toEqual(["Ablation — regularization"]);
+    expect(agentGraph.nodes[0]?.episode).toBe("Ablation — regularization");
+    expect(agentGraph.nodes[0]).not.toHaveProperty("primaryEpisodeId");
     expect(agentGraph.rootNodeId).toBe(d.trace.getGraphV2().meta.rootNodeId);
     expect(agentGraph).not.toHaveProperty("dependencies");
     expect(agentGraph).not.toHaveProperty("artifacts");
@@ -307,6 +313,128 @@ describe("tool access control (§9)", () => {
     expect(withExplicitRoot.nodes.find((item) => item.id === node.id)?.parents).toContainEqual(
       expect.objectContaining({ nodeId: rootId, origin: "trace" }),
     );
+  });
+
+  it("normalizes Episodes and applies parent batches atomically", async () => {
+    const d = deps("trace");
+    const tools = new Map(systemToolsForRole("trace", "trace", d).map((tool) => [tool.name, tool]));
+    const create = tools.get("create_trace_node")!;
+    const update = tools.get("update_trace_node")!;
+    const validCreate = {
+      title: "Valid title",
+      description: "A complete standalone research unit.",
+      episode: "Validation Episode",
+      confidence: "medium",
+      confidence_reason: "One source record is available.",
+    };
+    for (const invalid of [
+      { ...validCreate, title: "   " },
+      { ...validCreate, description: "   " },
+      { ...validCreate, episode: "   " },
+      { ...validCreate, confidence_reason: "   " },
+      {
+        ...validCreate,
+        parent_candidates: [{
+          node_id: d.trace.getGraphV2().meta.rootNodeId,
+          reason: "   ",
+        }],
+      },
+    ]) {
+      expect((await create.execute(invalid)).isError).toBe(true);
+    }
+    expect(d.trace.getGraphV2().episodes).toEqual([]);
+
+    const parentResult = await create.execute({
+      title: "Dropout baseline setting",
+      description: "Use dropout 0.3 with the fixed evaluation protocol.",
+      episode: "  Ａｂｌａｔｉｏｎ   —  Dropout  ",
+      confidence: "high",
+      confidence_reason: "The configuration is fully specified.",
+    });
+    expect(parentResult.isError).not.toBe(true);
+    const parentId = (JSON.parse(parentResult.content[0]!.text) as { nodeId: string }).nodeId;
+
+    const childResult = await create.execute({
+      title: "Dropout baseline result",
+      description: "The baseline achieved validation accuracy 0.82.",
+      episode: "ablation — dropout",
+      confidence: "medium",
+      confidence_reason: "One complete evaluation run is available.",
+      parent_candidates: [{
+        node_id: parentId,
+        reason: "The result was produced by this exact setting.",
+      }],
+    });
+    expect(childResult.isError).not.toBe(true);
+    const childId = (JSON.parse(childResult.content[0]!.text) as { nodeId: string }).nodeId;
+    let graph = d.trace.getGraphV2();
+    expect(graph.episodes).toHaveLength(1);
+    expect(graph.episodes[0]?.title).toBe("Ablation — Dropout");
+    expect(graph.nodes.find((node) => node.id === parentId)?.primaryEpisodeId)
+      .toBe(graph.nodes.find((node) => node.id === childId)?.primaryEpisodeId);
+    expect(graph.nodes.find((node) => node.id === childId)?.parents).toEqual([
+      expect.objectContaining({ nodeId: parentId, conclusion: "candidate", origin: "trace" }),
+    ]);
+
+    const beforeNodes = graph.nodes.length;
+    const beforeEpisodes = graph.episodes.length;
+    const invalidCreate = await create.execute({
+      title: "Partially linked result",
+      description: "This node must not survive a partially invalid parent batch.",
+      episode: "Atomicity Probe",
+      confidence: "low",
+      confidence_reason: "The proposed evidence batch is incomplete.",
+      parent_candidates: [
+        { node_id: parentId, reason: "A valid parent." },
+        { node_id: "missing-parent", reason: "An invalid parent." },
+      ],
+    });
+    expect(invalidCreate.isError).toBe(true);
+    graph = d.trace.getGraphV2();
+    expect(graph.nodes).toHaveLength(beforeNodes);
+    expect(graph.episodes).toHaveLength(beforeEpisodes);
+    expect(graph.episodes.some((episode) => episode.title === "Atomicity Probe")).toBe(false);
+
+    const invalidUpdate = await update.execute({
+      node_id: childId,
+      title: "This title must not be stored",
+      episode: "Also Must Not Exist",
+      confidence: "high",
+      confidence_reason: "This update contains one invalid parent.",
+      parent_candidates: [
+        { node_id: parentId, reason: "Still the direct setting." },
+        { node_id: "missing-parent", reason: "Invalid parent." },
+      ],
+    });
+    expect(invalidUpdate.isError).toBe(true);
+    graph = d.trace.getGraphV2();
+    expect(graph.nodes.find((node) => node.id === childId)?.title).toBe("Dropout baseline result");
+    expect(graph.episodes.some((episode) => episode.title === "Also Must Not Exist")).toBe(false);
+
+    expect((await update.execute({
+      node_id: childId,
+      episode: "Environment & Reproducibility",
+      confidence: "high",
+      confidence_reason: "The result is now classified as shared reproducibility evidence.",
+    })).isError).not.toBe(true);
+    graph = d.trace.getGraphV2();
+    const moved = graph.nodes.find((node) => node.id === childId)!;
+    expect(graph.episodes.find((episode) => episode.id === moved.primaryEpisodeId)?.title)
+      .toBe("Environment & Reproducibility");
+
+    for (const invalid of [
+      { title: "   " },
+      { description: "   " },
+      { episode: "   " },
+      { parent_candidates: [{ node_id: parentId, reason: "   " }] },
+    ]) {
+      expect((await update.execute({
+        node_id: childId,
+        confidence: "high",
+        confidence_reason: "The existing node remains well supported.",
+        ...invalid,
+      })).isError).toBe(true);
+    }
   });
 });
 

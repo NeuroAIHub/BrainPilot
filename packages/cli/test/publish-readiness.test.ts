@@ -115,6 +115,28 @@ describe("targeted publish guards", () => {
     const refs: Array<{ path: string }> = tsconfig.references ?? [];
     expect(refs.some((r) => r.path === "../skills")).toBe(true);
   });
+
+  it("ships the Auditor system plugin as a pinned Runtime dependency", () => {
+    const runtime = readPkg("../../runtime/package.json");
+    const plugin = readPkg("../../plugin-auditor/package.json");
+    const manifest = readPkg("../../plugin-auditor/manifest.json");
+    expect(runtime.dependencies?.["@brainpilot/plugin-auditor"]).toMatch(/^\^/);
+    expect(plugin.files).toEqual(expect.arrayContaining(["manifest.json", "prompts", "skills"]));
+    expect(plugin.version).toBe(ROOT.version);
+    expect(manifest.version).toBe(plugin.version);
+    expect(manifest.id).toBe("org.brainpilot.auditor");
+  });
+
+  it("ships the GoT system plugin as a pinned Runtime dependency", () => {
+    const runtime = readPkg("../../runtime/package.json");
+    const plugin = readPkg("../../plugin-got/package.json");
+    const manifest = readPkg("../../plugin-got/manifest.json");
+    expect(runtime.dependencies?.["@brainpilot/plugin-got"]).toMatch(/^\^/);
+    expect(plugin.files).toEqual(expect.arrayContaining(["manifest.json", "skills"]));
+    expect(plugin.version).toBe(ROOT.version);
+    expect(manifest.version).toBe(plugin.version);
+    expect(manifest.id).toBe("org.brainpilot.got");
+  });
 });
 
 describe("license is consistent across the repo", () => {
@@ -154,5 +176,13 @@ describe("root scripts", () => {
   // (and require.resolve at materialize time) breaks for npm installs.
   it("publishes @brainpilot/skills in release", () => {
     expect(pkg.scripts?.release).toContain("@brainpilot/skills");
+  });
+
+  it("publishes @brainpilot/plugin-auditor in release", () => {
+    expect(pkg.scripts?.release).toContain("@brainpilot/plugin-auditor");
+  });
+
+  it("publishes @brainpilot/plugin-got in release", () => {
+    expect(pkg.scripts?.release).toContain("@brainpilot/plugin-got");
   });
 });

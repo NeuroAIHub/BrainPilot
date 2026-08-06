@@ -58,8 +58,12 @@ describe("two-path skill loading", () => {
     const session = await mgr.createSession({});
     await mgr.ensureAgent(session.id, "principal");
 
-    // Always-on dir is the only entry; router is NOT in this list.
-    expect(capturedSkillPaths).toEqual([join(root, "bp_template", "skills")]);
+    // App-controlled Meta-Skills plus targeted bundled system-plugin Skills are
+    // native Pi paths; the router is never in this list.
+    expect(capturedSkillPaths).toEqual([
+      join(root, "bp_template", "skills"),
+      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+    ]);
     expect(capturedSkillPaths).not.toContain(join(root, "bp_template", "skills-router"));
   });
 
@@ -99,13 +103,17 @@ describe("two-path skill loading", () => {
     expect(capturedRouterDir).toBe(root);
   });
 
-  it("trace agent does NOT receive skill_search (graph-only role)", async () => {
+  it("trace receives only its targeted GoT skill and no skill_search", async () => {
     const root = await tmp();
     await materializeSkills(root);
 
     let traceTools: string[] | undefined;
+    let traceSkillPaths: string[] | undefined;
     const wrappedFactory: AgentSessionFactory = async (params) => {
-      if (params.agentName === "trace") traceTools = params.systemTools.map((t) => t.name);
+      if (params.agentName === "trace") {
+        traceTools = params.systemTools.map((t) => t.name);
+        traceSkillPaths = params.skillPaths;
+      }
       return mockAgentFactory(params);
     };
 
@@ -119,7 +127,11 @@ describe("two-path skill loading", () => {
 
     expect(traceTools).toBeDefined();
     expect(traceTools).not.toContain("skill_search");
-    // Trace also gets no skillPaths (it is skill-less by design).
+    expect(traceSkillPaths).toEqual([
+      expect.stringMatching(/plugin-got.*curate-research-trace/),
+    ]);
+    expect(traceSkillPaths).not.toContain(join(root, "bp_template", "skills"));
+    expect(traceSkillPaths).not.toContain(join(root, "bp_template", "skills-router"));
   });
 
   it("keeps full and base sessions isolated without global mutation", async () => {
@@ -147,8 +159,13 @@ describe("two-path skill loading", () => {
       expect(baseParams.systemTools.map((tool) => tool.name)).not.toContain(name);
       expect(fullParams.systemTools.map((tool) => tool.name)).toContain(name);
     }
-    expect(baseParams.skillPaths).toBeUndefined();
-    expect(fullParams.skillPaths).toEqual([join(root, "bp_template", "skills")]);
+    expect(baseParams.skillPaths).toEqual([
+      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+    ]);
+    expect(fullParams.skillPaths).toEqual([
+      join(root, "bp_template", "skills"),
+      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+    ]);
     expect(baseParams.systemPrompt).not.toMatch(/skill_search|<available_skills>|SKILL\.md/i);
     expect(fullParams.systemPrompt).toContain("skill_search");
     expect(baseParams.allowedToolNames).toEqual(expect.arrayContaining(["read", "write", "bash"]));
@@ -177,8 +194,14 @@ describe("two-path skill loading", () => {
     expect(captured.length).toBe(2);
     for (const params of captured) {
       expect(params.systemTools.map((t) => t.name)).not.toContain("skill_search");
-      // Always-on skills still load; KB tools unaffected by this single toggle.
-      expect(params.skillPaths).toEqual([join(root, "bp_template", "skills")]);
+      // App Meta-Skills still load; the targeted system-plugin Skill is added
+      // only to Principal, not unrelated Experts.
+      expect(params.skillPaths).toEqual(params.agentName === "principal"
+        ? [
+            join(root, "bp_template", "skills"),
+            expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+          ]
+        : [join(root, "bp_template", "skills")]);
       expect(params.systemTools.map((t) => t.name)).toContain("get_domain_knowledge_local");
       // Prompt no longer teaches skill_search / router library.
       expect(params.systemPrompt).not.toMatch(/skill_search/i);

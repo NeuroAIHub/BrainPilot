@@ -160,19 +160,24 @@ AI-assisted PRs are held to the same quality standard as any other PR.
 
 ## Project Structure
 
-BrainPilot is a TypeScript monorepo of six packages under `packages/`:
+BrainPilot is a TypeScript monorepo of eleven packages under `packages/` (nine
+public npm packages and two private workspaces):
 
 ```
 BrainPilot/
 ├── packages/
 │   ├── protocol/        # zod wire SSOT: AG-UI events, domain types, HTTP route contract
+│   ├── plugin-sdk/      # plugin manifests, compatibility, packaging, preview RPC
+│   ├── plugin-auditor/  # bundled Auditor system-plugin prompts and skill
 │   ├── runtime/         # Pi SDK orchestration, SessionManager, mailbox, system tools,
 │   │                    #   MCP bridge, Hono + SSE server
 │   ├── backend-core/    # Hono REST + SSE passthrough, Orchestrator (Local/Static/Docker)
 │   ├── web/             # React/Vite SPA (AG-UI consumer)
 │   ├── cli/             # @brainpilot/app — `brainpilot` / `bnpt` Docker-free launch
 │   ├── client-cli/      # @brainpilot/client-cli — headless verification client (private)
-│   └── skills/          # @brainpilot/skills — built-in skills content library
+│   ├── skills/          # @brainpilot/skills — built-in skills content library
+│   ├── kb-scripts/      # packaged KnowledgeBase Python scripts and model sidecar
+│   └── docs/            # documentation site workspace (private)
 ├── docker/              # Dockerfiles & sandbox build hooks
 ├── scripts/            # smoke tests, release tooling
 └── .github/            # issue/PR templates, CI workflows
@@ -202,7 +207,7 @@ The `contribute-skills-via-pr` and `verify-skill` Meta-Skills document the full 
 npm login                 # account with @brainpilot scope access
 npm run version:check     # verify all workspace package versions are aligned
 npm run release:dry       # pack-preview all public packages (no upload)
-npm run release           # version-sync, build, then publish protocol → runtime → backend-core → web → app
+npm run release           # publish 9 packages: plugin-sdk → skills → plugin-auditor → kb-scripts → protocol → runtime → backend-core → web → app
 ```
 
 `@brainpilot/client-cli` stays private and is never published.

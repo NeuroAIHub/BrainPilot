@@ -4,6 +4,7 @@ import {
   BUILTIN_PERSONA_NAMES,
   personaFor,
   sharedRootDirective,
+  withoutLegacyAuditorInstructions,
   withCoreCoordinationProtocols,
   withSharedRootDirective,
 } from "../personas.js";
@@ -76,7 +77,6 @@ describe("personas", () => {
       "experimentalist",
       "engineer",
       "writer",
-      "auditor",
     ]) {
       const p = PERSONAS[name]!;
       expect(p, name).toContain("skill_search");
@@ -89,8 +89,17 @@ describe("personas", () => {
     expect(PERSONAS.trace!).not.toContain("skill_search");
   });
 
+  it("teaches Trace research-unit granularity and direct dependency rules", () => {
+    const trace = PERSONAS.trace!;
+    expect(trace).toContain("curate-research-trace");
+    expect(trace).toContain("setting, its result");
+    expect(trace).toContain("Settings in one ablation are normally parallel");
+    expect(trace).toContain("Episode membership");
+    expect(trace).toContain("only direct parents");
+  });
+
   it("expert personas carry the flat task completion contract", () => {
-    for (const name of ["librarian", "engineer", "experimentalist", "writer", "auditor"]) {
+    for (const name of ["librarian", "engineer", "experimentalist", "writer"]) {
       expect(PERSONAS[name], name).toContain('complete_task(task_id="<exact assigned ID>"');
       expect(PERSONAS[name], name).toContain("one run may handle several task");
     }
@@ -103,10 +112,10 @@ describe("personas", () => {
       "experimentalist",
       "engineer",
       "writer",
-      "auditor",
     ]) {
       expect(PERSONAS[name]!.match(/^## Handoffs$/gm), name).toHaveLength(1);
     }
+    expect(PERSONAS.auditor!).not.toContain("## Handoffs");
     expect(PERSONAS.trace!).not.toContain("## Handoffs");
     expect(personaFor("statistician", "expert").match(/^## Handoffs$/gm)).toHaveLength(1);
   });
@@ -154,23 +163,11 @@ Stale local routing rule.`;
     expect(resolved).toContain("<task_list>");
   });
 
-  it("principal persona requires a pre-delivery audit for hard claims", () => {
-    const p = PERSONAS.principal!;
-    expect(p).toContain("Pre-delivery audit");
-    expect(p).toContain("MUST");
-    expect(p).toContain("auditor");
-    expect(p).toContain("expert deliverable");
-    expect(p).toContain("original user need");
-    expect(p).toContain("Do NOT personally perform fabrication/reliability audit");
-    // The exemption clause keeps the audit out of pure conversational turns.
-    expect(p.toLowerCase()).toContain("exemption");
-  });
-
-  it("principal audit gate covers analysis/modelling validity risks", () => {
-    const p = PERSONAS.principal!;
-    expect(p.toLowerCase()).toContain("leakage");
-    expect(p.toLowerCase()).toContain("cross-validation");
-    expect(p).toContain("data-split");
+  it("keeps Auditor behavior out of core personas", () => {
+    expect(PERSONAS.principal).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(PERSONAS.trace).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(PERSONAS.librarian).not.toMatch(/auditor|audit-feedback-loop/i);
+    expect(PERSONAS.engineer).not.toMatch(/auditor|audit-feedback-loop/i);
   });
 
   it("principal and writer personas keep internal status out of user-facing prose", () => {
@@ -195,46 +192,20 @@ Stale local routing rule.`;
     expect(writer).toContain("ask the engineer");
   });
 
-  it("auditor persona constrains scope, bash, and followup count", () => {
+  it("keeps only a neutral system-plugin base persona for Auditor", () => {
     const a = PERSONAS.auditor!;
-    // Three claim categories explicitly named
-    expect(a.toLowerCase()).toContain("numeric");
-    expect(a.toLowerCase()).toContain("file");
-    expect(a.toLowerCase()).toContain("citation");
-    // Bash is filesystem-inspection only
-    expect(a).toContain("filesystem inspection");
-    expect(a).toContain("grep");
-    // Audit report path discipline
-    expect(a).toContain(".audit/");
-    expect(a).toContain("ISO8601");
-    // Followup limit (2 different agents) — robust to whitespace/newline.
-    expect(a.toLowerCase()).toMatch(/two different\s+agents/);
-    // And the explicit "2 different agents" cap line.
-    expect(a).toMatch(/2 different agents/);
-    // Verdict vocabulary
-    expect(a).toContain("confirmed");
-    expect(a).toContain("unverified");
-    expect(a).toContain("disputed");
-    // The persona deliberately tells the auditor it CANNOT call
-    // get_trace_graph (so the model doesn't try). Assert the explicit
-    // "cannot call" disclaimer rather than that the name is absent.
-    expect(a).toMatch(/cannot call\s+`?get_trace_graph`?/);
+    expect(a).toContain("System plugin agent");
+    expect(a).toContain('complete_task(task_id="<exact assigned ID>"');
+    expect(a).not.toMatch(/reliability|audit-feedback-loop|edit_trace_review/i);
   });
 
-  it("auditor persona audits scientific-reliability defects, open-ended", () => {
-    const a = PERSONAS.auditor!;
-    // Still an evidence/fabrication auditor …
-    expect(a.toLowerCase()).toContain("fabrication");
-    // … now also a bounded-but-open reliability reviewer.
-    expect(a.toLowerCase()).toContain("reliability");
-    expect(a.toLowerCase()).toContain("leakage");
-    expect(a.toLowerCase()).toContain("baseline");
-    expect(a.toLowerCase()).toContain("metric");
-    // Reliability verdict vocabulary.
-    expect(a).toContain("concern");
-    expect(a).toContain("flaw");
-    // Scope is explicitly non-exhaustive.
-    expect(a.toLowerCase()).toMatch(/not exhaustive|including but not limited/);
+  it("neutralizes legacy Trace Auditor wording without removing other guidance", () => {
+    const legacy = `Keep this custom guidance. Auditor review is independent.\n\n` +
+      "You only propose candidates; Auditor confirms or rejects them. Never recreate a rejected candidate without materially new evidence.";
+    const migrated = withoutLegacyAuditorInstructions(legacy);
+    expect(migrated).toContain("Keep this custom guidance.");
+    expect(migrated).not.toContain("Auditor review is independent");
+    expect(migrated).toContain("enabled review mechanism");
   });
 
   it("authoring experts mention their write/run capability", () => {

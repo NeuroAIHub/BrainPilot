@@ -13,10 +13,7 @@ import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
-import {
-  attachmentStore,
-  useAttachments,
-} from "./attachmentScopes";
+import { reservePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
@@ -42,7 +39,28 @@ type ComposerUploadState = {
   phase: UploadProgress["phase"];
 };
 
+type ComposerAttachment = {
+  name: string;
+  type?: string;
+  previewUrl?: string;
+};
+
+type QueuedUpload = {
+  file: File;
+  uploadId: string;
+};
+
 type QueuedPrompt = { id: string; content: string };
+
+export function shouldClearQueuedPrompts(runActive: { active: boolean } | null): boolean {
+  return runActive?.active !== true;
+}
+
+function revokeAttachmentPreview(attachment: ComposerAttachment): void {
+  if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
+    URL.revokeObjectURL(attachment.previewUrl);
+  }
+}
 
 type PromptComposerProps = {
   /** Open Settings deep-linked to the Providers tab — wired to the
@@ -78,27 +96,20 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // present; only this composer UI was removed in #160. It now lives in the
   // left tool cluster, not the send cluster guarded by composerSendTools.test.)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
   const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, QueuedPrompt[]>>({});
-  // #305/#404: progress and cancellation belong to the session that started
-  // the upload, so navigating away never paints its result into another chat.
-  const [uploadStateBySession, setUploadStateBySession] = useState<Record<string, ComposerUploadState | null>>({});
-  const uploadAbortBySessionRef = useRef(new Map<string, AbortController>());
+  const attachmentsRef = useRef<ComposerAttachment[]>([]);
+  // #305: replace boolean busy with full progress UI state; null = idle.
+  const [uploadState, setUploadState] = useState<ComposerUploadState | null>(null);
+  const [queuedUploadCount, setQueuedUploadCount] = useState(0);
+  const uploadAbortRef = useRef<AbortController | null>(null);
+  const uploadQueueRef = useRef<QueuedUpload[]>([]);
+  const uploadWorkerRef = useRef<Promise<void> | null>(null);
+  const reservedUploadNamesRef = useRef(new Set<string>());
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
-  const [composerErrorBySession, setComposerErrorBySession] = useState<Record<string, string | null>>({});
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, subagents, runActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
-  const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
-  const attachments = useAttachments(sessionId);
-  const uploadState = sessionId ? (uploadStateBySession[sessionId] ?? null) : null;
-  const composerError = sessionId ? (composerErrorBySession[sessionId] ?? null) : null;
-  const uploading = uploadState != null;
-  const setCurrentComposerError = (next: string | null) => {
-    if (!sessionId) return;
-    setComposerErrorBySession((current) => ({ ...current, [sessionId]: next }));
-  };
-  useEffect(() => () => {
-    for (const controller of uploadAbortBySessionRef.current.values()) controller.abort();
-    uploadAbortBySessionRef.current.clear();
-  }, []);
+  const [composerError, setComposerError] = useState<string | null>(null);
+  const uploading = uploadState != null || queuedUploadCount > 0;
+  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
       ? agents.flatMap((agent) => agent.activeTools ?? [])
@@ -108,6 +119,16 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
+
+  useEffect(() => {
+    attachmentsRef.current = attachments;
+  }, [attachments]);
+
+  useEffect(() => () => {
+    uploadAbortRef.current?.abort();
+    uploadQueueRef.current = [];
+    attachmentsRef.current.forEach(revokeAttachmentPreview);
+  }, []);
 
   // #316: sources for the `@` mention picker. Loaded here (not in ComposerInput)
   // so keystroke state stays off this render path; only status flips re-render.
@@ -182,22 +203,17 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     [agents],
   );
 
-  // Names of every actively working persistent agent and isolated subagent.
-  // This is intentionally broader than runState.active: background experts
-  // remain visible without occupying the Principal's foreground turn (#405).
+  // Names of agents actively working, for the "X 正在工作" toast. Excludes the
+  // trace agent (it self-records continuously and isn't "the user's task"),
+  // matching the runtime's run-active aggregation (#76).
   const workingAgentNames = useMemo(
-    () => [
-      ...agents.filter((agent) => agent.status === "running").map((agent) => agent.name),
-      ...subagents
-        .filter((child) => child.status === "queued" || child.status === "running")
-        .map((child) => child.label || child.profile),
-    ],
-    [agents, subagents],
+    () => agents.filter((a) => a.status === "running" && a.name !== "trace").map((a) => a.name),
+    [agents],
   );
   // Prefer the principal when multiple provider calls are backing off: this is
   // the existing user-facing "principal is working" bubble requested by #365.
   const retryingAgent = useMemo(() => {
-    const working = agents.filter((a) => a.status === "running" && a.retry);
+    const working = agents.filter((a) => a.status === "running" && a.name !== "trace" && a.retry);
     const agent = working.find((a) => a.name === "principal") ?? working[0];
     return agent?.retry ? { name: agent.name, ...agent.retry } : undefined;
   }, [agents]);
@@ -418,30 +434,25 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     return () => window.clearInterval(id);
   }, []);
 
+  const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
   const queuedPrompts = sessionId ? (queuedPromptsBySession[sessionId] ?? []) : [];
 
-  // A queued prompt moves into the transcript only when Runtime emits its
-  // stable user-message id after Pi actually consumes the follow-up.
   useEffect(() => {
     if (!sessionId) return;
     const visibleIds = new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
     setQueuedPromptsBySession((current) => {
       const existing = current[sessionId] ?? [];
       const next = existing.filter((prompt) => !visibleIds.has(prompt.id));
-      if (next.length === existing.length) return current;
-      return { ...current, [sessionId]: next };
+      return next.length === existing.length ? current : { ...current, [sessionId]: next };
     });
-  }, [messages, sessionId, queuedPrompts.length]);
+  }, [messages, sessionId]);
 
-  // Pi consumes every accepted follow-up before the foreground run ends. If a
-  // run terminates with a queued chip still visible, it was cancelled/rejected.
   useEffect(() => {
-    if (!sessionId || runActive) return;
-    setQueuedPromptsBySession((current) => {
-      if ((current[sessionId] ?? []).length === 0) return current;
-      return { ...current, [sessionId]: [] };
-    });
-  }, [runActive, sessionId, queuedPrompts.length]);
+    if (!sessionId || !shouldClearQueuedPrompts(runActive)) return;
+    setQueuedPromptsBySession((current) => (current[sessionId]?.length
+      ? { ...current, [sessionId]: [] }
+      : current));
+  }, [runActive, sessionId]);
 
   // #99: whole-turn timer — spans user input → every agent finished (runState
   // settles false), debounced against hook/system re-wakes.
@@ -451,25 +462,25 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     event.preventDefault();
     if (!sessionId) return;
     const content = draftStore.get(sessionId).trim();
-    if (!content || !canSend) {
+    if (!content || !canSend || uploadWorkerRef.current) {
       return;
     }
     draftStore.set(sessionId, "");
     // #47: if files were uploaded this turn, prepend a notice so the agent knows
     // they exist in its workspace and can `read` them. Cleared after send.
     const notice =
-      attachments.length > 0 ? `${t("chat.upload.notice", { names: attachments.join(", ") })}\n\n` : "";
+      attachments.length > 0
+        ? `${t("chat.upload.notice", { names: attachments.map((item) => item.name).join(", ") })}\n\n`
+        : "";
     const sentAttachments = attachments;
-    if (attachments.length > 0) {
-      attachmentStore.clear(sessionId);
-    }
+    if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
     const result = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
     });
-    if (result.ok && result.queued && result.messageId && sessionId) {
+    if (result.ok && result.queued && result.messageId) {
       setQueuedPromptsBySession((current) => ({
         ...current,
         [sessionId]: [...(current[sessionId] ?? []), { id: result.messageId!, content }],
@@ -483,8 +494,11 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
         draftStore.set(sessionId, content);
       }
       if (sentAttachments.length > 0) {
-        attachmentStore.restoreIfEmpty(sessionId, sentAttachments);
+        setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
       }
+    } else {
+      sentAttachments.forEach(revokeAttachmentPreview);
+      for (const attachment of sentAttachments) reservedUploadNamesRef.current.delete(attachment.name);
     }
   };
 
@@ -496,65 +510,128 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // real session yet, so uploads land in the `"local"` staging area and the
   // runtime drains them (incl. `.attachments/`) into the real session on send
   // (#60 drainLocalUploads).
-  // #305: sequential multi-file with progress + cancel (one AbortController for
-  // the whole batch). Abort is not treated as a failure toast; successful chips
-  // already added are kept.
-  const handleFilesChosen = async (files: FileList | null) => {
-    if (!files || files.length === 0 || !sessionId) return;
-    const uploadSessionId = sessionId;
-    const uploadId = currentSession?.id ?? currentSandbox?.id;
-    if (!uploadId) return;
-    const list = Array.from(files);
+  // One worker drains a queue sequentially. New picker selections and paste
+  // batches may append while it is running without replacing progress/cancel
+  // state or racing writes to the same attachment path.
+  const startUploadWorker = () => {
+    if (uploadWorkerRef.current) return;
     const controller = new AbortController();
-    uploadAbortBySessionRef.current.set(uploadSessionId, controller);
-    setComposerErrorBySession((current) => ({ ...current, [uploadSessionId]: null }));
-    try {
-      for (let i = 0; i < list.length; i++) {
-        if (controller.signal.aborted) break;
-        const file = list[i]!;
-        setUploadStateBySession((current) => ({
-          ...current,
-          [uploadSessionId]: {
-            filename: file.name,
-            fileIndex: i + 1,
-            fileCount: list.length,
-            fileSize: file.size,
-            percent: null,
-            phase: "uploading",
-          },
-        }));
-        await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file, {
-          signal: controller.signal,
-          onProgress: (p) => {
-            setUploadStateBySession((current) => {
-              const previous = current[uploadSessionId];
-              return previous && previous.filename === file.name
-                ? { ...current, [uploadSessionId]: { ...previous, percent: p.percent, phase: p.phase } }
-                : current;
-            });
-          },
+    uploadAbortRef.current = controller;
+    setComposerError(null);
+    let processed = 0;
+    const worker = (async () => {
+      while (!controller.signal.aborted) {
+        const entry = uploadQueueRef.current.shift();
+        setQueuedUploadCount(uploadQueueRef.current.length);
+        if (!entry) break;
+        const { file, uploadId } = entry;
+        setUploadState({
+          filename: file.name,
+          fileIndex: processed + 1,
+          fileCount: processed + 1 + uploadQueueRef.current.length,
+          fileSize: file.size,
+          percent: null,
+          phase: "uploading",
         });
-        attachmentStore.add(uploadSessionId, file.name);
+        try {
+          await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file, {
+            signal: controller.signal,
+            onProgress: (p) => {
+              setUploadState((prev) =>
+                prev && prev.filename === file.name
+                  ? { ...prev, percent: p.percent, phase: p.phase }
+                  : prev,
+              );
+            },
+          });
+          const previewUrl = file.type.startsWith("image/")
+            && typeof URL !== "undefined"
+            && typeof URL.createObjectURL === "function"
+            ? URL.createObjectURL(file)
+            : undefined;
+          const attachment: ComposerAttachment = {
+            name: file.name,
+            type: file.type || undefined,
+            previewUrl,
+          };
+          setAttachments((prev) => {
+            const existing = prev.find((item) => item.name === attachment.name);
+            if (!existing) return [...prev, attachment];
+            if (existing.previewUrl !== attachment.previewUrl) revokeAttachmentPreview(existing);
+            return prev.map((item) => item.name === attachment.name ? attachment : item);
+          });
+        } catch (e) {
+          reservedUploadNamesRef.current.delete(file.name);
+          if (isUploadAbortError(e)) break;
+          const msg = e instanceof Error ? e.message : String(e);
+          setComposerError(t("chat.upload.failed", { msg }));
+        } finally {
+          processed += 1;
+        }
       }
-    } catch (e) {
-      if (!isUploadAbortError(e)) {
-        const msg = e instanceof Error ? e.message : String(e);
-        setComposerErrorBySession((current) => ({
-          ...current,
-          [uploadSessionId]: t("chat.upload.failed", { msg }),
-        }));
-      }
-    } finally {
-      if (uploadAbortBySessionRef.current.get(uploadSessionId) === controller) {
-        uploadAbortBySessionRef.current.delete(uploadSessionId);
-        setUploadStateBySession((current) => ({ ...current, [uploadSessionId]: null }));
-      }
-      if (fileInputRef.current) fileInputRef.current.value = ""; // allow re-selecting the same file
+    })();
+    uploadWorkerRef.current = worker;
+    void worker.finally(() => {
+      if (uploadWorkerRef.current !== worker) return;
+      uploadWorkerRef.current = null;
+      uploadAbortRef.current = null;
+      setUploadState(null);
+      setQueuedUploadCount(uploadQueueRef.current.length);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+      // A file can be appended between the empty read and this finally block.
+      if (uploadQueueRef.current.length > 0) startUploadWorker();
+    });
+  };
+
+  const enqueueFiles = (files: FileList | readonly File[] | null): boolean => {
+    if (!files || files.length === 0) return false;
+    const uploadId = currentSession?.id ?? currentSandbox?.id;
+    if (!uploadId) return false;
+    const list = Array.from(files);
+    for (const file of list) {
+      reservedUploadNamesRef.current.add(file.name);
+      uploadQueueRef.current.push({ file, uploadId });
     }
+    setQueuedUploadCount(uploadQueueRef.current.length);
+    setUploadState((current) => current
+      ? { ...current, fileCount: current.fileIndex + uploadQueueRef.current.length }
+      : current);
+    startUploadWorker();
+    return true;
+  };
+
+  const handleFilesChosen = (files: FileList | readonly File[] | null) => {
+    enqueueFiles(files);
   };
 
   const cancelUpload = () => {
-    if (sessionId) uploadAbortBySessionRef.current.get(sessionId)?.abort();
+    for (const entry of uploadQueueRef.current) {
+      reservedUploadNamesRef.current.delete(entry.file.name);
+    }
+    uploadQueueRef.current = [];
+    setQueuedUploadCount(0);
+    uploadAbortRef.current?.abort();
+  };
+
+  const handlePastedImages = (images: File[]): boolean => {
+    if (!(currentSession?.id ?? currentSandbox?.id)) return false;
+    const renamed = reservePastedImages(images, reservedUploadNamesRef.current);
+    return enqueueFiles(renamed);
+  };
+
+  const removeAttachment = (name: string) => {
+    reservedUploadNamesRef.current.delete(name);
+    setAttachments((prev) => {
+      const removed = prev.find((item) => item.name === name);
+      if (removed) revokeAttachmentPreview(removed);
+      return prev.filter((item) => item.name !== name);
+    });
+    const uploadId = currentSession?.id ?? currentSandbox?.id;
+    if (!uploadId) return;
+    void api.sandbox.deleteFile(uploadId, `/attachments/${name}`).catch((e: unknown) => {
+      const msg = e instanceof Error ? e.message : String(e);
+      setComposerError(t("chat.upload.removeFailed", { msg }));
+    });
   };
 
   // Writes to the draft store from non-text controls (slash command picks,
@@ -653,6 +730,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             placeholder={composerPlaceholder}
             ariaLabel={t("chat.srAsk")}
             mentionSources={mentionSources}
+            onPasteImages={handlePastedImages}
           />
 
           {attachments.length > 0 || uploadState ? (
@@ -661,18 +739,23 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                 <Paperclip size={11} />
                 {t("chat.attachments.label")}
               </span>
-              {attachments.map((name) => (
-                <span className="composer__chip composer__chip--attachment" key={name}>
-                  <Paperclip size={12} />
-                  <span className="composer__chip-name">{name}</span>
+              {attachments.map((attachment) => (
+                <span className="composer__chip composer__chip--attachment" key={attachment.name}>
+                  {attachment.previewUrl ? (
+                    <img
+                      className="composer__attachment-preview"
+                      src={attachment.previewUrl}
+                      alt=""
+                    />
+                  ) : (
+                    <Paperclip size={12} />
+                  )}
+                  <span className="composer__chip-name">{attachment.name}</span>
                   <button
                     type="button"
                     className="composer__chip-remove"
                     aria-label={t("chat.aria.removeAttachment")}
-                    onClick={() => {
-                      if (!sessionId) return;
-                      attachmentStore.remove(sessionId, name);
-                    }}
+                    onClick={() => removeAttachment(attachment.name)}
                   >
                     <X size={12} />
                   </button>
@@ -721,7 +804,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
               <IconButton
                 label={t("chat.aria.attachFile")}
                 onClick={() => fileInputRef.current?.click()}
-                disabled={uploading || !currentSandbox}
+                disabled={!currentSandbox}
               >
                 <Paperclip size={17} />
               </IconButton>
@@ -773,13 +856,13 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                   disabled={!currentSandbox || !activeProvider || activeProvider.models.length === 0}
                   onChange={async (model) => {
                     setSelectedModel(model);
-                    setCurrentComposerError(null);
+                    setComposerError(null);
                     try {
                       await api.settings.update({ model });
                     } catch (e) {
                       const msg = e instanceof Error ? e.message : String(e);
                       console.error("Failed to save model selection", e);
-                      setCurrentComposerError(t("chat.error.saveModel", { msg }));
+                      setComposerError(t("chat.error.saveModel", { msg }));
                       return;
                     }
                     try {
@@ -787,7 +870,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                     } catch (e) {
                       const msg = e instanceof Error ? e.message : String(e);
                       console.error("Failed to reload config after model change", e);
-                      setCurrentComposerError(t("chat.error.reloadConfig", { msg }));
+                      setComposerError(t("chat.error.reloadConfig", { msg }));
                     }
                   }}
                   options={activeProvider?.models.map((model) => {

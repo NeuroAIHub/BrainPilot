@@ -40,6 +40,10 @@ if (!version) {
   console.error("[sync-versions] root package.json has no version field.");
   process.exit(2);
 }
+const [major, minor] = version.split(".").map(Number);
+const pluginEngineRange = Number.isInteger(major) && Number.isInteger(minor)
+  ? `>=${version} <${major === 0 ? `0.${minor + 1}.0` : `${major + 1}.0.0`}`
+  : undefined;
 
 const workspaces = rootPkg.json.workspaces ?? [];
 const pkgPaths = workspaces.map((w) => join(repoRoot, w, "package.json"));
@@ -83,6 +87,29 @@ for (const pkgPath of pkgPaths) {
 
   if (changed && !check) {
     writeFileSync(pkgPath, JSON.stringify(json, null, 2) + "\n", "utf8");
+  }
+
+  // Content-only system-plugin packages ship a manifest beside package.json.
+  // Keep its release version and host compatibility range in lockstep too.
+  const manifestPath = join(dirname(pkgPath), "manifest.json");
+  try {
+    const manifest = readPkg(manifestPath);
+    let manifestChanged = false;
+    if (manifest.json.version !== version) {
+      drift.push(`${json.name}: manifest version ${manifest.json.version} -> ${version}`);
+      manifest.json.version = version;
+      manifestChanged = true;
+    }
+    if (pluginEngineRange && manifest.json.engines?.brainpilot !== pluginEngineRange) {
+      drift.push(`${json.name}: manifest engines.brainpilot ${manifest.json.engines?.brainpilot} -> ${pluginEngineRange}`);
+      manifest.json.engines = { ...(manifest.json.engines ?? {}), brainpilot: pluginEngineRange };
+      manifestChanged = true;
+    }
+    if (manifestChanged && !check) {
+      writeFileSync(manifestPath, JSON.stringify(manifest.json, null, 2) + "\n", "utf8");
+    }
+  } catch {
+    // Most workspaces are code packages without a plugin manifest.
   }
 }
 

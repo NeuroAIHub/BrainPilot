@@ -59,6 +59,14 @@ function unique(values: string[]): string[] {
   return [...new Set(values.filter(Boolean))];
 }
 
+function normalizeEpisodeTitle(value: string): string {
+  return value.normalize("NFKC").trim().replace(/\s+/gu, " ");
+}
+
+function episodeLookupKey(value: string): string {
+  return normalizeEpisodeTitle(value).toLowerCase();
+}
+
 function asRecord(value: unknown): Record<string, unknown> {
   return value && typeof value === "object" && !Array.isArray(value)
     ? value as Record<string, unknown>
@@ -145,6 +153,18 @@ export interface TraceAuditTarget {
   fingerprint: string;
 }
 
+export interface TraceCausalParentCandidate {
+  nodeId: string;
+  reason: string;
+}
+
+export interface TraceParentCandidateValidation {
+  ok: boolean;
+  reason?: string;
+}
+
+type TraceNodeUpdate = Partial<TraceNode> & { episode?: string };
+
 type TraceChangeDraft = Omit<TraceChange, "id" | "revision" | "createdAt">;
 
 /**
@@ -189,6 +209,8 @@ export class GraphOfTrace {
 
   createNode(input: {
     title: string;
+    /** Human-facing work-package name. Stored through the existing Episode registry. */
+    episode?: string;
     type?: string;
     status?: string;
     agent?: string;
@@ -219,6 +241,17 @@ export class GraphOfTrace {
     this.ensureSessionRoot();
     const id = input.id ?? `node_${randomUUID()}`;
     if (this.nodes.has(id)) throw new Error(`trace node already exists: ${id}`);
+    const causalParentCandidates = (input.causalParents ?? []).map((parent) => ({
+      nodeId: parent.nodeId,
+      reason: parent.reason ?? "",
+    }));
+    const parentValidation = this.validateCausalParentCandidates(undefined, causalParentCandidates);
+    if (!parentValidation.ok) {
+      throw new Error(`invalid causal parents: ${parentValidation.reason}`);
+    }
+    const episode = input.episode !== undefined
+      ? this.resolveEpisodeInternal(input.episode)
+      : undefined;
     const createdAt = now();
     const report = input.summary !== undefined || input.content !== undefined
       ? { kind: "agent_report" as const, summary: input.summary, content: input.content, author: input.agent }
@@ -237,7 +270,11 @@ export class GraphOfTrace {
       updatedAt: createdAt,
       toolCalls: [],
       artifactIds: [],
-      ...(input.primaryEpisodeId ? { primaryEpisodeId: input.primaryEpisodeId } : {}),
+      ...(episode
+        ? { primaryEpisodeId: episode.id }
+        : input.primaryEpisodeId
+          ? { primaryEpisodeId: input.primaryEpisodeId }
+          : {}),
       ...(input.episodeTags?.length ? { episodeTags: unique(input.episodeTags) } : { episodeTags: [] }),
       ...(input.metadata ? { metadata: clone(input.metadata) } : {}),
       records: clone(input.records ?? []),
@@ -283,9 +320,11 @@ export class GraphOfTrace {
       target: { nodeId: id },
       after: {
         title: node.title,
+        ...(episode ? { episode: episode.title } : {}),
         executionResult: node.executionResult,
         confidence: node.confidence,
         confidenceReason: node.confidenceReason,
+        parents: clone(node.parents),
       },
     });
     return this.getNode(id)!;
@@ -314,9 +353,16 @@ export class GraphOfTrace {
    * Legacy-shaped update. Parent/child fields are intentionally ignored: they
    * are derived from the canonical relation collections at read time.
    */
-  updateNode(id: string, updates: Partial<TraceNode>, actor: TraceChangeActor = { type: "host" }): TraceNode | undefined {
+  updateNode(
+    id: string,
+    updates: TraceNodeUpdate,
+    actor: TraceChangeActor = { type: "host" },
+    parentCandidates: TraceCausalParentCandidate[] = [],
+  ): TraceNode | undefined {
     const node = this.nodes.get(id);
     if (!node || this.isSessionRoot(id)) return undefined;
+    const parentValidation = this.validateCausalParentCandidates(id, parentCandidates);
+    if (!parentValidation.ok) return undefined;
     const patch = updates as Record<string, unknown>;
     const before = {
       confidence: node.confidence,
@@ -341,6 +387,9 @@ export class GraphOfTrace {
       node.reviewConclusion = patch.reviewConclusion;
     }
     if (typeof patch.reviewReason === "string") node.reviewReason = patch.reviewReason;
+    if (typeof patch.episode === "string") {
+      node.primaryEpisodeId = this.resolveEpisodeInternal(patch.episode).id;
+    }
     if (patch.summary !== undefined || patch.content !== undefined) {
       node.report = {
         kind: "agent_report",
@@ -377,6 +426,9 @@ export class GraphOfTrace {
       node.reviewConclusion = "unreviewed";
       delete node.reviewReason;
     }
+    for (const candidate of parentCandidates) {
+      this.applyCausalParentCandidateInternal(node, candidate.nodeId, candidate.reason);
+    }
     this.normalizeCausalGraph();
     node.updatedAt = now();
     this.commit("updated", id, {
@@ -384,7 +436,10 @@ export class GraphOfTrace {
       action: "node_updated",
       target: { nodeId: id },
       before,
-      after: clone(updates),
+      after: {
+        ...clone(updates),
+        ...(parentCandidates.length ? { parentCandidates: clone(parentCandidates) } : {}),
+      },
       ...(node.confidenceReason ? { reason: node.confidenceReason } : {}),
     });
     return this.getNode(id);
@@ -411,25 +466,14 @@ export class GraphOfTrace {
 
   proposeCausalParent(childNodeId: string, parentNodeId: string, reason: string, actor: TraceChangeActor): boolean {
     const child = this.nodes.get(childNodeId);
-    const parent = this.nodes.get(parentNodeId);
-    if (!child || !parent || child.revoked || parent.revoked || this.isSessionRoot(childNodeId) || childNodeId === parentNodeId) return false;
+    if (!child) return false;
+    const validation = this.validateCausalParentCandidates(childNodeId, [{ nodeId: parentNodeId, reason }]);
+    if (!validation.ok) return false;
     const existing = child.parents.find((item) => item.nodeId === parentNodeId);
-    if (existing?.conclusion === "rejected") return false;
-    if (!existing && this.wouldCreateCycle(parentNodeId, childNodeId)) return false;
     const before = existing ? clone(existing) : undefined;
-    if (existing) {
-      if (
-        existing.conclusion === "confirmed" &&
-        existing.reason === reason &&
-        existing.origin !== "host_fallback"
-      ) return true;
-      if (existing.conclusion === "candidate" && existing.reason === reason && existing.origin === "trace") return true;
-      existing.conclusion = "candidate";
-      existing.reason = reason;
-      existing.origin = "trace";
-    } else {
-      child.parents.push({ nodeId: parentNodeId, conclusion: "candidate", origin: "trace", ...(reason ? { reason } : {}) });
-    }
+    if (existing?.conclusion === "confirmed" && existing.reason === reason && existing.origin !== "host_fallback") return true;
+    if (existing?.conclusion === "candidate" && existing.reason === reason && existing.origin === "trace") return true;
+    this.applyCausalParentCandidateInternal(child, parentNodeId, reason);
     this.normalizeCausalGraph();
     this.syncCompatibilityDependency(parentNodeId, childNodeId, "candidate", reason);
     child.updatedAt = now();
@@ -442,6 +486,58 @@ export class GraphOfTrace {
       reason,
     });
     return true;
+  }
+
+  /** Validate a complete candidate batch before any node, Episode, or edge mutation. */
+  validateCausalParentCandidates(
+    childNodeId: string | undefined,
+    candidates: TraceCausalParentCandidate[],
+  ): TraceParentCandidateValidation {
+    const child = childNodeId ? this.nodes.get(childNodeId) : undefined;
+    if (childNodeId && (!child || child.revoked || this.isSessionRoot(childNodeId))) {
+      return { ok: false, reason: "child node is missing, revoked, or structural" };
+    }
+    const seen = new Set<string>();
+    for (const candidate of candidates) {
+      const parentNodeId = candidate.nodeId.trim();
+      const reason = candidate.reason.trim();
+      if (!parentNodeId) return { ok: false, reason: "parent node id is required" };
+      if (!reason) return { ok: false, reason: `parent ${parentNodeId} requires a non-empty reason` };
+      if (seen.has(parentNodeId)) return { ok: false, reason: `duplicate parent candidate: ${parentNodeId}` };
+      seen.add(parentNodeId);
+      const parent = this.nodes.get(parentNodeId);
+      if (!parent || parent.revoked) return { ok: false, reason: `parent ${parentNodeId} is missing or revoked` };
+      if (childNodeId === parentNodeId) return { ok: false, reason: "a node cannot depend on itself" };
+      const existing = child?.parents.find((item) => item.nodeId === parentNodeId);
+      if (existing?.conclusion === "rejected") {
+        return { ok: false, reason: `parent ${parentNodeId} was rejected` };
+      }
+      if (childNodeId && !existing && this.wouldCreateCycle(parentNodeId, childNodeId)) {
+        return { ok: false, reason: `parent ${parentNodeId} would create a cycle` };
+      }
+    }
+    return { ok: true };
+  }
+
+  private applyCausalParentCandidateInternal(
+    child: TraceNodeV2,
+    parentNodeId: string,
+    reason: string,
+  ): void {
+    const normalizedReason = reason.trim();
+    const existing = child.parents.find((item) => item.nodeId === parentNodeId);
+    if (existing) {
+      existing.conclusion = "candidate";
+      existing.reason = normalizedReason;
+      existing.origin = "trace";
+      return;
+    }
+    child.parents.push({
+      nodeId: parentNodeId,
+      conclusion: "candidate",
+      origin: "trace",
+      reason: normalizedReason,
+    });
   }
 
   review(
@@ -680,6 +776,23 @@ export class GraphOfTrace {
       }).ok;
     }
     return false;
+  }
+
+  private resolveEpisodeInternal(title: string): TraceEpisode {
+    const normalizedTitle = normalizeEpisodeTitle(title);
+    if (!normalizedTitle) throw new Error("episode must be non-empty");
+    const key = episodeLookupKey(normalizedTitle);
+    const existing = [...this.episodes.values()].find((episode) => episodeLookupKey(episode.title) === key);
+    if (existing) return existing;
+    const stamp = now();
+    const episode: TraceEpisode = {
+      id: stableId("episode", this.sessionId, key),
+      title: normalizedTitle,
+      createdAt: stamp,
+      updatedAt: stamp,
+    };
+    this.episodes.set(episode.id, episode);
+    return episode;
   }
 
   createEpisode(input: { title: string; description?: string; id?: string }): TraceEpisode {
