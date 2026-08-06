@@ -481,27 +481,30 @@ export class MasAgent {
         this.currentRetry = undefined;
         this.pendingProviderError = undefined;
         runOutcome = "aborted";
+        this.bus.emit(
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+        );
       } else if (this.pendingProviderError) {
         const raw = this.pendingProviderError;
         this.pendingProviderError = undefined;
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
+        this.bus.emit(
+          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+        );
         this.setStatus("error");
+        runOutcome = "error";
+      } else {
+        this.bus.emit(
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+        );
       }
-      this.bus.emit(
-        ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
-      );
       // A run that reached here without an exhausted provider error completed
       // cleanly (or was intentionally aborted) — clear the error class so the
       // delivery loop cannot mistake cancellation for a retryable failure.
       if (this._status !== "error") {
         this._lastErrorKind = undefined;
         this.setStatus("idle");
-      } else {
-        // Stream-error path (message_end stopReason="error", etc.): the run
-        // did reach RUN_FINISHED via the happy path above, but status flipped
-        // to "error" mid-stream. Classify as "error" for the RunStats entry.
-        runOutcome = "error";
       }
     } catch (err) {
       this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);

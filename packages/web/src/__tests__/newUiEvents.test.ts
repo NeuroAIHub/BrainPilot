@@ -230,6 +230,11 @@ describe("auto_retry mapping + detection + countdown", () => {
     expect(isAutoRetryStatus(retryEvent)).toBe(true);
     expect(isAutoRetryStatus({ type: "agent_status_update", status: "running" } as WebSocketEvent)).toBe(false);
     expect(isAutoRetryStatus({ type: "agent_status_update", autoRetry: { attempt: 1 } } as unknown as WebSocketEvent)).toBe(true);
+    expect(isAutoRetryStatus({
+      type: "agent_status_update",
+      status: "running",
+      retry: { attempt: 1, maxAttempts: 3, delayMs: 1200 },
+    } as unknown as WebSocketEvent)).toBe(true);
     expect(isAutoRetryStatus({ type: "system_message", level: "info", message: "x" } as WebSocketEvent)).toBe(false);
   });
 
@@ -254,6 +259,17 @@ describe("auto_retry mapping + detection + countdown", () => {
     expect(out[0].autoRetry?.attempt).toBe(2);
     // A normal status update produces no message.
     expect(reduceMessagesForEvent([], { type: "agent_status_update", status: "running" } as WebSocketEvent)).toHaveLength(0);
+  });
+
+  it("reduces the Runtime's canonical nested retry shape", () => {
+    const out = reduceMessagesForEvent([], {
+      type: "agent_status_update",
+      agentName: "principal",
+      status: "running",
+      retry: { attempt: 2, maxAttempts: 4, delayMs: 2500 },
+    } as unknown as WebSocketEvent);
+    expect(out).toHaveLength(1);
+    expect(out[0].autoRetry).toMatchObject({ attempt: 2, maxAttempts: 4, delayMs: 2500 });
   });
 });
 
