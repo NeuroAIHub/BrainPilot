@@ -126,6 +126,17 @@ describe("targeted publish guards", () => {
     expect(manifest.version).toBe(plugin.version);
     expect(manifest.id).toBe("org.brainpilot.auditor");
   });
+
+  it("ships the GoT system plugin as a pinned Runtime dependency", () => {
+    const runtime = readPkg("../../runtime/package.json");
+    const plugin = readPkg("../../plugin-got/package.json");
+    const manifest = readPkg("../../plugin-got/manifest.json");
+    expect(runtime.dependencies?.["@brainpilot/plugin-got"]).toMatch(/^\^/);
+    expect(plugin.files).toEqual(expect.arrayContaining(["manifest.json", "skills"]));
+    expect(plugin.version).toBe(ROOT.version);
+    expect(manifest.version).toBe(plugin.version);
+    expect(manifest.id).toBe("org.brainpilot.got");
+  });
 });
 
 describe("license is consistent across the repo", () => {
@@ -169,5 +180,9 @@ describe("root scripts", () => {
 
   it("publishes @brainpilot/plugin-auditor in release", () => {
     expect(pkg.scripts?.release).toContain("@brainpilot/plugin-auditor");
+  });
+
+  it("publishes @brainpilot/plugin-got in release", () => {
+    expect(pkg.scripts?.release).toContain("@brainpilot/plugin-got");
   });
 });

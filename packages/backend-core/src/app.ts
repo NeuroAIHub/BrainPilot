@@ -78,6 +78,7 @@ import {
   uninstallPlugin,
   updatePlugin,
 } from "./plugins.js";
+import { listDatasetJobs, listDatasets, startDatasetDownload } from "./datasets.js";
 
 export interface CreateAppOptions {
   orchestrator: Orchestrator;
@@ -550,6 +551,23 @@ export function createApp(options: CreateAppOptions): Hono {
     c.header("X-Content-Type-Options", "nosniff");
     if (extension === "html") c.header("Content-Security-Policy", "default-src 'none'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'none'; worker-src 'self' blob:; font-src 'self'; frame-ancestors 'self'");
     return c.body(bytes as unknown as ArrayBuffer);
+  });
+
+  // ---- Curated dataset catalogue and local downloads ------------------
+  api.get("/datasets", (c) => c.json(listDatasets()));
+  api.get("/datasets/downloads", (c) => c.json(listDatasetJobs(dataDir)));
+  api.post("/datasets/:id/download", async (c) => {
+    if (!localMode) return c.json({ error: "Dataset downloads are available only in local mode" }, 403);
+    const body = await safeJson(c);
+    const rawCredentials = body.credentials;
+    const credentials = rawCredentials && typeof rawCredentials === "object" && !Array.isArray(rawCredentials)
+      ? Object.fromEntries(Object.entries(rawCredentials).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
+      : {};
+    try {
+      return c.json(await startDatasetDownload(dataDir, c.req.param("id"), credentials), 202);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
   });
 
   // ---- Built-in tool toggles (disk-backed: bp_template/tool_toggles.json) ----

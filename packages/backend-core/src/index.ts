@@ -73,6 +73,19 @@ export type {
   PluginSourceFormat,
   ResolvedPlugin,
 } from "./plugins.js";
+export {
+  DATASET_CATALOG,
+  listDatasetJobs,
+  listDatasets,
+  startDatasetDownload,
+} from "./datasets.js";
+export type {
+  DatasetAccess,
+  DatasetCatalogEntry,
+  DatasetCredentialField,
+  DatasetDownloadJob,
+  DatasetModality,
+} from "./datasets.js";
 
 export {
   resolveProvider,

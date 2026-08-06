@@ -18,6 +18,7 @@ export interface ResolvedPlugin {
   version: string;
   root: string;
   skillPaths: string[];
+  instructionPaths: string[];
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
   unsupported: string[];
@@ -89,6 +90,33 @@ async function collectSkillFiles(root: string, locations: string[]): Promise<str
   return [...found].sort();
 }
 
+async function collectInstructionFiles(
+  root: string,
+  manifest: JsonObject,
+  conventionalNames: string[],
+): Promise<string[]> {
+  const found = new Set<string>();
+  for (const name of conventionalNames) {
+    const candidate = path.join(root, name);
+    if (await exists(candidate)) found.add(candidate);
+  }
+  const configured = [
+    ...stringList(manifest.instructions),
+    ...stringList(manifest.agentInstructions),
+  ];
+  for (const entry of configured) {
+    const candidate = resolveInside(root, entry, "agent instructions path");
+    let stat;
+    try { stat = await fs.lstat(candidate); }
+    catch { throw new Error(`Agent instructions not found: ${candidate}`); }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Agent instructions must be a regular file: ${candidate}`);
+    }
+    found.add(candidate);
+  }
+  return [...found].sort();
+}
+
 function authorName(manifest: JsonObject): string {
   if (typeof manifest.author === "string" && manifest.author.trim()) return manifest.author.trim();
   return object(manifest.author) && typeof manifest.author.name === "string" && manifest.author.name.trim()
@@ -116,6 +144,11 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
   const skillLocations = [path.join(root, "skills")];
   for (const entry of stringList(manifest.skills)) skillLocations.push(resolveInside(root, entry, "skills path"));
   const skillPaths = await collectSkillFiles(root, [...new Set(skillLocations)]);
+  const instructionPaths = await collectInstructionFiles(
+    root,
+    manifest,
+    format === "codex" ? ["AGENTS.md"] : ["CLAUDE.md"],
+  );
 
   let mcpConfigPath: string | undefined;
   let inlineMcpConfig: unknown;
@@ -154,6 +187,7 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
     description: typeof manifest.description === "string" && manifest.description.trim() ? manifest.description.trim() : `${manifest.name} imported from ${format}`,
     publisher: authorName(manifest),
     skillPaths,
+    instructionPaths,
     ...(mcpConfigPath ? { mcpConfigPath } : {}),
     ...(hookPath ? { hookConfig: { dialect: format, path: hookPath } } : {}),
     ...(inlineMcpConfig ? { inlineMcpConfig } : {}),
@@ -168,6 +202,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
   const pi = manifest.pi;
   const skillLocations = stringList(pi.skills).map((entry) => resolveInside(root, entry, "pi.skills path"));
   const skillPaths = await collectSkillFiles(root, skillLocations);
+  const instructionPaths = await collectInstructionFiles(root, pi, ["AGENTS.md", "CLAUDE.md"]);
   const unsupported = unsupportedForManifest(pi, "pi-package");
   return {
     format: "pi-package",
@@ -178,6 +213,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
     description: typeof manifest.description === "string" && manifest.description.trim() ? manifest.description : "Pi package imported into BrainPilot",
     publisher: authorName(manifest),
     skillPaths,
+    instructionPaths,
     unsupported,
   };
 }
