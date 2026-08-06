@@ -731,3 +731,20 @@ describe("api.plugins marketplace lifecycle", () => {
     expect(init.method).toBe("PUT");
   });
 });
+
+describe("api.datasets", () => {
+  it("loads the dataset catalogue", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: [{ id: "demo" }] }));
+    await expect(api.datasets.catalog()).resolves.toEqual([{ id: "demo" }]);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/datasets");
+  });
+
+  it("starts an encoded dataset download with ephemeral credentials", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ status: 202, contentType: "application/json", json: { id: "job-1", status: "queued" } }));
+    await api.datasets.download("provider/data", { token: "secret" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/datasets/provider%2Fdata/download");
+    expect(init.method).toBe("POST");
+    expect(JSON.parse(init.body)).toEqual({ credentials: { token: "secret" } });
+  });
+});
