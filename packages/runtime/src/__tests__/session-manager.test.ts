@@ -127,6 +127,34 @@ describe("SessionManager (mock mode)", () => {
     expect(seen[0]).not.toContain("mcp__builtin__");
   });
 
+  it("wires fresh ephemeral GoT renderers for Principal and bound Auditor turns", async () => {
+    const renderers = new Map<string, () => string>();
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      if (params.renderGoTContext) renderers.set(params.agentName, params.renderGoTContext);
+      return mockAgentFactory(params);
+    };
+    const sm = new SessionManager({ persist: false, agentFactory: spyFactory });
+    const session = await sm.createSession();
+    await sm.sendMessage(session.id, "hi");
+    await waitFor(() => renderers.has("principal"));
+
+    const internal = sm as unknown as {
+      sessions: Map<string, {
+        trace: import("../trace.js").GraphOfTrace;
+        currentTraceAuditTarget?: import("../trace.js").TraceAuditTarget;
+      }>;
+      ensureAgent(sessionId: string, name: string): Promise<unknown>;
+    };
+    const entry = internal.sessions.get(session.id)!;
+    const node = entry.trace.createNode({ title: "Review me" });
+    expect(renderers.get("principal")?.()).toContain(`"id":"${node.id}"`);
+
+    await internal.ensureAgent(session.id, "auditor");
+    entry.currentTraceAuditTarget = entry.trace.listPendingAuditTargets([node.id])[0];
+    expect(renderers.get("auditor")?.()).toContain("<bound_target>");
+    expect(renderers.get("auditor")?.()).toContain(node.id);
+  });
+
   it("keeps high-impact action authorization in PI and expert personas", () => {
     expect(PERSONAS.principal).toContain("## User authorization gate");
     expect(PERSONAS.principal).toContain("Use `ask_user` first");
