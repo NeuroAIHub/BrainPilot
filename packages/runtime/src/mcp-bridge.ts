@@ -20,6 +20,7 @@ import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isWindows } from "./platform.js";
 import type { SystemTool, SystemToolResult } from "./types.js";
+import { loadCompatPluginProjections } from "./compat-hooks.js";
 
 /**
  * Per-tool-call request timeout for MCP servers, in milliseconds.
@@ -66,6 +67,10 @@ export interface McpServersConfig {
   mcpServers: Record<string, McpServerSpec>;
 }
 
+function inheritedEnvironment(): Record<string, string> {
+  return Object.fromEntries(Object.entries(process.env).filter((entry): entry is [string, string] => typeof entry[1] === "string"));
+}
+
 /**
  * Options forwarded to the SDK's `callTool(params, resultSchema?, options?)`
  * third parameter. We keep only the fields the bridge actually sets — a
@@ -107,18 +112,47 @@ export type McpConnectFn = (name: string, spec: McpServerSpec) => Promise<McpCli
  * absent — MCP is entirely opt-in and adds zero overhead when unconfigured.
  */
 export async function loadMcpServersConfig(dataRoot: string): Promise<McpServersConfig | null> {
+  const merged: Record<string, McpServerSpec> = {};
   for (const rel of [join("bp_template", "mcp_servers.json"), join(".bp", "mcp_servers.json")]) {
     try {
       const raw = await readFile(join(dataRoot, rel), "utf8");
       const cfg = JSON.parse(raw) as unknown;
       if (cfg && typeof cfg === "object" && "mcpServers" in cfg) {
-        return cfg as McpServersConfig;
+        Object.assign(merged, (cfg as McpServersConfig).mcpServers);
+        break;
       }
     } catch {
       /* not present / unreadable — try the next location */
     }
   }
-  return null;
+  for (const projection of await loadCompatPluginProjections(dataRoot)) {
+    if (!projection.mcpConfigPath) continue;
+    const parsed = JSON.parse(await readFile(projection.mcpConfigPath, "utf8")) as unknown;
+    if (!parsed || typeof parsed !== "object") throw new Error(`plugin ${projection.id} MCP config must be an object`);
+    const object = parsed as Record<string, unknown>;
+    const servers = object.mcpServers && typeof object.mcpServers === "object"
+      ? object.mcpServers as Record<string, McpServerSpec>
+      : object as Record<string, McpServerSpec>;
+    for (const [name, spec] of Object.entries(servers)) {
+      if (merged[name]) throw new Error(`MCP server name conflict: ${name} (${projection.id})`);
+      merged[name] = {
+        ...spec,
+        ...(spec.command ? {
+          env: {
+            ...inheritedEnvironment(),
+            ...spec.env,
+            BRAINPILOT_PLUGIN_ROOT: projection.root,
+            BRAINPILOT_PLUGIN_DATA: projection.dataDir,
+            CLAUDE_PLUGIN_ROOT: projection.root,
+            CLAUDE_PLUGIN_DATA: projection.dataDir,
+            CLAUDE_MEM_DATA_DIR: projection.dataDir,
+            PLUGIN_ROOT: projection.root,
+          },
+        } : {}),
+      };
+    }
+  }
+  return Object.keys(merged).length > 0 ? { mcpServers: merged } : null;
 }
 
 /** Real connect: open the transport named by `spec.type` and hand back a thin client. */

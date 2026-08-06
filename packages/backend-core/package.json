@@ -11,7 +11,8 @@
   "types": "./dist/index.d.ts",
   "files": [
     "dist",
-    "plugins"
+    "plugins",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "repository": {
     "type": "git",

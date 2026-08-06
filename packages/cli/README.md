@@ -78,6 +78,24 @@ brainpilot down           # stop the detached backend
 | `--detach` | Run in the background |
 | `--no-open` | Don't open the browser on launch |
 
+## Import Codex, Claude Code, or Pi plugins
+
+Local BrainPilot deployments can import an unpacked plugin directory:
+
+```bash
+brainpilot plugin import ./plugin --format claude-code --dir ./brainpilot
+```
+
+Use `--format codex`, `--format claude-code`, or `--format pi-package`. The
+default `auto` mode works when the directory contains exactly one recognized
+manifest; directories containing both Codex and Claude manifests require an
+explicit choice. v1 loads Agent Skills, MCP servers, and command hooks. Other
+contributions are listed as unsupported instead of being silently ignored.
+
+Enabling an imported plugin trusts and runs its command hooks. Enable or disable
+it from the plugin settings, then start a new session/runtime for MCP and hook
+changes to take effect.
+
 ## Documentation
 
 Full documentation, architecture notes, and advanced configuration live in the

@@ -51,6 +51,8 @@ export type { RuntimeClientOptions, ForwardOptions } from "./runtime-client.js";
 
 export {
   installPlugin,
+  importExternalPlugin,
+  isFileContextBridgeEnabled,
   listEnabledPreviewers,
   listInstalledPlugins,
   listMarketplace,
@@ -65,6 +67,13 @@ export {
   uninstallPlugin,
   updatePlugin,
 } from "./plugins.js";
+export type {
+  ImportablePluginSourceFormat,
+  InstalledPlugin,
+  MarketplaceSourceStatus,
+  PluginSourceFormat,
+  ResolvedPlugin,
+} from "./plugins.js";
 export {
   DATASET_CATALOG,
   listDatasetJobs,
@@ -78,7 +87,6 @@ export type {
   DatasetDownloadJob,
   DatasetModality,
 } from "./datasets.js";
-export type { MarketplaceSourceStatus } from "./plugins.js";
 
 export {
   resolveProvider,

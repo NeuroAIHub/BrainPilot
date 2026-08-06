@@ -9,6 +9,7 @@ import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { createRequire } from "node:module";
+import { runCompatHookEvent } from "@brainpilot/runtime";
 import {
   PLUGIN_API_VERSION,
   SUPPORTED_PLUGIN_PROTOCOLS,
@@ -20,7 +21,7 @@ import {
   parsePublishablePluginManifest,
   type LegacyPluginKind,
   type EnabledPreviewer,
-  type InstalledPlugin,
+  type InstalledPlugin as SdkInstalledPlugin,
   type MarketplaceEntry,
   type MarketplaceRelease,
   type MarketplaceSourceStatus,
@@ -29,14 +30,38 @@ import {
   type PluginPermission,
   type PluginUpdateStatus,
 } from "@brainpilot/plugin-sdk";
+import {
+  resolveExternalPlugin,
+  type ImportablePluginSourceFormat,
+  type PluginSourceFormat,
+  type ResolvedExternalPlugin,
+  type ResolvedPlugin,
+} from "./external-plugins.js";
 
 const backendVersion = (createRequire(import.meta.url)("../package.json") as { version: string }).version;
 
 export { PLUGIN_API_VERSION, parsePluginManifest } from "@brainpilot/plugin-sdk";
 export type PluginKind = LegacyPluginKind;
 export type { PluginManifest, PluginPermission } from "@brainpilot/plugin-sdk";
+export type { MarketplaceEntry, MarketplaceRelease, MarketplaceSourceStatus, PluginCompatibility, PluginUpdateStatus } from "@brainpilot/plugin-sdk";
+export type { ImportablePluginSourceFormat, PluginSourceFormat, ResolvedPlugin } from "./external-plugins.js";
 
-export type { InstalledPlugin, MarketplaceEntry, MarketplaceRelease, MarketplaceSourceStatus, PluginCompatibility, PluginUpdateStatus } from "@brainpilot/plugin-sdk";
+/** Host registry metadata added by the import adapter; the SDK shape remains the common base. */
+export type InstalledPlugin = SdkInstalledPlugin & {
+  sourceFormat?: PluginSourceFormat;
+  unsupported?: string[];
+};
+
+interface PluginRuntimeProjection {
+  schemaVersion: 1;
+  id: string;
+  version: string;
+  format: ImportablePluginSourceFormat;
+  root: string;
+  dataDir: string;
+  mcpConfigPath?: string;
+  hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+}
 
 interface RegistryFile {
   plugins: Record<string, InstalledPlugin>;
@@ -88,6 +113,14 @@ function marketplaceSourcesPath(dataDir: string): string {
 
 function installedVersionPath(dataDir: string, manifest: PluginManifest): string {
   return path.join(pluginsDir(dataDir), "installed", manifest.id, manifest.version);
+}
+
+function pluginRuntimeDir(dataDir: string): string {
+  return path.join(pluginsDir(dataDir), "runtime");
+}
+
+function externalMetadataPath(dataDir: string, manifest: PluginManifest): string {
+  return path.join(installedVersionPath(dataDir, manifest), ".brainpilot", "source.json");
 }
 
 function builtinPluginRoot(source: string): string {
@@ -157,6 +190,15 @@ function isObject(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
 }
 
+function optionalHttpsUrl(value: unknown): string | undefined {
+  if (typeof value !== "string") return undefined;
+  try { return new URL(value).protocol === "https:" ? value : undefined; } catch { return undefined; }
+}
+
+function optionalStringList(value: unknown): string[] | undefined {
+  return Array.isArray(value) && value.every((item) => typeof item === "string") ? value : undefined;
+}
+
 function parseMarketplaceEntry(value: unknown): MarketplaceEntry | null {
   if (!isObject(value) || typeof value.publisher !== "string" || !value.publisher.trim()) return null;
   const manifest = parsePublishablePluginManifest(value.manifest);
@@ -177,10 +219,29 @@ function parseMarketplaceEntry(value: unknown): MarketplaceEntry | null {
       releases.push({ version: raw.version, manifest: releaseManifest, artifact: { url: raw.artifact.url, sha256: raw.artifact.sha256.toLowerCase() }, publishedAt: raw.publishedAt, releaseNotes: raw.releaseNotes });
     }
   }
+  const sourceFormat = value.sourceFormat === "brainpilot" || value.sourceFormat === "pi-package" || value.sourceFormat === "codex" || value.sourceFormat === "claude-code"
+    ? value.sourceFormat
+    : undefined;
+  const capabilities = Array.isArray(value.capabilities) && value.capabilities.every((item) => item === "skills" || item === "mcp" || item === "hooks")
+    ? value.capabilities as Array<"skills" | "mcp" | "hooks">
+    : undefined;
+  const repositoryUrl = optionalHttpsUrl(value.repositoryUrl);
+  const homepage = optionalHttpsUrl(value.homepage);
+  const unsupported = optionalStringList(value.unsupported);
+  const requirements = optionalStringList(value.requirements);
   return { manifest, publisher: value.publisher.trim(), ...(artifact ? { artifact } : {}), verified: value.verified === true,
     ...(releases?.length ? { releases } : {}),
     ...(value.status === "test" ? { status: "test" as const } : {}),
-    ...(typeof value.homepage === "string" ? { homepage: value.homepage } : {}) };
+    ...(homepage ? { homepage } : {}),
+    ...(sourceFormat ? { sourceFormat } : {}),
+    ...(repositoryUrl ? { repositoryUrl } : {}),
+    ...(typeof value.license === "string" ? { license: value.license } : {}),
+    ...(typeof value.upstreamRef === "string" ? { upstreamRef: value.upstreamRef } : {}),
+    ...(typeof value.upstreamCommit === "string" ? { upstreamCommit: value.upstreamCommit } : {}),
+    ...(capabilities ? { capabilities } : {}),
+    ...(typeof value.executesLocalCode === "boolean" ? { executesLocalCode: value.executesLocalCode } : {}),
+    ...(unsupported ? { unsupported } : {}),
+    ...(requirements ? { requirements } : {}) };
 }
 
 interface MarketplaceSourceDefinition { id: string; type: "https"; url: string; enabled: boolean; }
@@ -309,6 +370,7 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
     if (!manifest || manifest.id !== id || typeof item.publisher !== "string" || typeof item.installedAt !== "string") continue;
     const activeVersion = typeof item.activeVersion === "string" ? item.activeVersion : manifest.version;
     if (activeVersion !== manifest.version) continue;
+    const repositoryUrl = optionalHttpsUrl(item.repositoryUrl);
     plugins[id] = {
       manifest,
       publisher: item.publisher,
@@ -318,6 +380,14 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
       activeVersion,
       ...(typeof item.previousVersion === "string" ? { previousVersion: item.previousVersion } : {}),
       ...(typeof item.updatedAt === "string" ? { updatedAt: item.updatedAt } : {}),
+      ...(item.sourceFormat === "brainpilot" || item.sourceFormat === "pi-package" || item.sourceFormat === "codex" || item.sourceFormat === "claude-code"
+        ? { sourceFormat: item.sourceFormat }
+        : {}),
+      ...(Array.isArray(item.unsupported) && item.unsupported.every((entry) => typeof entry === "string")
+        ? { unsupported: item.unsupported as string[] }
+        : {}),
+      ...(repositoryUrl ? { repositoryUrl } : {}),
+      ...(typeof item.executesLocalCode === "boolean" ? { executesLocalCode: item.executesLocalCode } : {}),
     };
   }
   for (const plugin of Object.values(plugins)) plugin.compatibility = compatibilityFor(plugin.manifest, plugins);
@@ -346,7 +416,19 @@ export async function listMarketplace(dataDir: string): Promise<MarketplaceEntry
     releases.sort((left, right) => comparePluginVersions(right.version, left.version));
     const latest = releases[0]!;
     const plugin = BUILTIN_PLUGIN_RELEASES.find((release) => release.version === latest.version && latest.artifact.url === builtinArtifactUrl(release))?.plugin;
-    return { manifest: latest.manifest, publisher: "BrainPilot", verified: true, artifact: latest.artifact, releases, source: { id: "builtin", type: "builtin" }, ...(plugin && TEST_PLUGIN_SOURCES.has(plugin) ? { status: "test" as const } : {}) };
+    const capabilities = latest.manifest.contributes?.skills?.length ? ["skills" as const] : [];
+    return {
+      manifest: latest.manifest,
+      publisher: "BrainPilot",
+      verified: true,
+      artifact: latest.artifact,
+      releases,
+      source: { id: "builtin", type: "builtin" },
+      sourceFormat: "brainpilot",
+      repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+      ...(capabilities.length ? { capabilities } : {}),
+      ...(plugin && TEST_PLUGIN_SOURCES.has(plugin) ? { status: "test" as const } : {}),
+    };
   });
   const selected = new Map(builtins.map((entry) => [entry.manifest.id, entry]));
   for (const entry of configured) selected.set(entry.manifest.id, entry);
@@ -370,6 +452,15 @@ export async function listMarketplaceSourceStatuses(dataDir: string): Promise<Ma
 export async function listInstalledPlugins(dataDir: string): Promise<InstalledPlugin[]> {
   const registry = await readRegistry(dataDir);
   return Object.values(registry.plugins).sort((a, b) => a.manifest.displayName.localeCompare(b.manifest.displayName));
+}
+
+/** Opt-in gate for sharing the active file/preview context with chat. */
+export async function isFileContextBridgeEnabled(dataDir: string): Promise<boolean> {
+  return (await listInstalledPlugins(dataDir)).some((plugin) =>
+    plugin.enabled
+    && plugin.compatibility?.compatible !== false
+    && plugin.manifest.id === "org.brainpilot.file-context-bridge",
+  );
 }
 
 async function readArtifact(dataDir: string, artifact: NonNullable<MarketplaceEntry["artifact"]>): Promise<Buffer> {
@@ -459,6 +550,306 @@ async function installBundle(dataDir: string, bundle: PluginBundle): Promise<voi
   }
 }
 
+interface ExternalPluginMetadata {
+  format: ImportablePluginSourceFormat;
+  unsupported: string[];
+  mcpConfigPath?: string;
+  hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+}
+
+function externalSkillId(skillPath: string, used: Set<string>): string {
+  const base = path.basename(path.dirname(skillPath)).toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "") || "skill";
+  let candidate = base;
+  for (let suffix = 2; used.has(candidate); suffix += 1) candidate = `${base}-${suffix}`;
+  used.add(candidate);
+  return candidate;
+}
+
+function externalInstructionId(instructionPath: string, used: Set<string>): string {
+  const base = path.basename(instructionPath, path.extname(instructionPath)).toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "") || "instructions";
+  let candidate = base;
+  for (let suffix = 2; used.has(candidate); suffix += 1) candidate = `${base}-${suffix}`;
+  used.add(candidate);
+  return candidate;
+}
+
+async function pathExists(target: string): Promise<boolean> {
+  try { await fs.access(target); return true; } catch { return false; }
+}
+
+async function copyExternalTree(sourceRoot: string, destinationRoot: string): Promise<void> {
+  let files = 0;
+  let bytes = 0;
+  const walk = async (source: string, destination: string): Promise<void> => {
+    const stat = await fs.lstat(source);
+    if (stat.isSymbolicLink()) throw new Error(`Imported plugins may not contain symbolic links: ${path.relative(sourceRoot, source)}`);
+    if (stat.isDirectory()) {
+      await fs.mkdir(destination, { recursive: true, mode: 0o700 });
+      for (const entry of await fs.readdir(source)) await walk(path.join(source, entry), path.join(destination, entry));
+      return;
+    }
+    if (!stat.isFile()) return;
+    files += 1;
+    bytes += stat.size;
+    if (files > 200) throw new Error("Imported plugin has more than 200 files");
+    if (stat.size > 5 * 1024 * 1024) throw new Error(`Imported plugin file exceeds 5 MiB: ${path.relative(sourceRoot, source)}`);
+    if (bytes > 10 * 1024 * 1024) throw new Error("Imported plugin exceeds 10 MiB");
+    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+    await fs.copyFile(source, destination);
+    await fs.chmod(destination, stat.mode & 0o777);
+  };
+  await walk(sourceRoot, destinationRoot);
+}
+
+function externalManifest(resolved: ResolvedExternalPlugin): PluginManifest {
+  const used = new Set<string>();
+  const skills = resolved.skillPaths.map((skillPath) => ({
+    id: externalSkillId(skillPath, used),
+    title: path.basename(path.dirname(skillPath)),
+    description: `Agent Skill imported from ${resolved.format}`,
+    entry: path.relative(resolved.root, skillPath).split(path.sep).join("/"),
+  }));
+  const instructionIds = new Set<string>();
+  const agentInstructions = resolved.instructionPaths.map((instructionPath) => ({
+    id: externalInstructionId(instructionPath, instructionIds),
+    title: path.basename(instructionPath, path.extname(instructionPath)),
+    entry: path.relative(resolved.root, instructionPath).split(path.sep).join("/"),
+    targets: ["principal"],
+    mode: "append" as const,
+  }));
+  const contributes = {
+    ...(skills.length > 0 ? { skills } : {}),
+    ...(agentInstructions.length > 0 ? { agentInstructions } : {}),
+  };
+  const parsed = parsePluginManifest({
+    id: resolved.id,
+    version: resolved.version,
+    apiVersion: PLUGIN_API_VERSION,
+    displayName: resolved.displayName,
+    description: resolved.description,
+    categories: skills.length > 0 ? ["skills"] : ["other"],
+    environments: ["local"],
+    permissions: ["read:workspace", "read:data", "compute:worker", "network"],
+    ...(agentInstructions.length > 0 ? { protocols: { agentInstructions: "1" } } : {}),
+    contributes,
+  });
+  if (!parsed) throw new Error("Could not synthesize a valid BrainPilot manifest for the imported plugin");
+  return parsed;
+}
+
+async function materializeExternalPlugin(
+  dataDir: string,
+  resolved: ResolvedExternalPlugin,
+  manifest: PluginManifest,
+): Promise<ExternalPluginMetadata> {
+  const destination = installedVersionPath(dataDir, manifest);
+  if (await pathExists(destination)) throw new Error(`${manifest.id}@${manifest.version} is already installed`);
+  const temporary = `${destination}.${randomUUID()}.tmp`;
+  try {
+    await copyExternalTree(resolved.root, temporary);
+    const internal = path.join(temporary, ".brainpilot");
+    await fs.mkdir(internal, { recursive: true, mode: 0o700 });
+    let mcpConfigPath = resolved.mcpConfigPath
+      ? path.relative(resolved.root, resolved.mcpConfigPath).split(path.sep).join("/")
+      : undefined;
+    if (resolved.inlineMcpConfig) {
+      mcpConfigPath = ".brainpilot/mcp.json";
+      await fs.writeFile(path.join(temporary, mcpConfigPath), JSON.stringify(resolved.inlineMcpConfig, null, 2) + "\n", { mode: 0o600 });
+    }
+    let hookConfig = resolved.hookConfig ? {
+      dialect: resolved.hookConfig.dialect,
+      path: path.relative(resolved.root, resolved.hookConfig.path).split(path.sep).join("/"),
+    } : undefined;
+    if (resolved.inlineHookConfig) {
+      const dialect = resolved.format === "codex" ? "codex" as const : "claude-code" as const;
+      hookConfig = { dialect, path: ".brainpilot/hooks.json" };
+      await fs.writeFile(path.join(temporary, hookConfig.path), JSON.stringify(resolved.inlineHookConfig, null, 2) + "\n", { mode: 0o600 });
+    }
+    const metadata: ExternalPluginMetadata = {
+      format: resolved.format,
+      unsupported: resolved.unsupported,
+      ...(mcpConfigPath ? { mcpConfigPath } : {}),
+      ...(hookConfig ? { hookConfig } : {}),
+    };
+    await fs.writeFile(path.join(internal, "source.json"), JSON.stringify(metadata, null, 2) + "\n", { mode: 0o600 });
+    await fs.writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
+    await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
+    await fs.rename(temporary, destination);
+    return metadata;
+  } catch (error) {
+    await fs.rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function readExternalMetadata(dataDir: string, manifest: PluginManifest): Promise<ExternalPluginMetadata | null> {
+  const raw = await readJson(externalMetadataPath(dataDir, manifest));
+  if (!isObject(raw) || (raw.format !== "pi-package" && raw.format !== "codex" && raw.format !== "claude-code")) return null;
+  const unsupported = Array.isArray(raw.unsupported) && raw.unsupported.every((entry) => typeof entry === "string") ? raw.unsupported as string[] : [];
+  const mcpConfigPath = typeof raw.mcpConfigPath === "string" && isSafePluginPath(raw.mcpConfigPath) ? raw.mcpConfigPath : undefined;
+  const hookConfig = isObject(raw.hookConfig)
+    && (raw.hookConfig.dialect === "codex" || raw.hookConfig.dialect === "claude-code")
+    && typeof raw.hookConfig.path === "string" && isSafePluginPath(raw.hookConfig.path)
+    ? { dialect: raw.hookConfig.dialect as "codex" | "claude-code", path: raw.hookConfig.path }
+    : undefined;
+  return { format: raw.format, unsupported, ...(mcpConfigPath ? { mcpConfigPath } : {}), ...(hookConfig ? { hookConfig } : {}) };
+}
+
+async function runtimeProjectionFor(dataDir: string, manifest: PluginManifest, metadata: ExternalPluginMetadata): Promise<PluginRuntimeProjection> {
+  const installedRoot = path.resolve(installedVersionPath(dataDir, manifest));
+  const root = path.resolve(pluginsDir(dataDir), "execution", manifest.id, manifest.version);
+  if (!await pathExists(root)) {
+    const temporary = `${root}.${randomUUID()}.tmp`;
+    try {
+      await copyExternalTree(installedRoot, temporary);
+      await fs.mkdir(path.dirname(root), { recursive: true, mode: 0o700 });
+      await fs.rename(temporary, root);
+    } catch (error) {
+      await fs.rm(temporary, { recursive: true, force: true });
+      throw error;
+    }
+  }
+  const safe = (relative: string): string => {
+    const target = path.resolve(root, relative);
+    if (!target.startsWith(`${root}${path.sep}`)) throw new Error("External plugin runtime path escapes its installed directory");
+    return target;
+  };
+  return {
+    schemaVersion: 1,
+    id: manifest.id,
+    version: manifest.version,
+    format: metadata.format,
+    root,
+    dataDir: path.resolve(pluginsDir(dataDir), "data", manifest.id, manifest.version),
+    ...(metadata.mcpConfigPath ? { mcpConfigPath: safe(metadata.mcpConfigPath) } : {}),
+    ...(metadata.hookConfig ? { hookConfig: { dialect: metadata.hookConfig.dialect, path: safe(metadata.hookConfig.path) } } : {}),
+  };
+}
+
+function mcpServersFrom(value: unknown): Record<string, Record<string, unknown>> {
+  if (!isObject(value)) throw new Error("MCP config must be an object");
+  const servers = isObject(value.mcpServers) ? value.mcpServers : value;
+  const result: Record<string, Record<string, unknown>> = {};
+  for (const [name, spec] of Object.entries(servers)) {
+    if (!name.trim() || !isObject(spec)) throw new Error("MCP server entries must be named objects");
+    result[name] = spec;
+  }
+  return result;
+}
+
+async function executableAvailable(command: string): Promise<boolean> {
+  if (path.isAbsolute(command) || command.includes(path.sep)) return pathExists(command);
+  for (const directory of (process.env.PATH ?? "").split(path.delimiter).filter(Boolean)) {
+    if (await pathExists(path.join(directory, command))) return true;
+    if (process.platform === "win32" && await pathExists(path.join(directory, `${command}.cmd`))) return true;
+  }
+  return false;
+}
+
+async function preflightExternalRuntime(dataDir: string, projection: PluginRuntimeProjection): Promise<void> {
+  if (!projection.mcpConfigPath) return;
+  const servers = mcpServersFrom(await readJson(projection.mcpConfigPath));
+  const occupied = new Map<string, string>();
+  for (const globalPath of [path.join(dataDir, "bp_template", "mcp_servers.json"), path.join(dataDir, ".bp", "mcp_servers.json")]) {
+    const global = await readJson(globalPath);
+    if (!global) continue;
+    for (const name of Object.keys(mcpServersFrom(global))) occupied.set(name, "global MCP configuration");
+    break;
+  }
+  let runtimeEntries: string[] = [];
+  try { runtimeEntries = await fs.readdir(pluginRuntimeDir(dataDir)); } catch { /* no enabled foreign plugins */ }
+  for (const entry of runtimeEntries.filter((name) => name.endsWith(".json"))) {
+    const other = await readJson(path.join(pluginRuntimeDir(dataDir), entry));
+    if (!isObject(other) || typeof other.id !== "string" || other.id === projection.id || typeof other.mcpConfigPath !== "string") continue;
+    const config = await readJson(other.mcpConfigPath);
+    if (!config) continue;
+    for (const name of Object.keys(mcpServersFrom(config))) occupied.set(name, other.id);
+  }
+  for (const [name, spec] of Object.entries(servers)) {
+    const owner = occupied.get(name);
+    if (owner) throw new Error(`MCP server name conflict: ${name} is already provided by ${owner}`);
+    const type = typeof spec.type === "string" ? spec.type : "stdio";
+    if (type === "stdio") {
+      if (typeof spec.command !== "string" || !spec.command.trim()) throw new Error(`MCP server ${name} requires a command`);
+      if (!await executableAvailable(spec.command)) throw new Error(`MCP server ${name} command is not available: ${spec.command}`);
+    } else if ((type === "http" || type === "sse") && typeof spec.url !== "string") {
+      throw new Error(`MCP server ${name} requires a URL`);
+    }
+    const supplied = new Set(["BRAINPILOT_PLUGIN_ROOT", "BRAINPILOT_PLUGIN_DATA", "CLAUDE_PLUGIN_ROOT", "CLAUDE_PLUGIN_DATA", "CLAUDE_MEM_DATA_DIR", "PLUGIN_ROOT"]);
+    const configuredEnv = isObject(spec.env) ? spec.env : {};
+    for (const key of Object.keys(configuredEnv)) supplied.add(key);
+    for (const value of [...Object.values(configuredEnv), ...(isObject(spec.headers) ? Object.values(spec.headers) : [])]) {
+      if (typeof value !== "string") continue;
+      for (const match of value.matchAll(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g)) {
+        const variable = match[1]!;
+        if (!supplied.has(variable) && process.env[variable] === undefined) throw new Error(`MCP server ${name} requires environment variable ${variable}`);
+      }
+    }
+  }
+}
+
+async function runExternalSetup(projection: PluginRuntimeProjection): Promise<void> {
+  if (!projection.hookConfig) return;
+  const marker = path.join(projection.dataDir, `.setup-${projection.version}`);
+  if (await pathExists(marker)) return;
+  await fs.mkdir(projection.dataDir, { recursive: true, mode: 0o700 });
+  const results = await runCompatHookEvent(projection, "Setup", {
+    session_id: "setup",
+    cwd: projection.root,
+    hook_event_name: "Setup",
+    plugin_id: projection.id,
+  });
+  const failure = results.find((result) => !result.ok);
+  if (failure) throw new Error(`Plugin Setup hook failed${failure.stderr.trim() ? `: ${failure.stderr.trim()}` : ""}`);
+  await fs.writeFile(marker, `${new Date().toISOString()}\n`, { mode: 0o600 });
+}
+
+async function syncExternalRuntimeProjection(dataDir: string, manifest: PluginManifest, enabled: boolean): Promise<void> {
+  const target = path.join(pluginRuntimeDir(dataDir), `${manifest.id}.json`);
+  if (!enabled) { await fs.rm(target, { force: true }); return; }
+  const metadata = await readExternalMetadata(dataDir, manifest);
+  if (!metadata) return;
+  const projection = await runtimeProjectionFor(dataDir, manifest, metadata);
+  await preflightExternalRuntime(dataDir, projection);
+  await runExternalSetup(projection);
+  await writeJsonAtomic(target, projection);
+}
+
+/** Import a local Codex, Claude Code, or Pi package into the immutable registry. */
+export async function importExternalPlugin(
+  dataDir: string,
+  directory: string,
+  format: ImportablePluginSourceFormat | "auto" = "auto",
+  environment: "local" | "cloud" | "browser" = deploymentEnvironment(),
+): Promise<InstalledPlugin> {
+  if (environment !== "local") throw new Error("Local plugin directory import is only available in local deployments");
+  return withRegistryMutation(dataDir, async () => {
+    const resolved = await resolveExternalPlugin(directory, format);
+    const manifest = externalManifest(resolved);
+    const registry = await readRegistry(dataDir);
+    if (registry.plugins[manifest.id]) throw new Error(`Plugin ${manifest.id} is already installed`);
+    const metadata = await materializeExternalPlugin(dataDir, resolved, manifest);
+    const installed: InstalledPlugin = {
+      manifest,
+      publisher: resolved.publisher,
+      verified: false,
+      enabled: false,
+      installedAt: new Date().toISOString(),
+      activeVersion: manifest.version,
+      sourceFormat: metadata.format,
+      executesLocalCode: Boolean(resolved.mcpConfigPath || resolved.inlineMcpConfig || resolved.hookConfig || resolved.inlineHookConfig),
+      unsupported: metadata.unsupported,
+      ...(resolved.repositoryUrl ? { repositoryUrl: resolved.repositoryUrl } : {}),
+    };
+    installed.compatibility = compatibilityFor(manifest, { ...registry.plugins, [manifest.id]: installed });
+    registry.plugins[manifest.id] = installed;
+    await writeJsonAtomic(registryPath(dataDir), registry);
+    return installed;
+  });
+}
+
 function releasesForEntry(entry: MarketplaceEntry): MarketplaceRelease[] {
   if (entry.releases?.length) return [...entry.releases].sort((left, right) => comparePluginVersions(right.version, left.version));
   return entry.artifact ? [{
@@ -504,6 +895,10 @@ export async function installPlugin(dataDir: string, id: string, requestedVersio
       enabled: false,
       installedAt: new Date().toISOString(),
       activeVersion: release.version,
+      sourceFormat: entry.sourceFormat ?? "brainpilot",
+      executesLocalCode: entry.executesLocalCode ?? Boolean(entry.capabilities?.some((capability) => capability === "mcp" || capability === "hooks")),
+      ...(entry.repositoryUrl ? { repositoryUrl: entry.repositoryUrl } : {}),
+      ...(entry.unsupported?.length ? { unsupported: entry.unsupported } : {}),
     };
     installed.compatibility = compatibilityFor(release.manifest, { ...registry.plugins, [id]: installed });
     registry.plugins[id] = installed;
@@ -560,8 +955,10 @@ export async function updatePlugin(dataDir: string, id: string): Promise<Install
     installed.activeVersion = release.version;
     installed.previousVersion = previousVersion;
     installed.updatedAt = new Date().toISOString();
+    installed.executesLocalCode = entry?.executesLocalCode ?? Boolean(entry?.capabilities?.some((capability) => capability === "mcp" || capability === "hooks"));
     installed.compatibility = compatibilityFor(release.manifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
+    if (installed.enabled) await syncDeclarativeContributions(dataDir, installed.manifest, true);
     await writeJsonAtomic(registryPath(dataDir), registry);
     await pruneInstalledVersions(dataDir, id, [installed.activeVersion, previousVersion]);
     return installed;
@@ -585,9 +982,84 @@ export async function rollbackPlugin(dataDir: string, id: string): Promise<Insta
     installed.updatedAt = new Date().toISOString();
     installed.compatibility = compatibilityFor(previousManifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
+    if (installed.enabled) await syncDeclarativeContributions(dataDir, installed.manifest, true);
     await writeJsonAtomic(registryPath(dataDir), registry);
     return installed;
   });
+}
+
+function skillProjectionRoot(dataDir: string, manifest: PluginManifest): string {
+  const category = `99_Marketplace_${manifest.id.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+  return path.join(dataDir, "bp_template", "skills-router", category);
+}
+
+function agentInstructionProjectionRoot(dataDir: string, manifest: PluginManifest): string {
+  return path.join(dataDir, "bp_template", "agent-instructions", manifest.id.replace(/[^A-Za-z0-9._-]/g, "_"));
+}
+
+async function replaceProjection(target: string, build: (temporary: string) => Promise<void>): Promise<void> {
+  const temporary = `${target}.${randomUUID()}.tmp`;
+  await fs.mkdir(temporary, { recursive: true, mode: 0o700 });
+  try {
+    await build(temporary);
+    await fs.rm(target, { recursive: true, force: true });
+    await fs.mkdir(path.dirname(target), { recursive: true, mode: 0o700 });
+    await fs.rename(temporary, target);
+  } catch (error) {
+    await fs.rm(temporary, { recursive: true, force: true });
+    throw error;
+  }
+}
+
+async function syncSkillContributions(dataDir: string, manifest: PluginManifest, enabled: boolean): Promise<void> {
+  const targetRoot = skillProjectionRoot(dataDir, manifest);
+  if (!enabled) { await fs.rm(targetRoot, { recursive: true, force: true }); return; }
+  const skills = manifest.contributes?.skills ?? [];
+  if (skills.length === 0) return;
+  await replaceProjection(targetRoot, async (temporary) => {
+    const installedRoot = path.resolve(installedVersionPath(dataDir, manifest));
+    for (const skill of skills) {
+      const entry = path.resolve(installedRoot, skill.entry);
+      if (!entry.startsWith(`${installedRoot}${path.sep}`) || path.basename(entry).toLowerCase() !== "skill.md") {
+        throw new Error("skill entry must be a safe SKILL.md inside the plugin bundle");
+      }
+      const target = path.resolve(temporary, skill.id);
+      if (!target.startsWith(`${temporary}${path.sep}`)) throw new Error("skill id escapes marketplace category");
+      await fs.cp(path.dirname(entry), target, { recursive: true, force: false, errorOnExist: true });
+    }
+  });
+}
+
+/** BrainPilot-native compatibility adapter; not part of the cross-host plugin IR. */
+async function syncAgentInstructionContributions(dataDir: string, manifest: PluginManifest, enabled: boolean): Promise<void> {
+  const targetRoot = agentInstructionProjectionRoot(dataDir, manifest);
+  if (!enabled) { await fs.rm(targetRoot, { recursive: true, force: true }); return; }
+  const instructions = manifest.contributes?.agentInstructions ?? [];
+  if (instructions.length === 0) return;
+  await replaceProjection(targetRoot, async (temporary) => {
+    const installedRoot = path.resolve(installedVersionPath(dataDir, manifest));
+    for (const instruction of instructions) {
+      const source = path.resolve(installedRoot, instruction.entry);
+      if (!source.startsWith(`${installedRoot}${path.sep}`)) throw new Error("agent instruction entry escapes plugin bundle");
+      const target = path.resolve(temporary, instruction.id);
+      if (!target.startsWith(`${temporary}${path.sep}`)) throw new Error("agent instruction id escapes projection");
+      await fs.mkdir(target, { recursive: true, mode: 0o700 });
+      await fs.copyFile(source, path.join(target, "instructions.md"));
+      await fs.writeFile(path.join(target, "metadata.json"), JSON.stringify({
+        pluginId: manifest.id,
+        contributionId: instruction.id,
+        title: instruction.title,
+        targets: instruction.targets,
+        mode: instruction.mode,
+        priority: instruction.priority ?? 0,
+      }, null, 2) + "\n", { mode: 0o600 });
+    }
+  });
+}
+
+async function syncDeclarativeContributions(dataDir: string, manifest: PluginManifest, enabled: boolean): Promise<void> {
+  await syncSkillContributions(dataDir, manifest, enabled);
+  await syncAgentInstructionContributions(dataDir, manifest, enabled);
 }
 
 export async function setPluginEnabled(dataDir: string, id: string, enabled: boolean): Promise<InstalledPlugin | null> {
@@ -595,8 +1067,24 @@ export async function setPluginEnabled(dataDir: string, id: string, enabled: boo
     const registry = await readRegistry(dataDir);
     const installed = registry.plugins[id];
     if (!installed) return null;
+    const prospective = { ...registry.plugins, [id]: { ...installed, enabled } };
+    assertEnabledPluginsCompatible(prospective);
+    if (enabled) {
+      const compatibility = compatibilityFor(installed.manifest, prospective);
+      installed.compatibility = compatibility;
+      try {
+        await syncExternalRuntimeProjection(dataDir, installed.manifest, true);
+        await syncDeclarativeContributions(dataDir, installed.manifest, true);
+      } catch (error) {
+        await syncExternalRuntimeProjection(dataDir, installed.manifest, false);
+        await syncDeclarativeContributions(dataDir, installed.manifest, false);
+        throw error;
+      }
+    } else {
+      await syncDeclarativeContributions(dataDir, installed.manifest, false);
+      await syncExternalRuntimeProjection(dataDir, installed.manifest, false);
+    }
     installed.enabled = enabled;
-    assertEnabledPluginsCompatible(registry.plugins);
     installed.compatibility = compatibilityFor(installed.manifest, registry.plugins);
     await writeJsonAtomic(registryPath(dataDir), registry);
     return installed;
@@ -608,10 +1096,14 @@ export async function uninstallPlugin(dataDir: string, id: string): Promise<bool
     const registry = await readRegistry(dataDir);
     const installed = registry.plugins[id];
     if (!installed) return false;
+    await syncDeclarativeContributions(dataDir, installed.manifest, false);
+    await syncExternalRuntimeProjection(dataDir, installed.manifest, false);
     delete registry.plugins[id];
     assertEnabledPluginsCompatible(registry.plugins);
     await writeJsonAtomic(registryPath(dataDir), registry);
     await fs.rm(path.join(pluginsDir(dataDir), "installed", installed.manifest.id), { recursive: true, force: true });
+    await fs.rm(path.join(pluginsDir(dataDir), "execution", installed.manifest.id), { recursive: true, force: true });
+    await fs.rm(path.join(pluginsDir(dataDir), "data", installed.manifest.id), { recursive: true, force: true });
     return true;
   });
 }

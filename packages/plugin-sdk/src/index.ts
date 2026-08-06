@@ -90,6 +90,9 @@ export interface PluginCompatibility {
 
 export interface PluginArtifact { url: string; sha256: string; }
 
+export type PluginSourceFormat = "brainpilot" | "pi-package" | "codex" | "claude-code";
+export type PluginMarketCapability = "skills" | "mcp" | "hooks";
+
 export interface MarketplaceRelease {
   version: string;
   manifest: PluginManifest;
@@ -109,6 +112,18 @@ export interface MarketplaceEntry {
   compatibility?: PluginCompatibility;
   latestCompatibleVersion?: string;
   source?: { id: string; type: "builtin" | "local" | "https" };
+  /** Ecosystem syntax the published plugin originated from. Defaults to BrainPilot. */
+  sourceFormat?: PluginSourceFormat;
+  /** Human-facing upstream project URL; distinct from the catalogue source above. */
+  repositoryUrl?: string;
+  license?: string;
+  upstreamRef?: string;
+  upstreamCommit?: string;
+  capabilities?: PluginMarketCapability[];
+  /** Whether enabling this plugin may execute code or launch processes on the local machine. */
+  executesLocalCode?: boolean;
+  unsupported?: string[];
+  requirements?: string[];
 }
 
 export interface MarketplaceSourceStatus {
@@ -131,6 +146,10 @@ export interface InstalledPlugin {
   previousVersion?: string;
   updatedAt?: string;
   compatibility?: PluginCompatibility;
+  sourceFormat?: PluginSourceFormat;
+  repositoryUrl?: string;
+  executesLocalCode?: boolean;
+  unsupported?: string[];
 }
 
 export interface PluginUpdateStatus {

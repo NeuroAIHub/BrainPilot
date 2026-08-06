@@ -23,6 +23,7 @@ import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeGoTContextExt } from "./extensions/got-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
+import { makeCompatHooksExt } from "./compat-hooks.js";
 import {
   installBrainPilotRetryClassifier,
   PROVIDER_MAX_RETRIES,
@@ -119,6 +120,9 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // the agent the host supplied a renderer for (the principal). The `context`
   // hook recomputes per turn and the rewrite is ephemeral (never persisted).
   const extensionFactories: unknown[] = [];
+  if (params.compatPluginProjections?.length) {
+    extensionFactories.push(makeCompatHooksExt(params.compatPluginProjections));
+  }
   if (!params.suppressCoordinationHooks) {
     extensionFactories.push(makeTraceReminderExt({
       role: params.role,

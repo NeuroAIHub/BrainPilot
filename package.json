@@ -29,6 +29,8 @@
     "test": "vitest run",
     "test:datasets": "npm run build -w @brainpilot/backend-core && node scripts/test-public-dataset-downloads.mjs",
     "test:watch": "vitest",
+    "test:claude-mem": "bash scripts/test-claude-mem-plugin.sh",
+    "check:claude-mem-upstream": "bash scripts/check-claude-mem-upstream.sh",
     "bp": "node packages/cli/dist/bin.js",
     "version:sync": "node scripts/sync-versions.js",
     "version:check": "node scripts/sync-versions.js --check",
