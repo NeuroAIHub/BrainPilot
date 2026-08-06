@@ -84,8 +84,10 @@ export function toAskUserView(event: WebSocketEvent): AskUserView {
  */
 export function toAutoRetryView(event: WebSocketEvent): AutoRetryView {
   const e = event as Record<string, unknown>;
-  // The retry detail may be nested under `data` / `value` / `autoRetry`.
+  // Runtime's canonical agent_status_update carries retry details under
+  // `retry`. Older/demo feeds may use data/value/autoRetry or top-level fields.
   const nested =
+    (e.retry as Record<string, unknown> | undefined) ??
     (e.autoRetry as Record<string, unknown> | undefined) ??
     (e.data as Record<string, unknown> | undefined) ??
     (e.value as Record<string, unknown> | undefined) ??
@@ -103,12 +105,12 @@ export function isAutoRetryStatus(event: WebSocketEvent): boolean {
   const e = event as Record<string, unknown>;
   if (e.type !== "agent_status_update") return false;
   const status = str(e.status ?? (e as { runStatus?: string }).runStatus).toLowerCase();
-  // Pi auto_retry_start surfaces with a retrying/auto_retry status marker, or an
-  // explicit autoRetry payload.
+  // Pi auto_retry_start may surface with a retrying status marker, while the
+  // Runtime's canonical event keeps status="running" and attaches `retry`.
   if (status === "retrying" || status === "auto_retry" || status === "auto_retry_start") {
     return true;
   }
-  return Boolean(e.autoRetry ?? e.auto_retry);
+  return Boolean(e.retry ?? e.autoRetry ?? e.auto_retry);
 }
 
 /** Build the `system_message` ChatMessage. */

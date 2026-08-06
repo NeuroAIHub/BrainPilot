@@ -2,7 +2,12 @@ import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import { mkdtempSync, rmSync, existsSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
-import { resolveGatewayModel, resolveSessionModel, GATEWAY_PROVIDER, type PiProviderSdk } from "../pi-provider.js";
+import {
+  resolveGatewayModel,
+  resolveSessionModel,
+  GATEWAY_PROVIDER,
+  type PiProviderSdk,
+} from "../pi-provider.js";
 
 /** Fake Pi SDK that records the models.json path it was created against. */
 function fakeSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
@@ -84,6 +89,17 @@ describe("resolveGatewayModel", () => {
     expect(cfg.providers[GATEWAY_PROVIDER].api).toBe("anthropic-messages");
     // Key is referenced by env interpolation, never inlined.
     expect(cfg.providers[GATEWAY_PROVIDER].apiKey).toBe("$ANTHROPIC_API_KEY");
+  });
+
+  it("removes a trailing /v1 from the Anthropic gateway base URL (#416)", () => {
+    process.env.ANTHROPIC_BASE_URL = "https://gw.example/proxy/v1/";
+    process.env.ANTHROPIC_MODEL = "claude-x";
+    const { sdk, lastPath } = fakeSdk();
+
+    resolveGatewayModel(sdk, agentDir);
+
+    const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers[GATEWAY_PROVIDER].baseUrl).toBe("https://gw.example/proxy");
   });
 
   it("applies default context/token limits when env is unset", () => {
@@ -300,6 +316,29 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     });
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers["legacy"].api).toBe("anthropic-messages");
+  });
+
+  it("normalizes /v1 only for anthropic-messages (#416)", () => {
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "ant",
+      baseUrl: "https://gateway.example/v1/",
+      api: "anthropic-messages",
+      apiKey: "sk-ant",
+      modelId: "claude-x",
+    });
+    let cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers.ant.baseUrl).toBe("https://gateway.example");
+
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "oai-v1",
+      baseUrl: "https://gateway.example/v1/",
+      api: "openai-completions",
+      apiKey: "sk-oai",
+      modelId: "gpt-x",
+    });
+    cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers["oai-v1"].baseUrl).toBe("https://gateway.example/v1/");
   });
 
   // #68: when api is unset, the precise wire value is derived from the coarse
