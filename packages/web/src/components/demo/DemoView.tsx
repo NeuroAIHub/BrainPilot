@@ -214,6 +214,10 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
   }, [decoded]);
 
   const nodes = bundle?.trace.nodes ?? [];
+  const episodeTitles = useMemo(
+    () => new Map((bundle?.trace.episodes ?? []).map((episode) => [episode.id, episode.title])),
+    [bundle?.trace.episodes],
+  );
 
   // #321 — when Trace/files are empty, give conversation more width by default.
   useEffect(() => {
@@ -860,6 +864,7 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
                 fitToken={revealedNodes.length}
                 emptyLabel={nodes.length === 0 ? t("demo.trace.empty") : undefined}
                 formatKind={formatNodeKind}
+                episodeTitles={episodeTitles}
                 zoomLabels={{
                   controls: t("trace.aria.zoomControls"),
                   zoomIn: t("trace.aria.zoomIn"),

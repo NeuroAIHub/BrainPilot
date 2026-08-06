@@ -64,4 +64,32 @@ describe("TraceGraphView empty markup (#317)", () => {
     expect(html).not.toContain("should not appear");
     expect(html).toContain("Task A");
   });
+
+  it("shows the Episode name on a node card without exposing its ID", () => {
+    const node = {
+      id: "result-a",
+      title: "No-dropout result",
+      type: "result",
+      status: "completed",
+      primaryEpisodeId: "ep-private-id",
+      parents: [] as { id: string; title?: string }[],
+      parentIds: [] as string[],
+      childIds: [] as string[],
+      artifacts: [] as { path: string }[],
+      toolCalls: [] as string[],
+    };
+    const html = renderToStaticMarkup(
+      <TraceGraphView
+        nodes={[node as never]}
+        direction="LR"
+        selectedNodeId="result-a"
+        onSelectNode={() => {}}
+        zoom={1}
+        onZoomChange={() => {}}
+        episodeTitles={new Map([["ep-private-id", "Ablation — dropout"]])}
+      />,
+    );
+    expect(html).toContain("Ablation — dropout");
+    expect(html).not.toContain("ep-private-id");
+  });
 });
