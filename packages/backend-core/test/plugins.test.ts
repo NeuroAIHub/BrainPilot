@@ -289,4 +289,47 @@ describe("plugin marketplace control plane", () => {
     await setPluginEnabled(dataDir, id, false);
     await expect(readFile(path.join(dataDir, "plugins", "runtime", `${id}.json`), "utf8")).rejects.toThrow();
   });
+
+  it("installs the verified Playwright MCP wrapper and projects its pinned server", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-playwright-"));
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false });
+    const id = "org.brainpilot.playwright-mcp";
+    const marketplace = await (await app.request("/api/plugins/marketplace")).json() as Array<MarketplaceEntry>;
+    const entry = marketplace.find((candidate) => candidate.manifest.id === id);
+    expect(entry).toEqual(expect.objectContaining({
+      publisher: "Microsoft",
+      verified: true,
+      status: "test",
+      sourceFormat: "brainpilot",
+      license: "Apache-2.0",
+      upstreamRef: "npm:@playwright/mcp@0.0.78",
+      upstreamCommit: "8414d571beed0e12a4b8c7f537bfdab44236ba4c",
+      capabilities: ["mcp"],
+      executesLocalCode: true,
+    }));
+
+    expect((await app.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    })).status).toBe(201);
+    expect((await app.request(`/api/plugins/${id}/enabled`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    })).status).toBe(200);
+
+    const projection = JSON.parse(await readFile(path.join(dataDir, "plugins", "runtime", `${id}.json`), "utf8")) as {
+      format: string;
+      mcpConfigPath: string;
+    };
+    expect(projection.format).toBe("brainpilot");
+    expect(projection.mcpConfigPath).toMatch(/\.mcp\.json$/);
+    const config = JSON.parse(await readFile(projection.mcpConfigPath, "utf8")) as { mcpServers: { playwright: { command: string; args: string[] } } };
+    expect(config.mcpServers.playwright).toEqual({
+      type: "stdio",
+      command: "node",
+      args: ["${BRAINPILOT_PLUGIN_ROOT}/scripts/launch.mjs"],
+    });
+  });
 });

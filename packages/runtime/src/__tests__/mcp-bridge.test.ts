@@ -47,10 +47,14 @@ describe("loadMcpServersConfig", () => {
     await mkdir(pluginRoot, { recursive: true });
     await mkdir(runtimeDir, { recursive: true });
     const mcpConfigPath = join(pluginRoot, ".mcp.json");
-    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { memory: { command: "node", args: ["server.js"] } } }));
-    await writeFile(join(runtimeDir, "demo.json"), JSON.stringify({ schemaVersion: 1, id: "demo", version: "1.0.0", format: "claude-code", root: pluginRoot, dataDir: pluginData, mcpConfigPath }));
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { memory: { command: "node", args: ["${BRAINPILOT_PLUGIN_ROOT}/server.js"], env: { CACHE_DIR: "${BRAINPILOT_PLUGIN_DATA}/cache" } } } }));
+    await writeFile(join(runtimeDir, "demo.json"), JSON.stringify({ schemaVersion: 1, id: "demo", version: "1.0.0", format: "brainpilot", root: pluginRoot, dataDir: pluginData, mcpConfigPath }));
     const cfg = await loadMcpServersConfig(root);
-    expect(cfg?.mcpServers.memory).toEqual(expect.objectContaining({ command: "node", env: expect.objectContaining({ PLUGIN_ROOT: pluginRoot, BRAINPILOT_PLUGIN_DATA: pluginData }) }));
+    expect(cfg?.mcpServers.memory).toEqual(expect.objectContaining({
+      command: "node",
+      args: [`${pluginRoot}/server.js`],
+      env: expect.objectContaining({ PLUGIN_ROOT: pluginRoot, BRAINPILOT_PLUGIN_DATA: pluginData, CACHE_DIR: `${pluginData}/cache` }),
+    }));
   });
 
   it("rejects MCP server name conflicts between global and plugin configs", async () => {

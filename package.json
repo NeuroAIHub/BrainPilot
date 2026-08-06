@@ -32,6 +32,7 @@
     "test:claude-mem": "bash scripts/test-claude-mem-plugin.sh",
     "check:claude-mem-upstream": "bash scripts/check-claude-mem-upstream.sh",
     "check:superpowers-upstream": "bash scripts/check-superpowers-upstream.sh",
+    "check:playwright-mcp-upstream": "bash scripts/check-playwright-mcp-upstream.sh",
     "test:superpowers": "vitest run packages/runtime/src/__tests__/pi-package-extension.test.ts packages/backend-core/test/plugins.test.ts packages/backend-core/test/external-plugins.test.ts",
     "bp": "node packages/cli/dist/bin.js",
     "version:sync": "node scripts/sync-versions.js",
