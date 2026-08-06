@@ -10688,6 +10688,7 @@ button {
 
 .plugin-card__icon--skills { background: color-mix(in srgb, #8b5cf6 13%, var(--color-surface)); color: #8b5cf6; }
 .plugin-card__icon--knowledge { background: color-mix(in srgb, #0f9f75 13%, var(--color-surface)); color: #0f9f75; }
+.plugin-card__icon--datasets { background: color-mix(in srgb, #1683c4 13%, var(--color-surface)); color: #1683c4; }
 
 .plugin-card__identity { min-width: 0; }
 .plugin-card__identity > div { display: flex; min-width: 0; align-items: center; gap: 6px; }
@@ -10787,6 +10788,43 @@ button {
 .plugin-card__button:hover:not(:disabled) { box-shadow: var(--shadow-sm); }
 .plugin-card__button--ghost:hover:not(:disabled) { border-color: var(--color-border-strong); background: var(--color-hover); }
 .plugin-card__button:disabled { cursor: wait; opacity: 0.55; }
+.plugin-card__button:is(a) { text-decoration: none; }
+
+.dataset-credentials {
+  display: grid;
+  gap: 10px;
+}
+
+.dataset-credentials > p { margin-top: -4px !important; color: var(--color-text-subtle) !important; font-size: 11px !important; }
+
+.dataset-credentials label { display: grid; gap: 5px; color: var(--color-text-muted); font-size: 11px; }
+
+.dataset-credentials input {
+  width: 100%;
+  height: 36px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  outline: 0;
+  background: var(--color-canvas);
+  color: var(--color-text);
+  padding: 0 10px;
+}
+
+.dataset-credentials input:focus { border-color: var(--color-accent); box-shadow: 0 0 0 3px var(--color-accent-soft); }
+.dataset-credentials small { color: var(--color-text-subtle); }
+.dataset-job-error { color: var(--color-danger) !important; }
+.dataset-download-command {
+  display: block;
+  overflow-x: auto;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-canvas);
+  padding: 10px 12px;
+  color: var(--color-text-muted);
+  font-size: 11px;
+  line-height: 1.6;
+  white-space: pre;
+}
 
 .plugin-market__notice {
   display: flex;

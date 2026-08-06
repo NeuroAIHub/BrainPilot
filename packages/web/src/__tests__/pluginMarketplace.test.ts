@@ -3,6 +3,7 @@ import {
   capabilitiesForMarketplaceEntry,
   categoryForMarketplaceEntry,
   categoryForPluginKind,
+  executesLocalCodeForMarketplaceEntry,
   matchesMarketplaceQuery,
   matchesMarketplaceSource,
   sourceFormatForMarketplaceEntry,
@@ -21,7 +22,7 @@ const entry = {
 } as Parameters<typeof matchesMarketplaceQuery>[0];
 
 describe("plugin marketplace catalogue model", () => {
-  it("maps contribution kinds into the three marketplace panels", () => {
+  it("maps plugin contribution kinds into their marketplace panels", () => {
     expect(categoryForPluginKind("skill-pack")).toBe("skills");
     expect(categoryForPluginKind("knowledge-base")).toBe("knowledge");
     expect(categoryForPluginKind("literature-provider")).toBe("knowledge");
@@ -55,5 +56,11 @@ describe("plugin marketplace catalogue model", () => {
       ...entry,
       manifest: { ...entry.manifest, contributes: { skills: [{ id: "method", title: "Method", entry: "SKILL.md" }] } },
     })).toEqual(["skills"]);
+  });
+
+  it("uses explicit local-code metadata and falls back to executable capabilities", () => {
+    expect(executesLocalCodeForMarketplaceEntry({ executesLocalCode: false, capabilities: ["hooks"] })).toBe(false);
+    expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["mcp"] })).toBe(true);
+    expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["skills"] })).toBe(false);
   });
 });

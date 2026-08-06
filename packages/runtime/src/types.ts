@@ -235,6 +235,8 @@ export type AgentSessionFactory = (params: {
   renderAgentStatus?: () => string;
   /** Fresh flat task-list context, injected ephemerally on every turn. */
   renderTaskContext?: () => string;
+  /** Fresh role-specific GoT context, injected ephemerally on every turn. */
+  renderGoTContext?: () => string;
   /**
    * Per-session LLM provider resolved from providers.json. When omitted, the
    * factory falls back to Pi's env-based default (Docker/static compat).
