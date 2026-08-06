@@ -73,7 +73,8 @@ describe("Runtime HTTP contract", () => {
       "hi",
     );
     expect(SendMessageRequestSchema.safeParse({ agent: "principal" }).success).toBe(false);
-    expect(SendMessageResponseSchema.parse({ accepted: true, runId: "r1" }).accepted).toBe(true);
+    expect(SendMessageResponseSchema.parse({ accepted: true, runId: "r1", queued: true }))
+      .toEqual({ accepted: true, runId: "r1", queued: true });
   });
 
   it("validates interrupt / agents / evict responses", () => {

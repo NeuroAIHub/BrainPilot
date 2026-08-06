@@ -92,6 +92,8 @@ export interface CreateAppOptions {
   /** Disable static serving (tests that only exercise the API). */
   serveWeb?: boolean;
   env?: Record<string, string | undefined>;
+  /** Aborted during graceful shutdown so long-lived SSE proxies can drain. */
+  shutdownSignal?: AbortSignal;
 }
 
 /** Headers that must not be copied verbatim onto an SSE passthrough. */
@@ -949,8 +951,12 @@ export function createApp(options: CreateAppOptions): Hono {
   async function sseHandler(c: import("hono").Context): Promise<Response> {
     const rc = await getClient(c);
     const id = c.req.param("id") ?? "";
+    const signal = options.shutdownSignal
+      ? AbortSignal.any([c.req.raw.signal, options.shutdownSignal])
+      : c.req.raw.signal;
     const upstream = await rc.openSse(id, {
       query: c.req.query("token") ? `token=${encodeURIComponent(c.req.query("token")!)}` : undefined,
+      signal,
     });
     // 修正4: do not parse the stream — relay the byte body untouched.
     const headers = new Headers();
