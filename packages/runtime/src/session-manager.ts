@@ -69,6 +69,7 @@ import {
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { renderTaskListBlock } from "./extensions/task-context.js";
+import { renderGoTAuditContext, renderPrincipalGoTContext } from "./extensions/got-context.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
@@ -2320,16 +2321,18 @@ export class SessionManager {
     const mcpTools = role === "trace" ? [] : await this.ensureMcpTools();
     const rawTools = [...systemTools, ...mcpTools];
     // Built-in skills are loaded by Pi natively (not as tools). Materialize the
-    // bundled content into bp_template/skills once, then hand the dir to the
-    // factory as additionalSkillPaths. Trace agent is skill-less (graph-only).
+    // generic bundled library for non-Trace roles. System plugins may still
+    // contribute narrowly targeted skills to Trace without exposing that library.
     let skillPaths: string[] | undefined;
     if (role !== "trace" && entry.domainResources === "full") {
       await this.ensureSkillsMaterialized();
       skillPaths = [this.skillsDir];
     }
-    const pluginSkillPaths = role === "trace"
-      ? []
-      : systemPluginSkillPaths(this.bundledSystemPlugins, entry.systemPlugins, name);
+    const pluginSkillPaths = systemPluginSkillPaths(
+      this.bundledSystemPlugins,
+      entry.systemPlugins,
+      name,
+    );
     if (pluginSkillPaths.length) skillPaths = [...(skillPaths ?? []), ...pluginSkillPaths];
     // #80: guard every tool result against context-window overflow.
     const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
@@ -2380,6 +2383,12 @@ export class SessionManager {
       renderAgentStatus:
         name === "principal" ? () => this.renderAgentStatus(entry) : undefined,
       renderTaskContext: () => this.renderTaskContext(entry, name),
+      renderGoTContext:
+        name === "principal"
+          ? () => renderPrincipalGoTContext(entry.trace.getGraphV2())
+          : name === "auditor"
+            ? () => this.renderGoTAuditContext(entry)
+            : undefined,
     });
 
     const agent = new MasAgent({
@@ -2475,6 +2484,20 @@ export class SessionManager {
       entry.taskLedger.pendingCreatedBy(name),
       TASK_CONTEXT_MAX_CHARS,
     );
+  }
+
+  private renderGoTAuditContext(entry: SessionEntry): string {
+    const target = entry.currentTraceAuditTarget;
+    if (!target) return "";
+    return renderGoTAuditContext({
+      graph: entry.trace.getGraphV2(),
+      target,
+      targetNode: entry.trace.getNodeDetail(target.nodeId),
+      ...(target.parentNodeId
+        ? { parentNode: entry.trace.getNodeDetail(target.parentNodeId) }
+        : {}),
+      neighborhood: entry.trace.getNeighborhood(target.nodeId, 2),
+    });
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {
