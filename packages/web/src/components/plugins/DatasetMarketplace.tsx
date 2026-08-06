@@ -8,6 +8,26 @@ interface Props {
   onCount: (count: number) => void;
 }
 
+export type DatasetCardAction = "download" | "details";
+
+export function datasetCardAction(entry: DatasetCatalogEntry): DatasetCardAction {
+  return entry.downloadAvailable && !entry.credentialFields?.length ? "download" : "details";
+}
+
+export function handleDatasetCardAction(
+  entry: DatasetCatalogEntry,
+  actions: { download: (entry: DatasetCatalogEntry) => void; showDetails: (id: string) => void },
+): DatasetCardAction {
+  const action = datasetCardAction(entry);
+  if (action === "download") actions.download(entry);
+  else actions.showDetails(entry.id);
+  return action;
+}
+
+export function hasRequiredDatasetCredentials(entry: DatasetCatalogEntry, credentials: Record<string, string>): boolean {
+  return (entry.credentialFields ?? []).filter((field) => field.required).every((field) => Boolean(credentials[field.id]?.trim()));
+}
+
 function matches(entry: DatasetCatalogEntry, query: string): boolean {
   const normalized = query.trim().toLocaleLowerCase();
   return !normalized || [entry.name, entry.summary, entry.description, entry.provider, entry.license, ...entry.modalities]
@@ -79,6 +99,11 @@ export function DatasetMarketplace({ query, onCount }: Props) {
     }
   };
 
+  const showDetails = (id: string) => {
+    setSelectedId(id);
+    setCredentials({});
+  };
+
   if (loading && catalog.length === 0) return <div className="plugin-market__empty"><Loader2 className="is-spinning" size={24} /><strong>{t("datasets.loading")}</strong></div>;
   return <>
     {error ? <div className="plugin-market__notice plugin-market__notice--error"><span>{error}</span><button onClick={() => void load()} type="button">{t("marketplace.retry")}</button></div> : null}
@@ -86,8 +111,9 @@ export function DatasetMarketplace({ query, onCount }: Props) {
     <div className="plugin-market__grid">
       {visible.map((entry) => {
         const job = jobsByDataset.get(entry.id);
+        const primaryAction = datasetCardAction(entry);
         return <article className="plugin-card dataset-card" key={entry.id}>
-          <button className="plugin-card__details-trigger" onClick={() => { setSelectedId(entry.id); setCredentials({}); }} title={t("marketplace.details")} type="button"><span className="sr-only">{entry.name}</span></button>
+          <button className="plugin-card__details-trigger" onClick={() => showDetails(entry.id)} title={t("marketplace.details")} type="button"><span className="sr-only">{entry.name}</span></button>
           <div className="plugin-card__head">
             <div className="plugin-card__icon plugin-card__icon--datasets"><Database size={22} /></div>
             <div className="plugin-card__identity"><div><h2>{entry.name}</h2></div><span className="plugin-source-badge">{entry.provider}</span></div>
@@ -99,7 +125,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
             <span className={`plugin-card__state ${job ? statusClass(job.status) : ""}`}>{job ? t(`datasets.job.${job.status}`) : t(`datasets.access.${entry.access}`)}</span>
           </div>
           <div className="plugin-card__actions">
-            <button className="plugin-card__button" disabled={busy || job?.status === "queued" || job?.status === "downloading"} onClick={() => entry.downloadAvailable ? void start(entry) : setSelectedId(entry.id)} type="button">{entry.downloadAvailable ? <><Download size={14} />{t("datasets.download")}</> : t("marketplace.details")}</button>
+            <button className="plugin-card__button" disabled={busy || job?.status === "queued" || job?.status === "downloading"} onClick={() => handleDatasetCardAction(entry, { download: (target) => void start(target), showDetails })} type="button">{primaryAction === "download" ? <><Download size={14} />{t("datasets.download")}</> : t("marketplace.details")}</button>
           </div>
         </article>;
       })}
@@ -107,6 +133,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
     {selected ? (() => {
       const job = jobsByDataset.get(selected.id);
       const canDownload = selected.downloadAvailable === true;
+      const credentialsComplete = hasRequiredDatasetCredentials(selected, credentials);
       return <div className="plugin-detail-layer" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedId(null); }}>
         <section aria-labelledby="dataset-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
           <header className="plugin-detail__header">
@@ -134,7 +161,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
           </div>
           <footer className="plugin-detail__actions">
             <a className="plugin-card__button plugin-card__button--ghost" href={selected.homepage} rel="noreferrer" target="_blank">{t("datasets.openProvider")} <ExternalLink size={13} /></a>
-            {canDownload ? <button className="plugin-card__button" disabled={busy || job?.status === "queued" || job?.status === "downloading"} onClick={() => void start(selected)} type="button">{busy || job?.status === "downloading" ? <Loader2 className="is-spinning" size={14} /> : <Download size={14} />}{t("datasets.startDownload")}</button> : null}
+            {canDownload ? <button className="plugin-card__button" disabled={busy || !credentialsComplete || job?.status === "queued" || job?.status === "downloading"} onClick={() => void start(selected)} type="button">{busy || job?.status === "downloading" ? <Loader2 className="is-spinning" size={14} /> : <Download size={14} />}{t("datasets.startDownload")}</button> : null}
           </footer>
         </section>
       </div>;
