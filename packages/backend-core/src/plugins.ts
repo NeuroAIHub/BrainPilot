@@ -287,9 +287,9 @@ function parseMarketplaceEntry(value: unknown): MarketplaceEntry | null {
     ...(typeof value.upstreamRef === "string" ? { upstreamRef: value.upstreamRef } : {}),
     ...(typeof value.upstreamCommit === "string" ? { upstreamCommit: value.upstreamCommit } : {}),
     ...(capabilities ? { capabilities } : {}),
+    ...(typeof value.executesLocalCode === "boolean" ? { executesLocalCode: value.executesLocalCode } : {}),
     ...(unsupported ? { unsupported } : {}),
-    ...(requirements ? { requirements } : {}),
-    ...(value.executesLocalCode === true ? { executesLocalCode: true } : {}) };
+    ...(requirements ? { requirements } : {}) };
 }
 
 interface MarketplaceSourceDefinition { id: string; type: "https"; url: string; enabled: boolean; }
@@ -435,6 +435,7 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
         ? { unsupported: item.unsupported as string[] }
         : {}),
       ...(repositoryUrl ? { repositoryUrl } : {}),
+      ...(typeof item.executesLocalCode === "boolean" ? { executesLocalCode: item.executesLocalCode } : {}),
     };
   }
   for (const plugin of Object.values(plugins)) plugin.compatibility = compatibilityFor(plugin.manifest, plugins);
@@ -619,6 +620,15 @@ function externalSkillId(skillPath: string, used: Set<string>): string {
   return candidate;
 }
 
+function externalInstructionId(instructionPath: string, used: Set<string>): string {
+  const base = path.basename(instructionPath, path.extname(instructionPath)).toLowerCase()
+    .replace(/[^a-z0-9._-]+/g, "-").replace(/^[._-]+|[._-]+$/g, "") || "instructions";
+  let candidate = base;
+  for (let suffix = 2; used.has(candidate); suffix += 1) candidate = `${base}-${suffix}`;
+  used.add(candidate);
+  return candidate;
+}
+
 async function pathExists(target: string): Promise<boolean> {
   try { await fs.access(target); return true; } catch { return false; }
 }
@@ -668,6 +678,18 @@ function externalManifest(resolved: ResolvedExternalPlugin): PluginManifest {
     description: `Agent Skill imported from ${resolved.format}`,
     entry: path.relative(resolved.root, skillPath).split(path.sep).join("/"),
   }));
+  const instructionIds = new Set<string>();
+  const agentInstructions = resolved.instructionPaths.map((instructionPath) => ({
+    id: externalInstructionId(instructionPath, instructionIds),
+    title: path.basename(instructionPath, path.extname(instructionPath)),
+    entry: path.relative(resolved.root, instructionPath).split(path.sep).join("/"),
+    targets: ["principal"],
+    mode: "append" as const,
+  }));
+  const contributes = {
+    ...(skills.length > 0 ? { skills } : {}),
+    ...(agentInstructions.length > 0 ? { agentInstructions } : {}),
+  };
   const parsed = parsePluginManifest({
     id: resolved.id,
     version: resolved.version,
@@ -677,7 +699,8 @@ function externalManifest(resolved: ResolvedExternalPlugin): PluginManifest {
     categories: skills.length > 0 ? ["skills"] : ["other"],
     environments: ["local"],
     permissions: ["read:workspace", "read:data", "compute:worker", "network"],
-    contributes: skills.length > 0 ? { skills } : {},
+    ...(agentInstructions.length > 0 ? { protocols: { agentInstructions: "1" } } : {}),
+    contributes,
   });
   if (!parsed) throw new Error("Could not synthesize a valid BrainPilot manifest for the imported plugin");
   return parsed;
@@ -889,6 +912,7 @@ export async function importExternalPlugin(
       installedAt: new Date().toISOString(),
       activeVersion: manifest.version,
       sourceFormat: metadata.format,
+      executesLocalCode: Boolean(resolved.mcpConfigPath || resolved.inlineMcpConfig || resolved.hookConfig || resolved.inlineHookConfig),
       unsupported: metadata.unsupported,
       ...(resolved.repositoryUrl ? { repositoryUrl: resolved.repositoryUrl } : {}),
     };
@@ -945,6 +969,7 @@ export async function installPlugin(dataDir: string, id: string, requestedVersio
       installedAt: new Date().toISOString(),
       activeVersion: release.version,
       sourceFormat: entry.sourceFormat ?? "brainpilot",
+      executesLocalCode: entry.executesLocalCode ?? Boolean(entry.capabilities?.some((capability) => capability === "mcp" || capability === "hooks")),
       ...(entry.repositoryUrl ? { repositoryUrl: entry.repositoryUrl } : {}),
       ...(entry.unsupported?.length ? { unsupported: entry.unsupported } : {}),
     };
@@ -1003,6 +1028,7 @@ export async function updatePlugin(dataDir: string, id: string): Promise<Install
     installed.activeVersion = release.version;
     installed.previousVersion = previousVersion;
     installed.updatedAt = new Date().toISOString();
+    installed.executesLocalCode = entry?.executesLocalCode ?? Boolean(entry?.capabilities?.some((capability) => capability === "mcp" || capability === "hooks"));
     installed.compatibility = compatibilityFor(release.manifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
     if (installed.enabled) await syncDeclarativeContributions(dataDir, installed.manifest, true);

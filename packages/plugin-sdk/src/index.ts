@@ -120,10 +120,10 @@ export interface MarketplaceEntry {
   upstreamRef?: string;
   upstreamCommit?: string;
   capabilities?: PluginMarketCapability[];
+  /** Whether enabling this plugin may execute code or launch processes on the local machine. */
+  executesLocalCode?: boolean;
   unsupported?: string[];
   requirements?: string[];
-  /** Whether enabling the plugin loads executable code into the local agent runtime. */
-  executesLocalCode?: boolean;
 }
 
 export interface MarketplaceSourceStatus {
@@ -148,6 +148,7 @@ export interface InstalledPlugin {
   compatibility?: PluginCompatibility;
   sourceFormat?: PluginSourceFormat;
   repositoryUrl?: string;
+  executesLocalCode?: boolean;
   unsupported?: string[];
 }
 

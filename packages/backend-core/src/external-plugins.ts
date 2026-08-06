@@ -18,6 +18,7 @@ export interface ResolvedPlugin {
   version: string;
   root: string;
   skillPaths: string[];
+  instructionPaths: string[];
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
   extensionPaths?: string[];
@@ -91,6 +92,33 @@ async function collectSkillFiles(root: string, locations: string[]): Promise<str
   return [...found].sort();
 }
 
+async function collectInstructionFiles(
+  root: string,
+  manifest: JsonObject,
+  conventionalNames: string[],
+): Promise<string[]> {
+  const found = new Set<string>();
+  for (const name of conventionalNames) {
+    const candidate = path.join(root, name);
+    if (await exists(candidate)) found.add(candidate);
+  }
+  const configured = [
+    ...stringList(manifest.instructions),
+    ...stringList(manifest.agentInstructions),
+  ];
+  for (const entry of configured) {
+    const candidate = resolveInside(root, entry, "agent instructions path");
+    let stat;
+    try { stat = await fs.lstat(candidate); }
+    catch { throw new Error(`Agent instructions not found: ${candidate}`); }
+    if (stat.isSymbolicLink() || !stat.isFile()) {
+      throw new Error(`Agent instructions must be a regular file: ${candidate}`);
+    }
+    found.add(candidate);
+  }
+  return [...found].sort();
+}
+
 function authorName(manifest: JsonObject): string {
   if (typeof manifest.author === "string" && manifest.author.trim()) return manifest.author.trim();
   return object(manifest.author) && typeof manifest.author.name === "string" && manifest.author.name.trim()
@@ -131,6 +159,11 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
   const skillLocations = [path.join(root, "skills")];
   for (const entry of stringList(manifest.skills)) skillLocations.push(resolveInside(root, entry, "skills path"));
   const skillPaths = await collectSkillFiles(root, [...new Set(skillLocations)]);
+  const instructionPaths = await collectInstructionFiles(
+    root,
+    manifest,
+    format === "codex" ? ["AGENTS.md"] : ["CLAUDE.md"],
+  );
 
   let mcpConfigPath: string | undefined;
   let inlineMcpConfig: unknown;
@@ -171,6 +204,7 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
     publisher: authorName(manifest),
     ...(upstreamRepository ? { repositoryUrl: upstreamRepository } : {}),
     skillPaths,
+    instructionPaths,
     ...(mcpConfigPath ? { mcpConfigPath } : {}),
     ...(hookPath ? { hookConfig: { dialect: format, path: hookPath } } : {}),
     ...(inlineMcpConfig ? { inlineMcpConfig } : {}),
@@ -190,6 +224,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
     if (!/\.(?:[cm]?[jt]s)$/i.test(extensionPath)) throw new Error(`Unsupported Pi extension file: ${extensionPath}`);
     if (!await exists(extensionPath)) throw new Error(`Pi extension not found: ${extensionPath}`);
   }
+  const instructionPaths = await collectInstructionFiles(root, pi, ["AGENTS.md", "CLAUDE.md"]);
   const unsupported = unsupportedForManifest(pi, "pi-package");
   const upstreamRepository = repositoryUrl(manifest);
   return {
@@ -203,6 +238,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
     ...(upstreamRepository ? { repositoryUrl: upstreamRepository } : {}),
     skillPaths,
     ...(extensionPaths.length ? { extensionPaths } : {}),
+    instructionPaths,
     unsupported,
   };
 }

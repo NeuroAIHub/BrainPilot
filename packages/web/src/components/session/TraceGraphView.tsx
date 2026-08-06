@@ -27,6 +27,8 @@ interface TraceGraphViewProps {
   /** Shown when there are no nodes to display. */
   emptyLabel?: string;
   formatKind?: (kind: string) => string;
+  /** Display labels for internal Episode IDs carried by V2 nodes. */
+  episodeTitles?: ReadonlyMap<string, string>;
   zoomLabels?: {
     controls?: string;
     zoomIn?: string;
@@ -52,6 +54,7 @@ export function TraceGraphView({
   fitToken,
   emptyLabel,
   formatKind,
+  episodeTitles,
   zoomLabels,
   showProposedDependencies = true,
 }: TraceGraphViewProps) {
@@ -290,6 +293,10 @@ export function TraceGraphView({
           {adjustedLayout.positioned.map(({ node, x, y }) => {
             const kind = getNodeKind(node);
             const kindLabel = formatKind?.(kind) ?? kind;
+            const episodeTitle = node.primaryEpisodeId
+              ? episodeTitles?.get(node.primaryEpisodeId)
+              : undefined;
+            const kindAndEpisode = episodeTitle ? `${kindLabel} · ${episodeTitle}` : kindLabel;
             return (
               <g
                 className={`trace-map-node trace-map-node--${kind} trace-map-node--${normalizeStatus(node.status)} ${node.revoked ? "is-revoked" : ""} ${selectedNodeId === node.id ? "is-selected" : ""} ${draggingNodeRef.current?.nodeId === node.id ? "is-dragging" : ""}`}
@@ -313,11 +320,12 @@ export function TraceGraphView({
                 }}
                 style={{ transform: `translate(${x}px, ${y}px)` }}
               >
+                <title>{episodeTitle ? `${node.title} — ${episodeTitle}` : node.title}</title>
                 <rect height={adjustedLayout.nodeHeight} rx="8" width={adjustedLayout.nodeWidth} />
                 <circle className={`trace-node__dot--${normalizeStatus(node.status)}`} cx="16" cy="24" r="4" />
                 <text className="trace-map-node__title" x="28" y="26">{truncateNodeTitle(node.title)}</text>
                 <text className="trace-map-node__meta" x="28" y="44">{node.revoked ? "Revoked" : `${node.agent || kindLabel} · ${node.confidence ?? "?"}`}</text>
-                <text className="trace-map-node__kind" x="28" y="58">{kindLabel}</text>
+                <text className="trace-map-node__kind" x="28" y="58">{truncateNodeTitle(kindAndEpisode)}</text>
               </g>
             );
           })}

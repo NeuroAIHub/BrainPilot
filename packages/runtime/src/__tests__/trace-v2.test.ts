@@ -48,6 +48,9 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     const conclusion = graph.createNode({ title: "Conclusion" });
     expect(graph.getNode(evidence.id)?.parentIds).toEqual([rootId]);
     expect(graph.getNode(conclusion.id)?.parentIds).toEqual([rootId]);
+    expect(graph.getNodeV2(conclusion.id)?.parents).toContainEqual(
+      expect.objectContaining({ nodeId: rootId, origin: "host_fallback" }),
+    );
     expect(graph.updateNode(rootId, { title: "Changed" })).toBeUndefined();
     expect(graph.listPendingAuditTargets().some((target) => target.nodeId === rootId)).toBe(false);
 
@@ -57,7 +60,7 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       "Conclusion consumes this evidence.",
       { type: "agent", name: "trace" },
     )).toBe(true);
-    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([rootId]);
+    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([]);
     expect(graph.review(
       conclusion.id,
       "approve",
@@ -66,6 +69,82 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       evidence.id,
     )).toBe(true);
     expect(graph.getNode(conclusion.id)?.parentIds).toEqual([evidence.id]);
+  });
+
+  it("allows Trace to replace the root fallback with an audited root candidate", () => {
+    const graph = new GraphOfTrace("s");
+    const rootId = graph.getGraphV2().meta.rootNodeId!;
+    const node = graph.createNode({ title: "Independent observation" });
+
+    expect(graph.proposeCausalParent(
+      node.id,
+      rootId,
+      "This observation depends only on the session's initial context.",
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.getNodeV2(node.id)?.parents).toEqual([
+      expect.objectContaining({ nodeId: rootId, conclusion: "candidate", origin: "trace" }),
+    ]);
+    expect(graph.listPendingAuditTargets([node.id])).toContainEqual(
+      expect.objectContaining({ nodeId: node.id, parentNodeId: rootId }),
+    );
+    expect(graph.review(
+      node.id,
+      "approve",
+      "No upstream research unit is required.",
+      { type: "agent", name: "auditor" },
+      rootId,
+    )).toBe(true);
+    expect(graph.getNodeV2(node.id)?.parents).toEqual([
+      expect.objectContaining({ nodeId: rootId, conclusion: "confirmed", origin: "trace" }),
+    ]);
+  });
+
+  it("keeps an already confirmed explicit parent idempotent", () => {
+    const graph = new GraphOfTrace("s");
+    const parent = graph.createNode({ title: "Evidence" });
+    const child = graph.createNode({ title: "Conclusion" });
+    const reason = "Evidence directly supports the conclusion.";
+    expect(graph.proposeCausalParent(
+      child.id,
+      parent.id,
+      reason,
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.review(
+      child.id,
+      "approve",
+      reason,
+      { type: "agent", name: "auditor" },
+      parent.id,
+    )).toBe(true);
+
+    expect(graph.proposeCausalParent(
+      child.id,
+      parent.id,
+      reason,
+      { type: "agent", name: "trace" },
+    )).toBe(true);
+    expect(graph.getNodeV2(child.id)?.parents).toContainEqual(
+      expect.objectContaining({ nodeId: parent.id, conclusion: "confirmed", origin: "trace" }),
+    );
+    expect(graph.listPendingAuditTargets([child.id])).not.toContainEqual(
+      expect.objectContaining({ parentNodeId: parent.id }),
+    );
+  });
+
+  it("does not restore the Host root fallback while any non-root parent state exists", () => {
+    const graph = new GraphOfTrace("s");
+    const rootId = graph.getGraphV2().meta.rootNodeId!;
+    const parent = graph.createNode({ title: "Evidence" });
+    const child = graph.createNode({ title: "Conclusion" });
+    graph.proposeCausalParent(child.id, parent.id, "possible evidence", { type: "agent", name: "trace" });
+    expect(graph.getNodeV2(child.id)?.parents.some((item) => item.nodeId === rootId)).toBe(false);
+
+    graph.review(child.id, "uncertain", "relationship is unresolved", { type: "agent", name: "auditor" }, parent.id);
+    expect(graph.getNodeV2(child.id)?.parents).toEqual([
+      expect.objectContaining({ nodeId: parent.id, conclusion: "uncertain" }),
+    ]);
   });
 
   it("repairs rootless and cyclic V2 data into one all-state DAG", () => {
@@ -84,9 +163,9 @@ describe("TraceGraphV2 storage and audit semantics", () => {
 
     const normalized = graph.getGraphV2();
     const rootId = normalized.meta.rootNodeId!;
-    const activeParents = new Map(normalized.nodes.map((node) => [
+    const allParents = new Map(normalized.nodes.map((node) => [
       node.id,
-      node.parents.filter((parent) => parent.conclusion === "confirmed").map((parent) => parent.nodeId),
+      node.parents.map((parent) => parent.nodeId),
     ]));
     const reachesRoot = (start: string): boolean => {
       const seen = new Set<string>();
@@ -94,17 +173,17 @@ describe("TraceGraphV2 storage and audit semantics", () => {
         if (id === rootId) return true;
         if (seen.has(id)) return false;
         seen.add(id);
-        return (activeParents.get(id) ?? []).some(visit);
+        return (allParents.get(id) ?? []).some(visit);
       };
       return visit(start);
     };
     expect(normalized.nodes.filter((node) => node.id !== rootId).every((node) => reachesRoot(node.id))).toBe(true);
-    const allParents = new Map(normalized.nodes.map((node) => [node.id, node.parents.map((parent) => parent.nodeId)]));
+    const parentMap = new Map(normalized.nodes.map((node) => [node.id, node.parents.map((parent) => parent.nodeId)]));
     const isAcyclic = (start: string, visiting = new Set<string>(), visited = new Set<string>()): boolean => {
       if (visiting.has(start)) return false;
       if (visited.has(start)) return true;
       const nextVisiting = new Set(visiting).add(start);
-      if (!(allParents.get(start) ?? []).every((parentId) => isAcyclic(parentId, nextVisiting, visited))) return false;
+      if (!(parentMap.get(start) ?? []).every((parentId) => isAcyclic(parentId, nextVisiting, visited))) return false;
       visited.add(start);
       return true;
     };
@@ -120,6 +199,78 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     expect(graph.proposeCausalParent(b.id, a.id, "A informed B", { type: "agent", name: "trace" })).toBe(true);
     expect(graph.review(b.id, "reject", "not causal", { type: "agent", name: "auditor" }, a.id)).toBe(true);
     expect(graph.proposeCausalParent(a.id, b.id, "B informed A", { type: "agent", name: "trace" })).toBe(false);
+  });
+
+  it("rejects an entire invalid parent batch before graph mutation", () => {
+    const graph = new GraphOfTrace("s");
+    const a = graph.createNode({ title: "A" });
+    const b = graph.createNode({ title: "B" });
+    graph.proposeCausalParent(b.id, a.id, "A produces the input for B.", { type: "agent", name: "trace" });
+    const before = graph.getGraphV2();
+
+    expect(graph.updateNode(
+      a.id,
+      { title: "Mutated", episode: "Must Not Exist" },
+      { type: "agent", name: "trace" },
+      [
+        { nodeId: b.id, reason: "This would close a cycle." },
+        { nodeId: "missing", reason: "This parent is missing." },
+      ],
+    )).toBeUndefined();
+    expect(graph.getGraphV2()).toEqual(before);
+    expect(graph.validateCausalParentCandidates(undefined, [
+      { nodeId: a.id, reason: "one" },
+      { nodeId: a.id, reason: "duplicate" },
+    ])).toMatchObject({ ok: false, reason: expect.stringContaining("duplicate") });
+    expect(graph.validateCausalParentCandidates(undefined, [
+      { nodeId: a.id, reason: "   " },
+    ])).toMatchObject({ ok: false, reason: expect.stringContaining("non-empty") });
+
+    graph.review(b.id, "reject", "A is not a valid direct parent.", { type: "agent", name: "auditor" }, a.id);
+    expect(graph.validateCausalParentCandidates(b.id, [
+      { nodeId: a.id, reason: "Try the rejected relation again." },
+    ])).toMatchObject({ ok: false, reason: expect.stringContaining("rejected") });
+
+    graph.updateNode(a.id, { revoked: true }, { type: "host" });
+    expect(graph.validateCausalParentCandidates(undefined, [
+      { nodeId: a.id, reason: "revoked evidence" },
+    ])).toMatchObject({ ok: false, reason: expect.stringContaining("revoked") });
+  });
+
+  it("normalizes, reuses, moves, and persists Episode names", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-trace-episodes-"));
+    try {
+      const tracePath = join(root, "trace.json");
+      const graph = new GraphOfTrace("s", tracePath);
+      const first = graph.createNode({
+        title: "Baseline setting",
+        episode: "  Ａｂｌａｔｉｏｎ   —  Dropout  ",
+      });
+      const second = graph.createNode({
+        title: "Baseline result",
+        episode: "ablation — dropout",
+      });
+      let snapshot = graph.getGraphV2();
+      expect(snapshot.episodes).toHaveLength(1);
+      expect(snapshot.episodes[0]?.title).toBe("Ablation — Dropout");
+      expect(graph.getNodeV2(first.id)?.primaryEpisodeId)
+        .toBe(graph.getNodeV2(second.id)?.primaryEpisodeId);
+
+      graph.updateNode(second.id, { episode: "Environment & Reproducibility" });
+      await graph.flush();
+      const restored = new GraphOfTrace("s", tracePath);
+      restored.load(JSON.parse(await readFile(tracePath, "utf8")));
+      snapshot = restored.getGraphV2();
+      expect(snapshot.episodes.map((episode) => episode.title).sort()).toEqual([
+        "Ablation — Dropout",
+        "Environment & Reproducibility",
+      ]);
+      const restoredSecond = restored.getNodeV2(second.id)!;
+      expect(snapshot.episodes.find((episode) => episode.id === restoredSecond.primaryEpisodeId)?.title)
+        .toBe("Environment & Reproducibility");
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("migrates V1 lazily and persists only nodes[].parents as authoritative relationships", async () => {

@@ -19,13 +19,14 @@ import {
 import type { MarketplaceEntry as MarketplaceSdkEntry, PluginMarketCapability, PluginSourceFormat } from "@brainpilot/plugin-sdk";
 import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
+import { DatasetMarketplace } from "./DatasetMarketplace";
 
-export type MarketplaceCategory = "skills" | "knowledge" | "plugins";
+export type MarketplaceCategory = "skills" | "knowledge" | "plugins" | "datasets";
 type MarketplaceEntry = Awaited<ReturnType<typeof api.plugins.marketplace>>[number];
 type InstalledEntry = Awaited<ReturnType<typeof api.plugins.installed>>[number];
 type PluginUpdate = Awaited<ReturnType<typeof api.plugins.updates>>[number];
 
-const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "plugins"];
+const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "datasets", "plugins"];
 export type MarketplaceSourceFilter = "all" | PluginSourceFormat | "verified";
 const SOURCE_FILTERS: MarketplaceSourceFilter[] = ["all", "brainpilot", "codex", "claude-code", "pi-package", "verified"];
 
@@ -36,6 +37,10 @@ export function sourceFormatForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry,
 export function capabilitiesForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry, "capabilities" | "manifest">): PluginMarketCapability[] {
   if (entry.capabilities?.length) return [...new Set(entry.capabilities)];
   return entry.manifest.contributes?.skills?.length ? ["skills"] : [];
+}
+
+export function executesLocalCodeForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry, "executesLocalCode" | "capabilities">): boolean {
+  return entry.executesLocalCode ?? Boolean(entry.capabilities?.some((capability) => capability === "mcp" || capability === "hooks"));
 }
 
 export function matchesMarketplaceSource(entry: MarketplaceSdkEntry, filter: MarketplaceSourceFilter): boolean {
@@ -98,6 +103,7 @@ export function PluginMarketplace() {
   const [busyPluginId, setBusyPluginId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
+  const [datasetCount, setDatasetCount] = useState(0);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,7 +133,7 @@ export function PluginMarketplace() {
 
   const installedById = useMemo(() => new Map(installed.map((entry) => [entry.manifest.id, entry])), [installed]);
   const updatesById = useMemo(() => new Map(updates.map((entry) => [entry.pluginId, entry])), [updates]);
-  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [marketplace]);
+  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, item === "datasets" ? datasetCount : marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [datasetCount, marketplace]);
   const visible = useMemo(() => marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === category && matchesMarketplaceSource(entry, sourceFilter) && matchesMarketplaceQuery(entry, query)), [category, marketplace, query, sourceFilter]);
   const enabledCount = installed.filter((entry) => entry.enabled).length;
   const selectedEntry = marketplace.find((entry) => entry.manifest.id === selectedPluginId) ?? null;
@@ -226,7 +232,7 @@ export function PluginMarketplace() {
       </header>
 
       <section className="plugin-market__summary" aria-label={t("marketplace.title")}>
-        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length}</strong></div>
+        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length + datasetCount}</strong></div>
         <div><span>{t("marketplace.summary.installed")}</span><strong>{installed.length}</strong></div>
         <div><span>{t("marketplace.summary.enabled")}</span><strong>{enabledCount}</strong></div>
       </section>
@@ -245,6 +251,7 @@ export function PluginMarketplace() {
             <input aria-label={t("marketplace.search")} onChange={(event) => setQuery(event.target.value)} placeholder={t("marketplace.search")} type="search" value={query} />
           </label>
         </div>
+        {category === "datasets" ? <DatasetMarketplace onCount={setDatasetCount} query={query} /> : <>
         <div className="plugin-market__source-filters" aria-label={t("marketplace.sourceFilter.label")}>
           {SOURCE_FILTERS.map((item) => (
             <button className={sourceFilter === item ? "is-active" : ""} key={item} onClick={() => setSourceFilter(item)} type="button">
@@ -305,6 +312,7 @@ export function PluginMarketplace() {
             );
           })}
         </div>
+        </>}
       </section>
 
       {selectedEntry ? (() => {
@@ -315,8 +323,7 @@ export function PluginMarketplace() {
         const capabilities = capabilitiesForMarketplaceEntry(selectedEntry);
         const repositoryUrl = selectedEntry.repositoryUrl ?? selectedEntry.homepage;
         const unsupported = selectedInstalled?.unsupported ?? selectedEntry.unsupported ?? [];
-        const hasCommandHooks = capabilities.includes("hooks");
-        const executesLocalCode = selectedEntry.executesLocalCode === true;
+        const executesLocalCode = selectedInstalled?.executesLocalCode ?? executesLocalCodeForMarketplaceEntry(selectedEntry);
         return (
           <div className="plugin-detail-layer" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedPluginId(null); }}>
             <section aria-labelledby="plugin-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
@@ -339,7 +346,6 @@ export function PluginMarketplace() {
                   {repositoryUrl ? <div><dt>{t("marketplace.details.repository")}</dt><dd><a href={repositoryUrl} rel="noreferrer" target="_blank">{repositoryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")} <ExternalLink size={12} /></a></dd></div> : null}
                 </dl>
                 {capabilities.length ? <section><h3>{t("marketplace.details.capabilities")}</h3><div className="plugin-detail__capabilities">{capabilities.map((capability) => <span key={capability}><CheckCircle2 size={14} />{t(capabilityLabelKey(capability))}</span>)}</div></section> : null}
-                {hasCommandHooks ? <div className="plugin-detail__warning"><AlertTriangle size={16} /><span>{t("marketplace.details.hookWarning")}</span></div> : null}
                 {executesLocalCode ? <div className="plugin-detail__warning"><AlertTriangle size={16} /><span>{t("marketplace.details.localCodeWarning")}</span></div> : null}
                 {(selectedEntry.manifest.environments?.length || selectedEntry.requirements?.length || selectedCompatibility?.issues.length) ? <section><h3>{t("marketplace.details.runtime")}</h3>
                   {selectedEntry.manifest.environments?.length ? <div className="plugin-detail__chips">{selectedEntry.manifest.environments.map((environment) => <span key={environment}>{environment}</span>)}</div> : null}

@@ -103,13 +103,17 @@ describe("two-path skill loading", () => {
     expect(capturedRouterDir).toBe(root);
   });
 
-  it("trace agent does NOT receive skill_search (graph-only role)", async () => {
+  it("trace receives only its targeted GoT skill and no skill_search", async () => {
     const root = await tmp();
     await materializeSkills(root);
 
     let traceTools: string[] | undefined;
+    let traceSkillPaths: string[] | undefined;
     const wrappedFactory: AgentSessionFactory = async (params) => {
-      if (params.agentName === "trace") traceTools = params.systemTools.map((t) => t.name);
+      if (params.agentName === "trace") {
+        traceTools = params.systemTools.map((t) => t.name);
+        traceSkillPaths = params.skillPaths;
+      }
       return mockAgentFactory(params);
     };
 
@@ -123,7 +127,11 @@ describe("two-path skill loading", () => {
 
     expect(traceTools).toBeDefined();
     expect(traceTools).not.toContain("skill_search");
-    // Trace also gets no skillPaths (it is skill-less by design).
+    expect(traceSkillPaths).toEqual([
+      expect.stringMatching(/plugin-got.*curate-research-trace/),
+    ]);
+    expect(traceSkillPaths).not.toContain(join(root, "bp_template", "skills"));
+    expect(traceSkillPaths).not.toContain(join(root, "bp_template", "skills-router"));
   });
 
   it("keeps full and base sessions isolated without global mutation", async () => {

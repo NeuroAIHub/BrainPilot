@@ -9,7 +9,12 @@
  */
 import type { SubagentStatus, TraceNodeRecord } from "@brainpilot/protocol";
 import type { SubagentResult, SubagentTask } from "../subagent-manager.js";
-import type { GraphOfTrace, TraceArtifactInput, TraceAuditTarget } from "../trace.js";
+import type {
+  GraphOfTrace,
+  TraceArtifactInput,
+  TraceAuditTarget,
+  TraceCausalParentCandidate,
+} from "../trace.js";
 import type { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
 import { TaskQueueFullError, type TaskRecord } from "../task-ledger.js";
 import type { AgentRole, SystemTool } from "../types.js";
@@ -100,6 +105,24 @@ function artifactInputs(value: unknown): TraceArtifactInput[] {
       ...(typeof input.blobHash === "string" ? { blobHash: input.blobHash } : {}),
     }];
   });
+}
+
+function causalParentCandidates(value: unknown):
+  | { ok: true; candidates: TraceCausalParentCandidate[] }
+  | { ok: false; error: string } {
+  if (value === undefined) return { ok: true, candidates: [] };
+  if (!Array.isArray(value)) return { ok: false, error: "parent_candidates must be an array" };
+  const candidates: TraceCausalParentCandidate[] = [];
+  for (const raw of value) {
+    if (!raw || typeof raw !== "object") return { ok: false, error: "each parent candidate must be an object" };
+    const candidate = raw as Record<string, unknown>;
+    const nodeId = typeof candidate.node_id === "string" ? candidate.node_id.trim() : "";
+    const reason = typeof candidate.reason === "string" ? candidate.reason.trim() : "";
+    if (!nodeId) return { ok: false, error: "each parent candidate requires node_id" };
+    if (!reason) return { ok: false, error: `parent ${nodeId} requires a non-empty reason` };
+    candidates.push({ nodeId, reason });
+  }
+  return { ok: true, candidates };
 }
 
 async function attachCheckpointWithGitEvidence(deps: ToolDeps, nodeId: string, checkpointId: string): Promise<void> {
@@ -384,7 +407,9 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
     description:
       "Notify the Trace Agent of a reasoning/trace event. The Trace Agent is a " +
       "real agent that owns the Graph of Trace; it decides whether to create a " +
-      "new node, update an existing one, or merge with a sibling.",
+      "new node, update an existing one, or ignore process noise. Prefer one " +
+      "independently meaningful research unit per call; report distinct settings, " +
+      "results, analyses, findings, or conclusions separately when they can be inspected independently.",
     parameters: {
       type: "object",
       properties: {
@@ -416,7 +441,8 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       // Agents panel (otherwise it would be a permanently-dormant placeholder)
       // and lets the trace agent merge/dedupe across multiple sources, which is
       // exactly the persona we already ship for it.
-      const description = String(params.description ?? "");
+      const description = String(params.description ?? "").trim();
+      if (!description) return { ...ok("description must be non-empty"), isError: true };
       const context = String(params.context ?? "");
       const artifacts = Array.isArray(params.artifacts)
         ? params.artifacts.filter((value): value is string => typeof value === "string")
@@ -474,12 +500,13 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
     description:
       "Create one new active Graph of Trace node only when the current host-bound record represents a distinct, durable scientific unit that is not already in the active graph. " +
       "Do not create nodes for coordination, delegation, progress, presentation, reformatting, or repetition. The Host attaches the current source record and checkpoint automatically. " +
-      "The Host also attaches the session root whenever no more specific causal parent has been confirmed; never submit the session root as a parent candidate. " +
+      "The Host attaches the session root only when no parent is present. The session root ID is exposed by get_trace_graph and may be proposed when the unit directly depends on the session's initial context. " +
       "One Trace Event may call this tool more than once only when it explicitly contains multiple independently meaningful scientific units with enough content to describe each accurately.",
     parameters: {
       type: "object",
       properties: {
         title: { type: "string", description: "Concise name of the scientific result, decision, analysis, artifact, or conclusion; not an activity-log title." },
+        episode: { type: "string", description: "Human-facing research work-package name. Reuse the exact name of an existing Episode when the unit belongs there." },
         type: { type: "string", description: "Optional short presentation label; do not invent a complex ontology." },
         status: { type: "string", enum: ["completed", "failed"] },
         description: { type: "string", description: "What was scientifically decided, measured, produced, observed, or concluded." },
@@ -493,36 +520,52 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
         artifact_inputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, producer_node_id: { type: "string" } }, required: ["path"] } },
         artifact_outputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, blob_hash: { type: "string" } }, required: ["path"] } },
       },
-      required: ["title", "confidence", "confidence_reason"],
+      required: ["title", "episode", "description", "confidence", "confidence_reason"],
     },
     execute: async (params: Record<string, unknown>) => {
-      if ((params.confidence !== "low" && params.confidence !== "medium" && params.confidence !== "high") || !String(params.confidence_reason ?? "").trim()) {
+      const title = String(params.title ?? "").trim();
+      const episode = String(params.episode ?? "").normalize("NFKC").trim().replace(/\s+/gu, " ");
+      const description = String(params.description ?? "").trim();
+      const confidenceReason = String(params.confidence_reason ?? "").trim();
+      if (!title) return { ...ok("title must be non-empty"), isError: true };
+      if (!episode) return { ...ok("episode must be non-empty"), isError: true };
+      if (!description) return { ...ok("description must be non-empty"), isError: true };
+      if ((params.confidence !== "low" && params.confidence !== "medium" && params.confidence !== "high") || !confidenceReason) {
         return { ...ok("confidence and a non-empty confidence_reason are required"), isError: true };
       }
+      const parsedParents = causalParentCandidates(params.parent_candidates);
+      if (!parsedParents.ok) return { ...ok(parsedParents.error), isError: true };
+      const parentValidation = deps.trace.validateCausalParentCandidates(undefined, parsedParents.candidates);
+      if (!parentValidation.ok) return { ...ok(`invalid parent candidates: ${parentValidation.reason}`), isError: true };
       const record = deps.currentTraceRecord?.();
       const node = deps.trace.createNode({
-        title: String(params.title ?? ""),
-        type: params.type ? String(params.type) : undefined,
+        title,
+        episode,
+        type: params.type ? String(params.type).trim() : undefined,
         status: params.status === "failed" ? "failed" : "completed",
         executionResult: params.status === "failed" ? "failed" : "completed",
-        description: params.description ? String(params.description) : undefined,
+        description,
         confidence: params.confidence === "high" || params.confidence === "medium" ? params.confidence : "low",
-        confidenceReason: String(params.confidence_reason ?? ""),
+        confidenceReason,
         agent: record?.sourceAgent ?? deps.fromAgent,
         records: record ? [record] : [],
+        causalParents: parsedParents.candidates.map((candidate) => ({
+          nodeId: candidate.nodeId,
+          conclusion: "candidate",
+          origin: "trace",
+          reason: candidate.reason,
+        })),
         changeActor: { type: "agent", name: deps.fromAgent },
         artifactInputs: artifactInputs(params.artifact_inputs),
         artifactOutputs: artifactInputs(params.artifact_outputs),
       });
-      for (const value of Array.isArray(params.parent_candidates) ? params.parent_candidates : []) {
-        if (!value || typeof value !== "object") continue;
-        const candidate = value as Record<string, unknown>;
-        if (typeof candidate.node_id !== "string" || typeof candidate.reason !== "string") continue;
-        deps.trace.proposeCausalParent(node.id, candidate.node_id, candidate.reason, { type: "agent", name: deps.fromAgent });
-      }
       const checkpointId = record?.checkpointId;
       if (checkpointId) await attachCheckpointWithGitEvidence(deps, node.id, checkpointId);
-      return ok(`node ${node.id} created`);
+      return ok(JSON.stringify({
+        nodeId: node.id,
+        episode,
+        parentNodeIds: parsedParents.candidates.map((candidate) => candidate.nodeId),
+      }));
     },
   };
 }
@@ -538,6 +581,7 @@ export function createUpdateTraceNodeTool(deps: ToolDeps): SystemTool {
       type: "object",
       properties: {
         node_id: { type: "string", description: "Active node representing the exact same scientific unit. Inspect it with get_trace_node before updating." },
+        episode: { type: "string", description: "Optional human-facing Episode name. Supply only to move this node to another research work package." },
         title: { type: "string", description: "Supply only when the existing title is inaccurate or the same scientific unit now has a clearer stable name." },
         description: { type: "string", description: "Complete merged scientific description preserving valid prior content; this replaces the stored description." },
         status: { type: "string", enum: ["completed", "failed"] },
@@ -556,31 +600,48 @@ export function createUpdateTraceNodeTool(deps: ToolDeps): SystemTool {
     },
     execute: async (params: Record<string, unknown>) => {
       const id = String(params.node_id ?? "");
-      if (deps.trace.getNodeV2(id)?.revoked) return { ...ok(`node ${id} is revoked; create a new node instead`), isError: true };
-      if ((params.confidence !== "low" && params.confidence !== "medium" && params.confidence !== "high") || !String(params.confidence_reason ?? "").trim()) {
+      const existing = deps.trace.getNodeV2(id);
+      if (!existing) return { ...ok(`node ${id} not found`), isError: true };
+      if (existing.revoked) return { ...ok(`node ${id} is revoked; create a new node instead`), isError: true };
+      const confidenceReason = String(params.confidence_reason ?? "").trim();
+      if ((params.confidence !== "low" && params.confidence !== "medium" && params.confidence !== "high") || !confidenceReason) {
         return { ...ok("confidence and a non-empty confidence_reason are required for every node update"), isError: true };
       }
+      if (params.title !== undefined && !String(params.title).trim()) return { ...ok("title must be non-empty when supplied"), isError: true };
+      if (params.description !== undefined && !String(params.description).trim()) return { ...ok("description must be non-empty when supplied"), isError: true };
+      const episode = params.episode === undefined
+        ? undefined
+        : String(params.episode).normalize("NFKC").trim().replace(/\s+/gu, " ");
+      if (params.episode !== undefined && !episode) return { ...ok("episode must be non-empty when supplied"), isError: true };
+      const parsedParents = causalParentCandidates(params.parent_candidates);
+      if (!parsedParents.ok) return { ...ok(parsedParents.error), isError: true };
+      const parentValidation = deps.trace.validateCausalParentCandidates(id, parsedParents.candidates);
+      if (!parentValidation.ok) return { ...ok(`invalid parent candidates: ${parentValidation.reason}`), isError: true };
       const record = deps.currentTraceRecord?.();
       const updates: Record<string, unknown> = {};
       for (const k of ["status", "summary", "content", "title", "description"]) {
-        if (params[k] !== undefined) updates[k] = params[k];
+        if (params[k] !== undefined) updates[k] = typeof params[k] === "string" ? params[k].trim() : params[k];
       }
+      if (episode !== undefined) updates.episode = episode;
       if (params.status === "completed" || params.status === "failed") updates.executionResult = params.status;
       updates.confidence = params.confidence === "high" || params.confidence === "medium" ? params.confidence : "low";
-      updates.confidenceReason = String(params.confidence_reason ?? "");
+      updates.confidenceReason = confidenceReason;
       const outputs = artifactInputs(params.artifact_outputs);
       if (outputs.length) updates.artifacts = outputs.map((artifact) => ({ path: artifact.path, type: artifact.type }));
-      const node = deps.trace.updateNode(id, updates, { type: "agent", name: deps.fromAgent });
+      const node = deps.trace.updateNode(
+        id,
+        updates,
+        { type: "agent", name: deps.fromAgent },
+        parsedParents.candidates,
+      );
       if (node && record) deps.trace.appendRecord(id, record, { type: "agent", name: deps.fromAgent });
-      for (const value of Array.isArray(params.parent_candidates) ? params.parent_candidates : []) {
-        if (!value || typeof value !== "object") continue;
-        const candidate = value as Record<string, unknown>;
-        if (typeof candidate.node_id !== "string" || typeof candidate.reason !== "string") continue;
-        deps.trace.proposeCausalParent(id, candidate.node_id, candidate.reason, { type: "agent", name: deps.fromAgent });
-      }
       const checkpointId = record?.checkpointId;
       if (node && checkpointId) await attachCheckpointWithGitEvidence(deps, id, checkpointId);
-      return node ? ok(`node ${id} updated`) : { ...ok(`node ${id} not found`), isError: true };
+      return node ? ok(JSON.stringify({
+        nodeId: id,
+        ...(episode ? { episode } : {}),
+        parentNodeIds: parsedParents.candidates.map((candidate) => candidate.nodeId),
+      })) : { ...ok(`node ${id} update failed`), isError: true };
     },
   };
 }
@@ -594,6 +655,7 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
     execute: async () => {
       const graph = deps.trace.getGraphV2();
       const rootId = graph.meta.rootNodeId;
+      const episodeTitles = new Map(graph.episodes.map((episode) => [episode.id, episode.title]));
       const activeIds = new Set(
         graph.nodes
           .filter((node) => !node.revoked && node.id !== rootId)
@@ -602,11 +664,16 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
       return ok(JSON.stringify({
         schemaVersion: graph.schemaVersion,
         revision: graph.revision,
+        rootNodeId: rootId,
+        episodes: graph.episodes.map((episode) => episode.title),
         nodes: graph.nodes
           .filter((node) => activeIds.has(node.id))
           .map((node) => ({
             id: node.id,
             title: node.title,
+            ...(node.primaryEpisodeId && episodeTitles.has(node.primaryEpisodeId)
+              ? { episode: episodeTitles.get(node.primaryEpisodeId) }
+              : {}),
             type: node.type,
             status: node.status,
             ...(node.description
@@ -616,10 +683,15 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
             reviewConclusion: node.reviewConclusion,
             updatedAt: node.updatedAt,
             parents: node.parents
-              .filter((parent) => parent.nodeId !== rootId && activeIds.has(parent.nodeId))
+              .filter((parent) =>
+                parent.nodeId === rootId
+                  ? parent.origin === "trace"
+                  : activeIds.has(parent.nodeId)
+              )
               .map((parent) => ({
                 nodeId: parent.nodeId,
                 conclusion: parent.conclusion,
+                ...(parent.origin ? { origin: parent.origin } : {}),
                 ...(parent.reason ? { reason: parent.reason } : {}),
               })),
           })),
@@ -628,7 +700,7 @@ export function createGetTraceGraphTool(deps: ToolDeps): SystemTool {
   };
 }
 
-/** Principal-only bounded trace readers; no Principal full-graph tool exists. */
+/** Bounded trace readers shared by Principal, Trace, and Auditor as allowed below. */
 export function createGetTraceNodeTool(deps: ToolDeps): SystemTool {
   return {
     name: "get_trace_node",
@@ -759,12 +831,14 @@ export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
       if (conclusion !== "approve" && conclusion !== "reject" && conclusion !== "uncertain") {
         return { ...ok("invalid review conclusion"), isError: true };
       }
+      const reason = String(params.reason ?? "").trim();
+      if (!reason) return { ...ok("a non-empty review reason is required"), isError: true };
       const target = deps.currentTraceAuditTarget?.();
       if (!target) return { ...ok("no host-bound trace audit target for this turn"), isError: true };
       const success = deps.trace.review(
         target.nodeId,
         conclusion,
-        String(params.reason ?? ""),
+        reason,
         { type: "agent", name: deps.fromAgent },
         target.parentNodeId,
         target.fingerprint,
@@ -880,6 +954,10 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "create_agent",
     "destroy_agent",
     "record_trace",
+    "get_trace_graph",
+    "get_trace_node",
+    "get_trace_neighborhood",
+    "get_trace_diff",
     "ask_user",
     "skill_search",
     "get_domain_knowledge_local",

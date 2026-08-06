@@ -105,6 +105,8 @@ describe("Graph of Trace structural plumbing", () => {
             tool: "create_trace_node",
             args: {
               title: `decision ${traceTurn}`,
+              description: `Independent research decision ${traceTurn}.`,
+              episode: "Method Design — decisions",
               type: "trace",
               confidence: "medium",
               confidence_reason: "The source record is available.",
@@ -152,6 +154,8 @@ describe("Graph of Trace structural plumbing", () => {
                 tool: "create_trace_node",
                 args: {
                   title: "a decision",
+                  description: "The reported research decision.",
+                  episode: "Method Design — decision",
                   type: "trace",
                   confidence: "medium",
                   confidence_reason: "The source record is available.",
