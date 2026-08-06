@@ -24,6 +24,16 @@ Catalogue entries may also describe provenance without changing Manifest v1:
 `sourceFormat` (`brainpilot`, `codex`, `claude-code`, or `pi-package`), an HTTPS
 `repositoryUrl`, `license`, pinned `upstreamRef` / `upstreamCommit`, compact
 `capabilities` (`skills`, `mcp`, `hooks`), runtime `requirements`, and an
-`unsupported` list. The separate `source` field remains the catalogue transport
+`unsupported` list. `executesLocalCode` lets the details panel warn before a
+trusted Pi extension or other executable integration is enabled, without adding
+another badge to compact cards. The separate `source` field remains the catalogue transport
 (`builtin`, `local`, or `https`). Older entries default to the BrainPilot source
 format.
+
+Enabled local Pi packages may declare `package.json#pi.extensions`. BrainPilot
+loads only extension files copied into that immutable installed plugin root;
+host-global Pi extension discovery remains disabled. Extension paths must be
+relative JavaScript or TypeScript files, take effect in new sessions, and are
+removed from new sessions when the plugin is disabled. Enabling such a plugin
+is an explicit trust decision because Pi extensions execute in the agent
+runtime.

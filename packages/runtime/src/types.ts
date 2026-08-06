@@ -192,6 +192,7 @@ export type AgentSessionFactory = (params: {
     dataDir: string;
     mcpConfigPath?: string;
     hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+    extensionPaths?: string[];
   }>;
   /**
    * #309: when true, register the router-skill-guard extension so generic file

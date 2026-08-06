@@ -73,10 +73,12 @@ describe("external plugin resolver", () => {
     await writeJson(path.join(root, "package.json"), { name: "pi-demo", version: "2.0.0", pi: { skills: ["./skills"], instructions: ["./AGENTS.md"], extensions: ["./extension.ts"], prompts: ["./prompts"] } });
     await mkdir(path.join(root, "skills", "demo"), { recursive: true });
     await writeFile(path.join(root, "skills", "demo", "SKILL.md"), "---\nname: demo\ndescription: Demo\n---\n");
+    await writeFile(path.join(root, "extension.ts"), "export default function extension() {}\n");
     await writeFile(path.join(root, "AGENTS.md"), "Follow the imported Pi workflow.\n");
     const resolved = await resolveExternalPlugin(root);
     expect(resolved.format).toBe("pi-package");
-    expect(resolved.unsupported).toEqual(["extensions", "prompts"]);
+    expect(resolved.extensionPaths).toEqual([path.join(root, "extension.ts")]);
+    expect(resolved.unsupported).toEqual(["prompts"]);
     expect(resolved.instructionPaths).toEqual([path.join(root, "AGENTS.md")]);
   });
 });

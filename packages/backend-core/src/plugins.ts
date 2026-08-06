@@ -4,7 +4,7 @@
  * This module manages installation and activation state only. Contribution
  * hosts consume enabled, compatible manifests through separate adapters.
  */
-import { promises as fs } from "node:fs";
+import { promises as fs, type Stats } from "node:fs";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -61,6 +61,7 @@ interface PluginRuntimeProjection {
   dataDir: string;
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+  extensionPaths?: string[];
 }
 
 interface RegistryFile {
@@ -79,6 +80,17 @@ interface BuiltinPluginRelease {
   version: string;
   publishedAt: string;
   releaseNotes: string;
+  publisher?: string;
+  verified?: boolean;
+  sourceFormat?: PluginSourceFormat;
+  repositoryUrl?: string;
+  license?: string;
+  upstreamRef?: string;
+  upstreamCommit?: string;
+  capabilities?: MarketplaceEntry["capabilities"];
+  requirements?: string[];
+  executesLocalCode?: boolean;
+  status?: "test";
 }
 
 // PR4 adds immutable built-in release directories here. Every source directory
@@ -91,6 +103,24 @@ const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
     version: "0.1.0",
     publishedAt: "2026-08-03T00:00:00.000Z",
     releaseNotes: "Initial range-backed NIfTI-1 metadata and central axial slice preview.",
+  },
+  {
+    plugin: "superpowers",
+    source: "superpowers/6.2.0",
+    version: "6.2.0",
+    publishedAt: "2026-07-24T00:28:17.000Z",
+    releaseNotes: "Initial verified Pi Package release with 14 upstream Superpowers skills and native session bootstrap.",
+    publisher: "Jesse Vincent",
+    verified: true,
+    sourceFormat: "pi-package",
+    repositoryUrl: "https://github.com/obra/superpowers",
+    license: "MIT",
+    upstreamRef: "v6.2.0",
+    upstreamCommit: "3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9",
+    capabilities: ["skills"],
+    requirements: ["Local deployment", "Runs a trusted Pi TypeScript extension", "Git; Bash and Node.js are used by optional workflows"],
+    executesLocalCode: true,
+    status: "test",
   },
 ];
 const TEST_PLUGIN_SOURCES = new Set<string>();
@@ -415,19 +445,24 @@ export async function listMarketplace(dataDir: string): Promise<MarketplaceEntry
   const builtins = [...releaseGroups.values()].map((releases): MarketplaceEntry => {
     releases.sort((left, right) => comparePluginVersions(right.version, left.version));
     const latest = releases[0]!;
-    const plugin = BUILTIN_PLUGIN_RELEASES.find((release) => release.version === latest.version && latest.artifact.url === builtinArtifactUrl(release))?.plugin;
-    const capabilities = latest.manifest.contributes?.skills?.length ? ["skills" as const] : [];
+    const builtin = BUILTIN_PLUGIN_RELEASES.find((release) => release.version === latest.version && latest.artifact.url === builtinArtifactUrl(release));
+    const capabilities = builtin?.capabilities ?? (latest.manifest.contributes?.skills?.length ? ["skills" as const] : []);
     return {
       manifest: latest.manifest,
-      publisher: "BrainPilot",
-      verified: true,
+      publisher: builtin?.publisher ?? "BrainPilot",
+      verified: builtin?.verified ?? true,
       artifact: latest.artifact,
       releases,
       source: { id: "builtin", type: "builtin" },
-      sourceFormat: "brainpilot",
-      repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+      sourceFormat: builtin?.sourceFormat ?? "brainpilot",
+      repositoryUrl: builtin?.repositoryUrl ?? "https://github.com/NeuroAIHub/BrainPilot",
+      ...(builtin?.license ? { license: builtin.license } : {}),
+      ...(builtin?.upstreamRef ? { upstreamRef: builtin.upstreamRef } : {}),
+      ...(builtin?.upstreamCommit ? { upstreamCommit: builtin.upstreamCommit } : {}),
+      ...(builtin?.requirements ? { requirements: builtin.requirements } : {}),
+      ...(builtin?.executesLocalCode ? { executesLocalCode: true } : {}),
       ...(capabilities.length ? { capabilities } : {}),
-      ...(plugin && TEST_PLUGIN_SOURCES.has(plugin) ? { status: "test" as const } : {}),
+      ...(builtin?.status === "test" || builtin && TEST_PLUGIN_SOURCES.has(builtin.plugin) ? { status: "test" as const } : {}),
     };
   });
   const selected = new Map(builtins.map((entry) => [entry.manifest.id, entry]));
@@ -555,6 +590,7 @@ interface ExternalPluginMetadata {
   unsupported: string[];
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+  extensionPaths?: string[];
 }
 
 function externalSkillId(skillPath: string, used: Set<string>): string {
@@ -584,17 +620,30 @@ async function copyExternalTree(sourceRoot: string, destinationRoot: string): Pr
   let bytes = 0;
   const walk = async (source: string, destination: string): Promise<void> => {
     const stat = await fs.lstat(source);
-    if (stat.isSymbolicLink()) throw new Error(`Imported plugins may not contain symbolic links: ${path.relative(sourceRoot, source)}`);
+    const relative = path.relative(sourceRoot, source);
+    if (relative.split(path.sep).some((part) => part === ".git" || part === ".hg" || part === ".svn")) return;
+    if (stat.isSymbolicLink()) {
+      const target = await fs.realpath(source);
+      const root = await fs.realpath(sourceRoot);
+      if (target !== root && !target.startsWith(`${root}${path.sep}`)) throw new Error(`Imported plugin symbolic link escapes its root: ${relative}`);
+      const targetStat = await fs.stat(target);
+      if (!targetStat.isFile()) throw new Error(`Imported plugin symbolic links must target files: ${relative}`);
+      await copyFile(target, destination, relative, targetStat);
+      return;
+    }
     if (stat.isDirectory()) {
       await fs.mkdir(destination, { recursive: true, mode: 0o700 });
       for (const entry of await fs.readdir(source)) await walk(path.join(source, entry), path.join(destination, entry));
       return;
     }
     if (!stat.isFile()) return;
+    await copyFile(source, destination, relative, stat);
+  };
+  const copyFile = async (source: string, destination: string, relative: string, stat: Stats): Promise<void> => {
     files += 1;
     bytes += stat.size;
     if (files > 200) throw new Error("Imported plugin has more than 200 files");
-    if (stat.size > 5 * 1024 * 1024) throw new Error(`Imported plugin file exceeds 5 MiB: ${path.relative(sourceRoot, source)}`);
+    if (stat.size > 5 * 1024 * 1024) throw new Error(`Imported plugin file exceeds 5 MiB: ${relative}`);
     if (bytes > 10 * 1024 * 1024) throw new Error("Imported plugin exceeds 10 MiB");
     await fs.mkdir(path.dirname(destination), { recursive: true, mode: 0o700 });
     await fs.copyFile(source, destination);
@@ -672,6 +721,7 @@ async function materializeExternalPlugin(
       unsupported: resolved.unsupported,
       ...(mcpConfigPath ? { mcpConfigPath } : {}),
       ...(hookConfig ? { hookConfig } : {}),
+      ...(resolved.extensionPaths?.length ? { extensionPaths: resolved.extensionPaths.map((entry) => path.relative(resolved.root, entry).split(path.sep).join("/")) } : {}),
     };
     await fs.writeFile(path.join(internal, "source.json"), JSON.stringify(metadata, null, 2) + "\n", { mode: 0o600 });
     await fs.writeFile(path.join(temporary, "manifest.json"), JSON.stringify(manifest, null, 2) + "\n", { mode: 0o600 });
@@ -694,7 +744,11 @@ async function readExternalMetadata(dataDir: string, manifest: PluginManifest): 
     && typeof raw.hookConfig.path === "string" && isSafePluginPath(raw.hookConfig.path)
     ? { dialect: raw.hookConfig.dialect as "codex" | "claude-code", path: raw.hookConfig.path }
     : undefined;
-  return { format: raw.format, unsupported, ...(mcpConfigPath ? { mcpConfigPath } : {}), ...(hookConfig ? { hookConfig } : {}) };
+  const extensionPaths = Array.isArray(raw.extensionPaths)
+    && raw.extensionPaths.every((entry) => typeof entry === "string" && isSafePluginPath(entry))
+    ? raw.extensionPaths as string[]
+    : undefined;
+  return { format: raw.format, unsupported, ...(mcpConfigPath ? { mcpConfigPath } : {}), ...(hookConfig ? { hookConfig } : {}), ...(extensionPaths?.length ? { extensionPaths } : {}) };
 }
 
 async function runtimeProjectionFor(dataDir: string, manifest: PluginManifest, metadata: ExternalPluginMetadata): Promise<PluginRuntimeProjection> {
@@ -725,6 +779,7 @@ async function runtimeProjectionFor(dataDir: string, manifest: PluginManifest, m
     dataDir: path.resolve(pluginsDir(dataDir), "data", manifest.id, manifest.version),
     ...(metadata.mcpConfigPath ? { mcpConfigPath: safe(metadata.mcpConfigPath) } : {}),
     ...(metadata.hookConfig ? { hookConfig: { dialect: metadata.hookConfig.dialect, path: safe(metadata.hookConfig.path) } } : {}),
+    ...(metadata.extensionPaths?.length ? { extensionPaths: metadata.extensionPaths.map(safe) } : {}),
   };
 }
 

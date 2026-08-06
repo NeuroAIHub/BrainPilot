@@ -246,4 +246,47 @@ describe("plugin marketplace control plane", () => {
     await app.request(`/api/plugins/${id}/enabled`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: false }) });
     expect((await app.request(asset)).status).toBe(404);
   });
+
+  it("installs the verified Superpowers Pi package with its native extension projection", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-superpowers-"));
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false });
+    const id = "external.superpowers";
+    const marketplace = await (await app.request("/api/plugins/marketplace")).json() as Array<MarketplaceEntry>;
+    const entry = marketplace.find((candidate) => candidate.manifest.id === id);
+    expect(entry).toEqual(expect.objectContaining({
+      publisher: "Jesse Vincent",
+      verified: true,
+      status: "test",
+      sourceFormat: "pi-package",
+      license: "MIT",
+      upstreamRef: "v6.2.0",
+      upstreamCommit: "3dcbd5c4b48e02263fbf4a3c01e3fe4f81d584d9",
+      capabilities: ["skills"],
+      executesLocalCode: true,
+    }));
+    expect(entry?.manifest.contributes?.skills).toHaveLength(14);
+
+    expect((await app.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    })).status).toBe(201);
+    expect((await app.request(`/api/plugins/${id}/enabled`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    })).status).toBe(200);
+
+    const projection = JSON.parse(await readFile(path.join(dataDir, "plugins", "runtime", `${id}.json`), "utf8")) as {
+      format: string;
+      extensionPaths: string[];
+    };
+    expect(projection.format).toBe("pi-package");
+    expect(projection.extensionPaths).toHaveLength(1);
+    expect(projection.extensionPaths[0]).toMatch(/\.pi[/\\]extensions[/\\]superpowers\.ts$/);
+    await readFile(path.join(dataDir, "bp_template", "skills-router", "99_Marketplace_external.superpowers", "systematic-debugging", "SKILL.md"));
+
+    await setPluginEnabled(dataDir, id, false);
+    await expect(readFile(path.join(dataDir, "plugins", "runtime", `${id}.json`), "utf8")).rejects.toThrow();
+  });
 });

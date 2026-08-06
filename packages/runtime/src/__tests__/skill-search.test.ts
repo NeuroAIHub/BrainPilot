@@ -183,6 +183,21 @@ describe("searchSkills — query mode", () => {
     expect(text).toContain("Visualization helper.");
   });
 
+  it("resolves plugin-namespaced skill names to their portable Agent Skill name", async () => {
+    const text = await searchSkills(base, {
+      mode: "query",
+      skill_name: "superpowers:figure-builder",
+    });
+    expect(text).toContain("Build publication-grade figures");
+  });
+
+  it("rejects unsafe direct skill names", async () => {
+    await expect(searchSkills(base, {
+      mode: "query",
+      skill_name: "../figure-builder",
+    })).rejects.toThrow(/invalid skill name/);
+  });
+
   it("query with empty skill_name falls back to keyword search", async () => {
     const out = JSON.parse(
       await searchSkills(base, {

@@ -1,0 +1,29 @@
+{
+  "id": "external.superpowers",
+  "version": "6.2.0",
+  "apiVersion": "1",
+  "displayName": "Superpowers",
+  "description": "Planning, TDD, systematic debugging, code review, and delivery workflows for coding agents.",
+  "categories": ["skills", "workflow"],
+  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
+  "environments": ["local"],
+  "permissions": ["read:workspace", "read:data", "compute:worker", "network"],
+  "contributes": {
+    "skills": [
+      { "id": "brainstorming", "title": "Brainstorming", "entry": "skills/brainstorming/SKILL.md" },
+      { "id": "dispatching-parallel-agents", "title": "Dispatching Parallel Agents", "entry": "skills/dispatching-parallel-agents/SKILL.md" },
+      { "id": "executing-plans", "title": "Executing Plans", "entry": "skills/executing-plans/SKILL.md" },
+      { "id": "finishing-a-development-branch", "title": "Finishing a Development Branch", "entry": "skills/finishing-a-development-branch/SKILL.md" },
+      { "id": "receiving-code-review", "title": "Receiving Code Review", "entry": "skills/receiving-code-review/SKILL.md" },
+      { "id": "requesting-code-review", "title": "Requesting Code Review", "entry": "skills/requesting-code-review/SKILL.md" },
+      { "id": "subagent-driven-development", "title": "Subagent-Driven Development", "entry": "skills/subagent-driven-development/SKILL.md" },
+      { "id": "systematic-debugging", "title": "Systematic Debugging", "entry": "skills/systematic-debugging/SKILL.md" },
+      { "id": "test-driven-development", "title": "Test-Driven Development", "entry": "skills/test-driven-development/SKILL.md" },
+      { "id": "using-git-worktrees", "title": "Using Git Worktrees", "entry": "skills/using-git-worktrees/SKILL.md" },
+      { "id": "using-superpowers", "title": "Using Superpowers", "entry": "skills/using-superpowers/SKILL.md" },
+      { "id": "verification-before-completion", "title": "Verification Before Completion", "entry": "skills/verification-before-completion/SKILL.md" },
+      { "id": "writing-plans", "title": "Writing Plans", "entry": "skills/writing-plans/SKILL.md" },
+      { "id": "writing-skills", "title": "Writing Skills", "entry": "skills/writing-skills/SKILL.md" }
+    ]
+  }
+}

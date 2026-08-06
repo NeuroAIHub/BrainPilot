@@ -225,11 +225,20 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
     const name =
       typeof args.skill_name === "string" ? args.skill_name.trim() : "";
     if (name !== "") {
+      // Claude/Codex/Pi plugins commonly refer to a skill as
+      // `plugin-name:skill-name`, while Agent Skills themselves expose the
+      // portable `name` from SKILL.md. Try the exact safe name first, then the
+      // namespace-free suffix used by BrainPilot's marketplace projection.
+      const names = [...new Set([name, name.split(":").at(-1) ?? ""])]
+        .filter((candidate) => /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(candidate));
+      if (names.length === 0) throw new Error(`invalid skill name '${name}'`);
       const cats = await listDirs(baseAbs);
-      for (const cat of cats) {
-        const candidate = join(baseAbs, cat, name, "SKILL.md");
-        if (await exists(candidate)) {
-          return await readFile(candidate, "utf8");
+      for (const skillName of names) {
+        for (const cat of cats) {
+          const candidate = join(baseAbs, cat, skillName, "SKILL.md");
+          if (await exists(candidate)) {
+            return await readFile(candidate, "utf8");
+          }
         }
       }
       throw new Error(

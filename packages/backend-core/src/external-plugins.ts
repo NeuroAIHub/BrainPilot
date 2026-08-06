@@ -21,6 +21,7 @@ export interface ResolvedPlugin {
   instructionPaths: string[];
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
+  extensionPaths?: string[];
   unsupported: string[];
 }
 
@@ -141,7 +142,7 @@ function repositoryUrl(manifest: JsonObject): string | undefined {
 function unsupportedForManifest(manifest: JsonObject, format: ImportablePluginSourceFormat): string[] {
   const unsupported: string[] = [];
   const keys = format === "pi-package"
-    ? ["extensions", "prompts", "themes"]
+    ? ["prompts", "themes"]
     : ["agents", "commands", "apps", "app", "lspServers", "lsp", "browserExtensions", "scheduledTasks", "monitors", "channels"];
   for (const key of keys) {
     const value = manifest[key];
@@ -182,7 +183,7 @@ async function resolveAgentPlugin(root: string, format: "codex" | "claude-code")
   else if (Array.isArray(hooksField)) {
     if (hooksField.length > 1) throw new Error("v1 supports one plugin hooks config file");
     if (typeof hooksField[0] === "string") hookPath = resolveInside(root, hooksField[0], "hooks path");
-  } else if (object(hooksField)) inlineHookConfig = hooksField.hooks ? hooksField : { hooks: hooksField };
+  } else if (object(hooksField) && Object.keys(hooksField).length > 0) inlineHookConfig = hooksField.hooks ? hooksField : { hooks: hooksField };
   else if (await exists(path.join(root, "hooks", "hooks.json"))) hookPath = path.join(root, "hooks", "hooks.json");
   if (hookPath && !await exists(hookPath)) throw new Error(`Hooks config not found: ${hookPath}`);
 
@@ -218,6 +219,11 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
   const pi = manifest.pi;
   const skillLocations = stringList(pi.skills).map((entry) => resolveInside(root, entry, "pi.skills path"));
   const skillPaths = await collectSkillFiles(root, skillLocations);
+  const extensionPaths = stringList(pi.extensions).map((entry) => resolveInside(root, entry, "pi.extensions path"));
+  for (const extensionPath of extensionPaths) {
+    if (!/\.(?:[cm]?[jt]s)$/i.test(extensionPath)) throw new Error(`Unsupported Pi extension file: ${extensionPath}`);
+    if (!await exists(extensionPath)) throw new Error(`Pi extension not found: ${extensionPath}`);
+  }
   const instructionPaths = await collectInstructionFiles(root, pi, ["AGENTS.md", "CLAUDE.md"]);
   const unsupported = unsupportedForManifest(pi, "pi-package");
   const upstreamRepository = repositoryUrl(manifest);
@@ -231,6 +237,7 @@ async function resolvePiPackage(root: string): Promise<ResolvedExternalPlugin> {
     publisher: authorName(manifest),
     ...(upstreamRepository ? { repositoryUrl: upstreamRepository } : {}),
     skillPaths,
+    ...(extensionPaths.length ? { extensionPaths } : {}),
     instructionPaths,
     unsupported,
   };
