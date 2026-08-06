@@ -3,6 +3,7 @@ import {
   capabilitiesForMarketplaceEntry,
   categoryForMarketplaceEntry,
   categoryForPluginKind,
+  executesLocalCodeForMarketplaceEntry,
   matchesMarketplaceQuery,
   matchesMarketplaceSource,
   sourceFormatForMarketplaceEntry,
@@ -55,5 +56,11 @@ describe("plugin marketplace catalogue model", () => {
       ...entry,
       manifest: { ...entry.manifest, contributes: { skills: [{ id: "method", title: "Method", entry: "SKILL.md" }] } },
     })).toEqual(["skills"]);
+  });
+
+  it("uses explicit local-code metadata and falls back to executable capabilities", () => {
+    expect(executesLocalCodeForMarketplaceEntry({ executesLocalCode: false, capabilities: ["hooks"] })).toBe(false);
+    expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["mcp"] })).toBe(true);
+    expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["skills"] })).toBe(false);
   });
 });

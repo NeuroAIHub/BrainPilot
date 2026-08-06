@@ -38,6 +38,10 @@ export function capabilitiesForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry,
   return entry.manifest.contributes?.skills?.length ? ["skills"] : [];
 }
 
+export function executesLocalCodeForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry, "executesLocalCode" | "capabilities">): boolean {
+  return entry.executesLocalCode ?? Boolean(entry.capabilities?.some((capability) => capability === "mcp" || capability === "hooks"));
+}
+
 export function matchesMarketplaceSource(entry: MarketplaceSdkEntry, filter: MarketplaceSourceFilter): boolean {
   if (filter === "all") return true;
   if (filter === "verified") return entry.verified === true;
@@ -315,7 +319,7 @@ export function PluginMarketplace() {
         const capabilities = capabilitiesForMarketplaceEntry(selectedEntry);
         const repositoryUrl = selectedEntry.repositoryUrl ?? selectedEntry.homepage;
         const unsupported = selectedInstalled?.unsupported ?? selectedEntry.unsupported ?? [];
-        const hasCommandHooks = capabilities.includes("hooks");
+        const executesLocalCode = selectedInstalled?.executesLocalCode ?? executesLocalCodeForMarketplaceEntry(selectedEntry);
         return (
           <div className="plugin-detail-layer" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedPluginId(null); }}>
             <section aria-labelledby="plugin-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
@@ -338,7 +342,7 @@ export function PluginMarketplace() {
                   {repositoryUrl ? <div><dt>{t("marketplace.details.repository")}</dt><dd><a href={repositoryUrl} rel="noreferrer" target="_blank">{repositoryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")} <ExternalLink size={12} /></a></dd></div> : null}
                 </dl>
                 {capabilities.length ? <section><h3>{t("marketplace.details.capabilities")}</h3><div className="plugin-detail__capabilities">{capabilities.map((capability) => <span key={capability}><CheckCircle2 size={14} />{t(capabilityLabelKey(capability))}</span>)}</div></section> : null}
-                {hasCommandHooks ? <div className="plugin-detail__warning"><AlertTriangle size={16} /><span>{t("marketplace.details.hookWarning")}</span></div> : null}
+                {executesLocalCode ? <div className="plugin-detail__warning"><AlertTriangle size={16} /><span>{t("marketplace.details.localCodeWarning")}</span></div> : null}
                 {(selectedEntry.manifest.environments?.length || selectedEntry.requirements?.length || selectedCompatibility?.issues.length) ? <section><h3>{t("marketplace.details.runtime")}</h3>
                   {selectedEntry.manifest.environments?.length ? <div className="plugin-detail__chips">{selectedEntry.manifest.environments.map((environment) => <span key={environment}>{environment}</span>)}</div> : null}
                   {selectedEntry.requirements?.length ? <ul>{selectedEntry.requirements.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul> : null}

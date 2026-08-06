@@ -89,6 +89,7 @@ describe("plugin marketplace control plane", () => {
       upstreamRef: "v1.0.0",
       upstreamCommit: "a".repeat(40),
       capabilities: ["skills", "mcp", "hooks"],
+      executesLocalCode: true,
       unsupported: ["agents"],
       requirements: ["Bun"],
       artifact: artifact(bytes, "lifecycle.bundle.json"),
@@ -101,6 +102,7 @@ describe("plugin marketplace control plane", () => {
       sourceFormat: "claude-code",
       repositoryUrl: "https://github.com/example/lifecycle",
       capabilities: ["skills", "mcp", "hooks"],
+      executesLocalCode: true,
       unsupported: ["agents"],
     })]));
     const installed = await app.request("/api/plugins/install", {
@@ -114,6 +116,7 @@ describe("plugin marketplace control plane", () => {
       verified: true,
       sourceFormat: "claude-code",
       repositoryUrl: "https://github.com/example/lifecycle",
+      executesLocalCode: true,
       unsupported: ["agents"],
     }));
 
