@@ -41,6 +41,21 @@ describe("plugin SDK compatibility", () => {
     expect(isPreviewPluginMessage({ type: "preview/read-range", rpcVersion: "1", token: "x", requestId: "r", handle: "primary", offset: 0, length: 64 })).toBe(true);
   });
 
+  it("validates role-targeted skill contributions", () => {
+    const manifest = parsePluginManifest({
+      ...base,
+      contributes: { skills: [{ id: "audit", entry: "skills/audit/SKILL.md", targets: ["principal", "auditor"] }] },
+    });
+    expect(manifest?.contributes?.skills?.[0]).toMatchObject({
+      id: "audit",
+      targets: ["principal", "auditor"],
+    });
+    expect(parsePluginManifest({
+      ...base,
+      contributes: { skills: [{ id: "audit", entry: "skills/audit/SKILL.md", targets: [] }] },
+    })).toBeNull();
+  });
+
   it("uses standard npm SemVer ranges", () => {
     const range = "^0.1.2 || >=1.0.0 <2.0.0";
     expect(isBrainPilotVersionRange(range)).toBe(true);

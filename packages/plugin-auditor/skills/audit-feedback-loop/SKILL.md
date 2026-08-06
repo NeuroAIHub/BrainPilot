@@ -1,0 +1,22 @@
+---
+name: audit-feedback-loop
+description: Coordinate iterative evidence and reliability reviews between BrainPilot's Principal Investigator and Auditor. Use when PI needs to audit its own draft, an Expert result, or a multi-agent synthesis; when Auditor receives such a review task; or when a previous audit requires correction and incremental re-review.
+---
+
+# Audit Feedback Loop
+
+Use the durable task system for every handoff. Do not ask the user to relay audit findings.
+
+## Select the role procedure
+
+- If you are `principal`, read [references/pi-orchestration.md](references/pi-orchestration.md) and follow it. Load the request template before dispatching an audit. Load the revision-loop reference after receiving a `revise` or `block` verdict.
+- If you are `auditor`, read [references/auditor-review.md](references/auditor-review.md) and follow it. Load the response template before completing the assigned audit task.
+- If you are any other agent, provide an evidence-addressable result to PI; do not start or adjudicate the audit loop yourself.
+
+## Load only the needed templates
+
+- Audit request: [references/audit-request-template.md](references/audit-request-template.md)
+- Audit response: [references/audit-response-template.md](references/audit-response-template.md)
+- Correction and incremental re-review: [references/revision-loop.md](references/revision-loop.md)
+
+Keep audit content in `dispatch_task` and `complete_task`. Do not use a separate audit-report submission tool.
