@@ -181,11 +181,26 @@ describe("LocalProcessOrchestrator restart logic", () => {
       sleep: async () => {},
     });
     await orch.ensureRuntime();
-    await orch.stopRuntime();
+    const stopped = orch.stopRuntime();
     expect(procs[0]!.killed).toContain("SIGTERM");
     procs[0]!.emitExit(1, null);
+    await stopped;
     await Promise.resolve();
     expect(spawnFn).toHaveBeenCalledTimes(1);
+  });
+
+  it("force-kills a runtime that does not exit within the grace period", async () => {
+    const proc = makeFakeProc();
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js",
+      spawnFn: () => proc,
+      healthProbe: async () => true,
+      sleep: async () => {},
+      stopTimeoutMs: 0,
+    });
+    await orch.ensureRuntime();
+    await orch.stopRuntime();
+    expect(proc.killed).toEqual(["SIGTERM", "SIGKILL"]);
   });
 });
 

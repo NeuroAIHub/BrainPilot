@@ -1,5 +1,9 @@
-import { describe, expect, it } from "vitest";
-import { buildServerOrchestrator } from "../src/server.js";
+import { mkdtemp, rm } from "node:fs/promises";
+import { once } from "node:events";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
+import { buildServerOrchestrator, startServer } from "../src/server.js";
 import { LocalProcessOrchestrator } from "../src/local-orchestrator.js";
 import type { Orchestrator } from "../src/orchestrator.js";
 
@@ -74,6 +78,57 @@ describe("buildServerOrchestrator", () => {
     } finally {
       if (prev === undefined) delete process.env.BP_DATA_DIR;
       else process.env.BP_DATA_DIR = prev;
+    }
+  });
+});
+
+describe("startServer graceful shutdown (#407)", () => {
+  it("closes an active browser SSE connection promptly and is idempotent", async () => {
+    const dataDir = await mkdtemp(join(tmpdir(), "bp-shutdown-"));
+    const stopRuntime = vi.fn(async () => {});
+    const orchestrator: Orchestrator = {
+      async ensureRuntime() { return { baseUrl: "http://runtime.test" }; },
+      async health() { return true; },
+      stopRuntime,
+    };
+    const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+      const signal = init.signal as AbortSignal;
+      return new Response(new ReadableStream<Uint8Array>({
+        start(controller) {
+          controller.enqueue(new TextEncoder().encode(": connected\n\n"));
+          signal.addEventListener("abort", () => controller.close(), { once: true });
+        },
+      }), { headers: { "content-type": "text/event-stream" } });
+    });
+
+    let running: Awaited<ReturnType<typeof startServer>> | undefined;
+    try {
+      running = await startServer({
+        port: 0,
+        hostname: "127.0.0.1",
+        orchestrator,
+        fetchFn: fetchFn as never,
+        serveWeb: false,
+        dataDir,
+      });
+      if (!running.server.listening) await once(running.server, "listening");
+      const address = running.server.address();
+      if (!address || typeof address === "string") throw new Error("server did not bind a TCP port");
+      const response = await fetch(`http://127.0.0.1:${address.port}/api/sse/live`);
+      expect(response.status).toBe(200);
+
+      const firstStop = running.stop();
+      const secondStop = running.stop();
+      expect(secondStop).toBe(firstStop);
+      await Promise.race([
+        firstStop,
+        new Promise<never>((_, reject) => setTimeout(() => reject(new Error("shutdown timed out")), 2_000)),
+      ]);
+      expect(stopRuntime).toHaveBeenCalledTimes(1);
+      await response.body?.cancel().catch(() => {});
+    } finally {
+      await running?.stop().catch(() => {});
+      await rm(dataDir, { recursive: true, force: true });
     }
   });
 });

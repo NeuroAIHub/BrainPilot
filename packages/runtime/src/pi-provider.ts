@@ -27,6 +27,18 @@ import { deriveProviderApi, type ProviderAdapter } from "@brainpilot/protocol";
 /** The synthetic provider id under which the auto-generated gateway lives. */
 export const GATEWAY_PROVIDER = "bp-gateway";
 
+/**
+ * Anthropic's SDK appends `/v1/messages` to `baseURL` itself. Provider forms
+ * commonly use the OpenAI-style convention of including a trailing `/v1`,
+ * which would otherwise produce `/v1/v1/messages`. Keep every other API
+ * family untouched because their SDKs expect the version segment in baseUrl.
+ */
+export function normalizeProviderBaseUrl(baseUrl: string, api: string): string {
+  const trimmed = baseUrl.trim();
+  if (api !== "anthropic-messages") return trimmed;
+  return trimmed.replace(/\/+$/, "").replace(/\/v1$/, "");
+}
+
 /** Defaults applied to an auto-generated gateway model when env is unset. */
 const DEFAULT_CONTEXT_WINDOW = 200_000;
 // #293: 8_192 is far below what modern models (Claude Sonnet 5, GPT-5, Gemini 2.5)
@@ -116,7 +128,7 @@ export function resolveGatewayModel(sdk: PiProviderSdk, agentDir: string): Resol
     {
       providers: {
         [GATEWAY_PROVIDER]: {
-          baseUrl,
+          baseUrl: normalizeProviderBaseUrl(baseUrl, "anthropic-messages"),
           api: "anthropic-messages",
           // Resolved at request time from the same env the gateway key lives in.
           apiKey: "$ANTHROPIC_API_KEY",
@@ -211,19 +223,23 @@ export function resolveSessionModel(
   if (!cfg.apiKey || !cfg.baseUrl || !cfg.modelId) return {};
 
   mkdirSync(agentDir, { recursive: true });
+  const api =
+    cfg.api ??
+    deriveProviderApi(cfg.adapter as ProviderAdapter | undefined) ??
+    "anthropic-messages";
   // One models.json per provider id — distinct registries stay isolated.
   const modelsJsonPath = join(agentDir, `bp-session-${sanitize(cfg.providerId)}-models.json`);
   const desired = JSON.stringify(
     {
       providers: {
         [cfg.providerId]: {
-          baseUrl: cfg.baseUrl,
+          baseUrl: normalizeProviderBaseUrl(cfg.baseUrl, api),
           // #63/#68: persist the selected wire protocol instead of hardcoding
           // anthropic-messages. Precedence: explicit `api` (precise, #63) →
           // derived from `adapter` (coarse family, #68) → default. Pi's
           // ModelRegistry accepts any known api; azure-openai-responses derives
           // api-version/deployment from the Azure base URL.
-          api: cfg.api ?? deriveProviderApi(cfg.adapter as ProviderAdapter | undefined) ?? "anthropic-messages",
+          api,
           // Placeholder — the real key is injected via setRuntimeApiKey below.
           apiKey: `$BP_PROVIDER_${sanitize(cfg.providerId).toUpperCase()}`,
           models: [
