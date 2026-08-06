@@ -25,6 +25,7 @@ function gatedFactory(observe: Observed): AgentSessionFactory {
   return async ({ sessionId }: { sessionId: string; agentName: string; systemTools: SystemTool[] }) => {
     const listeners = new Set<(e: PiAgentEvent) => void>();
     let streaming = false;
+    const queued: string[] = [];
     let release!: () => void;
     const gate = new Promise<void>((r) => (release = r));
     const emit = (e: PiAgentEvent) => {
@@ -50,6 +51,7 @@ function gatedFactory(observe: Observed): AgentSessionFactory {
           // Follow-up path: SDK accepts it while streaming when a behavior is set.
           if (opts?.streamingBehavior) {
             observe.followUps.push(text);
+            queued.push(text);
             return;
           }
           // Plain prompt during streaming → mirror the real SDK guard.
@@ -69,6 +71,12 @@ function gatedFactory(observe: Observed): AgentSessionFactory {
           message: { role: "assistant", content: [{ type: "text", text: "ok" }] },
         });
         emit({ type: "turn_end" });
+        // Pi exposes each follow-up as a user message only when it drains the
+        // queue after the current turn. Runtime uses this as the injection ack.
+        for (const followUp of queued) {
+          emit({ type: "message_start", message: { role: "user", content: [{ type: "text", text: followUp }] } });
+          emit({ type: "message_end", message: { role: "user", content: [{ type: "text", text: followUp }] } });
+        }
         emit({ type: "agent_end", messages: [], willRetry: false });
         streaming = false;
       },
@@ -100,6 +108,12 @@ describe("concurrent send → follow-up queue", () => {
     const observe: Observed = { prompts: [], followUps: [] };
     const m = new SessionManager({ persist: false, agentFactory: gatedFactory(observe) });
     const s = await m.createSession();
+    const visibleUserMessages: string[] = [];
+    m.subscribe(s.id, (event) => {
+      if (event.type === "TEXT_MESSAGE_CHUNK" && event.role === "user") {
+        visibleUserMessages.push(String(event.delta ?? ""));
+      }
+    });
 
     // First message starts a run that blocks mid-turn (streaming stays true).
     const first = await m.sendMessage(s.id, "first");
@@ -116,8 +130,27 @@ describe("concurrent send → follow-up queue", () => {
     expect(observe.followUps).toEqual(["second"]);
     // The second message never went through the plain-prompt path.
     expect(observe.prompts).toEqual(["first"]);
+    expect(visibleUserMessages).toEqual(["first"]);
 
     // Release the gate so the run drains cleanly (no lingering timers).
+    releases.get(s.id)?.();
+    await waitFor(() => visibleUserMessages.includes("second"));
+    expect(visibleUserMessages).toEqual(["first", "second"]);
+  });
+
+  it("preserves FIFO order for multiple messages queued during one run", async () => {
+    const observe: Observed = { prompts: [], followUps: [] };
+    const m = new SessionManager({ persist: false, agentFactory: gatedFactory(observe) });
+    const s = await m.createSession();
+
+    await m.sendMessage(s.id, "first");
+    await waitFor(() => observe.prompts.length === 1);
+    await m.sendMessage(s.id, "second");
+    await m.sendMessage(s.id, "third");
+    await waitFor(() => observe.followUps.length === 2);
+
+    expect(observe.followUps).toEqual(["second", "third"]);
+    expect(observe.prompts).toEqual(["first"]);
     releases.get(s.id)?.();
   });
 

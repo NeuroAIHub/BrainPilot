@@ -59,6 +59,8 @@ export interface LocalOrchestratorOptions {
   healthProbe?: (baseUrl: string) => Promise<boolean>;
   /** Health wait timeout in ms when ensuring readiness. Default 30_000. */
   healthTimeoutMs?: number;
+  /** Grace period for runtime persistence before SIGKILL. Default 5_000. */
+  stopTimeoutMs?: number;
   /** Called when the restart budget is exhausted (§11A.5 fatal). */
   onFatal?: (err: Error) => void;
   /** Sleep impl (for tests). */
@@ -151,6 +153,7 @@ export class LocalProcessOrchestrator implements Orchestrator {
       backoffBaseMs: options.backoffBaseMs ?? 200,
       healthProbe: options.healthProbe ?? defaultHealthProbe,
       healthTimeoutMs: options.healthTimeoutMs ?? 30_000,
+      stopTimeoutMs: options.stopTimeoutMs ?? 5_000,
       onFatal: options.onFatal,
       sleep: options.sleep ?? sleepDefault,
       runtimeLogFile: options.runtimeLogFile,
@@ -231,6 +234,17 @@ export class LocalProcessOrchestrator implements Orchestrator {
     this.handle = null;
     this.removePidFile();
     if (child) {
+      let exited = false;
+      const exitPromise = new Promise<void>((resolve) => {
+        child.on("exit", () => {
+          exited = true;
+          resolve();
+        });
+        child.on("error", () => {
+          exited = true;
+          resolve();
+        });
+      });
       try {
         // Cross-platform (#6): on Windows `child.kill("SIGTERM")` is translated
         // to `TerminateProcess` (a forceful kill the child cannot intercept),
@@ -240,7 +254,19 @@ export class LocalProcessOrchestrator implements Orchestrator {
         // shutdown that never actually ran the child's signal handlers.
         child.kill(gracefulSignalsSupported ? "SIGTERM" : "SIGKILL");
       } catch {
-        /* already gone */
+        return; // already gone
+      }
+      if (!gracefulSignalsSupported) return;
+      await Promise.race([
+        exitPromise,
+        this.opts.sleep(this.opts.stopTimeoutMs),
+      ]);
+      if (!exited) {
+        try {
+          child.kill("SIGKILL");
+        } catch {
+          /* already gone */
+        }
       }
     }
   }

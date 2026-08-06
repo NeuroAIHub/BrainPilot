@@ -3,7 +3,10 @@ import { SessionManager } from "../session-manager.js";
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "../types.js";
 
 interface Call { tool: string; args: Record<string, unknown> }
-interface Script { onPrompt?: (text: string) => Call | undefined }
+interface Script {
+  beforePrompt?: (text: string) => Promise<void>;
+  onPrompt?: (text: string) => Call | undefined;
+}
 
 function scriptedFactory(scripts: Record<string, Script>, prompts: Array<{ agent: string; text: string }>): AgentSessionFactory {
   return async ({ sessionId, agentName, systemTools }) => {
@@ -17,6 +20,7 @@ function scriptedFactory(scripts: Record<string, Script>, prompts: Array<{ agent
         prompts.push({ agent: agentName, text });
         emit({ type: "agent_start" });
         emit({ type: "turn_start" });
+        await scripts[agentName]?.beforePrompt?.(text);
         const call = scripts[agentName]?.onPrompt?.(text);
         if (call) {
           const id = `tc_${prompts.length}`;
@@ -156,5 +160,35 @@ describe("flat task delegation", () => {
     await manager.sendMessage(session.id, "hello", "librarian");
     await waitFor(() => prompts.length === 1);
     expect(prompts[0]?.text).toBe("hello");
+  });
+
+  it("keeps Auditor visible without holding the Principal-only foreground active", async () => {
+    const prompts: Array<{ agent: string; text: string }> = [];
+    let releaseAuditor!: () => void;
+    const auditorGate = new Promise<void>((resolve) => { releaseAuditor = resolve; });
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: scriptedFactory({
+        principal: {
+          onPrompt: (text) => text.includes("AUDIT")
+            ? { tool: "dispatch_task", args: { to: "auditor", content: "optional review" } }
+            : undefined,
+        },
+        auditor: { beforePrompt: async () => auditorGate },
+      }, prompts),
+    });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "AUDIT");
+    await waitFor(() => manager.listAgents(session.id).some(
+      (agent) => agent.name === "auditor" && agent.status === "running",
+    ));
+    await waitFor(() => manager.getSessionState(session.id)?.runState.active === false);
+
+    expect(manager.getSessionState(session.id)).toMatchObject({
+      runState: { active: false },
+      agents: expect.arrayContaining([expect.objectContaining({ name: "auditor", status: "running" })]),
+    });
+    releaseAuditor();
+    await waitFor(() => manager.listAgents(session.id).find((agent) => agent.name === "auditor")?.status === "idle");
   });
 });

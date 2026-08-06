@@ -238,6 +238,22 @@ describe("interrupt cancels the active run without a follow-up notice run (#101 
     expect(runFinishedAfter).toBeGreaterThan(runFinishedBefore);
   });
 
+  it("quiesces active work before the final shutdown save", async () => {
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const m = new SessionManager({ persist: false, agentFactory: gatedPrincipalFactory(observe) });
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (event) => events.push(event));
+
+    await m.sendMessage(s.id, "work until shutdown");
+    await waitFor(() => observe.prompts.length === 1);
+    await m.shutdownAndSave();
+
+    expect(events.some((event) => event.type === "RUN_FINISHED")).toBe(true);
+    expect(m.getSessionState(s.id)?.runState.active).toBe(false);
+    expect(await m.sendMessage(s.id, "too late")).toEqual({ accepted: false });
+  });
+
   it("treats Stop during principal retry backoff as aborted, not a provider error", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const m = new SessionManager({ persist: false, agentFactory: retryBackoffFactory(observe) });

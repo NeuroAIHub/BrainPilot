@@ -514,14 +514,18 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
   process.on("uncaughtException", (err) => void onFatal(err));
   process.on("unhandledRejection", (reason) => void onFatal(reason));
 
+  let closePromise: Promise<void> | null = null;
   return {
     manager,
     port: boundPort,
-    close: () =>
-      new Promise<void>((resolve) => {
-        manager.shutdown();
+    close: () => {
+      if (closePromise) return closePromise;
+      const socketClosed = new Promise<void>((resolve) => {
         (server as { close: (cb?: () => void) => void }).close(() => resolve());
-      }),
+      });
+      closePromise = manager.shutdownAndSave().then(() => socketClosed);
+      return closePromise;
+    },
   };
 }
 
@@ -529,8 +533,16 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
 // main-module check so it works on Windows too — a naive `file://${argv[1]}`
 // never matches import.meta.url there (backslashes, drive letter, file:///).
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  void startServer().then(({ port }) => {
+  void startServer().then((running) => {
     // eslint-disable-next-line no-console
-    console.log(`[runtime] listening on :${port} (mock=${process.env.BP_MOCK ?? "0"})`);
+    console.log(`[runtime] listening on :${running.port} (mock=${process.env.BP_MOCK ?? "0"})`);
+    let stopping = false;
+    const stop = async (): Promise<void> => {
+      if (stopping) return;
+      stopping = true;
+      await running.close();
+    };
+    process.once("SIGTERM", () => void stop());
+    process.once("SIGINT", () => void stop());
   });
 }
