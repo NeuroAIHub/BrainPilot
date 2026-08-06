@@ -1,5 +1,13 @@
 import { describe, expect, it } from "vitest";
-import { categoryForMarketplaceEntry, categoryForPluginKind, matchesMarketplaceQuery } from "../components/plugins/PluginMarketplace";
+import {
+  capabilitiesForMarketplaceEntry,
+  categoryForMarketplaceEntry,
+  categoryForPluginKind,
+  executesLocalCodeForMarketplaceEntry,
+  matchesMarketplaceQuery,
+  matchesMarketplaceSource,
+  sourceFormatForMarketplaceEntry,
+} from "../components/plugins/PluginMarketplace";
 
 const entry = {
   manifest: {
@@ -32,5 +40,27 @@ describe("plugin marketplace catalogue model", () => {
     expect(matchesMarketplaceQuery(entry, "brainpilot")).toBe(true);
     expect(matchesMarketplaceQuery(entry, "previewer")).toBe(true);
     expect(matchesMarketplaceQuery(entry, "atlas")).toBe(false);
+  });
+
+  it("defaults legacy entries to BrainPilot and filters explicit ecosystem sources", () => {
+    expect(sourceFormatForMarketplaceEntry(entry)).toBe("brainpilot");
+    expect(matchesMarketplaceSource(entry, "brainpilot")).toBe(true);
+    expect(matchesMarketplaceSource({ ...entry, sourceFormat: "claude-code" }, "claude-code")).toBe(true);
+    expect(matchesMarketplaceSource({ ...entry, sourceFormat: "claude-code" }, "codex")).toBe(false);
+    expect(matchesMarketplaceSource(entry, "verified")).toBe(true);
+  });
+
+  it("uses explicit compact capabilities and derives legacy Skills", () => {
+    expect(capabilitiesForMarketplaceEntry({ ...entry, capabilities: ["mcp", "hooks"] })).toEqual(["mcp", "hooks"]);
+    expect(capabilitiesForMarketplaceEntry({
+      ...entry,
+      manifest: { ...entry.manifest, contributes: { skills: [{ id: "method", title: "Method", entry: "SKILL.md" }] } },
+    })).toEqual(["skills"]);
+  });
+
+  it("uses explicit local-code metadata and falls back to executable capabilities", () => {
+    expect(executesLocalCodeForMarketplaceEntry({ executesLocalCode: false, capabilities: ["hooks"] })).toBe(false);
+    expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["mcp"] })).toBe(true);
+    expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["skills"] })).toBe(false);
   });
 });

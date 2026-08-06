@@ -10637,6 +10637,31 @@ button {
   font-size: 12px;
 }
 
+.plugin-market__source-filters {
+  display: flex;
+  overflow-x: auto;
+  gap: 7px;
+  margin: -8px 0 18px;
+  padding-bottom: 2px;
+}
+
+.plugin-market__source-filters button {
+  flex: 0 0 auto;
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--color-text-muted);
+  padding: 5px 9px;
+  font-size: 10px;
+}
+
+.plugin-market__source-filters button:hover,
+.plugin-market__source-filters button.is-active {
+  border-color: var(--color-border-strong);
+  background: var(--color-surface);
+  color: var(--color-text);
+}
+
 .plugin-market__grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(300px, 1fr));
@@ -10702,6 +10727,18 @@ button {
 .plugin-card__identity > div { display: flex; min-width: 0; align-items: center; gap: 6px; }
 .plugin-card__identity h2 { overflow: hidden; margin: 0; font-size: 15px; font-weight: 620; text-overflow: ellipsis; white-space: nowrap; }
 .plugin-card__identity > span { display: block; margin-top: 3px; color: var(--color-text-subtle); font-size: 11px; }
+.plugin-card__identity > .plugin-source-badge {
+  display: inline-flex;
+  width: fit-content;
+  border-radius: 999px;
+  background: var(--color-surface-soft);
+  padding: 3px 7px;
+  font-size: 9px;
+  font-weight: 620;
+}
+.plugin-source-badge--codex { color: #7c5ce0 !important; }
+.plugin-source-badge--claude-code { color: #bd6239 !important; }
+.plugin-source-badge--pi-package { color: #27836c !important; }
 .plugin-card__verified { flex: 0 0 auto; color: var(--color-accent); }
 .plugin-card__test { flex: 0 0 auto; border-radius: 999px; background: color-mix(in srgb, #d98b14 14%, var(--color-surface)); color: #a8640b; padding: 3px 6px; font-size: 9px; font-weight: 650; }
 
@@ -10715,6 +10752,23 @@ button {
   line-height: 1.6;
   -webkit-box-orient: vertical;
   -webkit-line-clamp: 2;
+}
+
+.plugin-card__capabilities {
+  display: flex;
+  min-height: 18px;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.plugin-card__capabilities span {
+  color: var(--color-text-subtle);
+  font-size: 10px;
+}
+
+.plugin-card__capabilities span + span::before {
+  content: "·";
+  margin-right: 5px;
 }
 
 .plugin-card__meta {
@@ -10922,9 +10976,40 @@ button {
 .plugin-detail__facts > div { display: grid; min-width: 0; gap: 5px; background: var(--color-surface); padding: 11px 12px; }
 .plugin-detail__facts dt { color: var(--color-text-subtle); font-size: 10px; }
 .plugin-detail__facts dd { overflow: hidden; margin: 0; color: var(--color-text); font-size: 12px; text-overflow: ellipsis; white-space: nowrap; }
+.plugin-detail__facts dd a { display: inline-flex; max-width: 100%; align-items: center; gap: 4px; color: var(--color-accent); text-decoration: none; }
+.plugin-detail__facts dd code { font-size: 10px; }
 
 .plugin-detail__chips { display: flex; flex-wrap: wrap; gap: 7px; }
 .plugin-detail__chips span { border: 1px solid var(--color-border); border-radius: 999px; background: var(--color-surface-soft); color: var(--color-text-muted); padding: 5px 8px; font-family: var(--font-mono, monospace); font-size: 10px; }
+
+.plugin-detail__capabilities { display: flex; flex-wrap: wrap; gap: 8px; }
+.plugin-detail__capabilities span { display: inline-flex; align-items: center; gap: 5px; color: var(--color-text); font-size: 12px; }
+.plugin-detail__capabilities svg { color: #16855b; }
+
+.plugin-detail__warning {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  border: 1px solid color-mix(in srgb, #d98b14 35%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, #d98b14 8%, var(--color-surface));
+  color: #9a620e;
+  padding: 10px 12px;
+  font-size: 11px;
+  line-height: 1.5;
+}
+.plugin-detail__warning svg { flex: 0 0 auto; margin-top: 1px; }
+
+.plugin-detail__disclosure {
+  display: grid;
+  gap: 12px;
+  border-top: 1px solid var(--color-border);
+  padding-top: 12px;
+}
+.plugin-detail__disclosure summary { cursor: pointer; color: var(--color-text-muted); font-size: 11px; font-weight: 600; }
+.plugin-detail__disclosure[open] summary { margin-bottom: 12px; color: var(--color-text); }
+.plugin-detail__disclosure--warning summary { color: #9a620e; }
+.plugin-detail__body ul { margin: 0; padding-left: 18px; color: var(--color-text-muted); font-size: 11px; line-height: 1.6; }
 
 .plugin-detail__releases {
   display: grid;

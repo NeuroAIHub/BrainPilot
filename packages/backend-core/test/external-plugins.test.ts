@@ -92,7 +92,7 @@ describe("external plugin import", () => {
     await writeJson(path.join(root, "hooks", "hooks.json"), { hooks: { Setup: [{ hooks: [{ type: "command", command: "node -e \"process.exit(0)\"" }] }] } });
 
     const imported = await importExternalPlugin(dataDir, root, "claude-code");
-    expect(imported).toEqual(expect.objectContaining({ enabled: false, sourceFormat: "claude-code" }));
+    expect(imported).toEqual(expect.objectContaining({ enabled: false, sourceFormat: "claude-code", executesLocalCode: true }));
     await setPluginEnabled(dataDir, imported.manifest.id, true);
     const runtime = JSON.parse(await readFile(path.join(dataDir, "plugins", "runtime", "hook-demo.json"), "utf8")) as { root: string; mcpConfigPath: string };
     expect(runtime.root).toContain(path.join("plugins", "execution", "hook-demo", "1.0.0"));

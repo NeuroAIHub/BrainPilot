@@ -52,6 +52,7 @@ export type { RuntimeClientOptions, ForwardOptions } from "./runtime-client.js";
 export {
   installPlugin,
   importExternalPlugin,
+  isFileContextBridgeEnabled,
   listEnabledPreviewers,
   listInstalledPlugins,
   listMarketplace,

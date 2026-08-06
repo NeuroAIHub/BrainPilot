@@ -1094,6 +1094,11 @@ export const api = {
       if (runtimeConfig.useMockBackend) return [];
       return handleJson(await apiFetch(`${API_BASE}/plugins/installed`, { headers: authHeaders() }));
     },
+    async fileContextEnabled(): Promise<boolean> {
+      if (runtimeConfig.useMockBackend) return false;
+      const value = await handleJson<{ enabled: boolean }>(await apiFetch(`${API_BASE}/plugins/file-context-enabled`, { headers: authHeaders() }));
+      return value.enabled === true;
+    },
 
     async enabledPreviewers(): Promise<EnabledPreviewer[]> {
       if (runtimeConfig.useMockBackend) return [];

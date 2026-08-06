@@ -83,18 +83,42 @@ describe("plugin marketplace control plane", () => {
       manifest: value,
       publisher: "Example",
       verified: true,
+      sourceFormat: "claude-code",
+      repositoryUrl: "https://github.com/example/lifecycle",
+      license: "MIT",
+      upstreamRef: "v1.0.0",
+      upstreamCommit: "a".repeat(40),
+      capabilities: ["skills", "mcp", "hooks"],
+      executesLocalCode: true,
+      unsupported: ["agents"],
+      requirements: ["Bun"],
       artifact: artifact(bytes, "lifecycle.bundle.json"),
     }], { "lifecycle.bundle.json": bytes });
     const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false });
 
-    expect((await app.request("/api/plugins/marketplace")).status).toBe(200);
+    const marketResponse = await app.request("/api/plugins/marketplace");
+    expect(marketResponse.status).toBe(200);
+    expect(await marketResponse.json()).toEqual(expect.arrayContaining([expect.objectContaining({
+      sourceFormat: "claude-code",
+      repositoryUrl: "https://github.com/example/lifecycle",
+      capabilities: ["skills", "mcp", "hooks"],
+      executesLocalCode: true,
+      unsupported: ["agents"],
+    })]));
     const installed = await app.request("/api/plugins/install", {
       method: "POST",
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id: value.id }),
     });
     expect(installed.status).toBe(201);
-    expect(await installed.json()).toEqual(expect.objectContaining({ enabled: false, verified: true }));
+    expect(await installed.json()).toEqual(expect.objectContaining({
+      enabled: false,
+      verified: true,
+      sourceFormat: "claude-code",
+      repositoryUrl: "https://github.com/example/lifecycle",
+      executesLocalCode: true,
+      unsupported: ["agents"],
+    }));
 
     const enabled = await app.request(`/api/plugins/${value.id}/enabled`, {
       method: "PUT",
