@@ -3,12 +3,11 @@
  *
  * Selects which i18n key + vars the toast should render given the set of agents
  * currently working. Kept pure (no React) so it's unit-testable without a DOM —
- * the component just calls `t(key, vars)` with the result. The trace agent is
- * excluded by the caller (it self-records continuously and isn't "the user's
- * task"), matching the runtime's run-active aggregation.
+ * the component just calls `t(key, vars)` with the result. Background agents
+ * such as Trace remain visible even when they do not hold runState active.
  */
 export interface ToastLabel {
-  key: "chat.agentWorking" | "chat.agentsWorking" | "chat.agentThinking" | "chat.agentRetrying";
+  key: "chat.agentWorking" | "chat.agentsWorking" | "chat.agentThinking" | "chat.agentRetrying" | "chat.agentsWorkingRetrying";
   /** Interpolation vars; shape matches i18n `TranslateVars` (string|number). */
   vars?: Record<string, string | number>;
 }
@@ -21,7 +20,7 @@ export interface RetryingAgent {
 }
 
 /**
- * @param workingAgentNames names of non-trace agents with status "running"
+ * @param workingAgentNames names of all agents with status "running"
  * @param separator locale-appropriate join for multiple names (default "、")
  */
 export function runningToastLabel(
@@ -30,6 +29,19 @@ export function runningToastLabel(
   retryingAgent?: RetryingAgent,
 ): ToastLabel {
   if (retryingAgent) {
+    const others = workingAgentNames.filter((name) => name !== retryingAgent.name);
+    if (others.length > 0) {
+      return {
+        key: "chat.agentsWorkingRetrying",
+        vars: {
+          names: others.join(separator),
+          name: retryingAgent.name,
+          attempt: retryingAgent.attempt,
+          max: retryingAgent.maxAttempts,
+          sec: Math.ceil(retryingAgent.delayMs / 1000),
+        },
+      };
+    }
     return {
       key: "chat.agentRetrying",
       vars: {

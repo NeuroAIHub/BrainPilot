@@ -190,6 +190,8 @@ export const SendMessageResponseSchema = z.object({
   accepted: z.boolean(),
   /** Run id started/queued for this message, if synchronously known. */
   runId: z.string().optional(),
+  /** True when Pi accepted the message into an in-flight follow-up queue. */
+  queued: z.boolean().optional(),
 });
 export type SendMessageResponse = z.infer<typeof SendMessageResponseSchema>;
 

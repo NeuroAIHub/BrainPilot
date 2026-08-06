@@ -249,6 +249,8 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const dataUploadInputRef = useRef<HTMLInputElement | null>(null);
 
+  useEffect(() => () => dataUploadAbortRef.current?.abort(), []);
+
   // #156: in local mode, surface the real on-disk workspace dir so users know
   // which directory the agent writes into. `workspacesRoot` comes from the
   // backend (gated to local mode there too); the per-session dir is

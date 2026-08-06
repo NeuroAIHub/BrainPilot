@@ -377,6 +377,29 @@ describe("Hono app — REST forwarding", () => {
 });
 
 describe("Hono app — SSE byte passthrough (修正4)", () => {
+  it("forwards the shutdown abort signal to the runtime SSE request", async () => {
+    const shutdown = new AbortController();
+    let upstreamSignal: AbortSignal | null = null;
+    const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+      upstreamSignal = init.signal as AbortSignal;
+      return new Response(new ReadableStream<Uint8Array>({ start() {} }), {
+        headers: { "content-type": "text/event-stream" },
+      });
+    });
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: fetchFn as never,
+      serveWeb: false,
+      shutdownSignal: shutdown.signal,
+    });
+    const res = await app.request("/api/sse/sess-shutdown");
+    expect(res.status).toBe(200);
+    expect(upstreamSignal?.aborted).toBe(false);
+    shutdown.abort();
+    expect(upstreamSignal?.aborted).toBe(true);
+    await res.body?.cancel();
+  });
+
   it("pipes runtime SSE chunks through unmodified", async () => {
     const stream = new ReadableStream<Uint8Array>({
       start(controller) {
