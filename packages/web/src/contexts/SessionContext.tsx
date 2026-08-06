@@ -50,8 +50,10 @@ interface SessionContextValue {
   subagents: SubagentStatus[];
   /**
    * #99: authoritative whole-turn run-active signal from session_state.runState
-   * (trace agent excluded, delivery loops included), with the backend timestamp
-   * of the snapshot. null until the first session_state arrives. Drives the
+   * (only Principal work occupies the foreground), with the backend timestamp.
+   * This is status authority, not an input lock: sends during an active run are
+   * queued by Pi as follow-ups.
+   * null until the first session_state arrives. Drives the
    * whole-turn timer in the Chat footer.
    */
   runActive: { active: boolean; atMs: number } | null;
@@ -84,9 +86,10 @@ interface SessionContextValue {
   startDraftSession: () => void;
   updateSessionTitle: (sessionId: string, title: string) => Promise<void>;
   deleteSession: (sessionId: string) => Promise<void>;
-  /** Resolves true when the message was accepted, false on validation/timeout/
-   *  error — the composer uses this to restore the draft so input isn't lost. */
-  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources }) => Promise<boolean>;
+  /** Reports whether Pi accepted the message and whether it entered the
+   * in-flight follow-up queue. The composer keeps queued messages above the
+   * input until their user-message SSE event confirms actual injection. */
+  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources }) => Promise<{ ok: boolean; queued?: boolean; messageId?: string }>;
   interruptCurrent: () => Promise<void>;
   interruptSubagent: (childId: string) => Promise<boolean>;
   interruptTool: (toolCallId: string) => Promise<void>;
@@ -675,30 +678,26 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const trimmed = content.trim();
       console.log(`[SessionContext] sendPrompt: "${trimmed.slice(0, 40)}...", isConnected=${isConnected}, isDraft=${isDraft}`);
       if (!trimmed) {
-        return false;
+        return { ok: false };
       }
       // A draft has no SSE connection yet — the session is created and
       // connected below. Only block on connection for an already-persisted
       // session.
       if (!currentSession && !isDraft) {
         setError(tg("ctx.session.noConnection"));
-        return false;
+        return { ok: false };
       }
       if (currentSession && !isConnected) {
         setError(tg("ctx.session.noConnection"));
-        return false;
+        return { ok: false };
       }
 
       setIsSending(true);
       setError(null);
-      // Tracked so we can roll back the optimistic user message if the post
-      // fails/times out (#106) — otherwise the bubble lingers and a retry
-      // duplicates it.
-      let optimistic: { sessionId: string; messageId: string } | null = null;
       try {
         const session = currentSession ?? (await createSession(trimmed.slice(0, 48), opts));
         if (!session) {
-          return false;
+          return { ok: false };
         }
         // Freshly created (draft → persisted): open the SSE stream so the
         // assistant's streamed reply is received.
@@ -718,26 +717,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           createdAt: timestamp,
           agent: "user",
         };
-        optimistic = { sessionId: session.id, messageId: uuid };
-        setMessagesBySession((current) => ({
-          ...current,
-          [session.id]: [...(current[session.id] ?? []), userMessage],
-        }));
+        // Do not optimistically insert the message yet: the response tells us
+        // whether it belongs in the Pi queue above the composer or in the
+        // transcript. Runtime's SSE event may also arrive first; stable UUID
+        // dedupe keeps either ordering safe.
         console.log(`[SessionContext] posting message to ${session.id}`);
-        await api.sessions.postMessage(session.id, { content: trimmed, uuid, timestamp });
+        const result = await api.sessions.postMessage(session.id, { content: trimmed, uuid, timestamp });
+        if (!result.accepted) throw new Error(tg("ctx.session.sendFailed"));
+        if (!result.queued) {
+          // Normal/idle send: surface it after acceptance unless SSE already
+          // delivered the same stable user-message id.
+          setMessagesBySession((current) => {
+            const messages = current[session.id] ?? [];
+            return messages.some((message) => message.id === uuid)
+              ? current
+              : { ...current, [session.id]: [...messages, userMessage] };
+          });
+        }
         console.log(`[SessionContext] postMessage success`);
-        return true;
+        return { ok: true, queued: result.queued === true, messageId: uuid };
       } catch (err) {
         console.error(`[SessionContext] sendPrompt error:`, err);
-        // #106: roll back the optimistic bubble so the failed send doesn't
-        // leave a ghost message (and a retry doesn't duplicate it).
-        if (optimistic) {
-          const { sessionId: sid, messageId } = optimistic;
-          setMessagesBySession((current) => ({
-            ...current,
-            [sid]: (current[sid] ?? []).filter((m) => m.id !== messageId),
-          }));
-        }
         // AbortSignal.timeout() rejects with a TimeoutError (and a hard abort
         // with AbortError). Surface a clear, retryable message instead of the
         // raw DOMException text, and let `finally` release isSending so the
@@ -752,7 +752,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               ? err.message
               : tg("ctx.session.sendFailed"),
         );
-        return false;
+        return { ok: false };
       } finally {
         setIsSending(false);
       }

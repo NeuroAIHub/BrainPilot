@@ -50,6 +50,12 @@ type QueuedUpload = {
   uploadId: string;
 };
 
+type QueuedPrompt = { id: string; content: string };
+
+export function shouldClearQueuedPrompts(runActive: { active: boolean } | null): boolean {
+  return runActive?.active !== true;
+}
+
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
   if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
     URL.revokeObjectURL(attachment.previewUrl);
@@ -91,6 +97,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // left tool cluster, not the send cluster guarded by composerSendTools.test.)
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [attachments, setAttachments] = useState<ComposerAttachment[]>([]);
+  const [queuedPromptsBySession, setQueuedPromptsBySession] = useState<Record<string, QueuedPrompt[]>>({});
   const attachmentsRef = useRef<ComposerAttachment[]>([]);
   // #305: replace boolean busy with full progress UI state; null = idle.
   const [uploadState, setUploadState] = useState<ComposerUploadState | null>(null);
@@ -428,6 +435,24 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   }, []);
 
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
+  const queuedPrompts = sessionId ? (queuedPromptsBySession[sessionId] ?? []) : [];
+
+  useEffect(() => {
+    if (!sessionId) return;
+    const visibleIds = new Set(messages.filter((message) => message.role === "user").map((message) => message.id));
+    setQueuedPromptsBySession((current) => {
+      const existing = current[sessionId] ?? [];
+      const next = existing.filter((prompt) => !visibleIds.has(prompt.id));
+      return next.length === existing.length ? current : { ...current, [sessionId]: next };
+    });
+  }, [messages, sessionId]);
+
+  useEffect(() => {
+    if (!sessionId || !shouldClearQueuedPrompts(runActive)) return;
+    setQueuedPromptsBySession((current) => (current[sessionId]?.length
+      ? { ...current, [sessionId]: [] }
+      : current));
+  }, [runActive, sessionId]);
 
   // #99: whole-turn timer — spans user input → every agent finished (runState
   // settles false), debounced against hook/system re-wakes.
@@ -451,14 +476,20 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     if (attachments.length > 0) setAttachments([]);
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
-    const ok = await sendPrompt(`${notice}${content}`, {
+    const result = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
     });
+    if (result.ok && result.queued && result.messageId) {
+      setQueuedPromptsBySession((current) => ({
+        ...current,
+        [sessionId]: [...(current[sessionId] ?? []), { id: result.messageId!, content }],
+      }));
+    }
     // #106: a failed/timed-out send must not silently eat the user's input.
     // Restore the draft (and attachment chips) so they can retry without
     // retyping. Only restore if they haven't already started typing again.
-    if (!ok) {
+    if (!result.ok) {
       if (draftStore.get(sessionId).trim().length === 0) {
         draftStore.set(sessionId, content);
       }
@@ -650,7 +681,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                 return t(label.key, label.vars);
               })()}
             </span>
-            {hasActiveScripts ? null : (
+            {hasActiveScripts || runActive?.active !== true ? null : (
               <button
                 className="agent-running-toast__stop"
                 type="button"
@@ -674,6 +705,18 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
           isStoppingTask={isInterrupting}
           stoppingToolIds={interruptingToolIds}
         />
+
+        {queuedPrompts.length > 0 ? (
+          <div className="composer-queue" role="status" aria-live="polite">
+            <span className="composer-queue__label">{t("chat.queue.label")}</span>
+            {queuedPrompts.map((prompt) => (
+              <div className="composer-queue__item" key={prompt.id} title={prompt.content}>
+                <span className="agent-running-toast__dot" />
+                <span>{prompt.content}</span>
+              </div>
+            ))}
+          </div>
+        ) : null}
 
         {askTakeover ? (
           <AskUserComposer
