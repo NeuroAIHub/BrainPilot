@@ -17,6 +17,43 @@ import type { IAgentSession, PiAgentEvent } from "../types.js";
  * (via parseEvent) and that the expected types appear in order.
  */
 describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
+  it("keeps each terminal event bound to its originating run", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+    const pending: Array<() => void> = [];
+    const session: IAgentSession = {
+      sessionId: "overlap",
+      subscribe: () => () => {},
+      prompt: () => new Promise<void>((resolve) => pending.push(resolve)),
+      abort: async () => {},
+      dispose: () => {},
+      get isStreaming() { return pending.length > 0; },
+    };
+    const agent = new MasAgent({ sessionId: "overlap", name: "principal", role: "principal", session, bus });
+
+    const first = agent.prompt("first");
+    const second = agent.prompt("second");
+    const started = captured
+      .filter((event) => event.type === "RUN_STARTED")
+      .map((event) => (event as { run_id: string }).run_id);
+    expect(started).toHaveLength(2);
+
+    pending[0]!();
+    await first;
+    expect(agent.state().activeRunId).toBe(started[1]);
+    pending[1]!();
+    await second;
+
+    const finished = captured
+      .filter((event) => event.type === "RUN_FINISHED")
+      .map((event) => (event as { run_id: string }).run_id);
+    expect(finished).toEqual(started);
+    for (const event of captured.filter((item) => item.type.startsWith("RUN_"))) {
+      expect(() => parseEvent(event)).not.toThrow();
+    }
+  });
+
   it("maps a scripted run to valid AG-UI events", async () => {
     const bus = new EventBus({ persistPath: undefined });
     const captured: AgUiEvent[] = [];

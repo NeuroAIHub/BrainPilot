@@ -270,9 +270,40 @@ describe("tool access control (§9)", () => {
     expect((await tools.get("edit_trace_review")!.execute({ conclusion: "approve", reason: "The bound evidence supports this node." })).isError)
       .not.toBe(true);
     expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
+    const revision = d.trace.getGraphV2().revision;
+    const duplicate = await tools.get("edit_trace_review")!.execute({
+      conclusion: "reject",
+      reason: "A conflicting duplicate must not overwrite the accepted review.",
+    });
+    expect(duplicate.isError).not.toBe(true);
+    expect(duplicate.content[0]?.text).toContain("already submitted");
+    expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
+    expect(d.trace.getGraphV2().revision).toBe(revision);
     expect(tools.has("submit_audit_report")).toBe(false);
     expect(d.trace.getAuditReports()).toEqual([]);
     expect(tools.has("dispatch_task")).toBe(false);
+  });
+
+  it("atomically consumes a bound Auditor target across parallel calls", async () => {
+    const d = deps("auditor");
+    const node = d.trace.createNode({ title: "Parallel review" });
+    const target = d.trace.listPendingAuditTargets([node.id])[0]!;
+    d.currentTraceAuditTarget = () => target;
+    const tool = systemToolsForRole("expert", "auditor", d)
+      .find((item) => item.name === "edit_trace_review")!;
+
+    const [first, second] = await Promise.all([
+      tool.execute({ conclusion: "approve", reason: "The evidence is sufficient." }),
+      tool.execute({ conclusion: "reject", reason: "This call must be ignored." }),
+    ]);
+
+    expect(first.isError).not.toBe(true);
+    expect(second.isError).not.toBe(true);
+    expect(second.content[0]?.text).toContain("already submitted");
+    expect(d.trace.getNodeV2(node.id)).toMatchObject({
+      reviewConclusion: "approved",
+      reviewReason: "The evidence is sufficient.",
+    });
   });
 
   it("requires confidence and returns only a compact active graph to Trace", async () => {

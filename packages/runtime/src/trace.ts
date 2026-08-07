@@ -550,10 +550,14 @@ export class GraphOfTrace {
   ): boolean {
     const node = this.nodes.get(nodeId);
     if (!node || node.revoked || this.isSessionRoot(nodeId)) return false;
-    if (expectedFingerprint && this.auditFingerprint(nodeId, parentNodeId) !== expectedFingerprint) return false;
     if (!parentNodeId) {
+      if (expectedFingerprint && this.auditFingerprint(nodeId) !== expectedFingerprint) return false;
+      const next = conclusion === "approve" ? "approved" : conclusion === "reject" ? "rejected" : "uncertain";
+      if (node.reviewConclusion !== "unreviewed") {
+        return node.reviewConclusion === next && node.reviewReason === reason;
+      }
       const before = node.reviewConclusion;
-      node.reviewConclusion = conclusion === "approve" ? "approved" : conclusion === "reject" ? "rejected" : "uncertain";
+      node.reviewConclusion = next;
       node.reviewReason = reason;
       node.updatedAt = now();
       this.commit("updated", nodeId, {
@@ -570,8 +574,11 @@ export class GraphOfTrace {
     const ref = node.parents.find((item) => item.nodeId === parentNodeId);
     if (!parent || parent.revoked || !ref) return false;
     if (conclusion === "approve" && parent.reviewConclusion === "rejected") return false;
+    const next = conclusion === "approve" ? "confirmed" : conclusion === "reject" ? "rejected" : "uncertain";
+    if (ref.conclusion !== "candidate") return ref.conclusion === next && ref.reason === reason;
+    if (expectedFingerprint && this.auditFingerprint(nodeId, parentNodeId) !== expectedFingerprint) return false;
     const before = ref.conclusion;
-    ref.conclusion = conclusion === "approve" ? "confirmed" : conclusion === "reject" ? "rejected" : "uncertain";
+    ref.conclusion = next;
     ref.reason = reason;
     this.normalizeCausalGraph();
     node.updatedAt = now();
