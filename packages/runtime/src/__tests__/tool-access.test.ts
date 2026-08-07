@@ -115,6 +115,24 @@ describe("tool access control (§9)", () => {
     expect(systemToolNamesForRole("trace", "trace")).not.toContain("ask_user");
   });
 
+  it("limits Monitor tools to Principal, Engineer, and Experimentalist", () => {
+    const withMonitor = (name: string): ToolDeps => ({
+      ...deps(name),
+      startMonitor: () => ({ id: "mon_test" }),
+      listMonitors: () => [],
+      stopMonitor: async () => true,
+    });
+    for (const [role, name] of [["principal", "principal"], ["expert", "engineer"], ["expert", "experimentalist"]] as const) {
+      expect(systemToolsForRole(role, name, withMonitor(name)).map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["start_monitor", "list_monitors", "stop_monitor"]),
+      );
+    }
+    for (const name of ["librarian", "writer", "auditor", "statistician"]) {
+      expect(systemToolsForRole("expert", name, withMonitor(name)).map((tool) => tool.name)).not.toContain("start_monitor");
+    }
+    expect(systemToolsForRole("trace", "trace", withMonitor("trace")).map((tool) => tool.name)).not.toContain("start_monitor");
+  });
+
   it("trace agent gets ONLY graph tools", () => {
     const names = systemToolNamesForRole("trace", "trace");
     expect(names.sort()).toEqual(TRACE_V2_TOOLS);

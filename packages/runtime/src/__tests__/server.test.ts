@@ -40,6 +40,22 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect(body.memRatio).toBeNull();
   });
 
+  it("accepts only allowlisted backend-managed runtime capabilities", async () => {
+    const a = app();
+    const enabled = await a.request("/runtime/capabilities", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capabilities: ["builtin.monitor"] }),
+    });
+    expect(enabled.status).toBe(200);
+    expect(await enabled.json()).toEqual({ capabilities: ["builtin.monitor"] });
+    expect((await a.request("/runtime/capabilities", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capabilities: ["arbitrary.code"] }),
+    })).status).toBe(400);
+  });
+
   it("serves checkpoint diff/preview and restores through the trace API", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-checkpoint-api-"));
     try {

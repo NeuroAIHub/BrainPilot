@@ -68,6 +68,7 @@ import {
   importExternalPlugin,
   isFileContextBridgeEnabled,
   listEnabledPreviewers,
+  listEnabledRuntimeTools,
   listInstalledPlugins,
   listMarketplace,
   listMarketplaceSourceStatuses,
@@ -137,6 +138,19 @@ export function createApp(options: CreateAppOptions): Hono {
     return client;
   }
 
+  async function syncRuntimeCapabilities(client: RuntimeClient): Promise<void> {
+    const capabilities = await listEnabledRuntimeTools(dataDir);
+    const response = await client.forward("setRuntimeCapabilities", {
+      body: JSON.stringify({ capabilities }),
+      headers: { "content-type": "application/json" },
+    });
+    if (!response.ok) throw new Error(`runtime capability sync failed (${response.status})`);
+  }
+
+  async function syncKnownRuntimes(): Promise<void> {
+    await Promise.all([...clients.values()].map((client) => syncRuntimeCapabilities(client)));
+  }
+
   const app = new Hono();
   const api = new Hono();
 
@@ -203,7 +217,15 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---- Sessions (proxied to runtime) -----------------------------------
   api.get("/sessions", forward("listSessions"));
-  api.post("/sessions", forward("createSession", { withBody: true }));
+  api.post("/sessions", async (c) => {
+    const rc = await getClient(c);
+    await syncRuntimeCapabilities(rc);
+    const body = await c.req.text();
+    return relay(c, await rc.forward("createSession", {
+      body: body || undefined,
+      headers: { "content-type": c.req.header("content-type") ?? "application/json" },
+    }));
+  });
   api.get("/sessions/:id", forward("getSession", { idParam: "id" }));
   api.put("/sessions/:id", forward("updateSession", { idParam: "id", withBody: true }));
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
@@ -510,6 +532,7 @@ export function createApp(options: CreateAppOptions): Hono {
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be boolean" }, 400);
     try {
       const installed = await setPluginEnabled(dataDir, c.req.param("id"), body.enabled);
+      if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -518,6 +541,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.post("/plugins/:id/update", async (c) => {
     try {
       const installed = await updatePlugin(dataDir, c.req.param("id"));
+      if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
@@ -526,15 +550,17 @@ export function createApp(options: CreateAppOptions): Hono {
   api.post("/plugins/:id/rollback", async (c) => {
     try {
       const installed = await rollbackPlugin(dataDir, c.req.param("id"));
+      if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }
   });
   api.delete("/plugins/:id", async (c) => {
-    return await uninstallPlugin(dataDir, c.req.param("id"))
-      ? c.body(null, 204)
-      : c.json({ error: "plugin not installed" }, 404);
+    const removed = await uninstallPlugin(dataDir, c.req.param("id"));
+    if (!removed) return c.json({ error: "plugin not installed" }, 404);
+    await syncKnownRuntimes();
+    return c.body(null, 204);
   });
   api.get("/plugins/:id/:version/assets/*", async (c) => {
     const encodedAsset = c.req.path.split("/assets/")[1] ?? "";

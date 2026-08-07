@@ -18,6 +18,7 @@ import {
   CreateSessionRequestSchema,
   SendMessageRequestSchema,
   InterruptRequestSchema,
+  SetRuntimeCapabilitiesRequestSchema,
   TraceDependencyDecisionRequestSchema,
   TraceStateTokenRequestSchema,
   WriteFileRequestSchema,
@@ -36,6 +37,13 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
   app.get("/health", (c) => c.json({ status: "ok" }));
 
   app.get("/metrics", (c) => c.json(manager.metrics()));
+
+  app.put("/runtime/capabilities", async (c) => {
+    const parsed = SetRuntimeCapabilitiesRequestSchema.safeParse(await safeBody(c));
+    if (!parsed.success) return c.json({ error: "invalid capabilities" }, 400);
+    await manager.setRuntimeCapabilities(parsed.data.capabilities);
+    return c.json({ capabilities: parsed.data.capabilities });
+  });
 
   app.post("/sessions", async (c) => {
     const body = await safeBody(c);
