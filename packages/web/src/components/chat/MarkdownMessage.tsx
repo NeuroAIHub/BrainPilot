@@ -1,16 +1,18 @@
-import { memo } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, type MouseEvent } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import { normalizeMarkdownForRendering } from "./normalizeMarkdown";
+import { parseWorkspaceFileHref, type WorkspaceFileTarget } from "./workspaceFileLink";
 
 interface MarkdownMessageProps {
   content: string;
+  onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 }
 
-function MarkdownMessageImpl({ content }: MarkdownMessageProps) {
+function MarkdownMessageImpl({ content, onOpenWorkspaceFile }: MarkdownMessageProps) {
   const normalizedContent = normalizeMarkdownForRendering(content);
 
   return (
@@ -18,6 +20,27 @@ function MarkdownMessageImpl({ content }: MarkdownMessageProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
         rehypePlugins={[rehypeHighlight, rehypeKatex]}
+        urlTransform={(url) => parseWorkspaceFileHref(url) ? url : defaultUrlTransform(url)}
+        components={{
+          a: ({ href, children, node: _node, ...props }) => {
+            const target = href ? parseWorkspaceFileHref(href) : null;
+            const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+              if (!target) return;
+              event.preventDefault();
+              onOpenWorkspaceFile?.(target);
+            };
+            return (
+              <a
+                {...props}
+                href={href}
+                data-workspace-file={target ? target.path : undefined}
+                onClick={handleClick}
+              >
+                {children}
+              </a>
+            );
+          },
+        }}
       >
         {normalizedContent}
       </ReactMarkdown>

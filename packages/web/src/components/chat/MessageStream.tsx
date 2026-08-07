@@ -4,6 +4,7 @@ import type { ChatMessage } from "../../contracts/backend";
 import { buildRenderItems } from "../../contexts/messageGroups";
 import { useT } from "../../i18n/useT";
 import { MarkdownMessage } from "./MarkdownMessage";
+import type { WorkspaceFileTarget } from "./workspaceFileLink";
 import { SystemMessageBubble } from "./SystemMessageBubble";
 import { AskUserCard } from "./AskUserCard";
 import { AutoRetryIndicator } from "./AutoRetryIndicator";
@@ -59,6 +60,8 @@ interface MessageStreamProps {
    * so demo replay keeps its flat, curated presentation.
    */
   groupExpertActivity?: boolean;
+  /** Open a workspace path referenced by an assistant Markdown link. */
+  onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 }
 
 // Whether this message participates in same-agent avatar merging. User
@@ -93,6 +96,7 @@ function MessageStreamImpl({
   onRetryCancel,
   runningAgents,
   groupExpertActivity = false,
+  onOpenWorkspaceFile,
 }: MessageStreamProps) {
   const t = useT();
   // #329 — success or error feedback for Copy; never claim success on failure.
@@ -393,7 +397,7 @@ function MessageStreamImpl({
         {message.kind === "error" ? (
           <p className="message-card__content--plain message-row__error">{displayContent}</p>
         ) : (
-          <MarkdownMessage content={displayContent} />
+          <MarkdownMessage content={displayContent} onOpenWorkspaceFile={onOpenWorkspaceFile} />
         )}
         {message.streaming && message.kind !== "error" ? (
           <span className="message-row__streaming-cursor" aria-hidden="true" />
@@ -473,7 +477,10 @@ function MessageStreamImpl({
     return (
       <div className="activity-step" key={step.id}>
         {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
-        <MarkdownMessage content={step.content || (step.streaming ? t("chat.streamingPending") : "")} />
+        <MarkdownMessage
+          content={step.content || (step.streaming ? t("chat.streamingPending") : "")}
+          onOpenWorkspaceFile={onOpenWorkspaceFile}
+        />
       </div>
     );
   };
