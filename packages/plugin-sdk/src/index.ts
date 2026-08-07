@@ -11,17 +11,19 @@ export const PLUGIN_API_VERSION = "1" as const;
 export const AGENT_INSTRUCTIONS_PROTOCOL_VERSION = "1" as const;
 export const KNOWLEDGE_SERVICE_PROTOCOL_VERSION = "1" as const;
 export const LITERATURE_SERVICE_PROTOCOL_VERSION = "1" as const;
+export const RUNTIME_TOOLS_PROTOCOL_VERSION = "1" as const;
 
 export const SUPPORTED_PLUGIN_PROTOCOLS = {
   preview: PREVIEW_RPC_VERSION,
   agentInstructions: AGENT_INSTRUCTIONS_PROTOCOL_VERSION,
   knowledgeService: KNOWLEDGE_SERVICE_PROTOCOL_VERSION,
   literatureService: LITERATURE_SERVICE_PROTOCOL_VERSION,
+  runtimeTools: RUNTIME_TOOLS_PROTOCOL_VERSION,
 } as const;
 
 export type PluginCategory = "skills" | "knowledge" | "visualization" | "analysis" | "workflow" | "other";
 export type LegacyPluginKind = "skill-pack" | "knowledge-base" | "previewer" | "ui-panel" | "literature-provider" | "workflow";
-export type PluginPermission = "read:workspace" | "read:data" | "compute:worker" | "compute:container" | "network";
+export type PluginPermission = "read:workspace" | "read:data" | "compute:worker" | "compute:container" | "network" | "process:background";
 export type PluginEnvironment = "local" | "cloud" | "browser";
 
 export interface PluginDependency {
@@ -41,6 +43,12 @@ export interface AgentInstructionContribution extends EntryContribution {
   mode: "append";
   priority?: number;
 }
+export type RuntimeToolCapability = "builtin.monitor";
+export interface RuntimeToolContribution {
+  id: string;
+  capability: RuntimeToolCapability;
+  targets: string[];
+}
 
 export interface PluginContributions extends Record<string, unknown> {
   previewers?: PreviewerContribution[];
@@ -52,6 +60,7 @@ export interface PluginContributions extends Record<string, unknown> {
   computeProviders?: unknown[];
   workflows?: WorkflowContribution[];
   agentInstructions?: AgentInstructionContribution[];
+  runtimeTools?: RuntimeToolContribution[];
 }
 
 export interface PluginManifest {
@@ -91,7 +100,7 @@ export interface PluginCompatibility {
 export interface PluginArtifact { url: string; sha256: string; }
 
 export type PluginSourceFormat = "brainpilot" | "pi-package" | "codex" | "claude-code";
-export type PluginMarketCapability = "skills" | "mcp" | "hooks";
+export type PluginMarketCapability = "skills" | "mcp" | "hooks" | "runtime-tools";
 
 export interface MarketplaceRelease {
   version: string;
@@ -179,7 +188,8 @@ export interface LiteratureSearchResult { citation: ServiceCitation; abstract?: 
 const ID = /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/;
 const KINDS = new Set<LegacyPluginKind>(["skill-pack", "knowledge-base", "previewer", "ui-panel", "literature-provider", "workflow"]);
 const CATEGORIES = new Set<PluginCategory>(["skills", "knowledge", "visualization", "analysis", "workflow", "other"]);
-const PERMISSIONS = new Set<PluginPermission>(["read:workspace", "read:data", "compute:worker", "compute:container", "network"]);
+const PERMISSIONS = new Set<PluginPermission>(["read:workspace", "read:data", "compute:worker", "compute:container", "network", "process:background"]);
+const RUNTIME_TOOL_CAPABILITIES = new Set<RuntimeToolCapability>(["builtin.monitor"]);
 const ENVIRONMENTS = new Set<PluginEnvironment>(["local", "cloud", "browser"]);
 
 function object(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }
@@ -283,6 +293,19 @@ export function parsePluginManifest(value: unknown): PluginManifest | null {
       }
       if (!uniqueIds(instructions)) return null;
       contributes.agentInstructions = instructions;
+    }
+    if (value.contributes.runtimeTools !== undefined) {
+      if (!Array.isArray(value.contributes.runtimeTools)) return null;
+      const runtimeTools: RuntimeToolContribution[] = [];
+      for (const item of value.contributes.runtimeTools) {
+        if (!object(item) || typeof item.id !== "string" || !item.id.trim()) return null;
+        if (typeof item.capability !== "string" || !RUNTIME_TOOL_CAPABILITIES.has(item.capability as RuntimeToolCapability)) return null;
+        const targets = stringArray(item.targets);
+        if (!targets?.length || targets.some((target) => !target.trim())) return null;
+        runtimeTools.push({ id: item.id.trim(), capability: item.capability as RuntimeToolCapability, targets: [...new Set(targets)] });
+      }
+      if (!uniqueIds(runtimeTools)) return null;
+      contributes.runtimeTools = runtimeTools;
     }
   }
   const engines = object(value.engines) && typeof value.engines.brainpilot === "string" ? { brainpilot: value.engines.brainpilot } : undefined;

@@ -65,6 +65,9 @@ export interface ToolDeps {
   listSubagentProfiles?: () => Promise<Array<{ name: string; description: string; builtinTools: string[]; systemTools: string[]; mcp: boolean; modelId?: string; timeoutMs?: number }>>;
   /** Current host-owned record while the Trace Agent processes one trace event. */
   currentTraceRecord?: () => TraceNodeRecord | undefined;
+  startMonitor?: (input: { description: string; command: string; timeoutMs?: number; persistent?: boolean }) => unknown;
+  listMonitors?: () => unknown;
+  stopMonitor?: (monitorId: string) => Promise<boolean>;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -290,6 +293,72 @@ export function createDestroyAgentTool(deps: ToolDeps): SystemTool {
       const name = String(params.agent_type ?? "");
       await deps.destroyAgent(name);
       return ok(`agent ${name} destroyed`);
+    },
+  };
+}
+
+export function createStartMonitorTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "start_monitor",
+    description:
+      "Start a background shell command and receive its stdout as untrusted monitor events. " +
+      "Use selective, line-buffered output; silence costs no model turn. Persistent monitors run until explicitly stopped or the session ends.",
+    parameters: {
+      type: "object",
+      properties: {
+        description: { type: "string", minLength: 1, maxLength: 200 },
+        command: { type: "string", minLength: 1, maxLength: 16_000 },
+        timeout_ms: { type: "number", minimum: 1, maximum: 3_600_000 },
+        persistent: { type: "boolean" },
+      },
+      required: ["description", "command"],
+    },
+    execute: async (params) => {
+      if (!deps.startMonitor) return { ...ok("Monitor plugin is not enabled for this session"), isError: true };
+      const description = typeof params.description === "string" ? params.description.trim() : "";
+      const command = typeof params.command === "string" ? params.command.trim() : "";
+      if (!description || !command) return { ...ok("description and command are required"), isError: true };
+      try {
+        return ok(JSON.stringify(deps.startMonitor({
+          description,
+          command,
+          ...(typeof params.timeout_ms === "number" ? { timeoutMs: params.timeout_ms } : {}),
+          ...(typeof params.persistent === "boolean" ? { persistent: params.persistent } : {}),
+        }), null, 2));
+      } catch (error) {
+        return { ...ok((error as Error).message), isError: true };
+      }
+    },
+  };
+}
+
+export function createListMonitorsTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "list_monitors",
+    description: "List background monitors owned by this agent, including terminal status and bounded stderr diagnostics.",
+    parameters: { type: "object", properties: {} },
+    execute: async () => deps.listMonitors
+      ? ok(JSON.stringify({ monitors: deps.listMonitors() }, null, 2))
+      : { ...ok("Monitor plugin is not enabled for this session"), isError: true },
+  };
+}
+
+export function createStopMonitorTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "stop_monitor",
+    description: "Stop one running background monitor owned by this agent.",
+    parameters: {
+      type: "object",
+      properties: { monitor_id: { type: "string", minLength: 1 } },
+      required: ["monitor_id"],
+    },
+    execute: async (params) => {
+      if (!deps.stopMonitor) return { ...ok("Monitor plugin is not enabled for this session"), isError: true };
+      const monitorId = typeof params.monitor_id === "string" ? params.monitor_id.trim() : "";
+      if (!monitorId) return { ...ok("monitor_id is required"), isError: true };
+      return await deps.stopMonitor(monitorId)
+        ? ok(`monitor ${monitorId} stopped`)
+        : { ...ok(`monitor ${monitorId} is not running or is not owned by this agent`), isError: true };
     },
   };
 }
@@ -836,6 +905,9 @@ export function allSystemTools(
   if (deps.spawnSubagents) {
     tools.push(createSpawnSubagentTool(deps), createWaitSubagentTool(deps), createGetSubagentTool(deps), createCancelSubagentTool(deps), createListSubagentProfilesTool(deps));
   }
+  if (deps.startMonitor && deps.listMonitors && deps.stopMonitor) {
+    tools.push(createStartMonitorTool(deps), createListMonitorsTool(deps), createStopMonitorTool(deps));
+  }
   if (isToolEnabled(toggles, "skill_search")) {
     tools.push(createSkillSearchTool(deps));
   }
@@ -872,6 +944,9 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_trace_neighborhood",
     "get_trace_diff",
     "ask_user",
+    "start_monitor",
+    "list_monitors",
+    "stop_monitor",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
@@ -897,11 +972,11 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_domain_knowledge_local", "search_papers_local",
   ],
   engineer: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   experimentalist: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   // Auditor reviews scientific deliverables and has no GoT responsibilities.

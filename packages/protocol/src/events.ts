@@ -310,6 +310,8 @@ export const CUSTOM_EVENT = {
   DOMAIN_RESOURCE_USAGE: "domain_resource_usage",
   /** Lifecycle snapshot for one context-isolated child session. */
   SUBAGENT_STATE: "subagent_state",
+  /** Lifecycle update for one session-scoped background monitor. */
+  MONITOR_STATE: "monitor_state",
 } as const;
 
 export const TaskStatusSchema = z.enum(["pending", "completed", "cancelled"]);

@@ -16,6 +16,7 @@
     "packages/skills",
     "packages/plugin-auditor",
     "packages/plugin-got",
+    "packages/plugin-monitor",
     "packages/kb-scripts",
     "packages/docs"
   ],
@@ -39,7 +40,7 @@
     "version:check": "node scripts/sync-versions.js --check",
     "release:build": "npm run build",
     "release:dry": "npm publish --workspaces --if-present --dry-run --access public",
-    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/plugin-auditor --workspace @brainpilot/plugin-got --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
+    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/plugin-auditor --workspace @brainpilot/plugin-got --workspace @brainpilot/plugin-monitor --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",

@@ -13,6 +13,7 @@ import {
 
 export const AUDITOR_PLUGIN_ID = "org.brainpilot.auditor";
 export const GOT_PLUGIN_ID = "org.brainpilot.got";
+export const MONITOR_PLUGIN_ID = "org.brainpilot.monitor";
 export const SYSTEM_PLUGIN_DISABLE_ENV = "BP_EXPERIMENT_DISABLE_PLUGINS";
 
 export interface SystemPluginSnapshot {
@@ -20,7 +21,7 @@ export interface SystemPluginSnapshot {
   /** Installed version resolved for this session; informational, not pinned. */
   version: string;
   enabled: boolean;
-  reason: "default" | "experiment-override";
+  reason: "default" | "experiment-override" | "marketplace";
 }
 
 export interface BundledSystemPlugin {
@@ -38,6 +39,7 @@ interface SystemPluginSpec {
 const SPECS: readonly SystemPluginSpec[] = [
   { packageName: "@brainpilot/plugin-auditor", defaultEnabled: true },
   { packageName: "@brainpilot/plugin-got", defaultEnabled: true },
+  { packageName: "@brainpilot/plugin-monitor", defaultEnabled: false },
 ];
 
 function disabledPluginIds(value: string | undefined): Set<string> {

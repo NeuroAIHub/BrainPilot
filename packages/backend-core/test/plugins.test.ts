@@ -7,6 +7,7 @@ import type { MarketplaceEntry, MarketplaceRelease, PluginManifest } from "@brai
 import { createApp } from "../src/app.js";
 import {
   installPlugin,
+  listEnabledRuntimeTools,
   listInstalledPlugins,
   loadMarketplaceSources,
   rollbackPlugin,
@@ -331,5 +332,47 @@ describe("plugin marketplace control plane", () => {
       command: "node",
       args: ["${BRAINPILOT_PLUGIN_ROOT}/scripts/launch.mjs"],
     });
+  });
+
+  it("publishes the official Monitor capability only while its plugin is enabled", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-"));
+    const id = "org.brainpilot.monitor";
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+    expect((await installPlugin(dataDir, id))?.verified).toBe(true);
+    await setPluginEnabled(dataDir, id, true);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor"]);
+    await setPluginEnabled(dataDir, id, false);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+  });
+
+  it("syncs Monitor capability changes to already-known runtimes", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-sync-"));
+    const calls: Array<{ url: string; body?: string }> = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      calls.push({ url, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+      return url.endsWith("/sessions")
+        ? Response.json({ id: "s1" }, { status: 201 })
+        : Response.json({ ok: true });
+    };
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch });
+    await app.request("/api/sessions", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: "{}",
+    });
+    expect(calls.find((call) => call.url.endsWith("/runtime/capabilities"))?.body).toBe('{"capabilities":[]}');
+
+    const id = "org.brainpilot.monitor";
+    await app.request("/api/plugins/install", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ id }),
+    });
+    await app.request(`/api/plugins/${id}/enabled`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ enabled: true }),
+    });
+    expect(calls.at(-1)?.body).toBe('{"capabilities":["builtin.monitor"]}');
   });
 });

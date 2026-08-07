@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   AUDITOR_PLUGIN_ID,
   GOT_PLUGIN_ID,
+  MONITOR_PLUGIN_ID,
   loadBundledSystemPlugins,
   snapshotSystemPlugins,
   systemPluginEnabled,
@@ -15,6 +16,7 @@ describe("bundled system plugins", () => {
     const snapshot = snapshotSystemPlugins(plugins);
     expect(systemPluginEnabled(snapshot, AUDITOR_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, GOT_PLUGIN_ID)).toBe(true);
+    expect(systemPluginEnabled(snapshot, MONITOR_PLUGIN_ID)).toBe(false);
     expect(systemPluginSkillPaths(plugins, snapshot, "principal")[0]).toMatch(/plugin-auditor.*audit-feedback-loop/);
     expect(systemPluginSkillPaths(plugins, snapshot, "engineer")).toEqual([]);
     expect(systemPluginSkillPaths(plugins, snapshot, "trace")[0])
