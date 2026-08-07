@@ -1,0 +1,26 @@
+{
+  "id": "org.brainpilot.autoresearch",
+  "version": "0.1.2",
+  "apiVersion": "1",
+  "displayName": "BrainPilot Autoresearch",
+  "description": "Engineer-owned autonomous optimization loops with measured acceptance and checkpoint rollback.",
+  "categories": ["analysis", "workflow", "skills"],
+  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
+  "protocols": { "runtimeExtensions": "1" },
+  "environments": ["local", "cloud"],
+  "permissions": ["read:workspace", "write:workspace", "execute:process", "workspace:checkpoint"],
+  "contributes": {
+    "skills": [
+      { "id": "autoresearch-create", "title": "Start Autoresearch", "description": "Create a bounded optimization contract and run a measured loop.", "entry": "skills/autoresearch-create/SKILL.md", "targets": ["engineer", "autoresearch-worker"] },
+      { "id": "autoresearch-finalize", "title": "Finalize Autoresearch", "description": "Verify and report the best measured candidate.", "entry": "skills/autoresearch-finalize/SKILL.md", "targets": ["engineer", "autoresearch-worker"] },
+      { "id": "autoresearch-hooks", "title": "Autoresearch Hooks", "description": "Use lifecycle commands around an optimization benchmark.", "entry": "skills/autoresearch-hooks/SKILL.md", "targets": ["engineer", "autoresearch-worker"] },
+      { "id": "use-autoresearch", "title": "Use Autoresearch", "description": "Explain when Autoresearch fits and guide the complete measured optimization workflow.", "entry": "skills/use-autoresearch/SKILL.md", "targets": ["engineer", "autoresearch-worker"] }
+    ],
+    "runtimeExtensions": [{
+      "id": "autoresearch-runtime",
+      "title": "Autoresearch Runtime",
+      "entry": "runtime/index.mjs",
+      "targets": ["engineer", "autoresearch-worker"]
+    }]
+  }
+}

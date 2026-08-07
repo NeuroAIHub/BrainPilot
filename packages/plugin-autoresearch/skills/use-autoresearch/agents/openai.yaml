@@ -1,0 +1,4 @@
+interface:
+  display_name: "Use Autoresearch"
+  short_description: "Choose and run measured optimization loops"
+  default_prompt: "Use $use-autoresearch to decide whether this task fits an autoresearch loop and explain the workflow."

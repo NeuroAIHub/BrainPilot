@@ -1,0 +1,21 @@
+{
+  "name": "@brainpilot/plugin-autoresearch",
+  "version": "0.1.2",
+  "engines": { "node": ">=22" },
+  "license": "MIT",
+  "type": "module",
+  "description": "Autonomous measured optimization loops for BrainPilot engineers",
+  "scripts": { "test": "vitest run" },
+  "files": ["manifest.json", "runtime/index.mjs", "skills", "LICENSE.upstream"],
+  "exports": {
+    "./package.json": "./package.json",
+    "./manifest.json": "./manifest.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/plugin-autoresearch"
+  },
+  "devDependencies": { "vitest": "^3.0.0" },
+  "publishConfig": { "access": "public" }
+}
