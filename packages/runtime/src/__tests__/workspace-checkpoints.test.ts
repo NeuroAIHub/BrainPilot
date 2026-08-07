@@ -46,6 +46,49 @@ describe("WorkspaceCheckpointStore", () => {
     expect(detail?.skipped.some((item) => item.path === "ignored.txt" && item.reason === "ignored")).toBe(true);
   });
 
+  it("excludes generated environments and bounds provenance expansion", async () => {
+    const { workspace, store } = await fixture();
+    await mkdir(join(workspace, ".venv", "lib", "python", "site-packages"), { recursive: true });
+    await writeFile(join(workspace, ".venv", "pyvenv.cfg"), "home = /usr/bin\n", "utf8");
+    for (let i = 0; i < 20; i++) {
+      await writeFile(
+        join(workspace, ".venv", "lib", "python", "site-packages", `dependency_${i}.py`),
+        `VALUE = ${i}\n`,
+        "utf8",
+      );
+    }
+    for (let i = 0; i < 5; i++) {
+      await writeFile(join(workspace, `result_${i}.txt`), `${i}\n`, "utf8");
+    }
+
+    const checkpoint = await store.capture("engineer");
+    expect(checkpoint.stats?.files).toBe(5);
+    const detail = await store.detail(checkpoint.id);
+    expect(detail?.files.every((item) => !item.path.startsWith(".venv/"))).toBe(true);
+    expect(detail?.skipped.filter((item) => item.path.startsWith(".venv/"))).toEqual([
+      expect.objectContaining({ path: ".venv/", reason: "internal" }),
+    ]);
+
+    const bounded = await store.provenance(checkpoint.id, 2);
+    expect(bounded).toHaveLength(2);
+    expect(bounded?.every((item) => item.path.startsWith("result_"))).toBe(true);
+  });
+
+  it("uses an initial baseline so pre-existing inputs are not trace outputs", async () => {
+    const { workspace, store } = await fixture();
+    await writeFile(join(workspace, "input.csv"), "subject,value\n1,2\n", "utf8");
+    const baseline = await store.ensureBaseline();
+    expect(baseline?.stats).toMatchObject({ files: 1, added: 1 });
+    expect(await store.ensureBaseline()).toBeUndefined();
+
+    await writeFile(join(workspace, "result.csv"), "score\n0.8\n", "utf8");
+    const trace = await store.capture("engineer");
+    expect(trace.stats).toMatchObject({ files: 1, added: 1 });
+    expect((await store.detail(trace.id))?.files.map((item) => item.path)).toEqual([
+      "result.csv",
+    ]);
+  });
+
   it("restores managed files and makes the restored tree the next checkpoint baseline", async () => {
     const { workspace, state, store } = await fixture();
     await writeFile(join(workspace, ".gitignore"), "keep.local\n", "utf8");
