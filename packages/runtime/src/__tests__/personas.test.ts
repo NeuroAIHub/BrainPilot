@@ -208,6 +208,26 @@ Stale local routing rule.`;
     expect(migrated).toContain("enabled review mechanism");
   });
 
+  it("requires Engineer to inspect the environment and use working accelerators", () => {
+    const engineer = PERSONAS.engineer!;
+    expect(engineer).toContain("Environment and accelerator preflight");
+    expect(engineer).toContain("CPU and available memory");
+    expect(engineer).toContain("available VRAM");
+    expect(engineer).toContain("prefer GPU or another suitable accelerator");
+    expect(engineer).toContain("verify it with a small representative");
+    expect(engineer).toContain("smoke test before a long run");
+    expect(engineer).toContain("safe CPU fallback");
+    expect(engineer).toContain("normal user-authorization gate");
+  });
+
+  it("injects the Engineer environment preflight into old overrides exactly once", () => {
+    const legacy = "# Custom Engineer\n\nLocal instructions.";
+    const once = withCoreCoordinationProtocols(legacy, "engineer", "expert");
+    const twice = withCoreCoordinationProtocols(once, "engineer", "expert");
+    expect(twice.match(/^## Environment and accelerator preflight$/gm)).toHaveLength(1);
+    expect(twice).toContain("prefer GPU or another suitable accelerator");
+  });
+
   it("authoring experts mention their write/run capability", () => {
     expect(PERSONAS.engineer!).toContain("bash");
     expect(PERSONAS.writer!).toContain("write");
