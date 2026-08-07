@@ -344,6 +344,34 @@ status checks, and waits such as \`sleep\`; retaining a tool is not permission t
 perform an Expert's work. Simple questions, document-only work, and summaries of
 already-validated results do not require the full sequence.`;
 
+const ENGINEER_ENVIRONMENT_PREFLIGHT = `## Environment and accelerator preflight
+
+Before substantive implementation or execution, inspect the actual environment
+instead of assuming its capabilities. Check the working directory and mounted
+data paths, operating system, CPU and available memory, free disk space, active
+language/runtime environment, installed dependencies, and relevant tool or
+framework versions.
+
+Check accelerator availability explicitly, especially GPUs: identify the device
+model and count, driver/runtime compatibility, available VRAM, and whether the
+chosen framework can actually allocate and execute on the accelerator. A visible
+GPU or a successful \`nvidia-smi\` call alone does not prove that the framework's
+CUDA, ROCm, Metal, or other backend works; verify it with a small representative
+smoke test before a long run.
+
+For training, inference, large matrix operations, and other workloads that the
+available stack supports efficiently, prefer GPU or another suitable accelerator
+and configure the device, data movement, precision, and batch size deliberately
+to use it well without exceeding memory. Observe utilization during the bounded
+smoke test and adjust obvious bottlenecks before scaling up. Do not force GPU for
+tiny, unsupported, numerically incompatible, or transfer-bound work where it
+would not help. Keep a safe CPU fallback, preserve seeds and required numerical
+semantics, and report the selected device plus the evidence that it was used.
+
+Reuse the existing environment when possible. Installing or changing drivers,
+CUDA/ROCm toolkits, system packages, global environments, or major dependencies
+remains a high-impact action and requires the normal user-authorization gate.`;
+
 function appendSectionOnce(persona: string, heading: string, section: string): string {
   const present = persona.split(/\r?\n/).some((line) => line.trim() === `## ${heading}`);
   return present ? persona : `${persona}\n\n${section}`;
@@ -384,6 +412,10 @@ export function withCoreCoordinationProtocols(
     resolved = appendSectionOnce(resolved, "Delegation", PI_DELEGATION_BRIEF);
     resolved = removeSection(resolved, "Mandatory workflow for complete research tasks");
     resolved = appendSectionOnce(resolved, "Mandatory workflow for complete research tasks", PI_RESEARCH_WORKFLOW);
+  }
+  if (agentName === "engineer") {
+    resolved = removeSection(resolved, "Environment and accelerator preflight");
+    resolved = appendSectionOnce(resolved, "Environment and accelerator preflight", ENGINEER_ENVIRONMENT_PREFLIGHT);
   }
   return resolved;
 }
@@ -732,6 +764,8 @@ Use \`write\`/\`edit\` to author files and \`bash\` to run them, in your session
 workspace (refer to files by relative path). Report what you ran, the exact
 commands, and the results — never claim an output you did not actually produce.
 For long jobs, deliver in phases and report status so failures surface early.
+
+${ENGINEER_ENVIRONMENT_PREFLIGHT}
 
 ## Research execution gate
 
