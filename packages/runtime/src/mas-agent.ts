@@ -458,17 +458,20 @@ export class MasAgent {
   }
 
   private async runPrompt(text: string): Promise<void> {
-    this.currentRunId = newRunId();
-    this.runStartedAt = Date.now();
+    const runId = newRunId();
+    const runStartedAt = Date.now();
+    const runStartSnapshot = cloneAgentStats(this.cumulativeStats);
+    this.currentRunId = runId;
+    this.runStartedAt = runStartedAt;
     this.abortRequested = false;
     this._lastRunOutcome = undefined;
     this.currentRetry = undefined;
     this.pendingProviderError = undefined;
     // Snapshot cumulative stats BEFORE any events flow so the eventual delta
     // (`cumulative_after - snapshot`) captures exactly this run's contribution.
-    this.runStartSnapshot = cloneAgentStats(this.cumulativeStats);
+    this.runStartSnapshot = runStartSnapshot;
     this.setStatus("running");
-    this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }));
+    this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId }));
     let runOutcome: RunStatsStatus = "ok";
     try {
       await this.session.prompt(text);
@@ -482,7 +485,7 @@ export class MasAgent {
         this.pendingProviderError = undefined;
         runOutcome = "aborted";
         this.bus.emit(
-          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
       } else if (this.pendingProviderError) {
         const raw = this.pendingProviderError;
@@ -490,13 +493,13 @@ export class MasAgent {
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
         this.bus.emit(
-          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId }, message),
         );
         this.setStatus("error");
         runOutcome = "error";
       } else {
         this.bus.emit(
-          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
       }
       // A run that reached here without an exhausted provider error completed
@@ -514,7 +517,7 @@ export class MasAgent {
         // Some session implementations reject prompt() on abort rather than
         // resolving it. Normalize both forms to the same non-error lifecycle.
         this.bus.emit(
-          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
         this._lastErrorKind = undefined;
         this.setStatus("idle");
@@ -527,7 +530,7 @@ export class MasAgent {
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
         this.bus.emit(
-          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId }, message),
         );
         this.setStatus("error");
         runOutcome = "error";
@@ -538,30 +541,36 @@ export class MasAgent {
       // consumers see a stable `runId`. Aborted-mid-run is caught by
       // `abort()`'s own cleanup path (see abort()); if we reach here with a
       // clean or error path, either way we have a well-formed snapshot.
-      this.emitRunStats(runOutcome);
-      // Pi drains accepted follow-ups before the run terminates. Anything left
-      // here was cancelled or never injected and must not leak into a later run.
-      this.pendingFollowUps = [];
-      this.currentRunId = undefined;
-      this.currentMessageId = undefined;
-      this.runStartSnapshot = undefined;
-      this.runStartedAt = undefined;
+      this.emitRunStats(runOutcome, runId, runStartedAt, runStartSnapshot);
+      if (this.currentRunId === runId) {
+        // Pi drains accepted follow-ups before the run terminates. Anything left
+        // here was cancelled or never injected and must not leak into a later run.
+        this.pendingFollowUps = [];
+        this.currentRunId = undefined;
+        this.currentMessageId = undefined;
+        this.runStartSnapshot = undefined;
+        this.runStartedAt = undefined;
+      }
     }
   }
 
   /**
    * Fire the `onRunStats` callback with the run's delta. Called from
-   * `runPrompt`'s finally block for ok/error/aborted paths. Idempotent: if no
-   * snapshot exists (e.g. abort called with no run in flight), this is a no-op.
+   * `runPrompt`'s finally block for ok/error/aborted paths. Run identity and
+   * baseline are captured locally so overlapping cleanup cannot corrupt them.
    */
-  private emitRunStats(status: RunStatsStatus): void {
-    if (!this.runStartSnapshot || !this.currentRunId || this.runStartedAt === undefined) return;
+  private emitRunStats(
+    status: RunStatsStatus,
+    runId: string,
+    startedAt: number,
+    startSnapshot: AgentStats,
+  ): void {
     const cumulative = cloneAgentStats(this.cumulativeStats);
-    const delta = subtractAgentStats(this.cumulativeStats, this.runStartSnapshot);
+    const delta = subtractAgentStats(this.cumulativeStats, startSnapshot);
     this.opts.onRunStats?.({
       name: this.name,
-      runId: this.currentRunId,
-      startedAt: this.runStartedAt,
+      runId,
+      startedAt,
       finishedAt: Date.now(),
       status,
       delta,

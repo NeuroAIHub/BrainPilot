@@ -34,6 +34,35 @@ function v1Graph(): TraceGraph {
 }
 
 describe("TraceGraphV2 storage and audit semantics", () => {
+  it("records a final review once and rejects conflicting overwrites", () => {
+    const graph = new GraphOfTrace("s");
+    const parent = graph.createNode({ title: "Evidence" });
+    const child = graph.createNode({ title: "Conclusion" });
+    const actor = { type: "agent" as const, name: "auditor" };
+
+    expect(graph.review(child.id, "approve", "Supported.", actor)).toBe(true);
+    const nodeRevision = graph.getGraphV2().revision;
+    expect(graph.review(child.id, "approve", "Supported.", actor)).toBe(true);
+    expect(graph.getGraphV2().revision).toBe(nodeRevision);
+    expect(graph.review(child.id, "reject", "Conflicting.", actor)).toBe(false);
+    expect(graph.getNodeV2(child.id)).toMatchObject({
+      reviewConclusion: "approved",
+      reviewReason: "Supported.",
+    });
+
+    expect(graph.proposeCausalParent(child.id, parent.id, "Direct support.", { type: "agent", name: "trace" })).toBe(true);
+    expect(graph.review(child.id, "approve", "Direct support.", actor, parent.id)).toBe(true);
+    const edgeRevision = graph.getGraphV2().revision;
+    expect(graph.review(child.id, "approve", "Direct support.", actor, parent.id)).toBe(true);
+    expect(graph.getGraphV2().revision).toBe(edgeRevision);
+    expect(graph.review(child.id, "reject", "Conflicting.", actor, parent.id)).toBe(false);
+    expect(graph.getNodeV2(child.id)?.parents).toContainEqual(expect.objectContaining({
+      nodeId: parent.id,
+      conclusion: "confirmed",
+      reason: "Direct support.",
+    }));
+  });
+
   it("creates one protected Session Start root as the confirmed fallback", () => {
     const graph = new GraphOfTrace("s");
     const rootId = graph.getGraphV2().meta.rootNodeId!;

@@ -815,6 +815,7 @@ export function createSearchTraceTool(deps: ToolDeps): SystemTool {
 
 /** Auditor-only mutation surface: append one bounded node/parent conclusion. */
 export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
+  const consumedTargets = new WeakSet<TraceAuditTarget>();
   return {
     name: "edit_trace_review",
     description: "Review one Trace node or one proposed causal parent. Only conclusion and reason may be changed.",
@@ -835,6 +836,10 @@ export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
       if (!reason) return { ...ok("a non-empty review reason is required"), isError: true };
       const target = deps.currentTraceAuditTarget?.();
       if (!target) return { ...ok("no host-bound trace audit target for this turn"), isError: true };
+      // Claim synchronously before mutation so sequential and parallel duplicate
+      // calls in the same Auditor turn cannot review the target twice.
+      if (consumedTargets.has(target)) return ok("trace review already submitted; end this turn");
+      consumedTargets.add(target);
       const success = deps.trace.review(
         target.nodeId,
         conclusion,
