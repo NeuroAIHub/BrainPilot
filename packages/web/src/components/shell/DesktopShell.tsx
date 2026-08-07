@@ -1,4 +1,4 @@
-import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
 import { Bot, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
@@ -19,6 +19,7 @@ import { Sidebar } from "../sidebar/Sidebar";
 import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
 import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
+import type { WorkspaceFileTarget } from "../chat/workspaceFileLink";
 
 const PluginMarketplace = lazy(() => import("../plugins/PluginMarketplace").then((module) => ({ default: module.PluginMarketplace })));
 
@@ -50,12 +51,24 @@ export function DesktopShell() {
     setIsSettingsOpen(true);
   };
   const [isFilesOpen, setIsFilesOpen] = useState(false);
+  const [hasUnsavedFileChanges, setHasUnsavedFileChanges] = useState(false);
+  const [openFileRequest, setOpenFileRequest] = useState<(WorkspaceFileTarget & { requestId: number }) | null>(null);
   const [fileSidebarWidth, setFileSidebarWidth] = useState(420);
   const [isFileSidebarResizing, setIsFileSidebarResizing] = useState(false);
   const [sandboxOverlayDismissed, setSandboxOverlayDismissed] = useState(false);
   const [isWarningOpen, setIsWarningOpen] = useState(false);
   const hasWarnedRef = useRef(false);
+  const openFileRequestIdRef = useRef(0);
   const sidebarResizeRef = useRef<{ pointerX: number; width: number } | null>(null);
+  const confirmFileNavigation = useCallback(
+    () => !hasUnsavedFileChanges || window.confirm(t("files.editor.confirmDiscard")),
+    [hasUnsavedFileChanges, t],
+  );
+  const openWorkspaceFile = useCallback((target: WorkspaceFileTarget) => {
+    setIsFilesOpen(true);
+    openFileRequestIdRef.current += 1;
+    setOpenFileRequest({ ...target, requestId: openFileRequestIdRef.current });
+  }, []);
 
   useEffect(() => {
     if (operation === "creating" || operation === "rebuilding") {
@@ -168,6 +181,7 @@ export function DesktopShell() {
           setIsSidebarResizing(true);
         }}
         onToggle={() => setUserCollapsed(!isSidebarCollapsed)}
+        confirmNavigation={confirmFileNavigation}
       />
 
       {activePage === "demo" ? (
@@ -233,7 +247,10 @@ export function DesktopShell() {
               aria-pressed={isFilesOpen}
               className={isFilesOpen ? "is-active" : ""}
               label={isFilesOpen ? t("shell.files.close") : t("shell.files.open")}
-              onClick={() => setIsFilesOpen((current) => !current)}
+              onClick={() => {
+                if (isFilesOpen && !confirmFileNavigation()) return;
+                setIsFilesOpen((current) => !current);
+              }}
             >
               <FolderOpen size={16} />
             </IconButton>
@@ -241,7 +258,10 @@ export function DesktopShell() {
         </header>
 
         {currentView === "chat" ? (
-          <PromptComposer onOpenProviderSettings={() => openSettings("providers")} />
+          <PromptComposer
+            onOpenProviderSettings={() => openSettings("providers")}
+            onOpenWorkspaceFile={openWorkspaceFile}
+          />
         ) : null}
         {currentView === "agents" ? <AgentsPanel /> : null}
         {currentView === "trace" ? <TracePanel /> : null}
@@ -251,7 +271,12 @@ export function DesktopShell() {
           // while preserving the shell-owned open preference and width.
           key={fileSidebarScopeKey(currentSession?.id)}
           isOpen={isFilesOpen}
-          onClose={() => setIsFilesOpen(false)}
+          openFileRequest={openFileRequest}
+          onClose={() => {
+            if (!confirmFileNavigation()) return;
+            setIsFilesOpen(false);
+          }}
+          onDirtyChange={setHasUnsavedFileChanges}
           onResize={setFileSidebarWidth}
           onResizeEnd={() => setIsFileSidebarResizing(false)}
           onResizeStart={() => setIsFileSidebarResizing(true)}
@@ -260,7 +285,11 @@ export function DesktopShell() {
       </main>
       )}
 
-      <SearchDialog isOpen={isSearchOpen} onClose={() => setIsSearchOpen(false)} />
+      <SearchDialog
+        isOpen={isSearchOpen}
+        onClose={() => setIsSearchOpen(false)}
+        confirmNavigation={confirmFileNavigation}
+      />
       <SettingsDialog
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}

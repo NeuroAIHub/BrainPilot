@@ -24,9 +24,10 @@ type SidebarProps = {
   onOpenSearch: () => void;
   onResizeStart: (pointerX: number) => void;
   onToggle: () => void;
+  confirmNavigation?: () => boolean;
 };
 
-export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, onOpenPlugins, onOpenSettings, onOpenSearch, onResizeStart, onToggle }: SidebarProps) {
+export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, onOpenPlugins, onOpenSettings, onOpenSearch, onResizeStart, onToggle, confirmNavigation }: SidebarProps) {
   const {
     sessions,
     currentSession,
@@ -44,13 +45,25 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
   const sessionsPopoverRef = useRef<HTMLDivElement | null>(null);
 
   const newConversation = () => {
+    if (confirmNavigation && !confirmNavigation()) return;
     onGoWorkspace();
     startDraftSession();
   };
 
   const selectAndGo = (sessionId: string) => {
+    if (sessionId !== currentSession?.id && confirmNavigation && !confirmNavigation()) return;
     onGoWorkspace();
     selectSession(sessionId);
+  };
+
+  const deleteAndGuard = (sessionId: string) => {
+    if (sessionId === currentSession?.id && confirmNavigation && !confirmNavigation()) return;
+    return deleteSession(sessionId);
+  };
+
+  const navigateWithGuard = (navigate: () => void) => {
+    if (confirmNavigation && !confirmNavigation()) return;
+    navigate();
   };
 
   // Collapsing the rail (manually or at narrow widths) closes a stale popover.
@@ -137,7 +150,7 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
                   isLoading={isLoading}
                   onSelect={(id) => { selectAndGo(id); setIsSessionsPopoverOpen(false); }}
                   onRename={updateSessionTitle}
-                  onDelete={deleteSession}
+                  onDelete={deleteAndGuard}
                   onOpenSearch={() => { onOpenSearch(); setIsSessionsPopoverOpen(false); }}
                 />
               </div>
@@ -146,7 +159,7 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
         ) : null}
         <button
           className={`nav-item ${activePage === "demo" ? "is-active" : ""}`}
-          onClick={onOpenDemo}
+          onClick={() => navigateWithGuard(onOpenDemo)}
           title={t("sidebar.demo")}
           type="button"
         >
@@ -155,7 +168,7 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
         </button>
         <button
           className={`nav-item ${activePage === "plugins" ? "is-active" : ""}`}
-          onClick={onOpenPlugins}
+          onClick={() => navigateWithGuard(onOpenPlugins)}
           title={t("sidebar.plugins")}
           type="button"
         >
@@ -180,7 +193,7 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
           isLoading={isLoading}
           onSelect={selectAndGo}
           onRename={updateSessionTitle}
-          onDelete={deleteSession}
+          onDelete={deleteAndGuard}
           onOpenSearch={onOpenSearch}
         />
       </section>

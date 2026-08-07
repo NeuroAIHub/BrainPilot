@@ -5028,7 +5028,9 @@ button {
   display: none;
 }
 
-.file-preview__download {
+.file-preview__download,
+.file-preview__mode,
+.file-preview__save {
   display: inline-flex;
   height: 28px;
   align-items: center;
@@ -5039,6 +5041,17 @@ button {
   color: var(--color-text-muted);
   padding: 0 8px;
   font-size: 12px;
+}
+
+.file-preview__mode.is-active {
+  border-color: color-mix(in srgb, var(--color-accent) 55%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 10%, var(--color-surface));
+  color: var(--color-text);
+}
+
+.file-preview__save {
+  border-color: color-mix(in srgb, var(--color-accent) 42%, var(--color-border));
+  color: var(--color-accent);
 }
 
 .file-preview__actions {
@@ -5053,16 +5066,85 @@ button {
 }
 
 .file-preview__download:hover,
-.file-preview__download:focus-visible {
+.file-preview__download:focus-visible,
+.file-preview__mode:hover,
+.file-preview__mode:focus-visible,
+.file-preview__save:hover,
+.file-preview__save:focus-visible {
   border-color: var(--color-border-strong);
   background: var(--color-hover);
   color: var(--color-text);
   outline: none;
 }
 
-.file-preview__download:disabled {
+.file-preview__download:disabled,
+.file-preview__save:disabled {
   color: var(--color-text-subtle);
   opacity: 0.55;
+}
+
+.file-preview__body {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.file-editor__textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 0;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: var(--color-surface-soft);
+  color: var(--color-text);
+  padding: 18px 20px 28px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  line-height: 1.6;
+  tab-size: 2;
+}
+
+.file-editor__error,
+.file-editor__conflict {
+  margin: 10px 12px 0;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-danger);
+  padding: 9px 10px;
+  font-size: 12px;
+}
+
+.file-editor__conflict p {
+  margin: 0 0 8px;
+}
+
+.file-editor__conflict > div {
+  display: flex;
+  gap: 6px;
+}
+
+.file-editor__conflict button {
+  border: 1px solid currentColor;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: inherit;
+  padding: 5px 8px;
+  font-size: 11px;
+}
+
+.file-preview__body > .file-preview__markdown,
+.file-preview__body > .file-preview__content,
+.file-preview__body > .file-preview__media {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.file-preview__body > .file-editor__textarea {
+  flex: 1 1 auto;
 }
 
 .file-preview__meta {
