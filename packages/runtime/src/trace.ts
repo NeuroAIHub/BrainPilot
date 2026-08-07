@@ -472,17 +472,16 @@ export class GraphOfTrace {
     const existing = child.parents.find((item) => item.nodeId === parentNodeId);
     const before = existing ? clone(existing) : undefined;
     if (existing?.conclusion === "confirmed" && existing.reason === reason && existing.origin !== "host_fallback") return true;
-    if (existing?.conclusion === "candidate" && existing.reason === reason && existing.origin === "trace") return true;
     this.applyCausalParentCandidateInternal(child, parentNodeId, reason);
     this.normalizeCausalGraph();
-    this.syncCompatibilityDependency(parentNodeId, childNodeId, "candidate", reason);
+    this.syncCompatibilityDependency(parentNodeId, childNodeId, "confirmed", reason);
     child.updatedAt = now();
     this.commit("updated", childNodeId, {
       actor,
-      action: "parent_proposed",
+      action: "parent_confirmed",
       target: { nodeId: childNodeId, parentNodeId },
       before,
-      after: { conclusion: "candidate" },
+      after: { conclusion: "confirmed" },
       reason,
     });
     return true;
@@ -527,14 +526,14 @@ export class GraphOfTrace {
     const normalizedReason = reason.trim();
     const existing = child.parents.find((item) => item.nodeId === parentNodeId);
     if (existing) {
-      existing.conclusion = "candidate";
+      existing.conclusion = "confirmed";
       existing.reason = normalizedReason;
       existing.origin = "trace";
       return;
     }
     child.parents.push({
       nodeId: parentNodeId,
-      conclusion: "candidate",
+      conclusion: "confirmed",
       origin: "trace",
       reason: normalizedReason,
     });
@@ -752,7 +751,7 @@ export class GraphOfTrace {
     return clone(dependency);
   }
 
-  /** Compatibility wrapper for V1 callers. `depends_on` now stays proposed. */
+  /** Compatibility wrapper for V1 callers. Structurally valid Trace edges are active. */
   addRelation(fromId: string, toId: string, explanation: string, relation = "depends_on"): boolean {
     if (!this.nodes.has(fromId) || !this.nodes.has(toId)) return false;
     if (relation === "depends_on") {
@@ -1442,6 +1441,7 @@ export class GraphOfTrace {
     if (existing) {
       existing.evidence = this.mergeEvidence(existing.evidence, evidence);
       if (input.reason) existing.reason = input.reason;
+      if (origin === "trace") existing.state = "active";
       this.applyConfidencePolicy(existing, origin, evidence);
       this.syncParentFromDependency(existing);
       existing.updatedAt = now();
@@ -1454,7 +1454,7 @@ export class GraphOfTrace {
       dependentId,
       origin,
       confidence: "low",
-      state: "proposed",
+      state: origin === "trace" ? "active" : "proposed",
       ...(input.reason ? { reason: input.reason } : {}),
       evidence,
       createdAt: stamp,
@@ -1470,6 +1470,7 @@ export class GraphOfTrace {
     const node = this.nodes.get(dependency.dependentId);
     if (!node) return;
     const conclusion: TraceCausalParent["conclusion"] = dependency.state === "active" && (
+      dependency.origin === "trace" ||
       dependency.origin === "user" ||
       dependency.origin === "explicit" ||
       (dependency.origin === "host" && isDeterministicHostEvidence(dependency.evidence)) ||
@@ -1501,8 +1502,8 @@ export class GraphOfTrace {
     incomingOrigin: TraceDependencyOrigin,
     incomingEvidence: TraceDependencyEvidence[],
   ): void {
-    // Trace inference stays proposed/low forever. Repeating the same LLM view
-    // is not independent corroboration.
+    // A Trace relation is active for provenance and rollback, but its low
+    // confidence still signals that it is not independent scientific review.
     if (incomingOrigin === "trace") return;
     if (incomingOrigin === "user" || incomingOrigin === "explicit" || (incomingOrigin === "host" && isDeterministicHostEvidence(incomingEvidence))) {
       dependency.confidence = "high";

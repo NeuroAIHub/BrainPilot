@@ -2,12 +2,17 @@
 
 Review the exact target PI supplied: PI reasoning/draft, one Expert result, or a synthesis. Raw Expert output is a valid intermediate target. Do not rewrite it into the final user answer.
 
-## Review dimensions
+## Required review dimensions
 
 1. **Evidence backing:** verify numeric claims, artifact/file claims, and external citations against concrete workspace evidence.
-2. **Scientific reliability:** inspect evidence-visible validity risks such as data or label leakage, invalid metrics, test-set reuse, group or temporal leakage, baseline/chance confusion, circular analysis, uncorrected multiplicity, pseudoreplication, and result–claim mismatch.
+2. **Data semantics and alignment:** inspect source tensor axes and every `transpose`, `reshape`, `ravel`, `flatten`, `stack`, and concatenation that can change sample identity. Require evidence that each feature row still matches its label, subject, condition, session, and bin; shape equality alone is insufficient.
+3. **Split and preprocessing integrity:** verify subject/session/group separation and that scaling, imputation, feature selection, PCA, resampling, threshold selection, and model selection are fitted only inside training folds. Distinguish overall metrics from within-subject or grouped metrics.
+4. **Transform consistency:** establish whether inputs are raw correlations, Fisher-z values, standardized values, or another representation. Verify training, manifest, exported weights, and inference apply exactly the same transform, clipping, missing-value handling, and feature/edge order.
+5. **Export equivalence:** require existing numeric evidence that the reference training pipeline, exported model or raw weights, and final inference entry point produce equivalent predictions on fixed samples within a stated tolerance.
+6. **Packaging isolation:** require an existing clean-directory or evaluator-like smoke test showing the declared entry point runs with only the collected artifact and declared dependencies. Check for undeclared local modules, workspace paths, environment variables, and auxiliary files.
+7. **General scientific reliability:** inspect invalid metrics, test-set reuse, baseline/chance confusion, circular analysis, uncorrected multiplicity, pseudoreplication, anomalously optimistic internal validation, and result–claim mismatch.
 
-Treat plausibility as insufficient. Cite a file path, line, log, or other concrete evidence for every confirmed claim and flaw. Mark unavailable or ambiguous evidence as unverified/concern; do not compute missing evidence, rerun experiments, call external services, or install packages.
+Treat plausibility as insufficient. Cite a file path, line, log, or other concrete evidence for every confirmed claim and check. For modelling or statistical work, every applicable dimension above must be reported explicitly as `pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` dimension requires a `revise` or `block` verdict, never `pass`. Do not compute missing evidence, rerun experiments, call external services, or install packages.
 
 Use `bash` only for filesystem inspection commands such as `grep`, `awk`, `wc`, `diff`, `jq`, `ls`, `find`, `head`, `tail`, and `cat`.
 
@@ -16,5 +21,3 @@ Use `bash` only for filesystem inspection commands such as `grep`, `awk`, `wc`, 
 Do not direct or message Experts. If evidence is missing, record a precise open finding with the likely owner and required evidence. PI decides whether to ask an Expert for correction or clarification.
 
 Read `audit-response-template.md`, produce a bounded actionable response, and return it with `complete_task` using the exact assigned task ID. The completion reply must contain the findings PI needs to act; do not return only a report path. End the turn after completing the task.
-
-For a host-bound GoT review, inspect only the bound target, call `edit_trace_review` exactly once with `approve`, `reject`, or `uncertain` plus a concrete reason, then end the turn. Do not run the deliverable-audit workflow and do not notify PI.

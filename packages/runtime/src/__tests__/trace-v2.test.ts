@@ -89,18 +89,10 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       "Conclusion consumes this evidence.",
       { type: "agent", name: "trace" },
     )).toBe(true);
-    expect(graph.getNode(conclusion.id)?.parentIds).toEqual([]);
-    expect(graph.review(
-      conclusion.id,
-      "approve",
-      "Direct evidence confirmed.",
-      { type: "agent", name: "auditor" },
-      evidence.id,
-    )).toBe(true);
     expect(graph.getNode(conclusion.id)?.parentIds).toEqual([evidence.id]);
   });
 
-  it("allows Trace to replace the root fallback with an audited root candidate", () => {
+  it("allows Trace to replace the root fallback with a confirmed root parent", () => {
     const graph = new GraphOfTrace("s");
     const rootId = graph.getGraphV2().meta.rootNodeId!;
     const node = graph.createNode({ title: "Independent observation" });
@@ -112,21 +104,11 @@ describe("TraceGraphV2 storage and audit semantics", () => {
       { type: "agent", name: "trace" },
     )).toBe(true);
     expect(graph.getNodeV2(node.id)?.parents).toEqual([
-      expect.objectContaining({ nodeId: rootId, conclusion: "candidate", origin: "trace" }),
-    ]);
-    expect(graph.listPendingAuditTargets([node.id])).toContainEqual(
-      expect.objectContaining({ nodeId: node.id, parentNodeId: rootId }),
-    );
-    expect(graph.review(
-      node.id,
-      "approve",
-      "No upstream research unit is required.",
-      { type: "agent", name: "auditor" },
-      rootId,
-    )).toBe(true);
-    expect(graph.getNodeV2(node.id)?.parents).toEqual([
       expect.objectContaining({ nodeId: rootId, conclusion: "confirmed", origin: "trace" }),
     ]);
+    expect(graph.listPendingAuditTargets([node.id])).not.toContainEqual(
+      expect.objectContaining({ nodeId: node.id, parentNodeId: rootId }),
+    );
   });
 
   it("keeps an already confirmed explicit parent idempotent", () => {
@@ -170,9 +152,8 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     graph.proposeCausalParent(child.id, parent.id, "possible evidence", { type: "agent", name: "trace" });
     expect(graph.getNodeV2(child.id)?.parents.some((item) => item.nodeId === rootId)).toBe(false);
 
-    graph.review(child.id, "uncertain", "relationship is unresolved", { type: "agent", name: "auditor" }, parent.id);
     expect(graph.getNodeV2(child.id)?.parents).toEqual([
-      expect.objectContaining({ nodeId: parent.id, conclusion: "uncertain" }),
+      expect.objectContaining({ nodeId: parent.id, conclusion: "confirmed" }),
     ]);
   });
 
@@ -221,12 +202,11 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     expect(graph.getNode("orphan")?.parentIds).toEqual([rootId]);
   });
 
-  it("rejects a reverse candidate even when the existing edge is rejected history", () => {
+  it("rejects a reverse Trace edge when it would create a cycle", () => {
     const graph = new GraphOfTrace("s");
     const a = graph.createNode({ title: "A" });
     const b = graph.createNode({ title: "B" });
     expect(graph.proposeCausalParent(b.id, a.id, "A informed B", { type: "agent", name: "trace" })).toBe(true);
-    expect(graph.review(b.id, "reject", "not causal", { type: "agent", name: "auditor" }, a.id)).toBe(true);
     expect(graph.proposeCausalParent(a.id, b.id, "B informed A", { type: "agent", name: "trace" })).toBe(false);
   });
 
@@ -254,11 +234,6 @@ describe("TraceGraphV2 storage and audit semantics", () => {
     expect(graph.validateCausalParentCandidates(undefined, [
       { nodeId: a.id, reason: "   " },
     ])).toMatchObject({ ok: false, reason: expect.stringContaining("non-empty") });
-
-    graph.review(b.id, "reject", "A is not a valid direct parent.", { type: "agent", name: "auditor" }, a.id);
-    expect(graph.validateCausalParentCandidates(b.id, [
-      { nodeId: a.id, reason: "Try the rejected relation again." },
-    ])).toMatchObject({ ok: false, reason: expect.stringContaining("rejected") });
 
     graph.updateNode(a.id, { revoked: true }, { type: "host" });
     expect(graph.validateCausalParentCandidates(undefined, [

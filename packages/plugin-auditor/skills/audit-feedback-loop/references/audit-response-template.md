@@ -9,6 +9,15 @@ Audit ID: <audit-id>
 Verdict: <pass | revise | block>
 Risk: <low | medium | high>
 
+## Required scientific checks
+| Check | Status | Evidence |
+|---|---|---|
+| Data semantics and row/label alignment | <pass | flaw | unverified | not-applicable> | <path/line/log> |
+| Group split and fold-local preprocessing | <pass | flaw | unverified | not-applicable> | <path/line/log> |
+| Training/inference transform consistency | <pass | flaw | unverified | not-applicable> | <path/line/log> |
+| Exported-model prediction equivalence | <pass | flaw | unverified | not-applicable> | <path/line/log> |
+| Isolated artifact packaging | <pass | flaw | unverified | not-applicable> | <path/line/log> |
+
 ## Findings
 
 ### A1 — <short title>
@@ -31,4 +40,4 @@ Risk: <low | medium | high>
 - <finding IDs and changed claims that require re-review>
 ```
 
-Use `pass` only when no checked claim has an open material finding. Use `revise` for correctable open findings. Use `block` when a high-risk claim must not be delivered in its current form.
+For modelling or statistical work, include every required scientific check and justify every `not-applicable`. Use `pass` only when no applicable check is `flaw` or `unverified` and no checked claim has an open material finding. Use `revise` for correctable open findings. Use `block` when a high-risk claim must not be delivered in its current form.
