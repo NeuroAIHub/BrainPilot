@@ -205,7 +205,31 @@ Stale local routing rule.`;
     const migrated = withoutLegacyAuditorInstructions(legacy);
     expect(migrated).toContain("Keep this custom guidance.");
     expect(migrated).not.toContain("Auditor review is independent");
-    expect(migrated).toContain("enabled review mechanism");
+    expect(migrated).toContain("records structurally valid causal parents directly");
+  });
+
+  it("requires PI to delegate complete research execution while retaining coordination tools", () => {
+    const pi = PERSONAS.principal!;
+    expect(pi).toContain("Mandatory workflow for complete research tasks");
+    expect(pi).toContain("MUST coordinate Experts and MUST");
+    expect(pi).toContain("NOT perform the scientific execution yourself");
+    expect(pi).toContain("engineer` inspects the real data structure");
+    expect(pi).toContain("experimentalist` reads that contract");
+    expect(pi).toContain("waits such as `sleep`");
+    expect(pi).toContain("Do not write analysis");
+    expect(pi).toContain("The training prohibition is absolute");
+    expect(pi).toContain("smoke-test training");
+    expect(pi).toContain("Delegate every such run to `engineer`");
+    expect(pi).toContain("you must not");
+    expect(pi).toContain("execute the training command yourself");
+  });
+
+  it("requires data contracts, protocols, and independent method rechecks", () => {
+    expect(PERSONAS.engineer).toContain("Research execution gate");
+    expect(PERSONAS.engineer).toContain("start full training, model search");
+    expect(PERSONAS.engineer).toContain("exported predictions match");
+    expect(PERSONAS.experimentalist).toContain("Complete-task protocol and independent recheck");
+    expect(PERSONAS.experimentalist).toContain("source tensor axes");
   });
 
   it("requires Engineer to inspect the environment and use working accelerators", () => {
