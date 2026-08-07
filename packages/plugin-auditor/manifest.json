@@ -32,14 +32,6 @@
         "targets": ["auditor"],
         "mode": "append",
         "priority": 100
-      },
-      {
-        "id": "trace-audit-contract",
-        "title": "Trace audit contract",
-        "entry": "prompts/trace.md",
-        "targets": ["trace"],
-        "mode": "append",
-        "priority": 100
       }
     ]
   }

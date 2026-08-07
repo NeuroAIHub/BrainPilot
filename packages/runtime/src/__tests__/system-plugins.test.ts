@@ -21,6 +21,7 @@ describe("bundled system plugins", () => {
       .toMatch(/plugin-got.*curate-research-trace/);
     expect((await systemPluginInstructions(plugins, snapshot, "principal")).join("\n"))
       .toContain("Auditor feedback loop");
+    expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });
 
   it("rejects a bundled plugin outside its declared BrainPilot range", () => {

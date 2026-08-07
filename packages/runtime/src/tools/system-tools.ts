@@ -12,7 +12,6 @@ import type { SubagentResult, SubagentTask } from "../subagent-manager.js";
 import type {
   GraphOfTrace,
   TraceArtifactInput,
-  TraceAuditTarget,
   TraceCausalParentCandidate,
 } from "../trace.js";
 import type { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
@@ -66,8 +65,6 @@ export interface ToolDeps {
   listSubagentProfiles?: () => Promise<Array<{ name: string; description: string; builtinTools: string[]; systemTools: string[]; mcp: boolean; modelId?: string; timeoutMs?: number }>>;
   /** Current host-owned record while the Trace Agent processes one trace event. */
   currentTraceRecord?: () => TraceNodeRecord | undefined;
-  /** Host-bound immutable target for one asynchronous Auditor turn. */
-  currentTraceAuditTarget?: () => TraceAuditTarget | undefined;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -155,9 +152,6 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       if (!to || !content) return { ...ok("to and content are required"), isError: true };
       if (to === deps.fromAgent) return { ...ok("cannot dispatch a task to yourself"), isError: true };
       if (to === "trace") return { ...ok("cannot dispatch user tasks to the trace agent"), isError: true };
-      if (deps.fromAgent === "auditor" && deps.currentTraceAuditTarget?.()) {
-        return { ...ok("A bound GoT audit is a single-turn review and cannot delegate tasks"), isError: true };
-      }
       if (deps.fromAgent === "auditor" && to === "principal") {
         return { ...ok("Auditor reports are user-gated and cannot be sent directly to PI"), isError: true };
       }
@@ -529,7 +523,7 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
         parent_candidates: {
           type: "array",
           items: { type: "object", properties: { node_id: { type: "string" }, reason: { type: "string" } }, required: ["node_id", "reason"] },
-          description: "Direct epistemic or computational prerequisites actually consumed by this node. Chronology, delegation, and topic similarity are insufficient. Trace proposes; Auditor confirms.",
+          description: "Direct epistemic or computational prerequisites actually consumed by this node. Structurally valid Trace relations are recorded immediately; chronology, delegation, and topic similarity are insufficient.",
         },
         artifact_inputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, producer_node_id: { type: "string" } }, required: ["path"] } },
         artifact_outputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, blob_hash: { type: "string" } }, required: ["path"] } },
@@ -565,7 +559,7 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
         records: record ? [record] : [],
         causalParents: parsedParents.candidates.map((candidate) => ({
           nodeId: candidate.nodeId,
-          conclusion: "candidate",
+          conclusion: "confirmed",
           origin: "trace",
           reason: candidate.reason,
         })),
@@ -762,108 +756,12 @@ export function createGetTraceDiffTool(deps: ToolDeps): SystemTool {
   };
 }
 
-/** Auditor-only discovery surface for outstanding node and parent reviews. */
-export function createListPendingTraceReviewsTool(deps: ToolDeps): SystemTool {
-  return {
-    name: "list_pending_trace_reviews",
-    description:
-      "List active Trace nodes whose node review is unreviewed and causal parent candidates that still need a conclusion. " +
-      "This is read-only and does not bind or change the current audit target.",
-    parameters: {
-      type: "object",
-      properties: {
-        limit: { type: "number", minimum: 1, maximum: 100, description: "Maximum combined pending targets to return." },
-      },
-    },
-    execute: async (params) => {
-      const limit = typeof params.limit === "number"
-        ? Math.max(1, Math.min(100, Math.trunc(params.limit)))
-        : 50;
-      const targets = deps.trace.listPendingAuditTargets();
-      const selected = targets.slice(0, limit);
-      const nodes: Array<Record<string, unknown>> = [];
-      const parentRelations: Array<Record<string, unknown>> = [];
-      for (const target of selected) {
-        const node = deps.trace.getNodeV2(target.nodeId);
-        if (!node) continue;
-        if (!target.parentNodeId) {
-          nodes.push({
-            nodeId: node.id,
-            title: node.title,
-            updatedAt: node.updatedAt,
-            reviewConclusion: node.reviewConclusion,
-            ...(node.confidence ? { confidence: node.confidence } : {}),
-          });
-          continue;
-        }
-        const parent = deps.trace.getNodeV2(target.parentNodeId);
-        const relation = node.parents.find((item) => item.nodeId === target.parentNodeId);
-        parentRelations.push({
-          nodeId: node.id,
-          title: node.title,
-          parentNodeId: target.parentNodeId,
-          ...(parent ? { parentTitle: parent.title } : {}),
-          conclusion: relation?.conclusion ?? "candidate",
-          ...(relation?.reason ? { reason: relation.reason } : {}),
-        });
-      }
-      return ok(cappedJson({
-        nodes,
-        parentRelations,
-        total: targets.length,
-        returned: selected.length,
-        truncated: targets.length > selected.length,
-      }));
-    },
-  };
-}
-
 export function createSearchTraceTool(deps: ToolDeps): SystemTool {
   return {
     name: "search_trace",
     description: "Search concise agent reports and node metadata in Trace; returns a bounded set of matching details.",
     parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number", minimum: 1, maximum: 100 } }, required: ["query"] },
     execute: async (params) => ok(cappedJson(deps.trace.search(String(params.query ?? ""), typeof params.limit === "number" ? params.limit : 12))),
-  };
-}
-
-/** Auditor-only mutation surface: append one bounded node/parent conclusion. */
-export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
-  const consumedTargets = new WeakSet<TraceAuditTarget>();
-  return {
-    name: "edit_trace_review",
-    description: "Review one Trace node or one proposed causal parent. Only conclusion and reason may be changed.",
-    parameters: {
-      type: "object",
-      properties: {
-        conclusion: { type: "string", enum: ["approve", "reject", "uncertain"] },
-        reason: { type: "string" },
-      },
-      required: ["conclusion", "reason"],
-    },
-    execute: async (params) => {
-      const conclusion = params.conclusion;
-      if (conclusion !== "approve" && conclusion !== "reject" && conclusion !== "uncertain") {
-        return { ...ok("invalid review conclusion"), isError: true };
-      }
-      const reason = String(params.reason ?? "").trim();
-      if (!reason) return { ...ok("a non-empty review reason is required"), isError: true };
-      const target = deps.currentTraceAuditTarget?.();
-      if (!target) return { ...ok("no host-bound trace audit target for this turn"), isError: true };
-      // Claim synchronously before mutation so sequential and parallel duplicate
-      // calls in the same Auditor turn cannot review the target twice.
-      if (consumedTargets.has(target)) return ok("trace review already submitted; end this turn");
-      consumedTargets.add(target);
-      const success = deps.trace.review(
-        target.nodeId,
-        conclusion,
-        reason,
-        { type: "agent", name: deps.fromAgent },
-        target.parentNodeId,
-        target.fingerprint,
-      );
-      return success ? ok("trace review recorded") : { ...ok("review rejected: target changed, missing, revoked, or cyclic; it will be re-queued"), isError: true };
-    },
   };
 }
 
@@ -887,10 +785,8 @@ export function createSubmitAuditReportTool(deps: ToolDeps): SystemTool {
       const summary = String(params.summary ?? "").trim();
       const reportBody = String(params.report ?? "").trim();
       if (!summary || !reportBody) return { ...ok("summary and report are required"), isError: true };
-      const target = deps.currentTraceAuditTarget?.();
       const report = deps.trace.submitAuditReport({
-        kind: target ? "trace" : "deliverable",
-        ...(target ? { target: { nodeId: target.nodeId, ...(target.parentNodeId ? { parentNodeId: target.parentNodeId } : {}) } } : {}),
+        kind: "deliverable",
         risk: params.risk,
         summary,
         report: reportBody,
@@ -931,12 +827,10 @@ export function allSystemTools(
     createGetTraceNodeTool(deps),
     createGetTraceNeighborhoodTool(deps),
     createGetTraceDiffTool(deps),
-    createListPendingTraceReviewsTool(deps),
     // Temporarily disabled: the current substring matcher is not reliable
     // enough to expose as an Agent tool. Keep the implementation above so it
     // can be re-enabled after tokenized/ranked search is implemented.
     // createSearchTraceTool(deps),
-    createEditTraceReviewTool(deps),
     createSubmitAuditReportTool(deps),
   ];
   if (deps.spawnSubagents) {
@@ -1010,8 +904,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
-  // Auditor gets bounded Trace readers, review-only mutation tools, and
-  // isolated leaf workers. It cannot mutate ordinary Trace nodes.
+  // Auditor reviews scientific deliverables and has no GoT responsibilities.
   auditor: [
     "complete_task",
     "spawn_subagent",
@@ -1019,12 +912,6 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_subagent",
     "cancel_subagent",
     "list_subagent_profiles",
-    "list_pending_trace_reviews",
-    "get_trace_node",
-    "get_trace_neighborhood",
-    "get_trace_diff",
-    // "search_trace", // temporarily disabled; see allSystemTools above
-    "edit_trace_review",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
