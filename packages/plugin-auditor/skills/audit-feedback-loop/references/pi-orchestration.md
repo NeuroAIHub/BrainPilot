@@ -4,6 +4,8 @@
 
 Audit an Expert result, PI reasoning/draft, or a multi-agent synthesis when it contains numeric results, artifact claims, external citations, datasets, benchmarks, modelling or statistical conclusions, or conflicting Expert claims. Skip greetings, clarification, progress notices, and other replies without hard claims.
 
+For modelling or statistical work, the audit request must identify the data contract, scientific protocol, implementation, validation outputs, export-equivalence evidence, and isolated packaging test. If an expected artifact does not exist, ask its producing Expert to create it before requesting a final audit.
+
 1. Inspect the returned primary artifact for basic completeness.
 2. Read `audit-request-template.md` and build a self-contained request.
 3. Dispatch it to `auditor` with `dispatch_task`.
