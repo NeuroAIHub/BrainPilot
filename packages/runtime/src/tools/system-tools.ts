@@ -76,6 +76,8 @@ function ok(text: string): { content: [{ type: "text"; text: string }] } {
 
 /** Detail/read tools are deliberately bounded so one graph query cannot eat a turn. */
 const TRACE_DETAIL_MAX_TOKENS = 1500;
+/** File samples sent to the Trace model; complete evidence stays in the checkpoint store. */
+const TRACE_PROMPT_PROVENANCE_FILES = 25;
 
 function cappedJson(value: unknown, maxTokens = TRACE_DETAIL_MAX_TOKENS): string {
   const text = JSON.stringify(value, null, 2);
@@ -451,7 +453,10 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       const outputs = artifactInputs(params.artifact_outputs);
       const checkpoint = await deps.checkpoints?.capture(deps.fromAgent);
       const gitEvidence = checkpoint
-        ? await deps.checkpoints?.provenance(checkpoint.id).catch(() => undefined)
+        ? await deps.checkpoints?.provenance(
+            checkpoint.id,
+            TRACE_PROMPT_PROVENANCE_FILES,
+          ).catch(() => undefined)
         : undefined;
       const record: TraceNodeRecord = {
         sourceAgent: deps.fromAgent,
@@ -465,7 +470,16 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       if (checkpoint) lines.push(`Checkpoint-ID: ${checkpoint.id}`);
       if (inputs.length) lines.push(`Artifact-Inputs: ${JSON.stringify(inputs)}`);
       if (outputs.length) lines.push(`Artifact-Outputs: ${JSON.stringify(outputs)}`);
-      if (gitEvidence?.length) lines.push(`Git-Evidence: ${JSON.stringify(gitEvidence)}`);
+      if (checkpoint) {
+        const totalFiles = checkpoint.stats?.files ?? gitEvidence?.length ?? 0;
+        lines.push(`Git-Evidence-Summary: ${cappedJson({
+          checkpointId: checkpoint.id,
+          stats: checkpoint.stats,
+          skippedCount: checkpoint.skippedCount,
+          sample: gitEvidence ?? [],
+          truncated: totalFiles > (gitEvidence?.length ?? 0),
+        }, 1_000)}`);
+      }
       lines.push("", "Artifacts:");
       if (artifacts.length === 0) {
         lines.push("(none)");

@@ -1672,6 +1672,15 @@ export class SessionManager {
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
 
+    // Snapshot user/Bench-provided inputs before the first agent prompt. Without
+    // this baseline the first record_trace diffs against Git's empty tree and
+    // incorrectly attributes every pre-existing workspace file to that event.
+    // A concurrent follow-up or ask_user answer must not snapshot a workspace
+    // while an agent is already mutating it.
+    if (!entry.runActive && !agent.isStreaming) {
+      await entry.checkpoints.ensureBaseline().catch(() => undefined);
+    }
+
     // Defense-in-depth for old clients/direct callers: ordinary text answers
     // the one visible FIFO head. Queued questions are never addressable.
     const visibleInput = entry.userInputs.active;

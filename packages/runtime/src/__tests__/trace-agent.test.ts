@@ -153,6 +153,8 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
     expect(captured!).toContain("[Trace Event]");
     expect(captured!).toContain("Description: designed an experiment");
     expect(captured!).toContain("Context: after reviewing prior art");
+    expect(captured!).toContain("Git-Evidence-Summary:");
+    expect(captured!).not.toContain("Git-Evidence: [");
     expect(captured!).toContain("- plan.md");
     expect(captured!).toContain("- diagram.png");
   });

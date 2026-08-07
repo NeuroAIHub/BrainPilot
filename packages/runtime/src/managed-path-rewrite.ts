@@ -128,6 +128,27 @@ export function rewriteLogicalPath(raw: string, roots: ManagedPathRoots): Rewrit
   const attName = roots.attachmentsDirname ?? ATTACHMENTS_DEFAULT;
   const attAbs = resolve(cwdAbs, attName);
 
+  // A deployment may mount the whole BrainPilot data root at `/data`, making
+  // the real session cwd `/data/workspaces/<sid>` and the real persistent
+  // library `/data/data`. Those physical paths must win over the logical
+  // `/data` alias or an already-resolved path is rewritten a second time (for
+  // example `/data/data/x` -> `/data/data/data/x`). Relative paths and absolute
+  // paths outside known durable roots still flow through the logical-prefix
+  // handling below.
+  if (isAbsolute(p)) {
+    const abs = normalize(resolve(p));
+    const classified = classifyAbs(abs, roots);
+    if (classified !== "other") {
+      return {
+        ok: true,
+        path: p,
+        rewritten: false,
+        root: classified,
+        abs,
+      };
+    }
+  }
+
   let rootAbs: string;
   let kind: ManagedRootKind;
   let rel: string;
