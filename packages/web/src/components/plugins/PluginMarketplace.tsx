@@ -167,6 +167,11 @@ export function PluginMarketplace() {
     setBusyPluginId(id);
     setError(null);
     try {
+      const current = installedById.get(id);
+      if (enabled && current?.manifest.contributes?.runtimeExtensions?.length && current.executionTrust?.version !== current.activeVersion) {
+        if (!window.confirm(t("marketplace.executionTrustConfirm", { name: current.manifest.displayName, version: current.activeVersion }))) return;
+        await api.plugins.trustExecution(id, current.activeVersion);
+      }
       await api.plugins.setEnabled(id, enabled);
       await load();
     } catch (reason) {

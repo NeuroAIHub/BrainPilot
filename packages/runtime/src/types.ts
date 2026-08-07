@@ -194,6 +194,8 @@ export type AgentSessionFactory = (params: {
     hookConfig?: { dialect: "codex" | "claude-code"; path: string };
     extensionPaths?: string[];
   }>;
+  /** Explicit host/plugin Pi extensions already scoped to this agent session. */
+  extensionFactories?: unknown[];
   /**
    * #309: when true, register the router-skill-guard extension so generic file
    * tools cannot read `<dataRoot>/bp_template/skills-router`. Set when

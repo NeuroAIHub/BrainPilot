@@ -79,6 +79,14 @@ describe("plugin SDK compatibility", () => {
       contributes: { runtimeTools: [{ id: "bad", capability: "arbitrary.code", targets: ["principal"] }] },
     })).toBeNull();
   });
+  it("validates trusted runtime extension entries and permissions", () => {
+    const manifest = parsePluginManifest({ ...base,
+      permissions: ["write:workspace", "execute:process", "workspace:checkpoint"], protocols: { runtimeExtensions: "1" },
+      contributes: { runtimeExtensions: [{ id: "loop", title: "Loop", entry: "runtime/index.mjs", targets: ["engineer"] }] },
+    });
+    expect(manifest?.contributes?.runtimeExtensions?.[0]).toEqual({ id: "loop", title: "Loop", entry: "runtime/index.mjs", targets: ["engineer"] });
+    expect(parsePluginManifest({ ...base, contributes: { runtimeExtensions: [{ id: "bad", title: "Bad", entry: "../bad.mjs", targets: ["engineer"] }] } })).toBeNull();
+  });
 
   it("uses standard npm SemVer ranges", () => {
     const range = "^0.1.2 || >=1.0.0 <2.0.0";

@@ -77,8 +77,16 @@ export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
 
 export const RuntimeCapabilitySchema = z.enum(["builtin.monitor"]);
 export type RuntimeCapability = z.infer<typeof RuntimeCapabilitySchema>;
+export const RuntimeExtensionDescriptorSchema = z.object({
+  pluginId: z.string().min(1), pluginVersion: z.string().min(1), entry: z.string().min(1),
+  targets: z.array(z.string().min(1)).min(1),
+  skillEntries: z.array(z.object({ entry: z.string().min(1), targets: z.array(z.string().min(1)).optional() }).strict()).optional(),
+  permissions: z.array(z.enum(["read:workspace", "read:data", "compute:worker", "compute:container", "network", "process:background", "write:workspace", "execute:process", "workspace:checkpoint"])),
+}).strict();
+export type RuntimeExtensionDescriptor = z.infer<typeof RuntimeExtensionDescriptorSchema>;
 export const SetRuntimeCapabilitiesRequestSchema = z.object({
   capabilities: z.array(RuntimeCapabilitySchema),
+  runtimeExtensions: z.array(RuntimeExtensionDescriptorSchema).optional(),
 });
 export type SetRuntimeCapabilitiesRequest = z.infer<typeof SetRuntimeCapabilitiesRequestSchema>;
 

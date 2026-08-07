@@ -312,6 +312,7 @@ export const CUSTOM_EVENT = {
   SUBAGENT_STATE: "subagent_state",
   /** Lifecycle update for one session-scoped background monitor. */
   MONITOR_STATE: "monitor_state",
+  AUTORESEARCH_STATE: "autoresearch_state",
 } as const;
 
 export const TaskStatusSchema = z.enum(["pending", "completed", "cancelled"]);

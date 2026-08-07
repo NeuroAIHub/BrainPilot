@@ -28,6 +28,7 @@ import {
   type PluginCompatibility,
   type PluginManifest,
   type PluginPermission,
+  type RuntimeExtensionContribution,
   type PluginUpdateStatus,
 } from "@brainpilot/plugin-sdk";
 import {
@@ -91,12 +92,19 @@ interface BuiltinPluginRelease {
   requirements?: string[];
   executesLocalCode?: boolean;
   status?: "test";
+  packageName?: string;
 }
 
 // PR4 adds immutable built-in release directories here. Every source directory
 // contains the exact manifest and files for that version; versions are never
 // synthesized by rewriting the current bundle.
 const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
+  {
+    plugin: "autoresearch", source: "autoresearch/0.1.2", packageName: "@brainpilot/plugin-autoresearch", version: "0.1.2",
+    publishedAt: "2026-08-07T00:00:00.000Z", releaseNotes: "Initial Engineer-owned measured optimization loop with checkpoint rollback.",
+    publisher: "BrainPilot", verified: true, sourceFormat: "brainpilot", repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+    license: "MIT", capabilities: ["skills", "runtime-tools"], requirements: ["Explicit per-version host execution trust"], executesLocalCode: true,
+  },
   {
     plugin: "monitor",
     source: "monitor/0.1.2",
@@ -186,12 +194,13 @@ function externalMetadataPath(dataDir: string, manifest: PluginManifest): string
   return path.join(installedVersionPath(dataDir, manifest), ".brainpilot", "source.json");
 }
 
-function builtinPluginRoot(source: string): string {
-  return fileURLToPath(new URL(`../plugins/${source}`, import.meta.url));
+function builtinPluginRoot(release: BuiltinPluginRelease): string {
+  if (release.packageName) return path.dirname(createRequire(import.meta.url).resolve(`${release.packageName}/package.json`));
+  return fileURLToPath(new URL(`../plugins/${release.source}`, import.meta.url));
 }
 
 async function readBuiltinPluginBundle(release: BuiltinPluginRelease): Promise<Buffer> {
-  const root = builtinPluginRoot(release.source);
+  const root = builtinPluginRoot(release);
   const manifest = parsePublishablePluginManifest(JSON.parse(await fs.readFile(path.join(root, "manifest.json"), "utf8")) as unknown);
   if (!manifest || manifest.version !== release.version) {
     throw new Error(`built-in plugin ${release.source} does not contain immutable version ${release.version}`);
@@ -199,7 +208,7 @@ async function readBuiltinPluginBundle(release: BuiltinPluginRelease): Promise<B
   const files: Array<{ path: string; contentBase64: string }> = [];
   const walk = async (dir: string): Promise<void> => {
     for (const entry of await fs.readdir(dir, { withFileTypes: true })) {
-      if (entry.name === "manifest.json") continue;
+      if (entry.name === "manifest.json" || entry.name === "package.json" || entry.name === ".npmignore" || entry.name.includes(".test.")) continue;
       const absolute = path.join(dir, entry.name);
       if (entry.isDirectory()) await walk(absolute);
       else if (entry.isFile()) {
@@ -451,6 +460,9 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
         : {}),
       ...(repositoryUrl ? { repositoryUrl } : {}),
       ...(typeof item.executesLocalCode === "boolean" ? { executesLocalCode: item.executesLocalCode } : {}),
+      ...(isObject(item.executionTrust) && item.executionTrust.version === activeVersion && typeof item.executionTrust.trustedAt === "string"
+        ? { executionTrust: { version: activeVersion, trustedAt: item.executionTrust.trustedAt } }
+        : {}),
     };
   }
   for (const plugin of Object.values(plugins)) plugin.compatibility = compatibilityFor(plugin.manifest, plugins);
@@ -530,6 +542,23 @@ export async function listEnabledRuntimeTools(dataDir: string): Promise<string[]
   ))];
 }
 
+export interface EnabledRuntimeExtension {
+  pluginId: string; pluginVersion: string; extension: RuntimeExtensionContribution; permissions: PluginPermission[];
+  skillEntries: Array<{ entry: string; targets?: string[] }>;
+}
+
+export async function listEnabledRuntimeExtensions(dataDir: string): Promise<EnabledRuntimeExtension[]> {
+  return (await listInstalledPlugins(dataDir)).flatMap((plugin) =>
+    plugin.enabled && plugin.compatibility?.compatible !== false && plugin.executionTrust?.version === plugin.activeVersion
+      ? (plugin.manifest.contributes?.runtimeExtensions ?? []).map((extension) => ({
+          pluginId: plugin.manifest.id, pluginVersion: plugin.activeVersion, extension,
+          permissions: plugin.manifest.permissions ?? [],
+          skillEntries: (plugin.manifest.contributes?.skills ?? []).map((skill) => ({ entry: skill.entry, ...(skill.targets ? { targets: skill.targets } : {}) })),
+        }))
+      : [],
+  );
+}
+
 /** Opt-in gate for sharing the active file/preview context with chat. */
 export async function isFileContextBridgeEnabled(dataDir: string): Promise<boolean> {
   return (await listInstalledPlugins(dataDir)).some((plugin) =>
@@ -598,6 +627,7 @@ function parseBundle(bytes: Buffer, expected?: PluginManifest): PluginBundle {
     ...(contributions?.literatureProviders ?? []),
     ...(contributions?.workflows ?? []),
     ...(contributions?.agentInstructions ?? []),
+    ...(contributions?.runtimeExtensions ?? []),
   ].map((contribution) => contribution.entry);
   for (const entry of requiredEntries) {
     if (!paths.has(entry)) throw new Error(`plugin artifact is missing contribution entry: ${entry}`);
@@ -1045,12 +1075,18 @@ export async function updatePlugin(dataDir: string, id: string): Promise<Install
     const entry = (await listMarketplace(dataDir)).find((candidate) => candidate.manifest.id === id);
     const release = entry ? nextUpdate(entry, installed.activeVersion) : undefined;
     if (!release) throw new Error("no compatible plugin update is available");
+    if (installed.enabled) {
+      await syncDeclarativeContributions(dataDir, installed.manifest, false);
+      await syncExternalRuntimeProjection(dataDir, installed.manifest, false);
+    }
     await installBundle(dataDir, await downloadRelease(dataDir, release));
     const previousVersion = installed.activeVersion;
     installed.manifest = release.manifest;
     installed.activeVersion = release.version;
     installed.previousVersion = previousVersion;
     installed.updatedAt = new Date().toISOString();
+    installed.enabled = false;
+    delete installed.executionTrust;
     installed.executesLocalCode = entry?.executesLocalCode ?? Boolean(entry?.capabilities?.some((capability) => capability === "mcp" || capability === "hooks"));
     installed.compatibility = compatibilityFor(release.manifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
@@ -1071,11 +1107,17 @@ export async function rollbackPlugin(dataDir: string, id: string): Promise<Insta
     if (!previousManifest) throw new Error("previous plugin version is no longer installed");
     const rollbackCompatibility = compatibilityFor(previousManifest, registry.plugins);
     if (!rollbackCompatibility.compatible) throw new Error(rollbackCompatibility.issues.map((issue) => issue.message).join(" "));
+    if (installed.enabled) {
+      await syncDeclarativeContributions(dataDir, installed.manifest, false);
+      await syncExternalRuntimeProjection(dataDir, installed.manifest, false);
+    }
     const replacedVersion = installed.activeVersion;
     installed.manifest = previousManifest;
     installed.activeVersion = previousManifest.version;
     installed.previousVersion = replacedVersion;
     installed.updatedAt = new Date().toISOString();
+    installed.enabled = false;
+    delete installed.executionTrust;
     installed.compatibility = compatibilityFor(previousManifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
     if (installed.enabled) await syncDeclarativeContributions(dataDir, installed.manifest, true);
@@ -1163,6 +1205,9 @@ export async function setPluginEnabled(dataDir: string, id: string, enabled: boo
     const registry = await readRegistry(dataDir);
     const installed = registry.plugins[id];
     if (!installed) return null;
+    if (enabled && (installed.manifest.contributes?.runtimeExtensions?.length ?? 0) > 0 && installed.executionTrust?.version !== installed.activeVersion) {
+      throw new Error(`plugin ${id}@${installed.activeVersion} contains host runtime code and must be explicitly trusted before enabling`);
+    }
     const prospective = { ...registry.plugins, [id]: { ...installed, enabled } };
     assertEnabledPluginsCompatible(prospective);
     if (enabled) {
@@ -1182,6 +1227,19 @@ export async function setPluginEnabled(dataDir: string, id: string, enabled: boo
     }
     installed.enabled = enabled;
     installed.compatibility = compatibilityFor(installed.manifest, registry.plugins);
+    await writeJsonAtomic(registryPath(dataDir), registry);
+    return installed;
+  });
+}
+
+export async function trustPluginExecution(dataDir: string, id: string, version: string): Promise<InstalledPlugin | null> {
+  return withRegistryMutation(dataDir, async () => {
+    const registry = await readRegistry(dataDir);
+    const installed = registry.plugins[id];
+    if (!installed) return null;
+    if (installed.activeVersion !== version) throw new Error(`plugin version changed; expected ${installed.activeVersion}`);
+    if ((installed.manifest.contributes?.runtimeExtensions?.length ?? 0) === 0) throw new Error("plugin does not contain host runtime code");
+    installed.executionTrust = { version, trustedAt: new Date().toISOString() };
     await writeJsonAtomic(registryPath(dataDir), registry);
     return installed;
   });

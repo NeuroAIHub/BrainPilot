@@ -119,6 +119,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // the agent the host supplied a renderer for (the principal). The `context`
   // hook recomputes per turn and the rewrite is ephemeral (never persisted).
   const extensionFactories: unknown[] = [];
+  extensionFactories.push(...(params.extensionFactories ?? []));
   if (params.compatPluginProjections?.length) {
     extensionFactories.push(makeCompatHooksExt(params.compatPluginProjections));
   }

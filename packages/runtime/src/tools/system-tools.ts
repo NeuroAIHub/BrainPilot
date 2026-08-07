@@ -975,6 +975,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
+  "autoresearch-worker": ["complete_task", "record_trace", "skill_search", "get_domain_knowledge_local", "search_papers_local"],
   experimentalist: [
     "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
@@ -1041,6 +1042,7 @@ export const BUILTIN_TOOL_CONFIG: Record<string, string[]> = {
  */
 export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   engineer: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
+  "autoresearch-worker": ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],

@@ -88,6 +88,16 @@ describe("WorkspaceCheckpointStore", () => {
       "result.csv",
     ]);
   });
+  it("persists experiment and best checkpoint kinds", async () => {
+    const { workspace, state, store } = await fixture();
+    await writeFile(join(workspace, "benchmark.txt"), "baseline\n", "utf8");
+    const baseline = await store.capture("autoresearch-worker", "experiment-best");
+    await writeFile(join(workspace, "benchmark.txt"), "candidate\n", "utf8");
+    const candidate = await store.capture("autoresearch-worker", "experiment");
+    const index = JSON.parse(await readFile(join(state, "workspace-checkpoints.json"), "utf8")) as { checkpoints: Record<string, { kind: string }> };
+    expect(index.checkpoints[baseline.id]?.kind).toBe("experiment-best");
+    expect(index.checkpoints[candidate.id]?.kind).toBe("experiment");
+  });
 
   it("restores managed files and makes the restored tree the next checkpoint baseline", async () => {
     const { workspace, state, store } = await fixture();

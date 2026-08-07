@@ -7,6 +7,7 @@ import type { MarketplaceEntry, MarketplaceRelease, PluginManifest } from "@brai
 import { createApp } from "../src/app.js";
 import {
   installPlugin,
+  listEnabledRuntimeExtensions,
   listEnabledRuntimeTools,
   listInstalledPlugins,
   loadMarketplaceSources,
@@ -14,6 +15,7 @@ import {
   setPluginEnabled,
   uninstallPlugin,
   updatePlugin,
+  trustPluginExecution,
 } from "../src/plugins.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
 
@@ -343,6 +345,19 @@ describe("plugin marketplace control plane", () => {
     expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor"]);
     await setPluginEnabled(dataDir, id, false);
     expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+  });
+  it("requires per-version trust before enabling executable Autoresearch", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-autoresearch-"));
+    const id = "org.brainpilot.autoresearch";
+    const installed = await installPlugin(dataDir, id);
+    expect(installed?.manifest.contributes?.runtimeExtensions?.[0]?.entry).toBe("runtime/index.mjs");
+    await expect(setPluginEnabled(dataDir, id, true)).rejects.toThrow("explicitly trusted");
+    await trustPluginExecution(dataDir, id, "0.1.2");
+    await setPluginEnabled(dataDir, id, true);
+    expect(await listEnabledRuntimeExtensions(dataDir)).toEqual([expect.objectContaining({
+      pluginId: id, pluginVersion: "0.1.2",
+      extension: expect.objectContaining({ entry: "runtime/index.mjs", targets: ["engineer", "autoresearch-worker"] }),
+    })]);
   });
 
   it("syncs Monitor capability changes to already-known runtimes", async () => {

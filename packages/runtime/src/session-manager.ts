@@ -27,6 +27,7 @@ import {
   type FileEntry,
   type RunStats,
   type RuntimeCapability,
+  type RuntimeExtensionDescriptor,
   type Session,
   type SessionStats,
   type SessionTokenUsage,
@@ -103,6 +104,8 @@ import {
   type SystemPluginSnapshot,
 } from "./system-plugins.js";
 import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
+import { loadRuntimePluginExtension } from "./runtime-plugins.js";
+import { makeWorkspaceLeaseGuardExt } from "./extensions/workspace-lease-guard.js";
 
 const MAX_MONITOR_EVENT_LINES = 100;
 
@@ -300,6 +303,7 @@ interface SessionEntry {
   subagents: SubagentManager;
   checkpoints: WorkspaceCheckpointStore;
   workspaceOperationActive: boolean;
+  workspaceLease?: { owner: string; agentName: string };
   /** Host-bound source record while Trace processes one durable event. */
   currentTraceRecord?: TraceNodeRecord;
   agents: Map<string, MasAgent>;
@@ -427,6 +431,7 @@ export interface SessionManagerOptions {
   systemPluginEnv?: Record<string, string | undefined>;
   /** Backend-synchronized host-managed plugin capabilities. Tests may inject. */
   runtimeCapabilities?: RuntimeCapability[];
+  runtimeExtensions?: RuntimeExtensionDescriptor[];
 }
 
 /** Roles inferred from agent name. */
@@ -526,6 +531,7 @@ export class SessionManager {
   private readonly bundledSystemPlugins: BundledSystemPlugin[];
   private readonly defaultSystemPlugins: SystemPluginSnapshot[];
   private readonly runtimeCapabilities = new Set<RuntimeCapability>();
+  private runtimeExtensions: RuntimeExtensionDescriptor[] = [];
   private kbMaterialized = false;
 
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
@@ -601,6 +607,7 @@ export class SessionManager {
     this.bundledSystemPlugins = loadBundledSystemPlugins(opts.systemPluginEnv ?? process.env);
     this.defaultSystemPlugins = snapshotSystemPlugins(this.bundledSystemPlugins);
     for (const capability of opts.runtimeCapabilities ?? []) this.runtimeCapabilities.add(capability);
+    this.runtimeExtensions = [...(opts.runtimeExtensions ?? [])];
     for (const plugin of this.defaultSystemPlugins) {
       if (plugin.reason === "experiment-override") {
         // eslint-disable-next-line no-console
@@ -638,10 +645,19 @@ export class SessionManager {
   }
 
   /** Replace backend-managed runtime capabilities; disabling Monitor stops all live watches. */
-  async setRuntimeCapabilities(capabilities: readonly RuntimeCapability[]): Promise<void> {
+  async setRuntimeCapabilities(capabilities: readonly RuntimeCapability[], runtimeExtensions: readonly RuntimeExtensionDescriptor[] = []): Promise<void> {
     const wasMonitorEnabled = this.runtimeCapabilities.has("builtin.monitor");
     this.runtimeCapabilities.clear();
     for (const capability of capabilities) this.runtimeCapabilities.add(capability);
+    const previous = JSON.stringify(this.runtimeExtensions);
+    this.runtimeExtensions = [...runtimeExtensions];
+    if (previous !== JSON.stringify(this.runtimeExtensions)) {
+      for (const entry of this.sessions.values()) {
+        for (const [name, agent] of entry.agents) {
+          if (!agent.isStreaming && agent.status !== "running") { agent.stop(); entry.agents.delete(name); }
+        }
+      }
+    }
     const monitorEnabled = this.runtimeCapabilities.has("builtin.monitor");
     for (const entry of this.sessions.values()) {
       const monitor = entry.systemPlugins.find((plugin) => plugin.id === MONITOR_PLUGIN_ID);
@@ -1074,7 +1090,7 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
-    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+    if (prefix === "/workspace" && (this.sessions.get(sid)?.workspaceOperationActive || this.sessions.get(sid)?.workspaceLease)) {
       throw new Error("workspace restore is in progress");
     }
     try {
@@ -1125,7 +1141,7 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
-    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+    if (prefix === "/workspace" && (this.sessions.get(sid)?.workspaceOperationActive || this.sessions.get(sid)?.workspaceLease)) {
       throw new Error("workspace restore is in progress");
     }
     await mkdir(dirname(abs), { recursive: true });
@@ -1157,7 +1173,7 @@ export class SessionManager {
     await this.ensureLayoutForPath(rel);
     const { abs, root, prefix } = this.resolveManagedPath(sid, rel);
     this.assertWritable(prefix, rel); // #261: the shared root is read-only
-    if (prefix === "/workspace" && this.sessions.get(sid)?.workspaceOperationActive) {
+    if (prefix === "/workspace" && (this.sessions.get(sid)?.workspaceOperationActive || this.sessions.get(sid)?.workspaceLease)) {
       throw new Error("workspace restore is in progress");
     }
     await mkdir(dirname(abs), { recursive: true });
@@ -1505,6 +1521,7 @@ export class SessionManager {
       subagents,
       checkpoints,
       workspaceOperationActive: false,
+      workspaceLease: undefined,
       currentTraceRecord: undefined,
       agents: new Map(),
       deliveryErrors: new Map(),
@@ -1706,7 +1723,7 @@ export class SessionManager {
     if (this.shuttingDown) return { accepted: false };
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
-    if (entry.workspaceOperationActive) return { accepted: false };
+    if (entry.workspaceOperationActive || (entry.workspaceLease && entry.workspaceLease.agentName !== agentName)) return { accepted: false };
     this.touch(entry);
     // §R-4: refuse new runs past the soft memory threshold. The HTTP `accepted`
     // flag alone isn't surfaced by the web, so also emit a system message.
@@ -2456,6 +2473,16 @@ export class SessionManager {
       name,
     );
     if (pluginSkillPaths.length) skillPaths = [...(skillPaths ?? []), ...pluginSkillPaths];
+    const runtimeDescriptors = this.runtimeExtensions.filter((descriptor) => descriptor.targets.includes(name));
+    for (const descriptor of runtimeDescriptors) {
+      const root = resolve(this.dataRoot, "plugins", "installed", descriptor.pluginId, descriptor.pluginVersion);
+      for (const skill of descriptor.skillEntries ?? []) {
+        if (skill.targets && !skill.targets.includes(name)) continue;
+        const target = resolve(root, skill.entry);
+        if (!target.startsWith(`${root}${sep}`)) throw new Error(`plugin skill escapes bundle: ${skill.entry}`);
+        skillPaths = [...(skillPaths ?? []), dirname(target)];
+      }
+    }
     // #80: guard every tool result against context-window overflow.
     const agentTools = rawTools.map((t) => this.wrapToolWithTruncation(t, sessionId, entry.bus));
     const builtins = builtinToolNamesForRole(role, name);
@@ -2466,6 +2493,21 @@ export class SessionManager {
     const providerConfig = await resolveSessionProvider(this.dataRoot, entry.providerRef);
 
     const sessionCwd = this.workspaceDir(sessionId);
+    const extensionFactories: unknown[] = [makeWorkspaceLeaseGuardExt(
+      () => !entry.workspaceLease || entry.workspaceLease.agentName === name,
+    )];
+    for (const descriptor of runtimeDescriptors) {
+      extensionFactories.push(await loadRuntimePluginExtension({
+        dataRoot: this.dataRoot, descriptor, sessionId, agentName: name, cwd: sessionCwd, checkpoints: entry.checkpoints,
+        acquireLease: (owner) => {
+          if (entry.workspaceLease && entry.workspaceLease.owner !== owner) return false;
+          entry.workspaceLease = { owner, agentName: name }; return true;
+        },
+        releaseLease: (owner) => { if (entry.workspaceLease?.owner === owner) entry.workspaceLease = undefined; },
+        ownsLease: (owner) => entry.workspaceLease?.owner === owner,
+        emit: (eventName, value) => entry.bus.emit(ev.custom({ sessionId, agentName: name }, eventName, value)),
+      }));
+    }
     const session = await this.agentFactory({
       sessionId,
       agentName: name,
@@ -2482,6 +2524,7 @@ export class SessionManager {
         skillSearchEnabled,
       ),
       skillPaths,
+      extensionFactories,
       compatPluginProjections: name === "principal"
         ? await loadCompatPluginProjections(this.dataRoot)
         : undefined,
@@ -2672,7 +2715,7 @@ export class SessionManager {
    */
   private wakeAgent(sessionId: string, name: string): void {
     const current = this.sessions.get(sessionId);
-    if (!current || current.workspaceOperationActive || current.taskLedger.isPaused(name)) return;
+    if (!current || current.workspaceOperationActive || (current.workspaceLease && current.workspaceLease.agentName !== name) || current.taskLedger.isPaused(name)) return;
     if (current.agents.get(name)?.isStreaming) return;
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
@@ -2968,7 +3011,7 @@ export class SessionManager {
   }
 
   private beginWorkspaceOperation(entry: SessionEntry, action: "restore" | "roll back"): void {
-    if (entry.workspaceOperationActive) {
+    if (entry.workspaceOperationActive || entry.workspaceLease) {
       const error = new Error(`cannot ${action} while another workspace operation is active`);
       (error as Error & { code?: string }).code = "SESSION_ACTIVE";
       throw error;

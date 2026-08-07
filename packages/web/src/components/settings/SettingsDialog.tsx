@@ -788,7 +788,15 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                         <div className="settings-list-item__actions">
                           <button
                             disabled={!plugin.compatibility.compatible && !plugin.enabled}
-                            onClick={() => void api.plugins.setEnabled(plugin.manifest.id, !plugin.enabled).then(loadSettings).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}
+                            onClick={() => void (async () => {
+                              const enabling = !plugin.enabled;
+                              if (enabling && plugin.manifest.contributes?.runtimeExtensions?.length && plugin.executionTrust?.version !== plugin.activeVersion) {
+                                if (!window.confirm(t("marketplace.executionTrustConfirm", { name: plugin.manifest.displayName, version: plugin.activeVersion }))) return;
+                                await api.plugins.trustExecution(plugin.manifest.id, plugin.activeVersion);
+                              }
+                              await api.plugins.setEnabled(plugin.manifest.id, enabling);
+                              await loadSettings();
+                            })().catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}
                             type="button"
                           >
                             {t(plugin.enabled ? "marketplace.disable" : "marketplace.enable")}

@@ -21,6 +21,7 @@ export async function readPluginManifest(root: string): Promise<PluginManifest> 
     ...(contributions?.previewers ?? []), ...(contributions?.skills ?? []), ...(contributions?.knowledgeBases ?? []),
     ...(contributions?.panels ?? []), ...(contributions?.literatureProviders ?? []), ...(contributions?.workflows ?? []),
     ...(contributions?.agentInstructions ?? []),
+    ...(contributions?.runtimeExtensions ?? []),
   ];
   for (const contribution of entries) {
     try { await fs.access(path.join(root, contribution.entry)); }

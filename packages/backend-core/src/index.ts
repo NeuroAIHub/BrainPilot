@@ -54,6 +54,7 @@ export {
   importExternalPlugin,
   isFileContextBridgeEnabled,
   listEnabledPreviewers,
+  listEnabledRuntimeExtensions,
   listInstalledPlugins,
   listMarketplace,
   listMarketplaceSourceStatuses,
@@ -66,6 +67,7 @@ export {
   setPluginEnabled,
   uninstallPlugin,
   updatePlugin,
+  trustPluginExecution,
 } from "./plugins.js";
 export type {
   ImportablePluginSourceFormat,

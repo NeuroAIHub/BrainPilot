@@ -51,7 +51,7 @@ interface CheckpointRecord {
   ref: TraceCheckpointRef;
   skipped: Skipped[];
   treeId?: string;
-  kind: "trace" | "recovery" | "baseline";
+  kind: "trace" | "recovery" | "baseline" | "experiment" | "experiment-best";
 }
 interface CheckpointIndex {
   version: 2;
@@ -245,7 +245,7 @@ export class WorkspaceCheckpointStore {
             ref: record.ref,
             skipped: record.skipped ?? [],
             ...(record.treeId ? { treeId: record.treeId } : {}),
-            kind: record.kind === "recovery" || record.kind === "baseline" ? record.kind : "trace",
+            kind: record.kind === "recovery" || record.kind === "baseline" || record.kind === "experiment" || record.kind === "experiment-best" ? record.kind : "trace",
           };
         }
         this.loaded = { version: 2, headCheckpointId: parsed.headCheckpointId, checkpoints };
@@ -480,7 +480,7 @@ export class WorkspaceCheckpointStore {
     });
   }
 
-  private async captureUnlocked(sourceAgent: string | undefined, kind: "trace" | "recovery" | "baseline"): Promise<TraceCheckpointRef> {
+  private async captureUnlocked(sourceAgent: string | undefined, kind: CheckpointRecord["kind"]): Promise<TraceCheckpointRef> {
     const id = `checkpoint_${randomUUID()}`;
     const capturedAt = new Date().toISOString();
     const index = await this.index();
@@ -488,7 +488,7 @@ export class WorkspaceCheckpointStore {
     const base = index.headCheckpointId ? index.checkpoints[index.headCheckpointId] : undefined;
     try {
       let repositoryBudgetBytes: number | undefined;
-      if (kind === "trace") {
+      if (kind !== "recovery" && kind !== "baseline") {
         const repositoryBytes = await this.repositoryBytes();
         if (repositoryBytes >= this.maxRepositoryBytes) {
           throw new Error(`checkpoint repository quota exceeded: ${repositoryBytes} bytes >= ${this.maxRepositoryBytes} bytes`);
@@ -541,7 +541,7 @@ export class WorkspaceCheckpointStore {
     }
   }
 
-  capture(sourceAgent?: string, kind: "trace" | "recovery" = "trace"): Promise<TraceCheckpointRef> {
+  capture(sourceAgent?: string, kind: Exclude<CheckpointRecord["kind"], "baseline"> = "trace"): Promise<TraceCheckpointRef> {
     return this.exclusive(() => this.captureUnlocked(sourceAgent, kind));
   }
 

@@ -1134,6 +1134,13 @@ export const api = {
       notifyPluginsChanged();
       return result;
     },
+    async trustExecution(id: string, version: string): Promise<InstalledPluginApiEntry> {
+      const result = await handleJson<InstalledPluginApiEntry>(await apiFetch(`${API_BASE}/plugins/${encodeURIComponent(id)}/trust-execution`, {
+        method: "POST", headers: authHeaders(), body: JSON.stringify({ version }),
+      }));
+      notifyPluginsChanged();
+      return result;
+    },
 
     async update(id: string): Promise<InstalledPluginApiEntry> {
       const result = await handleJson<InstalledPluginApiEntry>(await apiFetch(`${API_BASE}/plugins/${encodeURIComponent(id)}/update`, { method: "POST", headers: authHeaders() }));

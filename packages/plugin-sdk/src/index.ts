@@ -12,6 +12,7 @@ export const AGENT_INSTRUCTIONS_PROTOCOL_VERSION = "1" as const;
 export const KNOWLEDGE_SERVICE_PROTOCOL_VERSION = "1" as const;
 export const LITERATURE_SERVICE_PROTOCOL_VERSION = "1" as const;
 export const RUNTIME_TOOLS_PROTOCOL_VERSION = "1" as const;
+export const RUNTIME_EXTENSIONS_PROTOCOL_VERSION = "1" as const;
 
 export const SUPPORTED_PLUGIN_PROTOCOLS = {
   preview: PREVIEW_RPC_VERSION,
@@ -19,11 +20,12 @@ export const SUPPORTED_PLUGIN_PROTOCOLS = {
   knowledgeService: KNOWLEDGE_SERVICE_PROTOCOL_VERSION,
   literatureService: LITERATURE_SERVICE_PROTOCOL_VERSION,
   runtimeTools: RUNTIME_TOOLS_PROTOCOL_VERSION,
+  runtimeExtensions: RUNTIME_EXTENSIONS_PROTOCOL_VERSION,
 } as const;
 
 export type PluginCategory = "skills" | "knowledge" | "visualization" | "analysis" | "workflow" | "other";
 export type LegacyPluginKind = "skill-pack" | "knowledge-base" | "previewer" | "ui-panel" | "literature-provider" | "workflow";
-export type PluginPermission = "read:workspace" | "read:data" | "compute:worker" | "compute:container" | "network" | "process:background";
+export type PluginPermission = "read:workspace" | "read:data" | "compute:worker" | "compute:container" | "network" | "process:background" | "write:workspace" | "execute:process" | "workspace:checkpoint";
 export type PluginEnvironment = "local" | "cloud" | "browser";
 
 export interface PluginDependency {
@@ -49,6 +51,22 @@ export interface RuntimeToolContribution {
   capability: RuntimeToolCapability;
   targets: string[];
 }
+export interface RuntimeExtensionContribution extends EntryContribution { targets: string[]; }
+export interface RuntimeProcessResult { exitCode: number | null; stdout: string; stderr: string; durationMs: number; timedOut: boolean; }
+export interface RuntimePluginHostContext {
+  sessionId: string; agentName: string; cwd: string;
+  storage: { readJson(name: string): Promise<unknown | undefined>; writeJson(name: string, value: unknown): Promise<void>; appendJsonl(name: string, value: unknown): Promise<void>; };
+  checkpoints: {
+    capture(kind: "experiment" | "experiment-best"): Promise<{ id: string; commitId?: string; status?: string; error?: string }>;
+    preview(id: string): Promise<{ stateToken: string; files: Array<{ path: string; status?: string }> } | undefined>;
+    restore(id: string, stateToken: string): Promise<{ restoredCheckpointId: string }>;
+    provenance(id: string): Promise<Array<{ path: string; status?: string }> | undefined>;
+  };
+  workspaceLease: { acquire(): boolean; release(): void; owned(): boolean };
+  execProcess(command: string, timeoutMs?: number): Promise<RuntimeProcessResult>;
+  emit(name: string, value: unknown): void;
+}
+export type RuntimePluginFactory = (context: RuntimePluginHostContext) => unknown | Promise<unknown>;
 
 export interface PluginContributions extends Record<string, unknown> {
   previewers?: PreviewerContribution[];
@@ -61,6 +79,7 @@ export interface PluginContributions extends Record<string, unknown> {
   workflows?: WorkflowContribution[];
   agentInstructions?: AgentInstructionContribution[];
   runtimeTools?: RuntimeToolContribution[];
+  runtimeExtensions?: RuntimeExtensionContribution[];
 }
 
 export interface PluginManifest {
@@ -159,6 +178,7 @@ export interface InstalledPlugin {
   repositoryUrl?: string;
   executesLocalCode?: boolean;
   unsupported?: string[];
+  executionTrust?: { version: string; trustedAt: string };
 }
 
 export interface PluginUpdateStatus {
@@ -188,7 +208,7 @@ export interface LiteratureSearchResult { citation: ServiceCitation; abstract?: 
 const ID = /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/;
 const KINDS = new Set<LegacyPluginKind>(["skill-pack", "knowledge-base", "previewer", "ui-panel", "literature-provider", "workflow"]);
 const CATEGORIES = new Set<PluginCategory>(["skills", "knowledge", "visualization", "analysis", "workflow", "other"]);
-const PERMISSIONS = new Set<PluginPermission>(["read:workspace", "read:data", "compute:worker", "compute:container", "network", "process:background"]);
+const PERMISSIONS = new Set<PluginPermission>(["read:workspace", "read:data", "compute:worker", "compute:container", "network", "process:background", "write:workspace", "execute:process", "workspace:checkpoint"]);
 const RUNTIME_TOOL_CAPABILITIES = new Set<RuntimeToolCapability>(["builtin.monitor"]);
 const ENVIRONMENTS = new Set<PluginEnvironment>(["local", "cloud", "browser"]);
 
@@ -306,6 +326,18 @@ export function parsePluginManifest(value: unknown): PluginManifest | null {
       }
       if (!uniqueIds(runtimeTools)) return null;
       contributes.runtimeTools = runtimeTools;
+    }
+    if (value.contributes.runtimeExtensions !== undefined) {
+      if (!Array.isArray(value.contributes.runtimeExtensions)) return null;
+      const runtimeExtensions: RuntimeExtensionContribution[] = [];
+      for (const item of value.contributes.runtimeExtensions) {
+        if (!object(item) || typeof item.id !== "string" || !item.id.trim() || typeof item.title !== "string" || !item.title.trim() || typeof item.entry !== "string" || !isSafePluginPath(item.entry)) return null;
+        const targets = stringArray(item.targets);
+        if (!targets?.length || targets.some((target) => !target.trim())) return null;
+        runtimeExtensions.push({ id: item.id.trim(), title: item.title.trim(), entry: item.entry, targets: [...new Set(targets.map((target) => target.trim()))] });
+      }
+      if (!uniqueIds(runtimeExtensions)) return null;
+      contributes.runtimeExtensions = runtimeExtensions;
     }
   }
   const engines = object(value.engines) && typeof value.engines.brainpilot === "string" ? { brainpilot: value.engines.brainpilot } : undefined;

@@ -11,6 +11,13 @@ Conformance and compatibility-matrix helpers are exported from
 `@brainpilot/plugin-sdk/testing`. The BrainPilot CLI exposes them as
 `brainpilot plugin test`; no separate testing npm package is used.
 
+## Executable runtime extensions
+
+Marketplace plugins may declare `contributes.runtimeExtensions[]` with a safe,
+self-contained ESM entry and targeted agent names. Code remains disabled until
+the exact installed version is explicitly trusted. The default export receives
+the permission-checked `RuntimePluginHostContext`.
+
 ## Catalogue and lifecycle
 
 BrainPilot reads the built-in catalogue, `<dataDir>/plugins/marketplace.json`,

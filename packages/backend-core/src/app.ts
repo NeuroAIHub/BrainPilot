@@ -69,6 +69,7 @@ import {
   isFileContextBridgeEnabled,
   listEnabledPreviewers,
   listEnabledRuntimeTools,
+  listEnabledRuntimeExtensions,
   listInstalledPlugins,
   listMarketplace,
   listMarketplaceSourceStatuses,
@@ -79,6 +80,7 @@ import {
   setPluginEnabled,
   uninstallPlugin,
   updatePlugin,
+  trustPluginExecution,
 } from "./plugins.js";
 import { listDatasetJobs, listDatasets, startDatasetDownload } from "./datasets.js";
 
@@ -140,8 +142,12 @@ export function createApp(options: CreateAppOptions): Hono {
 
   async function syncRuntimeCapabilities(client: RuntimeClient): Promise<void> {
     const capabilities = await listEnabledRuntimeTools(dataDir);
+    const runtimeExtensions = (await listEnabledRuntimeExtensions(dataDir)).map((item) => ({
+      pluginId: item.pluginId, pluginVersion: item.pluginVersion, entry: item.extension.entry,
+      targets: item.extension.targets, permissions: item.permissions, skillEntries: item.skillEntries,
+    }));
     const response = await client.forward("setRuntimeCapabilities", {
-      body: JSON.stringify({ capabilities }),
+      body: JSON.stringify({ capabilities, ...(runtimeExtensions.length ? { runtimeExtensions } : {}) }),
       headers: { "content-type": "application/json" },
     });
     if (!response.ok) throw new Error(`runtime capability sync failed (${response.status})`);
@@ -533,6 +539,16 @@ export function createApp(options: CreateAppOptions): Hono {
     try {
       const installed = await setPluginEnabled(dataDir, c.req.param("id"), body.enabled);
       if (installed) await syncKnownRuntimes();
+      return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
+    } catch (error) {
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+    }
+  });
+  api.post("/plugins/:id/trust-execution", async (c) => {
+    const body = await safeJson(c);
+    if (typeof body.version !== "string" || !body.version) return c.json({ error: "version is required" }, 400);
+    try {
+      const installed = await trustPluginExecution(dataDir, c.req.param("id"), body.version);
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
