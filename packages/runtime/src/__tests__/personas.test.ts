@@ -217,6 +217,11 @@ Stale local routing rule.`;
     expect(pi).toContain("experimentalist` reads that contract");
     expect(pi).toContain("waits such as `sleep`");
     expect(pi).toContain("Do not write analysis");
+    expect(pi).toContain("The training prohibition is absolute");
+    expect(pi).toContain("smoke-test training");
+    expect(pi).toContain("Delegate every such run to `engineer`");
+    expect(pi).toContain("you must not");
+    expect(pi).toContain("execute the training command yourself");
   });
 
   it("requires data contracts, protocols, and independent method rechecks", () => {
