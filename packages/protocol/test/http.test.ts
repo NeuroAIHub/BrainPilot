@@ -62,6 +62,7 @@ describe("Runtime HTTP contract", () => {
     expect(
       GetSessionStateResponseSchema.parse({
         runState: { active: false, runId: null },
+        workState: { active: false },
         agents: [],
         lastActivityTs: "",
       }).runState.active,
