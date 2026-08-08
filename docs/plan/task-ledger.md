@@ -8,7 +8,7 @@ BrainPilot uses a durable, session-scoped flat task ledger for agent-to-agent wo
 
 ## Contract
 
-- Statuses are `pending`, `completed`, and host-only `cancelled`.
+- Statuses are `pending`, `replied`, and host-only `cancelled`.
 - Tasks are ordered with pending tasks first, then by creation sequence.
 - Every non-trace agent receives a fresh `<task_list>` containing pending `assigned_to_me` and `delegated_by_me` entries.
 - Completion replies are delivered once through `<task_events>`; failed provider runs leave their notifications unacknowledged for replay.
@@ -19,7 +19,7 @@ Task changes use AG-UI `CUSTOM` events named `task_state`:
 
 ```ts
 { op: "snapshot", tasks: TaskRecord[] }
-{ op: "created" | "completed" | "cancelled", task: TaskRecord }
+{ op: "created" | "replied" | "cancelled", task: TaskRecord }
 ```
 
 Normal tool execution continues to use `TOOL_CALL_*`; warnings and terminal delivery errors use `system_message`.

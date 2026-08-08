@@ -91,10 +91,10 @@ describe("flat task delegation", () => {
     await manager.sendMessage(session.id, "DELEGATE");
     await waitFor(() => prompts.filter((prompt) => prompt.agent === "principal").length >= 2);
     const reply = prompts.filter((prompt) => prompt.agent === "principal")[1]!;
-    expect(reply.text).toContain('<task_event kind="completed" task_id="task_000001" from="librarian">');
+    expect(reply.text).toContain('<task_event kind="replied" task_id="task_000001" from="librarian">');
     expect(reply.text).toContain("docs/reports/findings.md");
     await waitFor(() => manager.getSessionState(session.id)?.runState.active === false);
-    expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "completed" });
+    expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "replied" });
     expect(prompts.filter((prompt) => prompt.agent === "principal")).toHaveLength(2);
   });
 
@@ -129,9 +129,9 @@ describe("flat task delegation", () => {
     const auditPrompt = prompts.find((prompt) => prompt.agent === "auditor")!;
     expect(auditPrompt.text).toContain("Target: raw engineer result");
     const piFeedback = prompts.filter((prompt) => prompt.agent === "principal")[1]!;
-    expect(piFeedback.text).toContain('<task_event kind="completed" task_id="task_000001" from="auditor">');
+    expect(piFeedback.text).toContain('<task_event kind="replied" task_id="task_000001" from="auditor">');
     expect(piFeedback.text).toContain("A1 owner: engineer");
-    expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "completed", assigned_to: "auditor" });
+    expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "replied", assigned_to: "auditor" });
   });
 
   it("rejects Auditor dispatch when the system plugin is disabled", async () => {

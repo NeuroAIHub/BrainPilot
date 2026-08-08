@@ -2395,8 +2395,8 @@ export class SessionManager {
       completeTask: async (taskId, reply) => {
         const before = entry.taskLedger.get(taskId);
         const task = await entry.taskLedger.complete(taskId, name, reply);
-        if (before?.status !== "completed") {
-          entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "completed", task }));
+        if (before?.status !== "replied") {
+          entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "replied", task }));
           this.touch(entry);
           this.emitSessionState(entry);
         }

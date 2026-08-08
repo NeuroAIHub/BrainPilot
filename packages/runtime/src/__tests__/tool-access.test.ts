@@ -33,7 +33,7 @@ function deps(name: string): ToolDeps {
     }),
     completeTask: async (taskId, reply) => ({
       id: taskId, seq: 1, created_by: "principal", assigned_to: name, content: "work",
-      status: "completed", reply, created_at: 1, completed_at: 2,
+      status: "replied", reply, created_at: 1, completed_at: 2,
     }),
     dispatchTrace: async () => {},
     ensureAgent: async () => {},

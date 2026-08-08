@@ -291,7 +291,7 @@ export type CustomEvent = z.infer<typeof CustomEventSchema>;
  * - `trace_node` — transitional V1 Graph-of-Trace node projection; `value` is
  *   `{ op: "created" | "updated", node: TraceNode }`.
  * - `trace_delta` — derived TraceGraphV2 API-view revision update.
- * - `task_state` — flat task-ledger snapshot or one created/completed/cancelled edge.
+ * - `task_state` — flat task-ledger snapshot or one created/replied/cancelled edge.
  * - `compaction` — Pi SDK auto/manual context compaction lifecycle. `value` is
  *   `CompactionStartValue | CompactionEndValue`. Emitted verbatim from the
  *   Pi `compaction_start` / `compaction_end` events (mas-agent.ts) so clients
@@ -315,7 +315,7 @@ export const CUSTOM_EVENT = {
   AUTORESEARCH_STATE: "autoresearch_state",
 } as const;
 
-export const TaskStatusSchema = z.enum(["pending", "completed", "cancelled"]);
+export const TaskStatusSchema = z.enum(["pending", "replied", "cancelled"]);
 export type TaskStatus = z.infer<typeof TaskStatusSchema>;
 
 export const TaskRecordSchema = z.object({
@@ -333,7 +333,7 @@ export type TaskRecord = z.infer<typeof TaskRecordSchema>;
 
 export const TaskStateValueSchema = z.discriminatedUnion("op", [
   z.object({ op: z.literal("snapshot"), tasks: z.array(TaskRecordSchema) }).strict(),
-  z.object({ op: z.enum(["created", "completed", "cancelled"]), task: TaskRecordSchema }).strict(),
+  z.object({ op: z.enum(["created", "replied", "cancelled"]), task: TaskRecordSchema }).strict(),
 ]);
 export type TaskStateValue = z.infer<typeof TaskStateValueSchema>;
 
