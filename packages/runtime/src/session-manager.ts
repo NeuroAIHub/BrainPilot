@@ -2681,17 +2681,28 @@ export class SessionManager {
         : undefined;
       if (name === "trace") entry.currentTraceRecord = traceRecord;
       if (name === "auditor") entry.currentTraceAuditTarget = auditTarget;
-      // #167: cap concurrent provider calls across experts in this session.
+      const taskEvents = this.renderTaskEvents(notifications);
       let ran = false;
       try {
-        ran = await this.withProviderSlot(sessionId, async () => {
-          // Stop may have paused delivery while this run waited for a provider
-          // semaphore slot. Do not start a new model call after Stop completed.
-          const current = this.sessions.get(sessionId);
-          if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
-          await agent.prompt(this.renderTaskEvents(notifications));
-          return true;
-        });
+        if (agent.isStreaming) {
+          // The notification is already durable. Queue it into the active Pi
+          // run, then fence that run before acknowledging the batch.
+          await agent.followUpAndWait(taskEvents);
+          ran = true;
+        } else {
+          // #167: cap new provider runs across experts in this session.
+          ran = await this.withProviderSlot(sessionId, async () => {
+            // Stop may have paused delivery while this run waited for a provider
+            // semaphore slot. Do not start a new model call after Stop completed.
+            const current = this.sessions.get(sessionId);
+            if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+            // A user run can start while this delivery waits for a provider
+            // slot. Inject rather than racing it with a second plain prompt.
+            if (agent.isStreaming) await agent.followUpAndWait(taskEvents);
+            else await agent.prompt(taskEvents);
+            return true;
+          });
+        }
       } finally {
         if (name === "trace") entry.currentTraceRecord = undefined;
         if (name === "auditor") entry.currentTraceAuditTarget = undefined;
