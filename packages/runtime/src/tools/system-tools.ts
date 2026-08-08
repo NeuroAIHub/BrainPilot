@@ -302,7 +302,10 @@ export function createStartMonitorTool(deps: ToolDeps): SystemTool {
     name: "start_monitor",
     description:
       "Start a background shell command and receive its stdout as untrusted monitor events. " +
-      "Use selective, line-buffered output; silence costs no model turn. Persistent monitors run until explicitly stopped or the session ends.",
+      "Use selective, line-buffered output; silence costs no model turn. " +
+      "Do not run sleep commands or poll while waiting. If monitoring is your only remaining work, end the current turn; " +
+      "the runtime will wake you automatically when stdout emits a complete line. " +
+      "Persistent monitors run until explicitly stopped or the session ends.",
     parameters: {
       type: "object",
       properties: {
