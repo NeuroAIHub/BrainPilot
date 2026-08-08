@@ -6,7 +6,7 @@ Return this structure inside `complete_task.reply`. Use the user's language for 
 # Audit Result
 
 Audit ID: <audit-id>
-Verdict: <pass | revise | block>
+Verdict: <PASS | REVISE | BLOCK>
 Risk: <low | medium | high>
 
 ## Required scientific checks
@@ -40,4 +40,4 @@ Risk: <low | medium | high>
 - <finding IDs and changed claims that require re-review>
 ```
 
-For modelling or statistical work, include every required scientific check and justify every `not-applicable`. Use `pass` only when no applicable check is `flaw` or `unverified` and no checked claim has an open material finding. Use `revise` for correctable open findings. Use `block` when a high-risk claim must not be delivered in its current form.
+For modelling or statistical work, include every required scientific check and justify every `not-applicable`. Use `PASS` only when no applicable check is `flaw` or `unverified` and no checked claim has an open material finding. Use `REVISE` for correctable open findings. Use `BLOCK` when a high-risk claim must not be delivered in its current form. For `REVISE` or `BLOCK`, explicitly state that PI must not claim the task is complete or deliver the affected conclusions.

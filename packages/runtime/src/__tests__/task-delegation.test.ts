@@ -116,7 +116,7 @@ describe("flat task delegation", () => {
             tool: "complete_task",
             args: {
               task_id: id,
-              reply: "Verdict: revise\nA1 owner: engineer\nRequired change: cite the result file.",
+              reply: "Verdict: REVISE\nA1 owner: engineer\nRequired change: cite the result file.",
             },
           } : undefined;
         } },
