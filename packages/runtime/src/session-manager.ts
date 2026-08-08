@@ -3116,7 +3116,7 @@ export class SessionManager {
     if (this.deriveRunActive(entry)) return true;
     // Covers the acceptance→agent-running gap for a direct expert prompt.
     if (entry.activeRunId !== null) return true;
-    if (entry.monitorManager.hasRunning() || entry.backgroundJobManager.hasRunning()) return true;
+    if (entry.monitorManager.hasBlocking() || entry.backgroundJobManager.hasRunning()) return true;
     if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "running")) return true;
     for (const agent of entry.agents.values()) {
       if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;

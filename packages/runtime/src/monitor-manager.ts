@@ -19,6 +19,8 @@ export interface MonitorInfo {
   command: string;
   status: MonitorStatus;
   persistent: boolean;
+  /** Whether this process must finish before aggregate session work can settle. */
+  blocking: boolean;
   timeoutMs: number;
   startedAt: string;
   finishedAt?: string;
@@ -81,12 +83,16 @@ export class MonitorManager {
     command: string;
     timeoutMs?: number;
     persistent?: boolean;
+    blocking?: boolean;
   }): MonitorInfo {
     const description = input.description.trim();
     const command = input.command.trim();
     if (!description) throw new Error("description is required");
     if (!command) throw new Error("command is required");
     const persistent = input.persistent === true;
+    // Finite commands are task work by default. Persistent subscriptions are
+    // background infrastructure unless explicitly marked as blocking.
+    const blocking = input.blocking ?? !persistent;
     const requested = input.timeoutMs ?? MONITOR_DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(requested) || requested <= 0 || requested > MONITOR_MAX_TIMEOUT_MS) {
       throw new Error(`timeout_ms must be between 1 and ${MONITOR_MAX_TIMEOUT_MS}`);
@@ -110,6 +116,7 @@ export class MonitorManager {
         command,
         status: "running",
         persistent,
+        blocking,
         timeoutMs,
         startedAt: new Date().toISOString(),
       },
@@ -160,6 +167,13 @@ export class MonitorManager {
   hasRunning(ownerAgent?: string): boolean {
     return [...this.monitors.values()].some((monitor) =>
       (!ownerAgent || monitor.info.ownerAgent === ownerAgent)
+      && (monitor.info.status === "running" || monitor.info.status === "stopping"),
+    );
+  }
+
+  hasBlocking(): boolean {
+    return [...this.monitors.values()].some((monitor) =>
+      monitor.info.blocking
       && (monitor.info.status === "running" || monitor.info.status === "stopping"),
     );
   }

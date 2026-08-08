@@ -85,6 +85,29 @@ describe("MonitorManager", () => {
     expect(second.manager.list()[0]?.finishedAt).toBeDefined();
   });
 
+  it("defaults finite monitors to blocking and persistent monitors to background", async () => {
+    const finite = await fixture();
+    finite.manager.start({
+      ownerAgent: "engineer",
+      description: "finite",
+      command: nodeCommand("setTimeout(() => {}, 50)"),
+    });
+    expect(finite.manager.list()[0]?.blocking).toBe(true);
+    expect(finite.manager.hasBlocking()).toBe(true);
+    await finite.manager.stopAll();
+
+    const persistent = await fixture();
+    persistent.manager.start({
+      ownerAgent: "engineer",
+      description: "subscription",
+      command: nodeCommand("setInterval(() => {}, 1000)"),
+      persistent: true,
+    });
+    expect(persistent.manager.list()[0]?.blocking).toBe(false);
+    expect(persistent.manager.hasBlocking()).toBe(false);
+    await persistent.manager.stopAll();
+  });
+
   it("stops a monitor that emits an oversized line", async () => {
     const { manager } = await fixture();
     manager.start({

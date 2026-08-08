@@ -233,10 +233,11 @@ reachable through the \`skill_search\` tool:
 - \`skill_search(mode="query", keywords="eeg, fmri, signal preprocessing")\`
   — keyword search of the router catalog. \`keywords\` is a **single
   comma-separated string** (NOT an array — do not wrap in \`[...]\`); the
-  server splits on \`,\` and matches each token against every skill's
-  frontmatter description. Returns the top-ranked skills with name,
-  description, paths, and hit count. Use this whenever you need a domain
-  method, technique, or pattern and \`<available_skills>\` has nothing matching.
+  server splits on \`,\` and ranks matches across skill names, aliases, domains,
+  categories, and descriptions. Results include the matched fields and terms.
+  Use this whenever you need a domain method, technique, or pattern and
+  \`<available_skills>\` has nothing matching. For a non-English task, query
+  with concise English technical terms and standard abbreviations.
 - \`skill_search(mode="query", skill_name="<name>")\` — load a skill's full
   \`SKILL.md\` body once you've decided which one to apply.
 - \`skill_search(mode="browse", relative_path="...")\` — list a category, walk

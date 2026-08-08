@@ -86,4 +86,20 @@ describe("Monitor runtime integration", () => {
       && ["stopping", "completed", "failed"].includes((event.value as { status?: string }).status ?? ""))).toBe(true);
     manager.shutdown();
   });
+
+  it("does not hold aggregate work open for a persistent background monitor", async () => {
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: mockAgentFactory,
+      runtimeCapabilities: ["builtin.monitor"],
+    });
+    const session = await manager.createSession();
+    await manager.sendMessage(
+      session.id,
+      `[[tool:start_monitor {"description":"subscription","command":"${process.execPath} -e \\"setInterval(() => {}, 1000)\\"","persistent":true}]]`,
+    );
+    await waitFor(() => manager.getSessionState(session.id)?.runState.active === false);
+    expect(manager.getSessionState(session.id)?.workState.active).toBe(false);
+    manager.shutdown();
+  });
 });

@@ -65,7 +65,7 @@ export interface ToolDeps {
   listSubagentProfiles?: () => Promise<Array<{ name: string; description: string; builtinTools: string[]; systemTools: string[]; mcp: boolean; modelId?: string; timeoutMs?: number }>>;
   /** Current host-owned record while the Trace Agent processes one trace event. */
   currentTraceRecord?: () => TraceNodeRecord | undefined;
-  startMonitor?: (input: { description: string; command: string; timeoutMs?: number; persistent?: boolean }) => unknown;
+  startMonitor?: (input: { description: string; command: string; timeoutMs?: number; persistent?: boolean; blocking?: boolean }) => unknown;
   listMonitors?: () => unknown;
   stopMonitor?: (monitorId: string) => Promise<boolean>;
   runInBackground?: (input: { jobKey: string; description: string; command: string; timeoutMs?: number; replaceExisting?: boolean }) => Promise<unknown>;
@@ -317,6 +317,10 @@ export function createStartMonitorTool(deps: ToolDeps): SystemTool {
         command: { type: "string", minLength: 1, maxLength: 16_000 },
         timeout_ms: { type: "number", minimum: 1, maximum: 3_600_000 },
         persistent: { type: "boolean" },
+        blocking: {
+          type: "boolean",
+          description: "Whether this process must finish before aggregate session work can settle. Defaults to true for finite monitors and false for persistent monitors.",
+        },
       },
       required: ["description", "command"],
     },
@@ -331,6 +335,7 @@ export function createStartMonitorTool(deps: ToolDeps): SystemTool {
           command,
           ...(typeof params.timeout_ms === "number" ? { timeoutMs: params.timeout_ms } : {}),
           ...(typeof params.persistent === "boolean" ? { persistent: params.persistent } : {}),
+          ...(typeof params.blocking === "boolean" ? { blocking: params.blocking } : {}),
         }), null, 2));
       } catch (error) {
         return { ...ok((error as Error).message), isError: true };
