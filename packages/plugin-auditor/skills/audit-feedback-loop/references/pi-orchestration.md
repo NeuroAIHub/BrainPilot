@@ -15,9 +15,19 @@ Raw Expert output is a valid intermediate target. Do not require Writer to turn 
 
 ## Process the verdict
 
-- `pass`: accept the checked scope; preserve stated limitations.
-- `revise`: assign each open finding to PI or the producing Expert, then follow `revision-loop.md`.
-- `block`: do not deliver the affected claim. Route safe correction work, ask the user only for a material decision or required authorization, then re-audit.
+- `pass`: verify that the compact reply names a report, then accept the checked
+  scope and preserve stated limitations. Read the full report only when its
+  limitations affect delivery.
+- `revise`: open the named report, read the sections for the listed finding IDs,
+  assign each finding to PI or the producing Expert, then follow
+  `revision-loop.md`.
+- `block`: open the named report and read the blocking findings; do not deliver
+  the affected claim. Route safe correction work, ask the user only for a
+  material decision or required authorization, then re-audit.
+
+The completion event is intentionally compact. Do not ask Auditor to paste the
+full report into the reply, and do not load unrelated report sections into the
+working context.
 
 PI owns all routing. Auditor advises PI and does not direct Experts. Never ask the user to carry an audit result back to PI.
 

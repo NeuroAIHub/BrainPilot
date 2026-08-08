@@ -13,6 +13,12 @@ describe("subagent profile overrides", () => {
       "api-librarian", "code-reviewer", "code-runner", "evidence-extractor",
       "literature-scout", "method-reviewer", "repo-scout",
     ]);
+    expect(builtinSubagentProfiles()
+      .filter((profile) => profile.allowedParents.includes("auditor"))
+      .map((profile) => profile.name)
+      .sort()).toEqual([
+      "code-reviewer", "evidence-extractor", "method-reviewer", "repo-scout",
+    ]);
   });
 
   it("loads prompt and validated config overrides while stripping forbidden tools", async () => {
@@ -76,4 +82,3 @@ describe("subagent profile overrides", () => {
     await expect(loadSubagentProfile(root, "../escape")).rejects.toThrow("invalid subagent profile name");
   });
 });
-

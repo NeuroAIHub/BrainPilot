@@ -17,21 +17,39 @@ describe("bundled system plugins", () => {
     const snapshot = snapshotSystemPlugins(plugins);
     expect(systemPluginEnabled(snapshot, AUDITOR_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, GOT_PLUGIN_ID)).toBe(true);
-    expect(systemPluginSkillPaths(plugins, snapshot, "principal")[0]).toMatch(/plugin-auditor.*audit-feedback-loop/);
+    const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
+    expect(principalSkills).toHaveLength(1);
+    expect(principalSkills[0]).toMatch(/plugin-auditor.*audit-feedback-loop/);
+    const auditorSkills = systemPluginSkillPaths(plugins, snapshot, "auditor");
+    expect(auditorSkills).toHaveLength(5);
+    for (const skill of [
+      "audit-feedback-loop",
+      "audit-data-integrity",
+      "audit-model-validation",
+      "audit-code-artifact",
+      "audit-evidence",
+    ]) {
+      expect(auditorSkills).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(skill))]));
+    }
     expect(systemPluginSkillPaths(plugins, snapshot, "engineer")).toEqual([]);
     expect(systemPluginSkillPaths(plugins, snapshot, "trace")[0])
       .toMatch(/plugin-got.*curate-research-trace/);
     const principalInstructions = (await systemPluginInstructions(plugins, snapshot, "principal")).join("\n");
     expect(principalInstructions).toContain("Auditor feedback loop");
-    expect(principalInstructions).toContain("never immediately claim that the task is");
+    expect(principalInstructions).toContain("never immediately claim that the");
+    expect(principalInstructions).toContain("task is complete");
     expect(principalInstructions).toContain("Only `Verdict: PASS`");
     const auditorInstructions = (await systemPluginInstructions(plugins, snapshot, "auditor")).join("\n");
     expect(auditorInstructions).toContain("Begin every completed audit reply");
     expect(auditorInstructions).toContain("PI must not claim the task is complete");
-    const auditorSkill = systemPluginSkillPaths(plugins, snapshot, "auditor")[0]!;
+    const auditorSkill = auditorSkills.find((path) => path.endsWith("audit-feedback-loop"))!;
     const auditorReview = await readFile(join(auditorSkill, "references", "auditor-review.md"), "utf8");
-    expect(auditorReview).toContain("Comparison and adaptation validity");
-    expect(auditorReview).toContain("Do not prescribe a winning model or redesign the study");
+    expect(auditorReview).toContain("call `spawn_subagent` once with two to");
+    expect(auditorReview).toContain("Children return evidence and candidate findings only");
+    expect(auditorReview).toContain("Write the complete report to a new path under");
+    const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
+    expect(responseTemplate).toContain("## Compact completion reply");
+    expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");
     expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });
 
