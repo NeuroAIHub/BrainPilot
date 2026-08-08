@@ -14,14 +14,14 @@
  *   <dataRoot>/bp_template/skills-router/  (router-only)
  *     Pi never sees this directory. Agents discover its contents only by
  *     calling THIS tool, which lazily scans, ranks, and returns matching
- *     skills. The router holds the long tail (~42 domain skills bundled by
- *     default) without bloating every prompt.
+ *     skills. The router holds the long tail of domain skills without bloating
+ *     every prompt.
  *
  * Both directories accept user-added skills with the same on-disk format
  * (`<category>/<skill_name>/SKILL.md` + optional `references/` / `scripts/`).
  *
  * Modes (preserved verbatim from the legacy `skills_tool_local` MCP server):
- *   - mode="query" + keywords      → top-K {name, description, paths, hits}
+ *   - mode="query" + keywords      → top-K ranked metadata with match reasons
  *     `keywords` is a SINGLE comma-separated string, e.g. `"eeg, fmri,
  *     signal preprocessing"`. The single-string shape is enforced by the JSON
  *     schema; older array-shaped inputs are still tolerated at runtime by
@@ -38,6 +38,7 @@
 import { readFile, readdir, stat, access } from "node:fs/promises";
 import { constants as FS } from "node:fs";
 import { isAbsolute, join, resolve, sep, posix } from "node:path";
+import { parse as parseYaml } from "yaml";
 import type { SystemTool } from "../types.js";
 import type { ToolDeps } from "./system-tools.js";
 
@@ -46,6 +47,9 @@ import type { ToolDeps } from "./system-tools.js";
 export interface SkillRecord {
   name: string;
   description: string;
+  domain?: string;
+  aliases: string[];
+  categories: string[];
   /** Category-relative paths where this skill name appears (multi-category dedupe). */
   relative_paths: string[];
 }
@@ -55,6 +59,9 @@ export interface QueryResultEntry {
   description: string;
   relative_paths: string[];
   keyword_hits: number;
+  score: number;
+  matched_fields: string[];
+  matched_terms: string[];
 }
 
 export interface QueryResult {
@@ -66,20 +73,39 @@ export interface QueryResult {
 
 /* --------------------------- frontmatter -------------------------- */
 
-/**
- * Parse the `description` field from YAML frontmatter (the leading `---` block)
- * of a SKILL.md. Handles double-quoted, single-quoted, and unquoted values.
- * Returns "" when absent.
- */
+interface SkillFrontmatter {
+  description: string;
+  domain?: string;
+  aliases: string[];
+}
+
+/** Parse complete YAML frontmatter, including folded description scalars. */
+function parseSkillFrontmatter(content: string): SkillFrontmatter {
+  const match = content.match(/^\uFEFF?---[ \t]*\r?\n([\s\S]*?)\r?\n---(?:[ \t]*\r?\n|$)/);
+  if (!match?.[1]) return { description: "", aliases: [] };
+  try {
+    const parsed = parseYaml(match[1]);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return { description: "", aliases: [] };
+    }
+    const fields = parsed as Record<string, unknown>;
+    const description = typeof fields.description === "string" ? fields.description.trim() : "";
+    const domain = typeof fields.domain === "string" && fields.domain.trim() ? fields.domain.trim() : undefined;
+    const aliases = Array.isArray(fields.aliases)
+      ? fields.aliases
+        .filter((value): value is string => typeof value === "string")
+        .map((value) => value.trim())
+        .filter(Boolean)
+      : [];
+    return { description, ...(domain ? { domain } : {}), aliases };
+  } catch {
+    return { description: "", aliases: [] };
+  }
+}
+
+/** Backward-compatible helper retained for downstream callers. */
 export function parseFrontmatterDescription(content: string): string {
-  const fmMatch = content.match(/^---\s*\n([\s\S]*?)\n---/);
-  if (!fmMatch || !fmMatch[1]) return "";
-  const fm = fmMatch[1];
-  const m = fm.match(
-    /^description:\s*(?:["'])(.*?)(?:["'])\s*$|^description:\s*(.+?)\s*$/m,
-  );
-  if (!m) return "";
-  return (m[1] ?? m[2] ?? "").trim();
+  return parseSkillFrontmatter(content).description;
 }
 
 /* --------------------------- fs helpers --------------------------- */
@@ -131,16 +157,30 @@ export async function collectAllSkills(base: string): Promise<SkillRecord[]> {
       const existing = byName.get(skillName);
       if (existing) {
         existing.relative_paths.push(relPath);
+        if (!existing.categories.includes(category)) existing.categories.push(category);
+        try {
+          const metadata = parseSkillFrontmatter(await readFile(skillMd, "utf8"));
+          existing.aliases = [...new Set([...existing.aliases, ...metadata.aliases])];
+          if (!existing.domain && metadata.domain) existing.domain = metadata.domain;
+        } catch {
+          /* unreadable duplicate → retain the first occurrence metadata */
+        }
         continue;
       }
-      let description = "";
+      let metadata: SkillFrontmatter = { description: "", aliases: [] };
       try {
-        const content = await readFile(skillMd, "utf8");
-        description = parseFrontmatterDescription(content);
+        metadata = parseSkillFrontmatter(await readFile(skillMd, "utf8"));
       } catch {
-        /* unreadable SKILL.md → empty description */
+        /* unreadable SKILL.md → empty metadata */
       }
-      byName.set(skillName, { name: skillName, description, relative_paths: [relPath] });
+      byName.set(skillName, {
+        name: skillName,
+        description: metadata.description,
+        ...(metadata.domain ? { domain: metadata.domain } : {}),
+        aliases: metadata.aliases,
+        categories: [category],
+        relative_paths: [relPath],
+      });
     }
   }
   return [...byName.values()];
@@ -149,18 +189,63 @@ export async function collectAllSkills(base: string): Promise<SkillRecord[]> {
 /* --------------------------- ranking ------------------------------ */
 
 export function countKeywordHits(text: string, keywords: string[]): number {
-  const lower = text.toLowerCase();
+  const normalized = normalizeSearchText(text);
   let hits = 0;
   for (const kw of keywords) {
-    const kl = kw.toLowerCase();
+    const kl = normalizeSearchText(kw);
     if (!kl) continue;
     let pos = 0;
-    while ((pos = lower.indexOf(kl, pos)) !== -1) {
+    while ((pos = normalized.indexOf(kl, pos)) !== -1) {
       hits++;
       pos += kl.length;
     }
   }
   return hits;
+}
+
+/** Normalize separators and Unicode variants while preserving domain syntax. */
+export function normalizeSearchText(value: string): string {
+  return value
+    .normalize("NFKC")
+    .toLocaleLowerCase("en-US")
+    .replace(/[-_/\\]+/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+interface SkillScore {
+  score: number;
+  matchedFields: string[];
+  matchedTerms: string[];
+}
+
+const FIELD_WEIGHTS = { name: 6, aliases: 5, domain: 3, categories: 3, description: 1 } as const;
+
+/** Deterministic field-weighted ranking; each term scores once per field. */
+export function scoreSkill(skill: SkillRecord, keywords: string[]): SkillScore {
+  const fields: Array<[keyof typeof FIELD_WEIGHTS, string[]]> = [
+    ["name", [skill.name]],
+    ["aliases", skill.aliases],
+    ["domain", skill.domain ? [skill.domain] : []],
+    ["categories", skill.categories],
+    ["description", [skill.description]],
+  ];
+  const matchedFields = new Set<string>();
+  const matchedTerms = new Set<string>();
+  let score = 0;
+  for (const rawKeyword of keywords) {
+    const keyword = normalizeSearchText(rawKeyword);
+    if (!keyword) continue;
+    for (const [field, values] of fields) {
+      if (values.some((value) => normalizeSearchText(value).includes(keyword))) {
+        score += FIELD_WEIGHTS[field];
+        matchedFields.add(field);
+        matchedTerms.add(rawKeyword);
+      }
+    }
+  }
+  if (keywords.length > 0 && matchedTerms.size === keywords.length) score += 3;
+  return { score, matchedFields: [...matchedFields], matchedTerms: [...matchedTerms] };
 }
 
 /* --------------------------- search ------------------------------- */
@@ -197,7 +282,13 @@ export interface SkillSearchArgs {
 export function normalizeKeywords(raw: string | string[] | undefined): string[] {
   if (raw === undefined || raw === null) return [];
   const asString = typeof raw === "string" ? raw : String(raw);
-  return asString.split(",").map((s) => s.trim()).filter(Boolean);
+  const seen = new Set<string>();
+  return asString.split(",").map((s) => s.trim()).filter((value) => {
+    const key = normalizeSearchText(value);
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
 }
 
 /** JSON-stringify with 2-space indent; the model parses these as text. */
@@ -255,22 +346,23 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
     }
     const skills = await collectAllSkills(baseAbs);
     const topk = typeof args.topk === "number" && args.topk > 0 ? Math.floor(args.topk) : 5;
-    const scored = skills.map((skill) => ({
-      skill,
-      hits: countKeywordHits(skill.description, kws),
-    }));
-    // Sort: hit count desc, then alphabetical name asc.
-    scored.sort((a, b) => b.hits - a.hits || a.skill.name.localeCompare(b.skill.name));
+    const scored = skills
+      .map((skill) => ({ skill, ...scoreSkill(skill, kws) }))
+      .filter(({ score }) => score > 0);
+    scored.sort((a, b) => b.score - a.score || a.skill.name.localeCompare(b.skill.name));
     const top = scored.slice(0, topk);
     const result: QueryResult = {
       keywords: kws,
-      total_matched: scored.filter((s) => s.hits > 0).length,
+      total_matched: scored.length,
       returned: top.length,
-      results: top.map(({ skill, hits }) => ({
+      results: top.map(({ skill, score, matchedFields, matchedTerms }) => ({
         name: skill.name,
         description: skill.description,
         relative_paths: skill.relative_paths,
-        keyword_hits: hits,
+        keyword_hits: score,
+        score,
+        matched_fields: matchedFields,
+        matched_terms: matchedTerms,
       })),
     };
     return jsonText(result);
@@ -354,7 +446,8 @@ export function createSkillSearchTool(deps: ToolDeps): SystemTool {
       "catalog NOT included in <available_skills>. Use this whenever the skill " +
       "you need is not visible in <available_skills>. Modes: 'query' with " +
       "keywords (top-K ranked metadata), 'query' with skill_name (full SKILL.md), " +
-      "or 'browse' with relative_path (list directory or read a file).",
+      "or 'browse' with relative_path (list directory or read a file). For " +
+      "non-English tasks, query with concise English technical terms and standard abbreviations.",
     parameters: {
       type: "object",
       properties: {
@@ -366,10 +459,11 @@ export function createSkillSearchTool(deps: ToolDeps): SystemTool {
         keywords: {
           type: "string",
           description:
-            "(query mode) comma-separated keyword string matched against each " +
-            "skill's frontmatter description — e.g. \"eeg, fmri, signal " +
-            "preprocessing\". Do NOT wrap in an array or JSON-encode it; pass " +
-            "the raw string. Splitting on ',' happens server-side.",
+            "(query mode) comma-separated technical terms matched against skill " +
+            "names, aliases, domains, categories, and descriptions — e.g. " +
+            "\"eeg, fmri, signal preprocessing\". For non-English tasks, use " +
+            "concise English terms and standard abbreviations. Do NOT wrap in " +
+            "an array or JSON-encode it; splitting on ',' happens server-side.",
         },
         topk: {
           type: "integer",
