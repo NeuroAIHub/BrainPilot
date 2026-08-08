@@ -1736,8 +1736,8 @@ export class SessionManager {
     // #70: emit an initial session_state frame here — onStatusChange only fires
     // on a status *change*, and ensureAgent creates the agent as idle without
     // emitting, so without this the panel stays empty until the first
-    // setStatus("running"). This first frame carries runState.active=true + the
-    // freshly-ensured agent.
+    // setStatus("running"). This first frame carries the appropriate PI and
+    // aggregate lifecycle values plus the freshly-ensured agent.
     this.emitSessionState(entry);
     // issue #42: persist + broadcast the user's own prompt as a role:"user"
     // CHUNK *before* the agent runs, so SSE replay reconstructs the full
@@ -2978,6 +2978,23 @@ export class SessionManager {
     return false;
   }
 
+  /**
+   * Aggregate lifecycle for every execution owned by the session. Unlike
+   * runState this includes experts, Trace, subagents, delivery-loop handoffs,
+   * monitors, and background jobs so external harnesses can await quiescence.
+   */
+  private deriveWorkActive(entry: SessionEntry): boolean {
+    if (this.deriveRunActive(entry)) return true;
+    // Covers the acceptance→agent-running gap for a direct expert prompt.
+    if (entry.activeRunId !== null) return true;
+    if (entry.monitorManager.hasRunning() || entry.backgroundJobManager.hasRunning()) return true;
+    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "running")) return true;
+    for (const agent of entry.agents.values()) {
+      if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
+    }
+    return [...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`));
+  }
+
   /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
   private hasAnyAgentActivity(entry: SessionEntry): boolean {
     if (entry.runActive || entry.userInputs.active || entry.userInputs.queue.length > 0) return true;
@@ -3012,8 +3029,8 @@ export class SessionManager {
    * event. This is the wholesale source the web Agents panel replaces its
    * agents list from; it is pushed on every agent status transition
    * (`onStatusChange`), an initial frame in `sendMessage`, and on delivery-loop
-   * entry/exit. `runState.active` is DERIVED (any non-trace agent running / a
-   * pending delivery), so a delegated expert keeps the run visibly active. The
+   * entry/exit. `runState.active` is PI-only; `workState.active` is the
+   * aggregate completion authority for the whole session. The
    * ring buffer replays the last frame on reconnect, so a re-subscribing client
    * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
    */
@@ -3021,6 +3038,7 @@ export class SessionManager {
     entry.bus.emit(
       ev.custom({ sessionId: entry.id }, "session_state", {
         runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
+        workState: { active: this.deriveWorkActive(entry) },
         agents: this.listAgents(entry.id),
         subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3045,6 +3063,7 @@ export class SessionManager {
 
   getSessionState(sessionId: string): {
     runState: { active: boolean; runId: string | null };
+    workState: { active: boolean };
     agents: AgentStatus[];
     subagents?: import("@brainpilot/protocol").SubagentStatus[];
     lastActivityTs: string;
@@ -3055,6 +3074,7 @@ export class SessionManager {
     if (!entry) return undefined;
     return {
       runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
+      workState: { active: this.deriveWorkActive(entry) },
       agents: this.listAgents(sessionId),
       subagents: entry.subagents.list(),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),

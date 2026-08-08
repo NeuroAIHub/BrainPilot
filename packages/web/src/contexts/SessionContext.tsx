@@ -48,15 +48,10 @@ interface SessionContextValue {
   currentView: "chat" | "agents" | "trace";
   agents: AgentStatus[];
   subagents: SubagentStatus[];
-  /**
-   * #99: authoritative whole-turn run-active signal from session_state.runState
-   * (only Principal work occupies the foreground), with the backend timestamp.
-   * This is status authority, not an input lock: sends during an active run are
-   * queued by Pi as follow-ups.
-   * null until the first session_state arrives. Drives the
-   * whole-turn timer in the Chat footer.
-   */
+  /** PI/Principal foreground lifecycle from session_state.runState. */
   runActive: { active: boolean; atMs: number } | null;
+  /** Aggregate session-work signal; use this for completion and workspace safety. */
+  workActive: { active: boolean; atMs: number } | null;
   /**
    * Cumulative real token usage for the current session (total + per-agent),
    * fed live from `session_state` frames. null until the first frame carrying
@@ -385,11 +380,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // session id and survive PromptComposer unmount (tab switches).
   const [agents, setAgents] = useState<AgentStatus[]>([]);
   const [subagents, setSubagents] = useState<SubagentStatus[]>([]);
-  // #99: authoritative whole-turn run-active flag from session_state.runState
-  // (derived by the runtime: trace agent excluded, delivery loops included),
-  // paired with the backend ISO timestamp of the snapshot that carried it. The
-  // turn timer keys off transitions of this flag, not the per-agent list.
+  // runState is PI-only. workState is the authoritative whole-session signal
+  // used for completion/timing and includes delegated/background execution.
   const [runActive, setRunActive] = useState<{ active: boolean; atMs: number } | null>(null);
+  const [workActive, setWorkActive] = useState<{ active: boolean; atMs: number } | null>(null);
   // Cumulative real token usage for the current session, fed from session_state.
   const [tokenUsage, setTokenUsage] = useState<SessionTokenUsage | null>(null);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
@@ -562,6 +556,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     saveLastSessionId(sessionId);
     setCurrentView("chat");
     setRunActive(null); // #99: drop the previous session's turn-active signal
+    setWorkActive(null);
     setTokenUsage(null); // drop the previous session's token totals
     connectSession(sessionId);
   }, [connectSession]);
@@ -1077,14 +1072,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         }));
         setAgents(nextAgents);
         setSubagents(stateSnapshot.subagents ?? []);
-        // #99: feed the whole-turn timer. runState.active is the authoritative
-        // "the user's task is still running" flag; lastActivityTs is the backend
-        // timestamp of this snapshot (fallback to now() if absent).
-        const rs = (value.runState ?? {}) as Record<string, unknown>;
         const tsRaw = typeof value.lastActivityTs === "string" ? Date.parse(value.lastActivityTs) : NaN;
+        const atMs = Number.isNaN(tsRaw) ? Date.now() : tsRaw;
         setRunActive({
-          active: rs.active === true,
-          atMs: Number.isNaN(tsRaw) ? Date.now() : tsRaw,
+          active: stateSnapshot.runState.active,
+          atMs,
+        });
+        setWorkActive({
+          active: stateSnapshot.workState.active,
+          atMs,
         });
         // Cumulative real token usage rides on the same frame (optional).
         const usage = parseTokenUsageValue(value.tokenUsage);
@@ -1356,6 +1352,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       agents,
       subagents,
       runActive,
+      workActive,
       tokenUsage,
       agentFilters,
       currentTrace,
@@ -1396,6 +1393,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       agents,
       subagents,
       runActive,
+      workActive,
       tokenUsage,
       agentFilters,
       currentTrace,
