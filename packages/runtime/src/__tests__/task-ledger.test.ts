@@ -25,15 +25,15 @@ describe("TaskLedger", () => {
     await ledger.acknowledge(ledger.peekBatch("engineer").map((event) => event.id));
     await ledger.complete(b.id, "engineer", "B result");
     await ledger.complete(a.id, "engineer", "A result");
-    expect(ledger.peekBatch("auditor")[0]).toMatchObject({ kind: "completed", task_id: b.id, content: "B result" });
-    expect(ledger.peekBatch("principal")[0]).toMatchObject({ kind: "completed", task_id: a.id, content: "A result" });
+    expect(ledger.peekBatch("auditor")[0]).toMatchObject({ kind: "replied", task_id: b.id, content: "B result" });
+    expect(ledger.peekBatch("principal")[0]).toMatchObject({ kind: "replied", task_id: a.id, content: "A result" });
   });
 
   it("enforces assignee ownership and idempotent completion", async () => {
     const ledger = new TaskLedger("s");
     const task = await ledger.dispatch("principal", "engineer", "work");
     await expect(ledger.complete(task.id, "writer", "wrong")).rejects.toThrow("assigned to engineer");
-    await expect(ledger.complete(task.id, "engineer", "ok")).resolves.toMatchObject({ status: "completed" });
+    await expect(ledger.complete(task.id, "engineer", "ok")).resolves.toMatchObject({ status: "replied" });
     expect(ledger.peekBatch("engineer")).toEqual([]);
     await expect(ledger.complete(task.id, "engineer", "ok")).resolves.toMatchObject({ reply: "ok" });
     await expect(ledger.complete(task.id, "engineer", "different")).rejects.toThrow("different reply");
@@ -53,6 +53,31 @@ describe("TaskLedger", () => {
     await restored.recover();
     expect(restored.list()[0]?.id).toBe(task.id);
     expect(restored.peekBatch("engineer")[0]?.task_id).toBe(task.id);
+  });
+
+  it("migrates legacy completed tasks and notifications to replied", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "task-ledger-legacy-"));
+    dirs.push(dir);
+    const path = join(dir, "tasks.json");
+    await writeFile(path, JSON.stringify({
+      next_task_seq: 2,
+      next_notification_seq: 2,
+      tasks: [{
+        id: "task_000001", seq: 1, created_by: "principal", assigned_to: "engineer",
+        content: "legacy", status: "completed", reply: "done", created_at: 1, completed_at: 2,
+      }],
+      notifications: [{
+        id: "task_event_000001", seq: 1, kind: "completed", to_agent: "principal",
+        from_agent: "engineer", task_id: "task_000001", content: "done", created_at: 2,
+      }],
+      delivery_paused: false,
+      paused_agents: [],
+    }));
+
+    const restored = new TaskLedger("s", path);
+    await restored.recover();
+    expect(restored.get("task_000001")).toMatchObject({ status: "replied", reply: "done" });
+    expect(restored.peekBatch("principal")[0]).toMatchObject({ kind: "replied" });
   });
 
   it("keeps notifications until acknowledged and applies backpressure", async () => {
@@ -121,7 +146,7 @@ describe("TaskLedger", () => {
     const cancelled = await ledger.cancelAllPending("workspace rolled back");
     expect(cancelled.map((task) => task.id)).toEqual([pending.id]);
     expect(ledger.get(pending.id)).toMatchObject({ status: "cancelled", reply: "workspace rolled back" });
-    expect(ledger.get(completed.id)).toMatchObject({ status: "completed" });
+    expect(ledger.get(completed.id)).toMatchObject({ status: "replied" });
     expect(ledger.notificationTargets()).toEqual([]);
   });
 
