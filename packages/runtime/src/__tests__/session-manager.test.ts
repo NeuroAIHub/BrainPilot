@@ -159,7 +159,7 @@ describe("SessionManager (mock mode)", () => {
     expect(PERSONAS.principal).toContain("## User authorization gate");
     expect(PERSONAS.principal).toContain("Use `ask_user` first");
     expect(PERSONAS.principal).toContain("## Incremental planning for heavy work");
-    expect(PERSONAS.principal).toContain("dry run, smoke test, tiny dataset");
+    expect(PERSONAS.principal).toContain("representative bounded step");
     expect(PERSONAS.engineer).toContain("## High-impact action gate");
     expect(PERSONAS.engineer).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(PERSONAS.engineer).toContain("## Execution discipline");

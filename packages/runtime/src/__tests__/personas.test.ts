@@ -232,6 +232,21 @@ Stale local routing rule.`;
     expect(PERSONAS.experimentalist).toContain("source tensor axes");
   });
 
+  it("keeps research planning adaptive without weakening essential comparisons", () => {
+    const pi = PERSONAS.principal!;
+    const experimentalist = PERSONAS.experimentalist!;
+    const engineer = PERSONAS.engineer!;
+
+    expect(pi).toContain("minimum valid deliverable");
+    expect(pi).toContain("protocol proportional to those needs");
+    expect(experimentalist).toContain("smallest procedure that answers the");
+    expect(experimentalist).toContain("Do not default to exhaustive nested");
+    expect(experimentalist).toContain("not as a reason to enlarge the");
+    expect(engineer).toContain("estimates runtime, memory use, and candidate feasibility");
+    expect(engineer).toContain("before removing a");
+    expect(engineer).toContain("superiority from an incomplete comparison");
+  });
+
   it("requires Engineer to inspect the environment and use working accelerators", () => {
     const engineer = PERSONAS.engineer!;
     expect(engineer).toContain("Environment and accelerator preflight");
