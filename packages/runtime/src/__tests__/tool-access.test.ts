@@ -10,6 +10,8 @@ import {
   createDispatchTaskTool,
   createCompleteTaskTool,
   createStartMonitorTool,
+  createRunInBackgroundTool,
+  createBackgroundJobTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
 import { GraphOfTrace } from "../trace.js";
@@ -54,6 +56,21 @@ describe("tool access control (§9)", () => {
     expect(description).toContain("Do not run sleep commands or poll");
     expect(description).toContain("end the current turn");
     expect(description).toContain("wake you automatically");
+  });
+
+  it("documents background completion wakeups and forbids polling", () => {
+    const d: ToolDeps = {
+      ...deps("engineer"),
+      runInBackground: async () => ({ id: "job_test" }),
+      listBackgroundJobs: () => [],
+      getBackgroundJob: () => undefined,
+      stopBackgroundJob: async () => true,
+    };
+    const startDescription = createRunInBackgroundTool(d).description;
+    expect(startDescription).toContain("do not sleep or poll");
+    expect(startDescription).toContain("job_key");
+    expect(startDescription).toContain("wakes you exactly when");
+    expect(createBackgroundJobTool(d).description).toContain("Do not repeatedly call list/get");
   });
 
   it("dispatch_task and complete_task expose stable task-oriented contracts", async () => {
@@ -139,6 +156,23 @@ describe("tool access control (§9)", () => {
       expect(systemToolsForRole("expert", name, withMonitor(name)).map((tool) => tool.name)).not.toContain("start_monitor");
     }
     expect(systemToolsForRole("trace", "trace", withMonitor("trace")).map((tool) => tool.name)).not.toContain("start_monitor");
+  });
+
+  it("limits Background Job tools to Engineer and Experimentalist", () => {
+    const withJobs = (name: string): ToolDeps => ({
+      ...deps(name),
+      runInBackground: async () => ({ id: "job_test" }),
+      listBackgroundJobs: () => [],
+      getBackgroundJob: () => undefined,
+      stopBackgroundJob: async () => true,
+    });
+    for (const name of ["engineer", "experimentalist"]) {
+      expect(systemToolsForRole("expert", name, withJobs(name)).map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["run_in_background", "background_job"]),
+      );
+    }
+    expect(systemToolsForRole("principal", "principal", withJobs("principal")).map((tool) => tool.name)).not.toContain("run_in_background");
+    expect(systemToolsForRole("expert", "librarian", withJobs("librarian")).map((tool) => tool.name)).not.toContain("run_in_background");
   });
 
   it("trace agent gets ONLY graph tools", () => {

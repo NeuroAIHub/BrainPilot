@@ -1,0 +1,21 @@
+{
+  "id": "org.brainpilot.background-jobs",
+  "version": "0.1.2",
+  "apiVersion": "1",
+  "displayName": "Background Jobs",
+  "description": "Run one-shot commands in the background and wake the owning agent exactly when they finish.",
+  "categories": ["workflow"],
+  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
+  "environments": ["local"],
+  "protocols": { "runtimeTools": "1" },
+  "permissions": ["read:workspace", "process:background"],
+  "contributes": {
+    "runtimeTools": [
+      {
+        "id": "background-jobs",
+        "capability": "builtin.backgroundJobs",
+        "targets": ["engineer", "experimentalist"]
+      }
+    ]
+  }
+}

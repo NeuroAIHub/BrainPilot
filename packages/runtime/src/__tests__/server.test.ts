@@ -45,10 +45,10 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const enabled = await a.request("/runtime/capabilities", {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ capabilities: ["builtin.monitor"] }),
+      body: JSON.stringify({ capabilities: ["builtin.monitor", "builtin.backgroundJobs"] }),
     });
     expect(enabled.status).toBe(200);
-    expect(await enabled.json()).toEqual({ capabilities: ["builtin.monitor"] });
+    expect(await enabled.json()).toEqual({ capabilities: ["builtin.monitor", "builtin.backgroundJobs"] });
     expect((await a.request("/runtime/capabilities", {
       method: "PUT",
       headers: { "content-type": "application/json" },

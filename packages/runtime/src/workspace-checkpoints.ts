@@ -36,6 +36,7 @@ const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
 const HARD_EXCLUDED_ROOTS = new Set([
   ".attachments",
   ".truncated",
+  ".background-jobs",
   ".venv",
   "venv",
   "node_modules",

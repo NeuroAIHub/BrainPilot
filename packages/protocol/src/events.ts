@@ -312,6 +312,8 @@ export const CUSTOM_EVENT = {
   SUBAGENT_STATE: "subagent_state",
   /** Lifecycle update for one session-scoped background monitor. */
   MONITOR_STATE: "monitor_state",
+  /** Lifecycle update for one session-scoped one-shot background job. */
+  BACKGROUND_JOB_STATE: "background_job_state",
   AUTORESEARCH_STATE: "autoresearch_state",
 } as const;
 

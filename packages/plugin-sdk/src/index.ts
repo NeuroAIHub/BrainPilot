@@ -45,7 +45,7 @@ export interface AgentInstructionContribution extends EntryContribution {
   mode: "append";
   priority?: number;
 }
-export type RuntimeToolCapability = "builtin.monitor";
+export type RuntimeToolCapability = "builtin.monitor" | "builtin.backgroundJobs";
 export interface RuntimeToolContribution {
   id: string;
   capability: RuntimeToolCapability;
@@ -209,7 +209,7 @@ const ID = /^[a-z0-9]+(?:[._-][a-z0-9]+)+$/;
 const KINDS = new Set<LegacyPluginKind>(["skill-pack", "knowledge-base", "previewer", "ui-panel", "literature-provider", "workflow"]);
 const CATEGORIES = new Set<PluginCategory>(["skills", "knowledge", "visualization", "analysis", "workflow", "other"]);
 const PERMISSIONS = new Set<PluginPermission>(["read:workspace", "read:data", "compute:worker", "compute:container", "network", "process:background", "write:workspace", "execute:process", "workspace:checkpoint"]);
-const RUNTIME_TOOL_CAPABILITIES = new Set<RuntimeToolCapability>(["builtin.monitor"]);
+const RUNTIME_TOOL_CAPABILITIES = new Set<RuntimeToolCapability>(["builtin.monitor", "builtin.backgroundJobs"]);
 const ENVIRONMENTS = new Set<PluginEnvironment>(["local", "cloud", "browser"]);
 
 function object(value: unknown): value is Record<string, unknown> { return Boolean(value) && typeof value === "object" && !Array.isArray(value); }

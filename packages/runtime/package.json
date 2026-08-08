@@ -41,6 +41,7 @@
     "@brainpilot/plugin-auditor": "^0.1.2",
     "@brainpilot/plugin-got": "^0.1.2",
     "@brainpilot/plugin-monitor": "^0.1.2",
+    "@brainpilot/plugin-background-jobs": "^0.1.2",
     "@brainpilot/plugin-sdk": "^0.1.2",
     "@brainpilot/protocol": "^0.1.2",
     "@brainpilot/skills": "^0.1.2",

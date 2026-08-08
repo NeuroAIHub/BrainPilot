@@ -14,6 +14,7 @@ import {
 export const AUDITOR_PLUGIN_ID = "org.brainpilot.auditor";
 export const GOT_PLUGIN_ID = "org.brainpilot.got";
 export const MONITOR_PLUGIN_ID = "org.brainpilot.monitor";
+export const BACKGROUND_JOBS_PLUGIN_ID = "org.brainpilot.background-jobs";
 export const SYSTEM_PLUGIN_DISABLE_ENV = "BP_EXPERIMENT_DISABLE_PLUGINS";
 
 export interface SystemPluginSnapshot {
@@ -40,6 +41,7 @@ const SPECS: readonly SystemPluginSpec[] = [
   { packageName: "@brainpilot/plugin-auditor", defaultEnabled: true },
   { packageName: "@brainpilot/plugin-got", defaultEnabled: true },
   { packageName: "@brainpilot/plugin-monitor", defaultEnabled: false },
+  { packageName: "@brainpilot/plugin-background-jobs", defaultEnabled: false },
 ];
 
 function disabledPluginIds(value: string | undefined): Set<string> {

@@ -100,6 +100,21 @@ interface BuiltinPluginRelease {
 // synthesized by rewriting the current bundle.
 const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
   {
+    plugin: "background-jobs",
+    source: "background-jobs/0.1.2",
+    version: "0.1.2",
+    publishedAt: "2026-08-08T00:00:00.000Z",
+    releaseNotes: "Initial official one-shot background job tools with terminal wakeups and duplicate prevention.",
+    publisher: "BrainPilot",
+    verified: true,
+    sourceFormat: "brainpilot",
+    repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+    license: "AGPL-3.0-only",
+    capabilities: ["runtime-tools"],
+    requirements: ["Local deployment", "Linux or macOS (Windows experimental)", "Background process permission"],
+    executesLocalCode: true,
+  },
+  {
     plugin: "autoresearch", source: "autoresearch/0.1.2", packageName: "@brainpilot/plugin-autoresearch", version: "0.1.2",
     publishedAt: "2026-08-07T00:00:00.000Z", releaseNotes: "Initial Engineer-owned measured optimization loop with checkpoint rollback.",
     publisher: "BrainPilot", verified: true, sourceFormat: "brainpilot", repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",

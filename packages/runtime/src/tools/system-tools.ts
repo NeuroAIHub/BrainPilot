@@ -68,6 +68,10 @@ export interface ToolDeps {
   startMonitor?: (input: { description: string; command: string; timeoutMs?: number; persistent?: boolean }) => unknown;
   listMonitors?: () => unknown;
   stopMonitor?: (monitorId: string) => Promise<boolean>;
+  runInBackground?: (input: { jobKey: string; description: string; command: string; timeoutMs?: number; replaceExisting?: boolean }) => Promise<unknown>;
+  listBackgroundJobs?: () => unknown;
+  getBackgroundJob?: (jobId: string) => unknown;
+  stopBackgroundJob?: (jobId: string) => Promise<boolean>;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -362,6 +366,86 @@ export function createStopMonitorTool(deps: ToolDeps): SystemTool {
       return await deps.stopMonitor(monitorId)
         ? ok(`monitor ${monitorId} stopped`)
         : { ...ok(`monitor ${monitorId} is not running or is not owned by this agent`), isError: true };
+    },
+  };
+}
+
+export function createRunInBackgroundTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "run_in_background",
+    description:
+      "Start a one-shot long-running shell command, such as training, a build, or a test suite, without blocking this turn. " +
+      "Unlike start_monitor, stdout and stderr are written to a bounded log and do not wake you while the job is running; " +
+      "the runtime wakes you exactly when the job completes, fails, or times out, including for silent commands. " +
+      "Always choose a stable job_key for the logical workload. A second active job with the same key is rejected unless " +
+      "replace_existing=true, which stops the old process group before starting the replacement. " +
+      "After starting, do not sleep or poll. If this is your only remaining work, end the current turn and wait for the completion event.",
+    parameters: {
+      type: "object",
+      properties: {
+        job_key: { type: "string", minLength: 1, maxLength: 160, description: "Stable key for duplicate prevention, for example experiment-b-training" },
+        description: { type: "string", minLength: 1, maxLength: 200 },
+        command: { type: "string", minLength: 1, maxLength: 16_000 },
+        timeout_ms: { type: "number", minimum: 1_000, maximum: 86_400_000, description: "Default 1 hour; maximum 24 hours" },
+        replace_existing: { type: "boolean", description: "Stop the active job with the same job_key before starting this one" },
+      },
+      required: ["job_key", "description", "command"],
+    },
+    execute: async (params) => {
+      if (!deps.runInBackground) return { ...ok("Background Jobs plugin is not enabled for this session"), isError: true };
+      const jobKey = typeof params.job_key === "string" ? params.job_key.trim() : "";
+      const description = typeof params.description === "string" ? params.description.trim() : "";
+      const command = typeof params.command === "string" ? params.command.trim() : "";
+      if (!jobKey || !description || !command) return { ...ok("job_key, description, and command are required"), isError: true };
+      try {
+        const job = await deps.runInBackground({
+          jobKey,
+          description,
+          command,
+          ...(typeof params.timeout_ms === "number" ? { timeoutMs: params.timeout_ms } : {}),
+          ...(typeof params.replace_existing === "boolean" ? { replaceExisting: params.replace_existing } : {}),
+        });
+        return ok(JSON.stringify(job, null, 2));
+      } catch (error) {
+        return { ...ok((error as Error).message), isError: true };
+      }
+    },
+  };
+}
+
+export function createBackgroundJobTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "background_job",
+    description:
+      "Manage one-shot jobs created by run_in_background. Use action=list to inspect your jobs, get to read one job's status, " +
+      "bounded stdout/stderr tail and log path, or stop to cancel its entire process group. " +
+      "Do not repeatedly call list/get to wait for completion; the runtime sends a completion event automatically.",
+    parameters: {
+      type: "object",
+      properties: {
+        action: { type: "string", enum: ["list", "get", "stop"] },
+        job_id: { type: "string", minLength: 1, description: "Required for get and stop" },
+      },
+      required: ["action"],
+    },
+    execute: async (params) => {
+      if (!deps.listBackgroundJobs || !deps.getBackgroundJob || !deps.stopBackgroundJob) {
+        return { ...ok("Background Jobs plugin is not enabled for this session"), isError: true };
+      }
+      const action = params.action;
+      if (action === "list") return ok(JSON.stringify({ jobs: deps.listBackgroundJobs() }, null, 2));
+      const jobId = typeof params.job_id === "string" ? params.job_id.trim() : "";
+      if (!jobId) return { ...ok("job_id is required for get and stop"), isError: true };
+      if (action === "get") {
+        const job = deps.getBackgroundJob(jobId);
+        return job ? ok(JSON.stringify(job, null, 2)) : { ...ok(`background job ${jobId} was not found`), isError: true };
+      }
+      if (action === "stop") {
+        return await deps.stopBackgroundJob(jobId)
+          ? ok(`background job ${jobId} stopped`)
+          : { ...ok(`background job ${jobId} is not running or is not owned by this agent`), isError: true };
+      }
+      return { ...ok("action must be list, get, or stop"), isError: true };
     },
   };
 }
@@ -911,6 +995,9 @@ export function allSystemTools(
   if (deps.startMonitor && deps.listMonitors && deps.stopMonitor) {
     tools.push(createStartMonitorTool(deps), createListMonitorsTool(deps), createStopMonitorTool(deps));
   }
+  if (deps.runInBackground && deps.listBackgroundJobs && deps.getBackgroundJob && deps.stopBackgroundJob) {
+    tools.push(createRunInBackgroundTool(deps), createBackgroundJobTool(deps));
+  }
   if (isToolEnabled(toggles, "skill_search")) {
     tools.push(createSkillSearchTool(deps));
   }
@@ -975,12 +1062,12 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_domain_knowledge_local", "search_papers_local",
   ],
   engineer: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "run_in_background", "background_job", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   "autoresearch-worker": ["complete_task", "record_trace", "skill_search", "get_domain_knowledge_local", "search_papers_local"],
   experimentalist: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "run_in_background", "background_job", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   // Auditor reviews scientific deliverables and has no GoT responsibilities.

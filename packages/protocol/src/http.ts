@@ -75,7 +75,7 @@ export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
  * PUT /runtime/capabilities  (backend-managed plugin capability sync)
  * ------------------------------------------------------------------ */
 
-export const RuntimeCapabilitySchema = z.enum(["builtin.monitor"]);
+export const RuntimeCapabilitySchema = z.enum(["builtin.monitor", "builtin.backgroundJobs"]);
 export type RuntimeCapability = z.infer<typeof RuntimeCapabilitySchema>;
 export const RuntimeExtensionDescriptorSchema = z.object({
   pluginId: z.string().min(1), pluginVersion: z.string().min(1), entry: z.string().min(1),

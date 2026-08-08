@@ -346,6 +346,16 @@ describe("plugin marketplace control plane", () => {
     await setPluginEnabled(dataDir, id, false);
     expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
   });
+
+  it("publishes the official Background Jobs capability only while enabled", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-background-jobs-"));
+    const id = "org.brainpilot.background-jobs";
+    expect((await installPlugin(dataDir, id))?.verified).toBe(true);
+    await setPluginEnabled(dataDir, id, true);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.backgroundJobs"]);
+    await setPluginEnabled(dataDir, id, false);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+  });
   it("requires per-version trust before enabling executable Autoresearch", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-autoresearch-"));
     const id = "org.brainpilot.autoresearch";

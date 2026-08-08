@@ -78,6 +78,12 @@ describe("plugin SDK compatibility", () => {
       ...base,
       contributes: { runtimeTools: [{ id: "bad", capability: "arbitrary.code", targets: ["principal"] }] },
     })).toBeNull();
+    expect(parsePluginManifest({
+      ...base,
+      permissions: ["process:background"],
+      protocols: { runtimeTools: "1" },
+      contributes: { runtimeTools: [{ id: "jobs", capability: "builtin.backgroundJobs", targets: ["engineer"] }] },
+    })?.contributes?.runtimeTools?.[0]?.capability).toBe("builtin.backgroundJobs");
   });
   it("validates trusted runtime extension entries and permissions", () => {
     const manifest = parsePluginManifest({ ...base,

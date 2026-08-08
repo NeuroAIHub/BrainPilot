@@ -1,0 +1,19 @@
+{
+  "name": "@brainpilot/plugin-background-jobs",
+  "version": "0.1.2",
+  "engines": { "node": ">=22" },
+  "license": "AGPL-3.0-only",
+  "description": "Official BrainPilot one-shot background job runtime tools",
+  "type": "module",
+  "files": ["manifest.json"],
+  "exports": {
+    "./package.json": "./package.json",
+    "./manifest.json": "./manifest.json"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
+    "directory": "packages/plugin-background-jobs"
+  },
+  "publishConfig": { "access": "public" }
+}
