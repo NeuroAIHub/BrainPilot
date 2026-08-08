@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Data Integrity"
+  short_description: "Check data alignment, leakage, and transforms"
+  default_prompt: "Use $audit-data-integrity to audit this pipeline for alignment, leakage, and transform defects."

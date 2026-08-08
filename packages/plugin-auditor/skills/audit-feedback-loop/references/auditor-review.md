@@ -1,26 +1,59 @@
 # Auditor review procedure
 
-Review the exact target PI supplied: PI reasoning/draft, one Expert result, or a synthesis. Raw Expert output is a valid intermediate target. Do not rewrite it into the final user answer.
+Review the exact target PI supplied. Raw Expert output is a valid intermediate
+target. Inspect existing evidence only; do not rewrite the user's final answer,
+rerun experiments, or compute missing results.
 
-## Required review dimensions
+## Route the audit by risk
 
-1. **Evidence backing:** verify numeric claims, artifact/file claims, and external citations against concrete workspace evidence.
-2. **Data semantics and alignment:** inspect source tensor axes and every `transpose`, `reshape`, `ravel`, `flatten`, `stack`, and concatenation that can change sample identity. Require evidence that each feature row still matches its label, subject, condition, session, and bin; shape equality alone is insufficient.
-3. **Split and preprocessing integrity:** verify subject/session/group separation and that scaling, imputation, feature selection, PCA, resampling, threshold selection, and model selection are fitted only inside training folds. Distinguish overall metrics from within-subject or grouped metrics.
-4. **Transform consistency:** establish whether inputs are raw correlations, Fisher-z values, standardized values, or another representation. Verify training, manifest, exported weights, and inference apply exactly the same transform, clipping, missing-value handling, and feature/edge order.
-5. **Export equivalence:** require existing numeric evidence that the reference training pipeline, exported model or raw weights, and final inference entry point produce equivalent predictions on fixed samples within a stated tolerance.
-6. **Packaging isolation:** require an existing clean-directory or evaluator-like smoke test showing the declared entry point runs with only the collected artifact and declared dependencies. Check for undeclared local modules, workspace paths, environment variables, and auxiliary files.
-7. **General scientific reliability:** inspect invalid metrics, test-set reuse, baseline/chance confusion, circular analysis, uncorrected multiplicity, pseudoreplication, anomalously optimistic internal validation, and result–claim mismatch.
-8. **Comparison and adaptation validity:** verify that the executed comparisons are sufficient for model-selection or method-superiority claims and that resource-driven deviations preserve the evidence essential to the stated scientific objective. Reproducible execution of one candidate does not support a best-model claim when relevant alternatives were omitted. Check that shortcuts are represented accurately and that the validation objective is a credible proxy for the stated deployment or transfer objective.
+Load only the specialist skills applicable to the target:
 
-Treat plausibility as insufficient. Cite a file path, line, log, or other concrete evidence for every confirmed claim and check. For modelling or statistical work, every applicable dimension above must be reported explicitly as `pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` dimension requires a `revise` or `block` verdict, never `pass`. Do not compute missing evidence, rerun experiments, call external services, or install packages.
+- `audit-evidence` for numeric, artifact, log, citation, or cross-report claims;
+- `audit-data-integrity` for datasets, tensors, repeated observations, splits,
+  preprocessing, or transforms;
+- `audit-model-validation` for modelling, prediction, benchmarking, selection,
+  deployment, or transfer claims;
+- `audit-code-artifact` for implementation, export, packaging, or inference.
 
-Do not prescribe a winning model or redesign the study. Report missing comparison coverage, unjustified protocol deviations, proxy-objective risks, and claims that exceed the completed evidence. A correctly qualified result may pass with explicit limitations; return `revise` when an incomplete comparison is used to claim selection or superiority, and use `block` when the validation evidence cannot support a high-risk deployment or transfer claim.
+For modelling or statistical work, report every applicable specialist check as
+`pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` check
+requires `REVISE` or `BLOCK`, never `PASS`. Do not prescribe a winning model or
+redesign the study.
 
-Use `bash` only for filesystem inspection commands such as `grep`, `awk`, `wc`, `diff`, `jq`, `ls`, `find`, `head`, `tail`, and `cat`.
+## Use bounded parallel review
 
-## Communication boundary
+Review a small target with one risk surface directly. When two or more risk
+surfaces can be inspected independently, call `spawn_subagent` once with two to
+four tasks and its default `wait=true`; do not launch background work, poll, or
+repeatedly wake children.
 
-Do not direct or message Experts. If evidence is missing, record a precise open finding with the likely owner and required evidence. PI decides whether to ask an Expert for correction or clarification.
+Use the narrowest suitable read-only profiles:
 
-Read `audit-response-template.md`, produce a bounded actionable response, and return it with `complete_task` using the exact assigned task ID. The completion reply must contain the findings PI needs to act; do not return only a report path. End the turn after completing the task.
+- `evidence-extractor` for claim-to-evidence mapping;
+- `method-reviewer` for data, validation, and scientific-method risks;
+- `code-reviewer` for concrete implementation and export defects;
+- `repo-scout` only when code or artifact dependencies must first be mapped.
+
+Give each child only its assigned evidence paths, the relevant checklist, and
+the claims it must inspect. Avoid duplicate review of the same risk surface.
+Children return evidence and candidate findings only: they do not choose the
+verdict, contact PI, write the final report, or expand the audit scope. If a
+child fails, inspect that bounded surface yourself or mark it `unverified`;
+never treat missing child output as a pass.
+
+## Synthesize and report
+
+Independently verify material child findings, merge duplicates by root cause,
+resolve contradictions, preserve explicit limitations, and decide the final
+`PASS`, `REVISE`, or `BLOCK` verdict yourself. Cite a specific path, line, log,
+or exact missing evidence for every confirmed claim and finding.
+
+Read `audit-response-template.md`. Write the complete report to a new path under
+`docs/audits/`. Use the Audit ID as the filename; if that path already exists,
+inspect existing names and add the next `-rN` suffix. Never overwrite an earlier
+audit or any source evidence. Use `bash` only for read-only inspection and, when
+needed, `mkdir -p docs/audits`; use `write` only for the new report.
+
+Call `complete_task` with the exact assigned task ID and the compact completion
+reply from the template. The reply must carry enough information for PI to route
+open findings without embedding the full report. End the turn after completion.
