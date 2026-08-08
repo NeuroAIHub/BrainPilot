@@ -8,7 +8,7 @@
  * real agent factory then wraps with Pi's `defineTool`).
  *
  * Tools are namespaced `mcp__<server>__<tool>` to avoid cross-server collisions.
- * A failing server is logged and skipped — it never aborts the others.
+ * A failing server is recorded and skipped — it never aborts the others.
  *
  * Config shape (standard MCP/Claude format). Three transports are supported,
  * selected by the optional `type` field (defaults to "stdio" for back-compat):
@@ -65,6 +65,17 @@ export interface McpServerSpec {
 
 export interface McpServersConfig {
   mcpServers: Record<string, McpServerSpec>;
+}
+
+export interface McpConnectionFailure {
+  server: string;
+  error: string;
+}
+
+export interface McpConnectResult {
+  tools: SystemTool[];
+  connectedServers: string[];
+  failures: McpConnectionFailure[];
 }
 
 function inheritedEnvironment(): Record<string, string> {
@@ -252,6 +263,13 @@ export class McpBridge {
 
   /** Connect every server in the config and collect their tools. */
   async connectAll(cfg: McpServersConfig): Promise<SystemTool[]> {
+    return (await this.connectAllWithStatus(cfg)).tools;
+  }
+
+  /** Connect every server while preserving per-server startup failures. */
+  async connectAllWithStatus(cfg: McpServersConfig): Promise<McpConnectResult> {
+    const connectedServers: string[] = [];
+    const failures: McpConnectionFailure[] = [];
     for (const [name, spec] of Object.entries(cfg.mcpServers)) {
       if (isPlaceholderSpec(spec)) {
         // A scaffolded slot whose url/command hasn't been filled in yet — skip
@@ -260,17 +278,22 @@ export class McpBridge {
         console.info(`[mcp] server '${name}' not configured yet — skipping`);
         continue;
       }
+      let client: McpClientLike | undefined;
       try {
-        const client = await this.connect(name, spec);
-        this.clients.push(client);
+        client = await this.connect(name, spec);
         const { tools } = await client.listTools();
+        this.clients.push(client);
+        connectedServers.push(name);
         for (const t of tools) this._tools.push(this.wrap(name, client, t));
       } catch (err) {
+        await client?.close().catch(() => {});
+        const error = err instanceof Error ? err.message : String(err);
+        failures.push({ server: name, error });
         // eslint-disable-next-line no-console
-        console.error(`[mcp] server '${name}' failed to connect:`, (err as Error).message);
+        console.error(`[mcp] server '${name}' failed to connect:`, error);
       }
     }
-    return this._tools;
+    return { tools: this._tools, connectedServers, failures };
   }
 
   private wrap(server: string, client: McpClientLike, t: McpToolDescriptor): SystemTool {

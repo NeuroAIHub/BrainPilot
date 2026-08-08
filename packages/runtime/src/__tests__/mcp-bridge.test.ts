@@ -112,11 +112,13 @@ describe("McpBridge", () => {
       return fakeClient();
     });
     const bridge = new McpBridge(connect);
-    const tools = await bridge.connectAll({
+    const result = await bridge.connectAllWithStatus({
       mcpServers: { bad: { command: "x" }, good: { command: "y" } },
     });
-    expect(tools).toHaveLength(1);
-    expect(tools[0]!.name).toBe("mcp__good__search");
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0]!.name).toBe("mcp__good__search");
+    expect(result.connectedServers).toEqual(["good"]);
+    expect(result.failures).toEqual([{ server: "bad", error: "spawn failed" }]);
   });
 
   it("closes all clients", async () => {

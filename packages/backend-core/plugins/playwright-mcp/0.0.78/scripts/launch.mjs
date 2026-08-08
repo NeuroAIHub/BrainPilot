@@ -21,7 +21,7 @@ async function cachedChromiumCandidates() {
 
 async function browserExecutable() {
   const configured = process.env.BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH;
-  if (configured && await exists(configured)) return configured;
+  if (configured) return await exists(configured) ? configured : undefined;
   const cached = await cachedChromiumCandidates();
   if (cached[0]) return cached[0];
   const system = process.platform === "darwin"
@@ -38,6 +38,7 @@ if (!executable) {
   console.error("Playwright MCP requires Chrome/Chromium. Install it with `npx playwright install chromium` or set BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH.");
   process.exit(1);
 }
+if (process.argv.includes("--check")) process.exit(0);
 
 const outputDir = process.env.BRAINPILOT_PLUGIN_DATA || path.join(os.tmpdir(), "brainpilot-playwright-mcp");
 const command = process.platform === "win32" ? "npx.cmd" : "npx";
