@@ -32,6 +32,7 @@ describe("domain schemas", () => {
   it("validates SessionStateSnapshot with agents", () => {
     const snap = {
       runState: { active: true, runId: "r1" },
+      workState: { active: true },
       agents: [{ name: "principal", status: "running", task: "thinking", alive: true }],
       lastActivityTs: "2026-06-12T00:00:00Z",
       domainResources: "full",
@@ -44,6 +45,7 @@ describe("domain schemas", () => {
     expect(
       SessionStateSnapshotSchema.parse({
         runState: { active: false, runId: null },
+        workState: { active: false },
         agents: [],
         lastActivityTs: "",
       }).runState.runId,
@@ -53,6 +55,7 @@ describe("domain schemas", () => {
   it("SessionStateSnapshot carries optional tokenUsage", () => {
     const parsed = SessionStateSnapshotSchema.parse({
       runState: { active: false, runId: null },
+      workState: { active: false },
       agents: [],
       lastActivityTs: "",
       tokenUsage: {
@@ -68,6 +71,7 @@ describe("domain schemas", () => {
     expect(
       SessionStateSnapshotSchema.parse({
         runState: { active: false, runId: null },
+        workState: { active: false },
         agents: [],
         lastActivityTs: "",
       }).tokenUsage,

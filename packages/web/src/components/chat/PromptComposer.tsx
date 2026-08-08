@@ -111,7 +111,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
       ? agents.flatMap((agent) => agent.activeTools ?? [])
@@ -456,9 +456,9 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : current));
   }, [runActive, sessionId]);
 
-  // #99: whole-turn timer — spans user input → every agent finished (runState
+  // #99: whole-turn timer — spans user input → every agent finished (workState
   // settles false), debounced against hook/system re-wakes.
-  const turnTiming = useTurnTimer({ runActive, resetKey: currentSession?.id ?? null });
+  const turnTiming = useTurnTimer({ runActive: workActive, resetKey: currentSession?.id ?? null });
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();

@@ -190,9 +190,10 @@ describe("flat task delegation", () => {
 
     expect(manager.getSessionState(session.id)).toMatchObject({
       runState: { active: false },
+      workState: { active: true },
       agents: expect.arrayContaining([expect.objectContaining({ name: "auditor", status: "running" })]),
     });
     releaseAuditor();
-    await waitFor(() => manager.listAgents(session.id).find((agent) => agent.name === "auditor")?.status === "idle");
+    await waitFor(() => manager.getSessionState(session.id)?.workState.active === false);
   });
 });

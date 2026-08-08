@@ -1,8 +1,8 @@
 /**
  * useTurnTimer — React host for the whole-turn timer reducer (#99).
  *
- * Consumes the authoritative `runActive` signal from SessionContext
- * (session_state.runState.active + backend timestamp) and produces:
+ * Consumes the authoritative whole-session activity signal from SessionContext
+ * (session_state.workState.active + backend timestamp) and produces:
  *   - `running`: a turn is in progress (active, or within the settle window);
  *   - `elapsedMs`: live elapsed while running (ticks ~every second), or the
  *     last settled whole-turn duration once finished;

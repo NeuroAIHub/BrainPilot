@@ -34,5 +34,15 @@ describe("subagent session state", () => {
   it("keeps old snapshots compatible when subagents is absent", () => {
     expect(normalizeSessionState({ runState: { active: false }, agents: [], lastActivityTs: "" }).subagents).toEqual([]);
   });
-});
 
+  it("keeps PI and whole-session activity distinct", () => {
+    const state = normalizeSessionState({
+      run_state: { active: false, run_id: null },
+      work_state: { active: true },
+      agents: [{ name: "engineer", status: "running" }],
+      last_activity_ts: "2026-08-09T00:00:00.000Z",
+    });
+    expect(state.runState.active).toBe(false);
+    expect(state.workState.active).toBe(true);
+  });
+});
