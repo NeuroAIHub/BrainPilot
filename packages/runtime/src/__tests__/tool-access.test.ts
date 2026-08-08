@@ -9,6 +9,7 @@ import {
   createAskUserTool,
   createDispatchTaskTool,
   createCompleteTaskTool,
+  createStartMonitorTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
 import { GraphOfTrace } from "../trace.js";
@@ -48,6 +49,13 @@ function deps(name: string): ToolDeps {
 }
 
 describe("tool access control (§9)", () => {
+  it("tells agents to yield instead of sleeping while Monitor is idle", () => {
+    const description = createStartMonitorTool(deps("principal")).description;
+    expect(description).toContain("Do not run sleep commands or poll");
+    expect(description).toContain("end the current turn");
+    expect(description).toContain("wake you automatically");
+  });
+
   it("dispatch_task and complete_task expose stable task-oriented contracts", async () => {
     const d = deps("engineer");
     const dispatched: Array<[string, string]> = [];
