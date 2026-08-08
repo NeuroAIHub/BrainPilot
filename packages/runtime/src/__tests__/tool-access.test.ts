@@ -294,10 +294,9 @@ describe("tool access control (§9)", () => {
     expect(names).not.toContain("destroy_agent");
   });
 
-  it("auditor builtins are read-only and separate report submission is disabled", () => {
+  it("auditor can create reports but cannot edit evidence or use a report tool", () => {
     const a = builtinToolNamesForRole("expert", "auditor");
-    expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash"]));
-    expect(a).not.toContain("write");
+    expect(a).toEqual(expect.arrayContaining(["read", "write", "grep", "find", "glob", "bash"]));
     expect(a).not.toContain("edit");
     expect(systemToolNamesForRole("expert", "auditor")).not.toContain("submit_audit_report");
   });

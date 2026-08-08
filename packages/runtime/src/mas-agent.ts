@@ -457,6 +457,20 @@ export class MasAgent {
     });
   }
 
+  /**
+   * Inject an internal notification into the current Pi run and wait until that
+   * run has drained it. `session.prompt(..., { streamingBehavior: "followUp" })`
+   * may resolve as soon as the item is queued, so callers must also fence the
+   * prompt that was active when the injection began before acknowledging a
+   * durable notification. If the run drains between the streaming check and
+   * `followUp`, its normal-prompt fallback is awaited by `followUp` itself.
+   */
+  async followUpAndWait(text: string): Promise<void> {
+    const activePrompt = this.currentPrompt;
+    await this.followUp(text);
+    await activePrompt;
+  }
+
   private async runPrompt(text: string): Promise<void> {
     const runId = newRunId();
     const runStartedAt = Date.now();

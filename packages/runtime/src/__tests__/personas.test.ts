@@ -215,7 +215,9 @@ Stale local routing rule.`;
     expect(pi).toContain("NOT perform the scientific execution yourself");
     expect(pi).toContain("engineer` inspects the real data structure");
     expect(pi).toContain("experimentalist` reads that contract");
-    expect(pi).toContain("waits such as `sleep`");
+    expect(pi).toContain("Delegated task results are");
+    expect(pi).toContain("Do not use `sleep`, polling loops");
+    expect(pi).toContain("never for Agent coordination");
     expect(pi).toContain("Do not write analysis");
     expect(pi).toContain("The training prohibition is absolute");
     expect(pi).toContain("smoke-test training");
@@ -230,6 +232,21 @@ Stale local routing rule.`;
     expect(PERSONAS.engineer).toContain("exported predictions match");
     expect(PERSONAS.experimentalist).toContain("Complete-task protocol and independent recheck");
     expect(PERSONAS.experimentalist).toContain("source tensor axes");
+  });
+
+  it("keeps research planning adaptive without weakening essential comparisons", () => {
+    const pi = PERSONAS.principal!;
+    const experimentalist = PERSONAS.experimentalist!;
+    const engineer = PERSONAS.engineer!;
+
+    expect(pi).toContain("minimum valid deliverable");
+    expect(pi).toContain("protocol proportional to those needs");
+    expect(experimentalist).toContain("smallest procedure that answers the");
+    expect(experimentalist).toContain("Do not default to exhaustive nested");
+    expect(experimentalist).toContain("not as a reason to enlarge the");
+    expect(engineer).toContain("estimates runtime, memory use, and candidate feasibility");
+    expect(engineer).toContain("before removing a");
+    expect(engineer).toContain("superiority from an incomplete comparison");
   });
 
   it("requires Engineer to inspect the environment and use working accelerators", () => {

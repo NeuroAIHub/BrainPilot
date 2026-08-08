@@ -98,7 +98,7 @@ describe("flat task delegation", () => {
     expect(prompts.filter((prompt) => prompt.agent === "principal")).toHaveLength(2);
   });
 
-  it("returns Auditor findings directly to PI for a correction cycle", async () => {
+  it("returns a compact Auditor report pointer to PI for a correction cycle", async () => {
     const prompts: Array<{ agent: string; text: string }> = [];
     const manager = new SessionManager({
       persist: false,
@@ -116,7 +116,9 @@ describe("flat task delegation", () => {
             tool: "complete_task",
             args: {
               task_id: id,
-              reply: "Verdict: revise\nA1 owner: engineer\nRequired change: cite the result file.",
+              reply: "Verdict: REVISE\nRisk: high\nReport: docs/audits/task_000001-r1.md\n" +
+                "Open findings: A1\nOwners: engineer\nRequired actions: A1 cite the result file.\n" +
+                "PI must not claim the task is complete or deliver the affected conclusions.",
             },
           } : undefined;
         } },
@@ -130,7 +132,9 @@ describe("flat task delegation", () => {
     expect(auditPrompt.text).toContain("Target: raw engineer result");
     const piFeedback = prompts.filter((prompt) => prompt.agent === "principal")[1]!;
     expect(piFeedback.text).toContain('<task_event kind="replied" task_id="task_000001" from="auditor">');
-    expect(piFeedback.text).toContain("A1 owner: engineer");
+    expect(piFeedback.text).toContain("Report: docs/audits/task_000001-r1.md");
+    expect(piFeedback.text).toContain("Open findings: A1");
+    expect(piFeedback.text).toContain("Owners: engineer");
     expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "replied", assigned_to: "auditor" });
   });
 

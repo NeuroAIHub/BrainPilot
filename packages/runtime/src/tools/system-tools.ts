@@ -1136,12 +1136,10 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],
-  // Auditor: read-only inspection. Deliverable audit findings return to PI
-  // through complete_task; no separate report tool or workspace write access.
-  // `bash` is included for
-  // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
-  // enforced by the auditor persona, not by the tool whitelist.
-  auditor: ["read", "grep", "find", "glob", "bash"],
+  // Auditor evidence inspection remains read-only. `write` is limited by the
+  // plugin contract to creating versioned reports under docs/audits/; there is
+  // no general edit permission or separate report-submission tool.
+  auditor: ["read", "write", "grep", "find", "glob", "bash"],
 };
 
 export function systemToolNamesForRole(role: AgentRole, agentName: string): string[] {

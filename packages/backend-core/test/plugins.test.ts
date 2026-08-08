@@ -316,11 +316,29 @@ describe("plugin marketplace control plane", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ id }),
     })).status).toBe(201);
-    expect((await app.request(`/api/plugins/${id}/enabled`, {
-      method: "PUT",
-      headers: { "content-type": "application/json" },
-      body: JSON.stringify({ enabled: true }),
-    })).status).toBe(200);
+    const previousExecutable = process.env.BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH;
+    try {
+      process.env.BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH = path.join(dataDir, "missing-chromium");
+      const failed = await app.request(`/api/plugins/${id}/enabled`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      });
+      expect(failed.status).toBe(400);
+      expect(await failed.json()).toEqual(expect.objectContaining({ error: expect.stringMatching(/requires Chrome\/Chromium/) }));
+      expect((await listInstalledPlugins(dataDir)).find((plugin) => plugin.manifest.id === id)?.enabled).toBe(false);
+      await expect(readFile(path.join(dataDir, "plugins", "runtime", `${id}.json`), "utf8")).rejects.toThrow();
+
+      process.env.BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH = process.execPath;
+      expect((await app.request(`/api/plugins/${id}/enabled`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ enabled: true }),
+      })).status).toBe(200);
+    } finally {
+      if (previousExecutable === undefined) delete process.env.BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH;
+      else process.env.BRAINPILOT_PLAYWRIGHT_EXECUTABLE_PATH = previousExecutable;
+    }
 
     const projection = JSON.parse(await readFile(path.join(dataDir, "plugins", "runtime", `${id}.json`), "utf8")) as {
       format: string;

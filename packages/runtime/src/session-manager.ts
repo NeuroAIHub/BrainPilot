@@ -798,16 +798,28 @@ export class SessionManager {
    */
   private async ensureMcpTools(): Promise<SystemTool[]> {
     if (this.mcpLoaded) return this.mcpTools;
-    this.mcpLoaded = true;
-    if (isMockMode() && !this.mcpBridge) return this.mcpTools;
+    if (isMockMode() && !this.mcpBridge) {
+      this.mcpLoaded = true;
+      return this.mcpTools;
+    }
     try {
       const cfg = await loadMcpServersConfig(this.dataRoot);
-      if (!cfg) return this.mcpTools;
+      if (!cfg) {
+        this.mcpLoaded = true;
+        return this.mcpTools;
+      }
       if (!this.mcpBridge) this.mcpBridge = new McpBridge();
-      this.mcpTools = await this.mcpBridge.connectAll(cfg);
+      const result = await this.mcpBridge.connectAllWithStatus(cfg);
+      this.mcpTools = result.tools;
+      if (result.connectedServers.length === 0 && result.failures.length > 0) {
+        throw new Error(`Configured MCP services failed to start: ${result.failures.map(({ server, error }) => `${server}: ${error}`).join("; ")}`);
+      }
+      this.mcpLoaded = true;
     } catch (err) {
+      this.mcpLoaded = false;
       // eslint-disable-next-line no-console
       console.error("[mcp] bridge load failed:", (err as Error).message);
+      throw err;
     }
     return this.mcpTools;
   }
@@ -2764,13 +2776,14 @@ export class SessionManager {
    * Wake `name` to consume durable task notifications. Fire-and-forget; task
    * tools call this after committing ledger state.
    * The re-entrancy guard (`deliveryLoops`) means concurrent wakes for the same
-   * agent collapse into the one already-running loop (which re-drains after each
-   * turn), so an agent's `prompt` is never invoked concurrently.
+   * agent collapse into the one already-running loop. A busy agent receives the
+   * notification through Pi's follow-up queue; an idle agent is prompted. This
+   * keeps exactly one delivery owner and never invokes a second plain prompt
+   * while the agent is already processing.
    */
   private wakeAgent(sessionId: string, name: string): void {
     const current = this.sessions.get(sessionId);
     if (!current || current.workspaceOperationActive || (current.workspaceLease && current.workspaceLease.agentName !== name) || current.taskLedger.isPaused(name)) return;
-    if (current.agents.get(name)?.isStreaming) return;
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
     this.deliveryLoops.add(key);
@@ -2793,9 +2806,10 @@ export class SessionManager {
   }
 
   /**
-   * Peek `name`'s durable task events and run it, looping so events that arrive
-   * during a turn are picked up without a second external wake. Events are only
-   * acknowledged after a clean provider run.
+   * Peek `name`'s durable task events and deliver them, looping so events that
+   * arrive during a turn are picked up without a second external wake. A busy
+   * agent receives a follow-up in its current run; an idle agent gets a new
+   * prompt. Events are only acknowledged after the owning run finishes cleanly.
    * `MasAgent.prompt` is error-isolated (never throws), so a failed expert turn
    * ends the loop cleanly rather than rejecting. A `session_state` frame is
    * emitted on entry and exit so the derived run-active flag reflects the
@@ -2816,7 +2830,7 @@ export class SessionManager {
       const monitorBatch = notifications.length === 0 && !backgroundJobEvent ? entry.monitorEvents.get(name)?.[0] : undefined;
       if (notifications.length === 0 && !backgroundJobEvent && !monitorBatch) return;
       const agent = await this.ensureAgent(sessionId, name);
-      if (agent.status === "stopped" || agent.isStreaming) return;
+      if (agent.status === "stopped") return;
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
@@ -2824,19 +2838,30 @@ export class SessionManager {
         ? this.parseInternalEnvelope<TraceNodeRecord>(notifications[0]?.content, "Trace-Record")
         : undefined;
       if (name === "trace") entry.currentTraceRecord = traceRecord;
-      // #167: cap concurrent provider calls across experts in this session.
+      const deliveryEvents = backgroundJobEvent
+        ? this.renderBackgroundJobEvents([backgroundJobEvent])
+        : monitorBatch ? this.renderMonitorEvents([monitorBatch]) : this.renderTaskEvents(notifications);
       let ran = false;
       try {
-        ran = await this.withProviderSlot(sessionId, async () => {
-          // Stop may have paused delivery while this run waited for a provider
-          // semaphore slot. Do not start a new model call after Stop completed.
-          const current = this.sessions.get(sessionId);
-          if (!current || current !== entry || current.taskLedger.isPaused(name) || agent.isStreaming) return false;
-          await agent.prompt(backgroundJobEvent
-            ? this.renderBackgroundJobEvents([backgroundJobEvent])
-            : monitorBatch ? this.renderMonitorEvents([monitorBatch]) : this.renderTaskEvents(notifications));
-          return true;
-        });
+        if (agent.isStreaming) {
+          // The notification is already durable. Queue it into the active Pi
+          // run, then fence that run before acknowledging the batch.
+          await agent.followUpAndWait(deliveryEvents);
+          ran = true;
+        } else {
+          // #167: cap new provider runs across experts in this session.
+          ran = await this.withProviderSlot(sessionId, async () => {
+            // Stop may have paused delivery while this run waited for a provider
+            // semaphore slot. Do not start a model call after Stop completed.
+            const current = this.sessions.get(sessionId);
+            if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+            // A user run can start while this delivery waits for a provider
+            // slot. Inject rather than racing it with a second plain prompt.
+            if (agent.isStreaming) await agent.followUpAndWait(deliveryEvents);
+            else await agent.prompt(deliveryEvents);
+            return true;
+          });
+        }
       } finally {
         if (name === "trace") entry.currentTraceRecord = undefined;
       }

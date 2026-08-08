@@ -19,11 +19,12 @@ import type { SystemToolResult } from "../types.js";
  * Helpers
  * ------------------------------------------------------------------ */
 
-/** Build a fake MCP bridge that returns `tools` on connectAll. */
+/** Build a fake MCP bridge that returns `tools` with a healthy server status. */
 function fakeMcpBridge(tools: SystemTool[]): McpBridge {
   return {
     tools,
     connectAll: async (_cfg: McpServersConfig) => tools,
+    connectAllWithStatus: async (_cfg: McpServersConfig) => ({ tools, connectedServers: ["test"], failures: [] }),
     close: async () => {},
   } as unknown as McpBridge;
 }
