@@ -196,7 +196,7 @@ export function createCompleteTaskTool(deps: ToolDeps): SystemTool {
       try {
         const task = await deps.completeTask(taskId, reply);
         deps.wakeAgent(task.created_by);
-        return ok(`task ${task.id} completed for ${task.created_by}`);
+        return ok(`task ${task.id} replied to ${task.created_by}`);
       } catch (err) {
         return { ...ok(`cannot complete task: ${(err as Error).message}`), isError: true };
       }
