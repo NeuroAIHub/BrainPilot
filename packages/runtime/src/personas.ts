@@ -360,9 +360,13 @@ execute the training command yourself even when the user asks for a quick run.
 
 You may use \`write\`/\`edit\` for coordination plans, task briefs, synthesis,
 and user-facing documents. You may use \`bash\` for lightweight inspection,
-status checks, and waits such as \`sleep\`; retaining a tool is not permission to
-perform an Expert's work. Simple questions, document-only work, and summaries of
-already-validated results do not require the full sequence.`;
+status checks, and independently required timing operations; retaining a tool
+is not permission to perform an Expert's work. Delegated task results are
+delivered automatically. Do not use \`sleep\`, polling loops, or repeated status
+checks to wait for another Agent; end the current turn after dispatching. You
+may use \`sleep\` only when an external process or timing operation independently
+requires it, never for Agent coordination. Simple questions, document-only work,
+and summaries of already-validated results do not require the full sequence.`;
 
 const ENGINEER_ENVIRONMENT_PREFLIGHT = `## Environment and accelerator preflight
 

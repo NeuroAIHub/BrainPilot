@@ -19,8 +19,13 @@ describe("bundled system plugins", () => {
     expect(systemPluginSkillPaths(plugins, snapshot, "engineer")).toEqual([]);
     expect(systemPluginSkillPaths(plugins, snapshot, "trace")[0])
       .toMatch(/plugin-got.*curate-research-trace/);
-    expect((await systemPluginInstructions(plugins, snapshot, "principal")).join("\n"))
-      .toContain("Auditor feedback loop");
+    const principalInstructions = (await systemPluginInstructions(plugins, snapshot, "principal")).join("\n");
+    expect(principalInstructions).toContain("Auditor feedback loop");
+    expect(principalInstructions).toContain("never immediately claim that the task is");
+    expect(principalInstructions).toContain("Only `Verdict: PASS`");
+    const auditorInstructions = (await systemPluginInstructions(plugins, snapshot, "auditor")).join("\n");
+    expect(auditorInstructions).toContain("Begin every completed audit reply");
+    expect(auditorInstructions).toContain("PI must not claim the task is complete");
     expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });
 
