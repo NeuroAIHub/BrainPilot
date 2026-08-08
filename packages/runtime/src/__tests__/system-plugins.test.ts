@@ -1,3 +1,5 @@
+import { readFile } from "node:fs/promises";
+import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AUDITOR_PLUGIN_ID,
@@ -26,6 +28,10 @@ describe("bundled system plugins", () => {
     const auditorInstructions = (await systemPluginInstructions(plugins, snapshot, "auditor")).join("\n");
     expect(auditorInstructions).toContain("Begin every completed audit reply");
     expect(auditorInstructions).toContain("PI must not claim the task is complete");
+    const auditorSkill = systemPluginSkillPaths(plugins, snapshot, "auditor")[0]!;
+    const auditorReview = await readFile(join(auditorSkill, "references", "auditor-review.md"), "utf8");
+    expect(auditorReview).toContain("Comparison and adaptation validity");
+    expect(auditorReview).toContain("Do not prescribe a winning model or redesign the study");
     expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });
 
