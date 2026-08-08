@@ -745,16 +745,28 @@ export class SessionManager {
    */
   private async ensureMcpTools(): Promise<SystemTool[]> {
     if (this.mcpLoaded) return this.mcpTools;
-    this.mcpLoaded = true;
-    if (isMockMode() && !this.mcpBridge) return this.mcpTools;
+    if (isMockMode() && !this.mcpBridge) {
+      this.mcpLoaded = true;
+      return this.mcpTools;
+    }
     try {
       const cfg = await loadMcpServersConfig(this.dataRoot);
-      if (!cfg) return this.mcpTools;
+      if (!cfg) {
+        this.mcpLoaded = true;
+        return this.mcpTools;
+      }
       if (!this.mcpBridge) this.mcpBridge = new McpBridge();
-      this.mcpTools = await this.mcpBridge.connectAll(cfg);
+      const result = await this.mcpBridge.connectAllWithStatus(cfg);
+      this.mcpTools = result.tools;
+      if (result.connectedServers.length === 0 && result.failures.length > 0) {
+        throw new Error(`Configured MCP services failed to start: ${result.failures.map(({ server, error }) => `${server}: ${error}`).join("; ")}`);
+      }
+      this.mcpLoaded = true;
     } catch (err) {
+      this.mcpLoaded = false;
       // eslint-disable-next-line no-console
       console.error("[mcp] bridge load failed:", (err as Error).message);
+      throw err;
     }
     return this.mcpTools;
   }
