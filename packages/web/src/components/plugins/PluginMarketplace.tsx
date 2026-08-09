@@ -18,13 +18,15 @@ import {
 } from "lucide-react";
 import type { MarketplaceEntry as MarketplaceSdkEntry, PluginMarketCapability, PluginSourceFormat } from "@brainpilot/plugin-sdk";
 import { useT } from "../../i18n/useT";
-import { api } from "../../utils/api";
+import { api, type McpRuntimeStatus } from "../../utils/api";
 import { DatasetMarketplace } from "./DatasetMarketplace";
 
 export type MarketplaceCategory = "skills" | "knowledge" | "plugins" | "datasets";
 type MarketplaceEntry = Awaited<ReturnType<typeof api.plugins.marketplace>>[number];
 type InstalledEntry = Awaited<ReturnType<typeof api.plugins.installed>>[number];
 type PluginUpdate = Awaited<ReturnType<typeof api.plugins.updates>>[number];
+type RestartPrompt = { pluginName: string; enabled: boolean };
+export type PluginMcpRuntimeSummary = { state: "ready" | "degraded" | "failed"; errors: string[] };
 
 const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "datasets", "plugins"];
 export type MarketplaceSourceFilter = "all" | PluginSourceFormat | "verified";
@@ -37,6 +39,20 @@ export function sourceFormatForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry,
 export function capabilitiesForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry, "capabilities" | "manifest">): PluginMarketCapability[] {
   if (entry.capabilities?.length) return [...new Set(entry.capabilities)];
   return entry.manifest.contributes?.skills?.length ? ["skills"] : [];
+}
+
+export function marketplacePluginRequiresRestart(entry: Pick<MarketplaceSdkEntry, "capabilities" | "manifest">): boolean {
+  return capabilitiesForMarketplaceEntry(entry).includes("mcp");
+}
+
+export function mcpRuntimeSummaryForPlugin(status: McpRuntimeStatus | null, pluginId: string): PluginMcpRuntimeSummary | null {
+  const servers = status?.servers.filter((server) => server.pluginId === pluginId) ?? [];
+  if (servers.length === 0) return null;
+  const failed = servers.filter((server) => server.state === "failed");
+  return {
+    state: failed.length === 0 ? "ready" : failed.length === servers.length ? "failed" : "degraded",
+    errors: failed.map((server) => `${server.name}: ${server.error ?? "failed to start"}`),
+  };
 }
 
 export function executesLocalCodeForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry, "executesLocalCode" | "capabilities">): boolean {
@@ -104,19 +120,25 @@ export function PluginMarketplace() {
   const [error, setError] = useState<string | null>(null);
   const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
   const [datasetCount, setDatasetCount] = useState(0);
+  const [restartPrompt, setRestartPrompt] = useState<RestartPrompt | null>(null);
+  const [restarting, setRestarting] = useState(false);
+  const [restartError, setRestartError] = useState<string | null>(null);
+  const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
     setError(null);
     try {
-      const [nextMarketplace, nextInstalled, nextUpdates] = await Promise.all([
+      const [nextMarketplace, nextInstalled, nextUpdates, nextMcpStatus] = await Promise.all([
         api.plugins.marketplace(),
         api.plugins.installed(),
         api.plugins.updates(),
+        api.mcpRuntime.status().catch(() => null),
       ]);
       setMarketplace(nextMarketplace);
       setInstalled(nextInstalled);
       setUpdates(nextUpdates);
+      setMcpStatus(nextMcpStatus);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -169,10 +191,31 @@ export function PluginMarketplace() {
     try {
       await api.plugins.setEnabled(id, enabled);
       await load();
+      const entry = marketplace.find((candidate) => candidate.manifest.id === id);
+      if (entry && marketplacePluginRequiresRestart(entry)) {
+        setSelectedPluginId(null);
+        setRestartError(null);
+        setRestartPrompt({ pluginName: entry.manifest.displayName, enabled });
+      }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
       setBusyPluginId(null);
+    }
+  };
+
+  const restartRuntime = async () => {
+    setRestarting(true);
+    setRestartError(null);
+    try {
+      await api.runtime.restart();
+      await load();
+      if (typeof window !== "undefined") window.dispatchEvent(new CustomEvent("brainpilot:runtime-restarted"));
+      setRestartPrompt(null);
+    } catch (reason) {
+      setRestartError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setRestarting(false);
     }
   };
 
@@ -276,6 +319,8 @@ export function PluginMarketplace() {
             const busy = busyPluginId === entry.manifest.id;
             const sourceFormat = sourceFormatForMarketplaceEntry(entry);
             const capabilities = capabilitiesForMarketplaceEntry(entry);
+            const mcpRuntime = installedEntry?.enabled ? mcpRuntimeSummaryForPlugin(mcpStatus, entry.manifest.id) : null;
+            const runtimeLabel = mcpRuntime ? t(`marketplace.mcp.${mcpRuntime.state}`) : null;
             return (
               <article className="plugin-card" key={entry.manifest.id}>
                 <button className="plugin-card__details-trigger" onClick={() => setSelectedPluginId(entry.manifest.id)} title={t("marketplace.details")} type="button">
@@ -292,8 +337,8 @@ export function PluginMarketplace() {
                 {capabilities.length ? <div className="plugin-card__capabilities">{capabilities.map((capability) => <span key={capability}>{t(capabilityLabelKey(capability))}</span>)}</div> : null}
                 <div className="plugin-card__meta">
                   <span>{installedEntry ? `v${installedEntry.activeVersion}` : t(kindLabelKey(kind))}</span>
-                  {installedEntry || incompatible || compatibilityWarning ? <span className={`plugin-card__state ${incompatible ? "is-incompatible" : compatibilityWarning ? "is-warning" : pluginUpdate?.updateAvailable ? "is-update" : installedEntry?.enabled ? "is-enabled" : ""}`}>
-                    {installedEntry?.enabled && !pluginUpdate?.updateAvailable && !incompatible && !compatibilityWarning ? <CheckCircle2 size={13} /> : null}{t(incompatible ? "marketplace.incompatible" : compatibilityWarning ? "marketplace.compatibilityWarning" : pluginUpdate?.updateAvailable ? "marketplace.updateAvailable" : installedEntry?.enabled ? "marketplace.enabled" : "marketplace.disabled")}
+                  {installedEntry || incompatible || compatibilityWarning ? <span className={`plugin-card__state ${incompatible ? "is-incompatible" : compatibilityWarning || mcpRuntime?.state === "degraded" ? "is-warning" : mcpRuntime?.state === "failed" ? "is-incompatible" : pluginUpdate?.updateAvailable ? "is-update" : installedEntry?.enabled || mcpRuntime?.state === "ready" ? "is-enabled" : ""}`} title={mcpRuntime?.errors.join("; ")}>
+                    {installedEntry?.enabled && !pluginUpdate?.updateAvailable && !incompatible && !compatibilityWarning && mcpRuntime?.state !== "failed" ? <CheckCircle2 size={13} /> : null}{runtimeLabel ?? t(incompatible ? "marketplace.incompatible" : compatibilityWarning ? "marketplace.compatibilityWarning" : pluginUpdate?.updateAvailable ? "marketplace.updateAvailable" : installedEntry?.enabled ? "marketplace.enabled" : "marketplace.disabled")}
                   </span> : null}
                 </div>
                 <div className="plugin-card__actions">
@@ -324,6 +369,7 @@ export function PluginMarketplace() {
         const repositoryUrl = selectedEntry.repositoryUrl ?? selectedEntry.homepage;
         const unsupported = selectedInstalled?.unsupported ?? selectedEntry.unsupported ?? [];
         const executesLocalCode = selectedInstalled?.executesLocalCode ?? executesLocalCodeForMarketplaceEntry(selectedEntry);
+        const mcpRuntime = selectedInstalled?.enabled ? mcpRuntimeSummaryForPlugin(mcpStatus, selectedEntry.manifest.id) : null;
         return (
           <div className="plugin-detail-layer" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedPluginId(null); }}>
             <section aria-labelledby="plugin-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
@@ -340,13 +386,14 @@ export function PluginMarketplace() {
                   <div><dt>{t("marketplace.details.publisher")}</dt><dd>{selectedEntry.publisher}</dd></div>
                   <div><dt>{t("marketplace.details.currentVersion")}</dt><dd>{selectedInstalled?.activeVersion ?? t("marketplace.details.notInstalled")}</dd></div>
                   <div><dt>{t("marketplace.details.latestVersion")}</dt><dd>{selectedEntry.manifest.version}</dd></div>
-                  <div><dt>{t("marketplace.details.status")}</dt><dd>{t(selectedCompatibility?.compatible === false ? "marketplace.incompatible" : selectedInstalled ? selectedInstalled.enabled ? "marketplace.enabled" : "marketplace.disabled" : "marketplace.details.notInstalled")}</dd></div>
+                  <div><dt>{t("marketplace.details.status")}</dt><dd>{mcpRuntime ? t(`marketplace.mcp.${mcpRuntime.state}`) : t(selectedCompatibility?.compatible === false ? "marketplace.incompatible" : selectedInstalled ? selectedInstalled.enabled ? "marketplace.enabled" : "marketplace.disabled" : "marketplace.details.notInstalled")}</dd></div>
                   <div><dt>{t("marketplace.details.compatibility")}</dt><dd>{t(selectedCompatibility?.compatible === false ? "marketplace.incompatible" : selectedCompatibility?.status === "warning" ? "marketplace.compatibilityWarning" : "marketplace.compatible")}</dd></div>
                   {selectedEntry.license ? <div><dt>{t("marketplace.details.license")}</dt><dd>{selectedEntry.license}</dd></div> : null}
                   {repositoryUrl ? <div><dt>{t("marketplace.details.repository")}</dt><dd><a href={repositoryUrl} rel="noreferrer" target="_blank">{repositoryUrl.replace(/^https?:\/\//, "").replace(/\/$/, "")} <ExternalLink size={12} /></a></dd></div> : null}
                 </dl>
                 {capabilities.length ? <section><h3>{t("marketplace.details.capabilities")}</h3><div className="plugin-detail__capabilities">{capabilities.map((capability) => <span key={capability}><CheckCircle2 size={14} />{t(capabilityLabelKey(capability))}</span>)}</div></section> : null}
                 {executesLocalCode ? <div className="plugin-detail__warning"><AlertTriangle size={16} /><span>{t("marketplace.details.localCodeWarning")}</span></div> : null}
+                {mcpRuntime?.errors.length ? <div className="plugin-detail__warning"><AlertTriangle size={16} /><span>{t(`marketplace.mcp.${mcpRuntime.state}`)}: {mcpRuntime.errors.join("; ")}</span></div> : null}
                 {(selectedEntry.manifest.environments?.length || selectedEntry.requirements?.length || selectedCompatibility?.issues.length) ? <section><h3>{t("marketplace.details.runtime")}</h3>
                   {selectedEntry.manifest.environments?.length ? <div className="plugin-detail__chips">{selectedEntry.manifest.environments.map((environment) => <span key={environment}>{environment}</span>)}</div> : null}
                   {selectedEntry.requirements?.length ? <ul>{selectedEntry.requirements.map((requirement) => <li key={requirement}>{requirement}</li>)}</ul> : null}
@@ -380,6 +427,27 @@ export function PluginMarketplace() {
           </div>
         );
       })() : null}
+
+      {restartPrompt ? (
+        <div className="plugin-detail-layer plugin-restart-layer">
+          <section aria-labelledby="plugin-restart-title" aria-modal="true" className="plugin-restart-dialog" role="dialog">
+            <div className="plugin-restart-dialog__header">
+              <span className="plugin-restart-dialog__icon"><RefreshCw className={restarting ? "is-spinning" : ""} size={19} /></span>
+              <div>
+                <h2 id="plugin-restart-title">{t("marketplace.restart.title")}</h2>
+                <p>{t(restartPrompt.enabled ? "marketplace.restart.enabledBody" : "marketplace.restart.disabledBody", { plugin: restartPrompt.pluginName })}</p>
+              </div>
+            </div>
+            {restartError ? <div className="plugin-restart-dialog__error">{restartError}</div> : null}
+            <div className="plugin-restart-dialog__actions">
+              <button className="plugin-card__button plugin-card__button--ghost" disabled={restarting} onClick={() => setRestartPrompt(null)} type="button">{t("marketplace.restart.later")}</button>
+              <button className="plugin-card__button" disabled={restarting} onClick={() => void restartRuntime()} type="button">
+                {restarting ? <Loader2 className="is-spinning" size={14} /> : null}{t(restarting ? "marketplace.restart.restarting" : "marketplace.restart.now")}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
     </main>
   );

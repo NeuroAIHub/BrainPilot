@@ -19,6 +19,42 @@ function fakeOrchestrator(baseUrl = "http://runtime.test"): Orchestrator {
 }
 
 describe("Hono app — REST forwarding", () => {
+  it("stops and recreates the current user's runtime", async () => {
+    const calls: string[] = [];
+    const orchestrator: Orchestrator = {
+      ensureRuntime: vi.fn(async (opts) => {
+        calls.push(`start:${opts?.userId}`);
+        return { baseUrl: "http://runtime-restarted.test" };
+      }),
+      health: async () => true,
+      stopRuntime: vi.fn(async (userId) => { calls.push(`stop:${userId}`); }),
+    };
+    const app = createApp({ orchestrator, serveWeb: false });
+
+    const response = await app.request("/api/runtime/restart", {
+      method: "POST",
+      headers: { "x-bp-user": "researcher-1" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+    expect(calls).toEqual(["stop:researcher-1", "start:researcher-1"]);
+  });
+
+  it("forwards runtime-observed MCP status", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/mcp/status");
+      return new Response(JSON.stringify({ state: "ready", servers: [{ name: "playwright", pluginId: "org.brainpilot.playwright-mcp", state: "ready" }] }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = createApp({ orchestrator: fakeOrchestrator(), fetchFn: fetchFn as never, serveWeb: false });
+
+    const response = await app.request("/api/mcp-status");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ state: "ready" });
+  });
+
   it("GET /api/sessions forwards to the runtime and returns its body", async () => {
     const fetchFn = vi.fn(async (url: string) => {
       expect(url).toBe("http://runtime.test/sessions");

@@ -134,7 +134,6 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // so keystroke state stays off this render path; only status flips re-render.
   const [pluginSource, setPluginSource] = useState<SourceStatus<MentionPlugin>>({ state: "loading" });
   const [fileSource, setFileSource] = useState<SourceStatus<MentionFile>>({ state: "idle" });
-
   // No provider configured: after the first load resolves, there's no active
   // provider. Surface a persistent banner + CTA so a first-run user isn't left
   // to discover it only by sending a message and hitting an opaque error. The CTA
@@ -230,17 +229,27 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     };
   }, []);
 
-  // #316: load MCP servers for `@` mention candidates (global, works in draft).
+  // Load runtime-confirmed MCP servers for `@` mention candidates, including
+  // servers contributed by enabled marketplace plugins.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setPluginSource((prev) => (prev.state === "ready" ? prev : { state: "loading" }));
       try {
-        const servers = await api.mcpServers.list();
+        const status = await api.mcpRuntime.status();
         if (cancelled) return;
+        const ready = status.servers.filter((server) => server.state === "ready");
+        const failures = status.servers.filter((server) => server.state === "failed");
+        if (ready.length === 0 && failures.length > 0) {
+          setPluginSource({
+            state: "error",
+            message: failures.map((server) => `${server.name}: ${server.error ?? "failed to start"}`).join("; "),
+          });
+          return;
+        }
         setPluginSource({
           state: "ready",
-          items: servers.map((s) => ({ name: s.name })),
+          items: ready.map((server) => ({ name: server.name })),
         });
       } catch (err) {
         if (cancelled) return;
@@ -254,10 +263,13 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     // Refresh when provider profiles update is a weak proxy; also re-fetch on
     // focus so Settings → Tools changes show up after the dialog closes.
     const onFocus = () => void load();
+    const onRuntimeRestarted = () => void load();
     window.addEventListener("focus", onFocus);
+    window.addEventListener("brainpilot:runtime-restarted", onRuntimeRestarted);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("brainpilot:runtime-restarted", onRuntimeRestarted);
     };
   }, []);
 

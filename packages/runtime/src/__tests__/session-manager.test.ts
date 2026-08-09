@@ -117,7 +117,7 @@ describe("SessionManager (mock mode)", () => {
     await mkdir(join(root, "bp_template"), { recursive: true });
     await writeFile(join(root, "bp_template", "mcp_servers.json"), JSON.stringify({ mcpServers: { playwright: { command: "node" } } }));
     const mcpBridge = {
-      connectAllWithStatus: async () => ({ tools: [], connectedServers: [], failures: [{ server: "playwright", error: "Chrome/Chromium is required" }] }),
+      connectAllWithStatus: async () => ({ tools: [], connectedServers: [], skippedServers: [], failures: [{ server: "playwright", error: "Chrome/Chromium is required" }] }),
       close: async () => {},
     } as unknown as McpBridge;
     const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge });
@@ -126,6 +126,34 @@ describe("SessionManager (mock mode)", () => {
     await expect(manager.sendMessage(session.id, "browse the web")).rejects.toThrow(
       "Configured MCP services failed to start: playwright: Chrome/Chromium is required",
     );
+    await expect(manager.getMcpRuntimeStatus()).resolves.toEqual({
+      state: "failed",
+      servers: [{ name: "playwright", state: "failed", error: "Chrome/Chromium is required" }],
+    });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("reports the owning plugin for a ready MCP server", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-plugin-status-"));
+    const pluginRoot = join(root, "plugins", "execution", "plugin-a", "1.0.0");
+    const runtimeDir = join(root, "plugins", "runtime");
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(runtimeDir, { recursive: true });
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { playwright: { command: "node" } } }));
+    await writeFile(join(runtimeDir, "plugin-a.json"), JSON.stringify({
+      schemaVersion: 1, id: "plugin-a", version: "1.0.0", format: "brainpilot", root: pluginRoot, dataDir: join(root, "plugins", "data", "plugin-a"), mcpConfigPath,
+    }));
+    const mcpBridge = {
+      connectAllWithStatus: async () => ({ tools: [], connectedServers: ["playwright"], skippedServers: [], failures: [] }),
+      close: async () => {},
+    } as unknown as McpBridge;
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge });
+
+    await expect(manager.getMcpRuntimeStatus()).resolves.toEqual({
+      state: "ready",
+      servers: [{ name: "playwright", pluginId: "plugin-a", state: "ready" }],
+    });
     await rm(root, { recursive: true, force: true });
   });
 

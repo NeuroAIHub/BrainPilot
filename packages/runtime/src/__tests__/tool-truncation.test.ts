@@ -24,7 +24,7 @@ function fakeMcpBridge(tools: SystemTool[]): McpBridge {
   return {
     tools,
     connectAll: async (_cfg: McpServersConfig) => tools,
-    connectAllWithStatus: async (_cfg: McpServersConfig) => ({ tools, connectedServers: ["test"], failures: [] }),
+    connectAllWithStatus: async (_cfg: McpServersConfig) => ({ tools, connectedServers: ["test"], skippedServers: [], failures: [] }),
     close: async () => {},
   } as unknown as McpBridge;
 }

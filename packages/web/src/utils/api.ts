@@ -56,6 +56,16 @@ import type {
 
 export type MarketplaceApiEntry = MarketplaceEntry & { compatibility: PluginCompatibility };
 export type InstalledPluginApiEntry = InstalledPlugin & { compatibility: PluginCompatibility };
+export interface McpRuntimeServerStatus {
+  name: string;
+  pluginId?: string;
+  state: "ready" | "failed";
+  error?: string;
+}
+export interface McpRuntimeStatus {
+  state: "not_loaded" | "unconfigured" | "ready" | "degraded" | "failed";
+  servers: McpRuntimeServerStatus[];
+}
 export interface DatasetCatalogEntry {
   id: string;
   name: string;
@@ -438,6 +448,23 @@ export const api = {
     } catch {
       return { localMode: false };
     }
+  },
+
+  runtime: {
+    async restart(): Promise<{ status: "ok" }> {
+      if (runtimeConfig.useMockBackend) return { status: "ok" };
+      return handleJson(await apiFetch(`${API_BASE}/runtime/restart`, {
+        method: "POST",
+        headers: authHeaders(),
+      }));
+    },
+  },
+
+  mcpRuntime: {
+    async status(): Promise<McpRuntimeStatus> {
+      if (runtimeConfig.useMockBackend) return { state: "unconfigured", servers: [] };
+      return handleJson(await apiFetch(`${API_BASE}/mcp-status`, { headers: authHeaders() }));
+    },
   },
 
   auth: {

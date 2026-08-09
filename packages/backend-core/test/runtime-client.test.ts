@@ -17,6 +17,7 @@ describe("RuntimeClient", () => {
       "http://rt:8081/sessions/s1/state",
     );
     expect(rc.urlFor("listSessions")).toBe("http://rt:8081/sessions");
+    expect(rc.urlFor("mcpStatus")).toBe("http://rt:8081/mcp/status");
   });
 
   it("forward issues the route's method + body and returns the raw Response", async () => {

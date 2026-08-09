@@ -6,12 +6,23 @@ import path from "node:path";
 const exists = async (file) => access(file).then(() => true, () => false);
 
 async function cachedChromiumCandidates() {
-  const root = process.env.PLAYWRIGHT_BROWSERS_PATH || path.join(os.homedir(), ".cache", "ms-playwright");
+  const defaultRoot = process.platform === "darwin"
+    ? path.join(os.homedir(), "Library", "Caches", "ms-playwright")
+    : process.platform === "win32"
+      ? path.join(process.env.LOCALAPPDATA || os.homedir(), "ms-playwright")
+      : path.join(os.homedir(), ".cache", "ms-playwright");
+  const root = process.env.PLAYWRIGHT_BROWSERS_PATH || defaultRoot;
   let entries = [];
   try { entries = await readdir(root); } catch { return []; }
   const candidates = [];
   for (const entry of entries.filter((name) => /^chromium-\d+$/.test(name))) {
-    for (const relative of ["chrome-linux64/chrome", "chrome-linux/chrome"]) {
+    for (const relative of [
+      "chrome-linux64/chrome",
+      "chrome-linux/chrome",
+      "chrome-mac/Chromium.app/Contents/MacOS/Chromium",
+      "chrome-mac-arm64/Chromium.app/Contents/MacOS/Chromium",
+      "chrome-win/chrome.exe",
+    ]) {
       const file = path.join(root, entry, relative);
       if (await exists(file)) candidates.push({ file, modified: (await stat(file)).mtimeMs });
     }
