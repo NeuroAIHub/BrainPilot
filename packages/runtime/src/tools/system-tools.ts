@@ -320,6 +320,11 @@ export function createSpawnSubagentTool(deps: ToolDeps): SystemTool {
               name: { type: "string" },
               profile: { type: "string", description: "Profile name from list_subagent_profiles." },
               task: { type: "string" },
+              workspaceMode: {
+                type: "string",
+                enum: ["isolated", "shared"],
+                description: "Run in isolated scratch space or directly in the shared session workspace. Defaults to isolated.",
+              },
               inputs: {
                 type: "array",
                 items: {
