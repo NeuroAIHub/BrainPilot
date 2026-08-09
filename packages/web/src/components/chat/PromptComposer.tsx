@@ -1,5 +1,5 @@
 import { Bot, Paperclip, Square, X } from "lucide-react";
-import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProviderProfile } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
@@ -18,7 +18,7 @@ import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
-import type { WorkspaceFileTarget } from "./workspaceFileLink";
+import type { SessionWorkspaceFileTarget, WorkspaceFileTarget } from "./workspaceFileLink";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
 import { shouldShowNoProviderBanner } from "./noProviderBanner";
@@ -68,7 +68,7 @@ type PromptComposerProps = {
    *  no-provider banner's CTA. Optional so the composer still renders standalone
    *  (e.g. in tests). */
   onOpenProviderSettings?: () => void;
-  onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
+  onOpenWorkspaceFile?: (target: SessionWorkspaceFileTarget) => void;
 };
 
 export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: PromptComposerProps = {}) {
@@ -136,6 +136,9 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   // so keystroke state stays off this render path; only status flips re-render.
   const [pluginSource, setPluginSource] = useState<SourceStatus<MentionPlugin>>({ state: "loading" });
   const [fileSource, setFileSource] = useState<SourceStatus<MentionFile>>({ state: "idle" });
+  const openWorkspaceFile = useCallback((target: WorkspaceFileTarget) => {
+    if (currentSession?.id) onOpenWorkspaceFile?.({ ...target, sessionId: currentSession.id });
+  }, [currentSession?.id, onOpenWorkspaceFile]);
 
   // No provider configured: after the first load resolves, there's no active
   // provider. Surface a persistent banner + CTA so a first-run user isn't left
@@ -232,17 +235,27 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     };
   }, []);
 
-  // #316: load MCP servers for `@` mention candidates (global, works in draft).
+  // Load runtime-confirmed MCP servers for `@` mention candidates, including
+  // servers contributed by enabled marketplace plugins.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setPluginSource((prev) => (prev.state === "ready" ? prev : { state: "loading" }));
       try {
-        const servers = await api.mcpServers.list();
+        const status = await api.mcpRuntime.status();
         if (cancelled) return;
+        const ready = status.servers.filter((server) => server.state === "ready");
+        const failures = status.servers.filter((server) => server.state === "failed");
+        if (ready.length === 0 && failures.length > 0) {
+          setPluginSource({
+            state: "error",
+            message: failures.map((server) => `${server.name}: ${server.error ?? "failed to start"}`).join("; "),
+          });
+          return;
+        }
         setPluginSource({
           state: "ready",
-          items: servers.map((s) => ({ name: s.name })),
+          items: ready.map((server) => ({ name: server.name })),
         });
       } catch (err) {
         if (cancelled) return;
@@ -256,10 +269,13 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     // Refresh when provider profiles update is a weak proxy; also re-fetch on
     // focus so Settings → Tools changes show up after the dialog closes.
     const onFocus = () => void load();
+    const onRuntimeRestarted = () => void load();
     window.addEventListener("focus", onFocus);
+    window.addEventListener("brainpilot:runtime-restarted", onRuntimeRestarted);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("brainpilot:runtime-restarted", onRuntimeRestarted);
     };
   }, []);
 
@@ -671,7 +687,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             runningAgents={runningAgents}
             groupExpertActivity
             onRetryCancel={() => void interruptCurrent()}
-            onOpenWorkspaceFile={onOpenWorkspaceFile}
+            onOpenWorkspaceFile={openWorkspaceFile}
           />
         ) : null}
 

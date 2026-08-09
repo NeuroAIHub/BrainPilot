@@ -8,7 +8,7 @@ import { runtimeConfig } from "../../config";
 import { PromptComposer } from "../chat/PromptComposer";
 import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
-import { fileSidebarScopeKey } from "../files/fileSidebarScope";
+import { fileRequestMatchesSession, fileSidebarScopeKey } from "../files/fileSidebarScope";
 import { IconButton } from "../primitives/IconButton";
 import { SearchDialog } from "../search/SearchDialog";
 import { SettingsDialog, type SettingsTab } from "../settings/SettingsDialog";
@@ -19,7 +19,7 @@ import { Sidebar } from "../sidebar/Sidebar";
 import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
 import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
-import type { WorkspaceFileTarget } from "../chat/workspaceFileLink";
+import type { SessionWorkspaceFileTarget } from "../chat/workspaceFileLink";
 
 const PluginMarketplace = lazy(() => import("../plugins/PluginMarketplace").then((module) => ({ default: module.PluginMarketplace })));
 
@@ -52,7 +52,7 @@ export function DesktopShell() {
   };
   const [isFilesOpen, setIsFilesOpen] = useState(false);
   const [hasUnsavedFileChanges, setHasUnsavedFileChanges] = useState(false);
-  const [openFileRequest, setOpenFileRequest] = useState<(WorkspaceFileTarget & { requestId: number }) | null>(null);
+  const [openFileRequest, setOpenFileRequest] = useState<(SessionWorkspaceFileTarget & { requestId: number }) | null>(null);
   const [fileSidebarWidth, setFileSidebarWidth] = useState(420);
   const [isFileSidebarResizing, setIsFileSidebarResizing] = useState(false);
   const [sandboxOverlayDismissed, setSandboxOverlayDismissed] = useState(false);
@@ -64,11 +64,15 @@ export function DesktopShell() {
     () => !hasUnsavedFileChanges || window.confirm(t("files.editor.confirmDiscard")),
     [hasUnsavedFileChanges, t],
   );
-  const openWorkspaceFile = useCallback((target: WorkspaceFileTarget) => {
+  const openWorkspaceFile = useCallback((target: SessionWorkspaceFileTarget) => {
     setIsFilesOpen(true);
     openFileRequestIdRef.current += 1;
     setOpenFileRequest({ ...target, requestId: openFileRequestIdRef.current });
   }, []);
+
+  useEffect(() => {
+    if (openFileRequest && !fileRequestMatchesSession(openFileRequest.sessionId, currentSession?.id)) setOpenFileRequest(null);
+  }, [currentSession?.id, openFileRequest]);
 
   useEffect(() => {
     if (operation === "creating" || operation === "rebuilding") {

@@ -45,6 +45,8 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return c.json({ capabilities: parsed.data.capabilities });
   });
 
+  app.get("/mcp/status", async (c) => c.json(await manager.getMcpRuntimeStatus()));
+
   app.post("/sessions", async (c) => {
     const body = await safeBody(c);
     const parsed = CreateSessionRequestSchema.safeParse(body);

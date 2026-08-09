@@ -30,6 +30,7 @@ import { createZipBlob, type ZipEntry } from "../../utils/zip";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
+import { fileRequestMatchesSession } from "./fileSidebarScope";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
 import { PluginPreviewHost } from "./PluginPreviewHost";
 import { matchEnabledPreviewer, type EnabledPreviewer } from "./previewerRegistry";
@@ -52,7 +53,7 @@ type FileNode = FileEntry & {
 
 type FileSidebarProps = {
   isOpen: boolean;
-  openFileRequest?: { path: string; line?: number; requestId: number } | null;
+  openFileRequest?: { path: string; line?: number; sessionId: string; requestId: number } | null;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
   onResize: (width: number) => void;
@@ -747,7 +748,7 @@ export function FileSidebar({
   };
 
   useEffect(() => {
-    if (!isOpen || !openFileRequest || !sandboxId || currentSandbox?.status !== "running") return;
+    if (!isOpen || !openFileRequest || !sandboxId || !fileRequestMatchesSession(openFileRequest.sessionId, sandboxId) || currentSandbox?.status !== "running") return;
     let cancelled = false;
 
     const openLinkedFile = async () => {

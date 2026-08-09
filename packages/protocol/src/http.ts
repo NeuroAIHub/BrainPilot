@@ -306,6 +306,7 @@ export const RUNTIME_ROUTES = {
   health: { method: "GET", path: "/health" },
   metrics: { method: "GET", path: "/metrics" },
   setRuntimeCapabilities: { method: "PUT", path: "/runtime/capabilities" },
+  mcpStatus: { method: "GET", path: "/mcp/status" },
   createSession: { method: "POST", path: "/sessions" },
   listSessions: { method: "GET", path: "/sessions" },
   getSession: { method: "GET", path: "/sessions/:id" },
