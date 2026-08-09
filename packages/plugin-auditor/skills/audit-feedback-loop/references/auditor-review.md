@@ -11,14 +11,14 @@ Load only the specialist skills applicable to the target:
 - `audit-evidence` for numeric, artifact, log, citation, or cross-report claims;
 - `audit-data-integrity` for datasets, tensors, repeated observations, splits,
   preprocessing, or transforms;
-- `audit-model-validation` for modelling, prediction, benchmarking, selection,
-  deployment, or transfer claims;
+- `audit-model-validation` for method selection, empirical evaluation,
+  benchmarking, modelling, prediction, or suitability claims;
 - `audit-code-artifact` for implementation, export, packaging, or inference.
 
-For modelling or statistical work, report every applicable specialist check as
-`pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` check
-requires `REVISE` or `BLOCK`, never `PASS`. Do not prescribe a winning model or
-redesign the study.
+For empirical or method-selection work, report every applicable specialist check
+as `pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` check
+requires `REVISE` or `BLOCK`, never `PASS`. Do not choose a method or redesign
+the work.
 
 ## Use bounded parallel review
 

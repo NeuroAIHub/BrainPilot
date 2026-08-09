@@ -51,6 +51,12 @@ describe("bundled system plugins", () => {
     expect(auditorReview).toContain("call `spawn_subagent` once with two to");
     expect(auditorReview).toContain("Children return evidence and candidate findings only");
     expect(auditorReview).toContain("Write the complete report to a new path under");
+    const methodSkill = auditorSkills.find((path) => path.endsWith("audit-model-validation"))!;
+    const methodReview = await readFile(join(methodSkill, "SKILL.md"), "utf8");
+    expect(methodReview).toContain("Audit Method Validation");
+    expect(methodReview).toContain("substantively different alternatives");
+    expect(methodReview).toContain("operational correctness and feasibility");
+    expect(methodReview).toContain("implementation convenience");
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
     expect(responseTemplate).toContain("## Compact completion reply");
     expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");

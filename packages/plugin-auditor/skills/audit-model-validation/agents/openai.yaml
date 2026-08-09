@@ -1,4 +1,4 @@
 interface:
-  display_name: "Audit Model Validation"
-  short_description: "Check validation design and model-selection claims"
-  default_prompt: "Use $audit-model-validation to audit whether this validation supports the stated model claims."
+  display_name: "Audit Method Validation"
+  short_description: "Check method comparison and selection evidence"
+  default_prompt: "Use $audit-model-validation to audit whether this method comparison supports the stated claims."

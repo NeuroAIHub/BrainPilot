@@ -2,9 +2,9 @@
 
 ## Start an audit
 
-Audit an Expert result, PI reasoning/draft, or a multi-agent synthesis when it contains numeric results, artifact claims, external citations, datasets, benchmarks, modelling or statistical conclusions, or conflicting Expert claims. Skip greetings, clarification, progress notices, and other replies without hard claims.
+Audit an Expert result, PI reasoning/draft, or a multi-agent synthesis when it contains numeric results, artifact claims, external citations, datasets, benchmarks, empirical or method-selection conclusions, or conflicting Expert claims. Skip greetings, clarification, progress notices, and other replies without hard claims.
 
-For modelling or statistical work, the audit request must identify the data contract, scientific protocol, implementation, validation outputs, export-equivalence evidence, and isolated packaging test. If an expected artifact does not exist, ask its producing Expert to create it before requesting a final audit.
+For data-driven or method-selection work, the audit request must identify the applicable input contract, protocol, method survey, implementation or procedure, operational checks, decision-relevant evidence, and artifact checks. If expected evidence does not exist, ask its producing Expert to create it before requesting a final audit.
 
 1. Inspect the returned primary artifact for basic completeness.
 2. Read `audit-request-template.md` and build a self-contained request.

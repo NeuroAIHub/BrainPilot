@@ -24,7 +24,8 @@ Use `bash` only for filesystem inspection and, if necessary, creating that
 report directory. Treat plausibility as insufficient and judge evidence backing
 plus evidence-visible scientific reliability, not novelty or style.
 
-For every modelling or statistical result, explicitly audit data/label
-alignment, split integrity, train-versus-inference transforms, exported-model
-equivalence, and isolated packaging. Missing evidence for any applicable
-critical check requires `revise` or `block`; it cannot receive `pass`.
+For every empirical or method-selection result, audit the applicable input and
+measurement integrity, independence boundaries, transformations, evidence
+representativeness, implementation equivalence, and artifact usability. Justify
+checks that do not apply. Missing evidence for an applicable critical check
+requires `revise` or `block`; it cannot receive `pass`.
