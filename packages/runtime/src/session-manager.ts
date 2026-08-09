@@ -40,7 +40,6 @@ import {
   type TraceRestoreResult,
   type TraceNodeRecord,
   type UserInputCancellationReason,
-  type WorkflowPolicy,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
 import {
@@ -118,12 +117,6 @@ interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
   reject: (reason: Error) => void;
-}
-
-function resolveWorkflowPolicy(value: unknown): WorkflowPolicy {
-  if (value === undefined || value === "direct") return "direct";
-  if (value === "expert_required") return "expert_required";
-  throw new Error(`invalid workflowPolicy: ${String(value)}`);
 }
 
 type UserInputPhase = "queued" | "activating" | "active" | "finishing";
@@ -299,7 +292,6 @@ interface SessionMeta {
   updatedAt?: string;
   lastActivityAt?: number;
   domainResources?: DomainResources;
-  workflowPolicy?: WorkflowPolicy;
   workflowTaskSeqBaseline?: number;
   workflowReminderClaimed?: boolean;
   workflowViolationEmitted?: boolean;
@@ -336,8 +328,7 @@ interface SessionEntry {
   providerRef: SessionProviderRef;
   /** Frozen per-session domain-resource mode; never read from global state. */
   domainResources: DomainResources;
-  /** Frozen PI delegation policy plus the current explicit-user work epoch. */
-  workflowPolicy: WorkflowPolicy;
+  /** Host-owned state for the current explicit-user delegation epoch. */
   workflowTaskSeqBaseline: number;
   workflowReminderClaimed: boolean;
   workflowViolationEmitted: boolean;
@@ -1466,7 +1457,6 @@ export class SessionManager {
       providerId?: string;
       modelId?: string;
       domainResources?: DomainResources;
-      workflowPolicy?: WorkflowPolicy;
       workflowTaskSeqBaseline?: number;
       workflowReminderClaimed?: boolean;
       workflowViolationEmitted?: boolean;
@@ -1495,12 +1485,6 @@ export class SessionManager {
             `cannot reopen it as ${input.domainResources}`,
         );
       }
-      if (input.workflowPolicy && input.workflowPolicy !== existing.workflowPolicy) {
-        throw new Error(
-          `session ${id} already uses workflowPolicy=${existing.workflowPolicy}; ` +
-            `cannot reopen it as ${input.workflowPolicy}`,
-        );
-      }
       return this.toSession(existing);
     }
     const nowIso = _restore ? _restore.updatedAt : new Date().toISOString();
@@ -1508,7 +1492,6 @@ export class SessionManager {
     const lastActivityAt = _restore ? _restore.lastActivityAt : Date.now();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
     const domainResources = resolveDomainResources(input.domainResources);
-    const workflowPolicy = resolveWorkflowPolicy(input.workflowPolicy);
     const systemPlugins = this.resolveSessionSystemPlugins(input.systemPlugins);
 
     // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
@@ -1638,7 +1621,6 @@ export class SessionManager {
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       domainResources,
-      workflowPolicy,
       workflowTaskSeqBaseline: input.workflowTaskSeqBaseline ?? 0,
       workflowReminderClaimed: input.workflowReminderClaimed === true,
       workflowViolationEmitted: input.workflowViolationEmitted === true,
@@ -1760,7 +1742,6 @@ export class SessionManager {
           createdAt: meta.createdAt ?? "",
           updatedAt: meta.updatedAt ?? "",
           domainResources: meta.domainResources === "base" ? "base" : "full",
-          workflowPolicy: resolveWorkflowPolicy(meta.workflowPolicy),
         });
       }
     }
@@ -1918,7 +1899,6 @@ export class SessionManager {
     // existing epoch, so a completed delegation continues to satisfy the guard.
     if (
       agentName === "principal"
-      && entry.workflowPolicy === "expert_required"
       && !this.deriveWorkActive(entry)
     ) {
       entry.workflowTaskSeqBaseline = entry.taskLedger.list().reduce(
@@ -2701,7 +2681,7 @@ export class SessionManager {
         name === "principal" ? () => this.renderAgentStatus(entry) : undefined,
       renderTaskContext: () => this.renderTaskContext(entry, name),
       principalWorkflowGuard:
-        name === "principal" && entry.workflowPolicy === "expert_required"
+        name === "principal"
           ? {
               renderState: () => this.renderPrincipalWorkflowState(entry),
               hasQualifyingDelegation: () => this.hasQualifyingPrincipalDelegation(entry),
@@ -2820,15 +2800,13 @@ export class SessionManager {
 
   private renderPrincipalWorkflowState(entry: SessionEntry): string {
     return renderPrincipalWorkflowBlock(
-      entry.workflowPolicy === "expert_required"
-      && !this.hasQualifyingPrincipalDelegation(entry),
+      !this.hasQualifyingPrincipalDelegation(entry),
     );
   }
 
   private async claimPrincipalWorkflowReminder(entry: SessionEntry): Promise<boolean> {
     if (
-      entry.workflowPolicy !== "expert_required"
-      || entry.workflowReminderClaimed
+      entry.workflowReminderClaimed
       || this.hasQualifyingPrincipalDelegation(entry)
     ) return false;
     entry.workflowReminderClaimed = true;
@@ -3304,7 +3282,6 @@ export class SessionManager {
         subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
         domainResources: entry.domainResources,
-        workflowPolicy: entry.workflowPolicy,
         tokenUsage: entry.tokenUsage,
       }),
     );
@@ -3330,7 +3307,6 @@ export class SessionManager {
     subagents?: import("@brainpilot/protocol").SubagentStatus[];
     lastActivityTs: string;
     domainResources: DomainResources;
-    workflowPolicy: WorkflowPolicy;
     tokenUsage: SessionTokenUsage;
   } | undefined {
     const entry = this.sessions.get(sessionId);
@@ -3342,7 +3318,6 @@ export class SessionManager {
       subagents: entry.subagents.list(),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
       domainResources: entry.domainResources,
-      workflowPolicy: entry.workflowPolicy,
       tokenUsage: entry.tokenUsage,
     };
   }
@@ -3682,7 +3657,6 @@ export class SessionManager {
       createdAt: e.createdAt,
       updatedAt: e.updatedAt,
       domainResources: e.domainResources,
-      workflowPolicy: e.workflowPolicy,
     };
   }
 
@@ -3695,7 +3669,6 @@ export class SessionManager {
       updatedAt: entry.updatedAt,
       lastActivityAt: entry.lastActivityAt,
       domainResources: entry.domainResources,
-      workflowPolicy: entry.workflowPolicy,
       workflowTaskSeqBaseline: entry.workflowTaskSeqBaseline,
       workflowReminderClaimed: entry.workflowReminderClaimed,
       workflowViolationEmitted: entry.workflowViolationEmitted,
@@ -3868,7 +3841,6 @@ export class SessionManager {
       const raw = await readFile(join(this.dataRoot, ".bp", id, "meta.json"), "utf8");
       const meta = JSON.parse(raw) as SessionMeta;
       resolveDomainResources(meta.domainResources);
-      resolveWorkflowPolicy(meta.workflowPolicy);
       return meta;
     } catch {
       return null;
@@ -3896,7 +3868,6 @@ export class SessionManager {
           id: sid,
           title: meta.title,
           domainResources: resolveDomainResources(meta.domainResources),
-          workflowPolicy: resolveWorkflowPolicy(meta.workflowPolicy),
           workflowTaskSeqBaseline:
             typeof meta.workflowTaskSeqBaseline === "number" ? meta.workflowTaskSeqBaseline : 0,
           workflowReminderClaimed: meta.workflowReminderClaimed === true,

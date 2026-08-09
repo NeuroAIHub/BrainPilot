@@ -237,7 +237,7 @@ export type AgentSessionFactory = (params: {
   renderAgentStatus?: () => string;
   /** Fresh flat task-list context, injected ephemerally on every turn. */
   renderTaskContext?: () => string;
-  /** Principal-only, host-owned delegation guard. Omitted for direct sessions and other roles. */
+  /** Principal-only, host-owned mandatory delegation guard. Omitted for other roles. */
   principalWorkflowGuard?: {
     renderState: () => string;
     hasQualifyingDelegation: () => boolean;
