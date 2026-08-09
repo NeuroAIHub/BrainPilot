@@ -5,7 +5,7 @@
  * (RUN_FINISHED / RUN_ERROR) or `command_complete` is seen.
  */
 import { BrainPilotClient, isTerminalEvent } from "./client.js";
-import type { AgUiEvent } from "@brainpilot/protocol";
+import type { AgUiEvent, WorkflowPolicy } from "@brainpilot/protocol";
 
 export interface DriveOptions {
   baseUrl?: string;
@@ -13,6 +13,8 @@ export interface DriveOptions {
   agent?: string;
   /** Reuse an existing session instead of creating one. */
   sessionId?: string;
+  /** Applied when this driver creates a new session. */
+  workflowPolicy?: WorkflowPolicy;
   /** Stop after this many events even without a terminal (safety bound). */
   maxEvents?: number;
 }
@@ -55,7 +57,9 @@ export async function driveSession(
   const events: AgUiEvent[] = [];
   const maxEvents = options.maxEvents ?? Infinity;
 
-  const sessionId = options.sessionId ?? (await client.createSession());
+  const sessionId = options.sessionId ?? (await client.createSession({
+    ...(options.workflowPolicy ? { workflowPolicy: options.workflowPolicy } : {}),
+  }));
 
   // Start the stream BEFORE sending so we don't miss early events. The runtime
   // replays buffered events on connect, so ordering here is best-effort.

@@ -237,6 +237,13 @@ export type AgentSessionFactory = (params: {
   renderTaskContext?: () => string;
   /** Fresh role-specific GoT context, injected ephemerally on every turn. */
   renderGoTContext?: () => string;
+  /** Principal-only, host-owned delegation guard. Omitted for direct sessions and other roles. */
+  principalWorkflowGuard?: {
+    renderState: () => string;
+    hasQualifyingDelegation: () => boolean;
+    claimReminder: () => boolean | Promise<boolean>;
+    onViolation: () => void | Promise<void>;
+  };
   /**
    * Per-session LLM provider resolved from providers.json. When omitted, the
    * factory falls back to Pi's env-based default (Docker/static compat).

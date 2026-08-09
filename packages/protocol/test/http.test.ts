@@ -45,6 +45,9 @@ describe("Runtime HTTP contract", () => {
     expect(CreateSessionRequestSchema.parse({ title: "T" }).title).toBe("T");
     expect(CreateSessionRequestSchema.parse({ domainResources: "base" }).domainResources).toBe("base");
     expect(CreateSessionRequestSchema.safeParse({ domainResources: "disabled" }).success).toBe(false);
+    expect(CreateSessionRequestSchema.parse({ workflowPolicy: "expert_required" }).workflowPolicy)
+      .toBe("expert_required");
+    expect(CreateSessionRequestSchema.safeParse({ workflowPolicy: "unknown" }).success).toBe(false);
     expect(CreateSessionRequestSchema.parse({}).title).toBeUndefined();
     expect(CreateSessionResponseSchema.parse({ id: "s1" }).id).toBe("s1");
   });

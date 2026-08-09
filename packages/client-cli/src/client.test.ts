@@ -207,6 +207,31 @@ describe("driveSession", () => {
     ).toBe(true);
   });
 
+  it("passes the workflow policy when creating a session", async () => {
+    let createBody: unknown;
+    const fetchFn = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      const method = init?.method ?? "GET";
+      if (u.endsWith("/sessions") && method === "POST") {
+        createBody = JSON.parse(String(init?.body));
+        return new Response(JSON.stringify({ id: "workflow-session" }), { status: 200 });
+      }
+      if (u.endsWith("/messages")) {
+        return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      }
+      return new Response(
+        streamFrom(['data: {"type":"RUN_FINISHED","run_id":"r1"}\n\n']),
+        { status: 200 },
+      );
+    }) as unknown as typeof fetch;
+
+    await driveSession(
+      { baseUrl: "http://h/api", message: "research", workflowPolicy: "expert_required" },
+      { fetchFn },
+    );
+    expect(createBody).toEqual({ workflowPolicy: "expert_required" });
+  });
+
   it("respects maxEvents as a safety bound", async () => {
     const fetchFn = (async (url: string | URL, init?: RequestInit) => {
       const u = String(url);

@@ -155,6 +155,39 @@ describe("SessionManager (mock mode)", () => {
     expect(renderers.get("auditor")?.()).toContain(node.id);
   });
 
+  it("wires the Principal workflow guard only for expert-required sessions", async () => {
+    const seen: Parameters<typeof mockAgentFactory>[0][] = [];
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      seen.push(params);
+      return mockAgentFactory(params);
+    };
+    const manager = new SessionManager({ persist: false, agentFactory: spyFactory });
+
+    const direct = await manager.createSession({ workflowPolicy: "direct" });
+    await manager.sendMessage(direct.id, "hello");
+    await waitFor(() => seen.some((params) => params.sessionId === direct.id));
+    expect(seen.find((params) => params.sessionId === direct.id)?.principalWorkflowGuard)
+      .toBeUndefined();
+
+    const required = await manager.createSession({ workflowPolicy: "expert_required" });
+    expect(required.workflowPolicy).toBe("expert_required");
+    await manager.sendMessage(required.id, "run the research task");
+    await waitFor(() => seen.some((params) => params.sessionId === required.id));
+    const principal = seen.find(
+      (params) => params.sessionId === required.id && params.agentName === "principal",
+    )!;
+    expect(principal.principalWorkflowGuard?.renderState()).toContain(
+      "requires a qualifying Expert delegation",
+    );
+
+    const dispatch = principal.systemTools.find((tool) => tool.name === "dispatch_task")!;
+    await dispatch.execute({ to: "writer", content: "polish a document" });
+    expect(principal.principalWorkflowGuard?.hasQualifyingDelegation()).toBe(false);
+    await dispatch.execute({ to: "engineer", content: "inspect the data contract" });
+    expect(principal.principalWorkflowGuard?.hasQualifyingDelegation()).toBe(true);
+    expect(principal.principalWorkflowGuard?.renderState()).toBe("");
+  });
+
   it("keeps high-impact action authorization in PI and expert personas", () => {
     expect(PERSONAS.principal).toContain("## User authorization gate");
     expect(PERSONAS.principal).toContain("Use `ask_user` first");
@@ -224,6 +257,24 @@ describe("SessionManager (mock mode)", () => {
         reason: "experiment-override",
         version: "0.1.2",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("persists and restores the session workflow policy", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-workflow-policy-"));
+    try {
+      const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: mockAgentFactory });
+      const session = await manager.createSession({ workflowPolicy: "expert_required" });
+      const meta = JSON.parse(
+        await readFile(join(root, ".bp", session.id, "meta.json"), "utf8"),
+      ) as { workflowPolicy?: string };
+      expect(meta.workflowPolicy).toBe("expert_required");
+
+      const restored = new SessionManager({ dataRoot: root, persist: true, agentFactory: mockAgentFactory });
+      await restored.restoreFromDisk();
+      expect(restored.getSession(session.id)?.workflowPolicy).toBe("expert_required");
     } finally {
       await rm(root, { recursive: true, force: true });
     }

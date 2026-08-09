@@ -86,6 +86,8 @@ export const CreateSessionRequestSchema = z.object({
   modelId: z.string().optional(),
   /** Per-session domain resources; omitted means full for backward compatibility. */
   domainResources: z.enum(["full", "base"]).optional(),
+  /** Require Principal to delegate substantive work to an Expert in each user-work epoch. */
+  workflowPolicy: z.enum(["direct", "expert_required"]).optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
