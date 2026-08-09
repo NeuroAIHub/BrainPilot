@@ -65,6 +65,8 @@ export interface McpServerSpec {
 
 export interface McpServersConfig {
   mcpServers: Record<string, McpServerSpec>;
+  /** Plugin id for servers contributed by an enabled plugin. */
+  serverOwners?: Record<string, string>;
 }
 
 export interface McpConnectionFailure {
@@ -75,7 +77,20 @@ export interface McpConnectionFailure {
 export interface McpConnectResult {
   tools: SystemTool[];
   connectedServers: string[];
+  skippedServers: string[];
   failures: McpConnectionFailure[];
+}
+
+export interface McpRuntimeServerStatus {
+  name: string;
+  pluginId?: string;
+  state: "ready" | "failed";
+  error?: string;
+}
+
+export interface McpRuntimeStatus {
+  state: "not_loaded" | "unconfigured" | "ready" | "degraded" | "failed";
+  servers: McpRuntimeServerStatus[];
 }
 
 function inheritedEnvironment(): Record<string, string> {
@@ -140,6 +155,7 @@ export type McpConnectFn = (name: string, spec: McpServerSpec) => Promise<McpCli
  */
 export async function loadMcpServersConfig(dataRoot: string): Promise<McpServersConfig | null> {
   const merged: Record<string, McpServerSpec> = {};
+  const serverOwners: Record<string, string> = {};
   for (const rel of [join("bp_template", "mcp_servers.json"), join(".bp", "mcp_servers.json")]) {
     try {
       const raw = await readFile(join(dataRoot, rel), "utf8");
@@ -172,9 +188,10 @@ export async function loadMcpServersConfig(dataRoot: string): Promise<McpServers
         PLUGIN_ROOT: projection.root,
       };
       merged[name] = spec.command ? materializePluginMcpSpec(spec, env) : spec;
+      serverOwners[name] = projection.id;
     }
   }
-  return Object.keys(merged).length > 0 ? { mcpServers: merged } : null;
+  return Object.keys(merged).length > 0 ? { mcpServers: merged, serverOwners } : null;
 }
 
 /** Real connect: open the transport named by `spec.type` and hand back a thin client. */
@@ -269,6 +286,7 @@ export class McpBridge {
   /** Connect every server while preserving per-server startup failures. */
   async connectAllWithStatus(cfg: McpServersConfig): Promise<McpConnectResult> {
     const connectedServers: string[] = [];
+    const skippedServers: string[] = [];
     const failures: McpConnectionFailure[] = [];
     for (const [name, spec] of Object.entries(cfg.mcpServers)) {
       if (isPlaceholderSpec(spec)) {
@@ -276,6 +294,7 @@ export class McpBridge {
         // quietly so the default config never delays launch or logs an error.
         // eslint-disable-next-line no-console
         console.info(`[mcp] server '${name}' not configured yet — skipping`);
+        skippedServers.push(name);
         continue;
       }
       let client: McpClientLike | undefined;
@@ -293,7 +312,7 @@ export class McpBridge {
         console.error(`[mcp] server '${name}' failed to connect:`, error);
       }
     }
-    return { tools: this._tools, connectedServers, failures };
+    return { tools: this._tools, connectedServers, skippedServers, failures };
   }
 
   private wrap(server: string, client: McpClientLike, t: McpToolDescriptor): SystemTool {

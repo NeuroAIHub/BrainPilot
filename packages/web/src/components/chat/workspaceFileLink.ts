@@ -3,6 +3,8 @@ export type WorkspaceFileTarget = {
   line?: number;
 };
 
+export type SessionWorkspaceFileTarget = WorkspaceFileTarget & { sessionId: string };
+
 const EXTERNAL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const MANAGED_ROOTS = ["/workspace", "/data"] as const;
 

@@ -5,3 +5,7 @@
 export function fileSidebarScopeKey(sessionId: string | null | undefined): string {
   return sessionId ?? "draft";
 }
+
+export function fileRequestMatchesSession(requestSessionId: string, currentSessionId: string | null | undefined): boolean {
+  return requestSessionId === currentSessionId;
+}
