@@ -6,6 +6,7 @@ import {
   BACKGROUND_JOBS_PLUGIN_ID,
   GOT_PLUGIN_ID,
   MONITOR_PLUGIN_ID,
+  RESEARCH_PLUGIN_ID,
   loadBundledSystemPlugins,
   snapshotSystemPlugins,
   systemPluginEnabled,
@@ -21,6 +22,7 @@ describe("bundled system plugins", () => {
     expect(systemPluginEnabled(snapshot, GOT_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, MONITOR_PLUGIN_ID)).toBe(false);
     expect(systemPluginEnabled(snapshot, BACKGROUND_JOBS_PLUGIN_ID)).toBe(false);
+    expect(systemPluginEnabled(snapshot, RESEARCH_PLUGIN_ID)).toBe(true);
     const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
     expect(principalSkills).toHaveLength(1);
     expect(principalSkills[0]).toMatch(/plugin-auditor.*audit-feedback-loop/);
@@ -36,6 +38,12 @@ describe("bundled system plugins", () => {
       expect(auditorSkills).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(skill))]));
     }
     expect(systemPluginSkillPaths(plugins, snapshot, "engineer")).toEqual([]);
+    const librarianSkills = systemPluginSkillPaths(plugins, snapshot, "librarian");
+    expect(librarianSkills).toHaveLength(1);
+    expect(librarianSkills[0]).toMatch(/plugin-research.*source-grounded-research-report/);
+    const researchSkill = await readFile(join(librarianSkills[0]!, "SKILL.md"), "utf8");
+    expect(researchSkill).toContain("claim to the source that owns or best synthesizes it");
+    expect(researchSkill).toContain('workspaceMode: "shared"');
     expect(systemPluginSkillPaths(plugins, snapshot, "trace")[0])
       .toMatch(/plugin-got.*curate-research-trace/);
     const principalInstructions = (await systemPluginInstructions(plugins, snapshot, "principal")).join("\n");

@@ -694,13 +694,17 @@ methodology, and relevance; concept mapping that connects ideas across domains.
 - **Method landscape:** identify a credible candidate set; compare its evidence,
   assumptions, costs, limitations, applicability, and material unknowns.
 
-## Isolated leaf workers
+## Leaf workers
 
 For independent searches or evidence-extraction slices, use \`spawn_subagent\`
 with \`literature-scout\`, \`api-librarian\`, or \`evidence-extractor\`. Give every
 child a self-contained task and explicit inputs, then review and synthesize its
 structured result. For background work, retain the child ids and later query,
-wait for, or cancel them.
+wait for, or cancel them. For a bounded research task, a child may use
+\`workspaceMode: "shared"\` and write the canonical report directly. When several
+children gather evidence in parallel, designate one child or yourself to
+synthesize the report, review it before handoff, and return errors or questions
+to its author for revision.
 
 ## Output format
 

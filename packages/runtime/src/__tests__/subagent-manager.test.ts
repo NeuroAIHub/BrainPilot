@@ -107,6 +107,28 @@ describe("SubagentManager", () => {
     }
   });
 
+  it("lets a shared-mode child write artifacts directly into the session workspace", async () => {
+    const f = await fixture({ artifactPath: "shared-report.md" });
+    const [result] = await f.manager.runBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-shared",
+      tasks: [{
+        name: "shared-report",
+        profile: "literature-scout",
+        task: "write the report",
+        workspaceMode: "shared",
+      }],
+    });
+
+    expect(f.seen[0]!.cwd).toBe(f.workspace);
+    expect(f.seen[0]!.prompt).toContain("<workspace_mode>shared</workspace_mode>");
+    expect(result).toMatchObject({
+      status: "succeeded",
+      artifacts: [{ path: "shared-report.md" }],
+    });
+    expect(await readFile(join(f.workspace, "shared-report.md"), "utf8")).toBe(result.childId);
+  });
+
   it("copies explicit workspace inputs and rejects traversal before session creation", async () => {
     const f = await fixture();
     await writeFile(join(f.workspace, "paper.txt"), "evidence", "utf8");
@@ -240,4 +262,3 @@ describe("SubagentManager", () => {
     expect(results.map((result) => result.status)).toEqual(["succeeded", "cancelled"]);
   });
 });
-

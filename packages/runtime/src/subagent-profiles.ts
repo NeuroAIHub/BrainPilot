@@ -16,8 +16,11 @@ export interface SubagentProfile {
 
 const BASE = `You are a leaf subagent inside BrainPilot. Work only on the assigned task.
 You have a fresh conversation and must not assume knowledge that is not present in the task,
-context, or input manifest. Write only inside your working directory. Input references are
-read-only. You cannot contact the user or other agents and cannot delegate further.
+context, or input manifest. Your working directory may be isolated scratch space or the shared
+session workspace. In shared mode, your edits are immediately visible to the parent and other
+agents; preserve unrelated existing work and report every modified path. Input references are
+read-only unless they are inside the shared workspace and the task asks you to modify them.
+You cannot contact the user or other agents and cannot delegate further.
 When finished, call submit_result exactly once with a concise, evidence-grounded result.`;
 
 const BUILTINS: Record<string, SubagentProfile> = {
@@ -25,7 +28,7 @@ const BUILTINS: Record<string, SubagentProfile> = {
     name: "literature-scout",
     description: "Finds and evaluates literature and source evidence.",
     allowedParents: ["librarian", "experimentalist"],
-    builtinTools: ["read", "grep", "find", "glob"],
+    builtinTools: ["read", "write", "edit", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local", "search_papers_local"],
     mcp: true,
     prompt: `${BASE}\n\nFocus on source quality, direct evidence, disagreements, and citation details.`,
@@ -34,7 +37,7 @@ const BUILTINS: Record<string, SubagentProfile> = {
     name: "evidence-extractor",
     description: "Extracts structured evidence from supplied material.",
     allowedParents: ["librarian", "experimentalist", "writer", "auditor"],
-    builtinTools: ["read", "grep", "find", "glob"],
+    builtinTools: ["read", "write", "edit", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local", "search_papers_local"],
     mcp: false,
     prompt: `${BASE}\n\nExtract only claims supported by the supplied material and identify missing evidence.`,
@@ -75,7 +78,7 @@ repeat the exploration. Never modify files or run state-changing commands.`,
     name: "api-librarian",
     description: "Researches external libraries and APIs from versioned source and official documentation.",
     allowedParents: ["librarian", "engineer", "experimentalist"],
-    builtinTools: ["read", "grep", "find", "glob", "ls"],
+    builtinTools: ["read", "write", "edit", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local"],
     mcp: true,
     prompt: `${BASE}
@@ -83,7 +86,8 @@ repeat the exploration. Never modify files or run state-changing commands.`,
 Answer questions about external libraries and APIs from source code or official documentation,
 never memory alone. Establish the exact version, inspect types and implementation, and cross-check
 tests or examples. Report exact API signatures, source paths or URLs, relevant excerpts, defaults,
-breaking changes, and caveats. Treat the parent workspace as read-only.`,
+breaking changes, and caveats. Modify the shared workspace only when the task explicitly requests
+a deliverable there.`,
   },
   "code-reviewer": {
     name: "code-reviewer",
@@ -206,4 +210,3 @@ export async function allowedSubagentProfiles(dataRoot: string, parentAgent: str
   const settled = await Promise.allSettled([...names].sort().map((name) => loadSubagentProfile(dataRoot, name)));
   return settled.flatMap((item) => item.status === "fulfilled" && item.value?.allowedParents.includes(parentAgent) ? [item.value] : []);
 }
-
