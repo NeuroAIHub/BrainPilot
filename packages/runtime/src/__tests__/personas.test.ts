@@ -257,6 +257,27 @@ Stale local routing rule.`;
     expect(engineer).toMatch(/infer superiority from an\s+incomplete comparison/);
   });
 
+  it("requires result-driven real-data iteration before empirical completion", () => {
+    const pi = PERSONAS.principal!;
+    const experimentalist = PERSONAS.experimentalist!;
+    const engineer = PERSONAS.engineer!;
+
+    expect(pi).toContain("Empirical completion gate");
+    expect(pi).toContain("complete iteration ledger");
+    expect(pi).toContain("stop-no-meaningful-improvement");
+    expect(pi).toContain("not an executable stopping rule");
+
+    expect(experimentalist).toContain("Empirical iteration contract");
+    expect(experimentalist).toContain("minimum meaningful improvement");
+    expect(experimentalist).toContain("Issue exactly one");
+    expect(experimentalist).toContain("Loss decrease, finite");
+
+    expect(engineer).toContain("Representative real-data execution");
+    expect(engineer).toContain("Empirical result bundle");
+    expect(engineer).toContain("screening run cannot serve as the");
+    expect(engineer).toContain("do not hand off the model as scientifically complete");
+  });
+
   it("requires Engineer to inspect the environment and use working accelerators", () => {
     const engineer = PERSONAS.engineer!;
     expect(engineer).toContain("Environment and accelerator preflight");

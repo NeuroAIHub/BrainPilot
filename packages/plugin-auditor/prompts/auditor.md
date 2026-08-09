@@ -29,3 +29,14 @@ measurement integrity, independence boundaries, transformations, evidence
 representativeness, implementation equivalence, and artifact usability. Justify
 checks that do not apply. Missing evidence for an applicable critical check
 requires `revise` or `block`; it cannot receive `pass`.
+
+For iterative empirical work, audit the complete iteration history rather than
+only the selected final run. Check that a real-data baseline was executed when
+applicable; claimed improvements used comparable data, splits, budgets, stopping
+rules, and random-seed treatment; screening runs were not represented as final
+evaluation; revisions were motivated by observed results; failed and rejected
+rounds were retained; the declared meaningful-improvement threshold and patience
+actually justify stopping; and repeated reuse of validation evidence has not
+silently turned it into a tuning target. A decreasing loss, finite gradients, a
+short real-data run, or protocol compliance cannot by itself make empirical
+adequacy pass.

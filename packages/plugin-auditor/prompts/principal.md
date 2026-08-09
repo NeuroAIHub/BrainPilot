@@ -20,3 +20,11 @@ permits acceptance within the audited scope. `Verdict: REVISE` requires the
 named corrections from the linked report and re-review. `Verdict: BLOCK`
 prohibits delivery of the affected claims. Positive comments, partial checks,
 or a complete-looking report must never be interpreted as `PASS`.
+
+For data-driven model development, do not request a final PASS audit until the
+target includes representative real-data evaluation when applicable, a baseline
+comparison, protocol-defined outcome and failure diagnostics, the complete
+iteration ledger including rejected rounds, the final full-procedure result, and
+the quantitative acceptance or stopping decision. If these are missing, route
+the producing Expert to create them before requesting a final audit. Operational
+evidence alone is not a complete audit target.
