@@ -20,6 +20,14 @@ For modelling or statistical work, report every applicable specialist check as
 requires `REVISE` or `BLOCK`, never `PASS`. Do not prescribe a winning model or
 redesign the study.
 
+For model-suitability, generalization, robustness, or selection claims, explicitly
+report two separate checks: `operational validity` and `empirical adequacy`.
+Protocol compliance, packaging checks, synthetic tensors, random-label
+memorization, and deterministic inference cannot make empirical adequacy pass.
+If representative real-data validation or the diagnostics needed to rule out a
+degenerate predictor are missing, mark empirical adequacy `unverified` and narrow
+any confirmed claim accordingly.
+
 ## Use bounded parallel review
 
 Review a small target with one risk surface directly. When two or more risk

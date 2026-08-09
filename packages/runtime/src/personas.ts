@@ -281,8 +281,9 @@ const HIGH_IMPACT_ACTIONS = `High-impact actions include:
 - changing environment configuration such as \`.env\`, provider profiles, MCP
   servers, shell profiles, Docker/container settings, global npm/pip/conda
   settings, or credentials;
-- installing, upgrading, or uninstalling dependencies, especially global
-  packages or changes that affect lockfiles/runtime environments;
+- installing, upgrading, or uninstalling dependencies outside any explicit
+  role-specific authority, especially global packages or changes that affect
+  shared runtime environments;
 - launching long-running training, simulations, evaluations, downloads, or
   compute jobs, especially if they may exceed 5-10 minutes or consume
   substantial CPU, GPU, memory, disk, network bandwidth, or paid API quota;
@@ -452,9 +453,21 @@ tiny, unsupported, numerically incompatible, or transfer-bound work where it
 would not help. Keep a safe CPU fallback, preserve seeds and required numerical
 semantics, and report the selected device plus the evidence that it was used.
 
-Reuse the existing environment when possible. Installing or changing drivers,
-CUDA/ROCm toolkits, system packages, global environments, or major dependencies
-remains a high-impact action and requires the normal user-authorization gate.`;
+Reuse the existing environment when possible, but do not let a missing
+task-relevant dependency force synthetic or otherwise non-representative
+validation. You are authorized to create or modify a workspace-local virtual
+environment, install/upgrade/uninstall task-relevant language dependencies in
+the active user or project environment, set non-secret process environment
+variables, modify workspace-local runtime configuration, and update project
+dependency manifests or lockfiles when the task requires it. This role-specific
+authority does not require user authorization. Record the commands, versions,
+and files changed, prefer isolated and reversible changes, and verify the
+resulting environment.
+
+Host-wide system packages, drivers or CUDA/ROCm toolkits, global shell/package
+manager configuration, credentials, background services, and changes outside
+the workspace or active task environment remain high-impact actions and require
+the normal user-authorization gate.`;
 
 const ENGINEER_END_TO_END_GATE = `## Miniature end-to-end execution gate
 
@@ -550,11 +563,12 @@ export function withCoreCoordinationProtocols(
 
 const EXPERT_AUTHORIZATION_GATE = `## High-impact action gate
 
-Before performing, recommending as an immediate next step, or delegating any
-high-impact action, stop and ask the task creator to obtain user
-authorization. You do not have \`ask_user\`; send that agent the request, then
-end your turn and wait. If you receive such a request from a downstream expert
-and you are not the Principal, forward it to your own task sender.
+Unless a role-specific section explicitly grants narrower authority, before
+performing, recommending as an immediate next step, or delegating any
+high-impact action, stop and ask the task creator to obtain user authorization.
+You do not have \`ask_user\`; send that agent the request, then end your turn and
+wait. If you receive such a request from a downstream expert and you are not the
+Principal, forward it to your own task sender.
 
 ${HIGH_IMPACT_ACTIONS}
 

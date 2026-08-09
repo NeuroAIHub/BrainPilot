@@ -3,7 +3,9 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   AUDITOR_PLUGIN_ID,
+  BACKGROUND_JOBS_PLUGIN_ID,
   GOT_PLUGIN_ID,
+  MONITOR_PLUGIN_ID,
   loadBundledSystemPlugins,
   snapshotSystemPlugins,
   systemPluginEnabled,
@@ -17,6 +19,8 @@ describe("bundled system plugins", () => {
     const snapshot = snapshotSystemPlugins(plugins);
     expect(systemPluginEnabled(snapshot, AUDITOR_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, GOT_PLUGIN_ID)).toBe(true);
+    expect(systemPluginEnabled(snapshot, MONITOR_PLUGIN_ID)).toBe(false);
+    expect(systemPluginEnabled(snapshot, BACKGROUND_JOBS_PLUGIN_ID)).toBe(false);
     const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
     expect(principalSkills).toHaveLength(1);
     expect(principalSkills[0]).toMatch(/plugin-auditor.*audit-feedback-loop/);
@@ -46,7 +50,19 @@ describe("bundled system plugins", () => {
     const auditorReview = await readFile(join(auditorSkill, "references", "auditor-review.md"), "utf8");
     expect(auditorReview).toContain("call `spawn_subagent` once with two to");
     expect(auditorReview).toContain("Children return evidence and candidate findings only");
+    expect(auditorReview).toContain("`operational validity` and `empirical adequacy`");
     expect(auditorReview).toContain("Write the complete report to a new path under");
+    const methodSkill = auditorSkills.find((path) => path.endsWith("audit-model-validation"))!;
+    const methodReview = await readFile(join(methodSkill, "SKILL.md"), "utf8");
+    expect(methodReview).toContain("Audit Method Validation");
+    expect(methodReview).toContain("substantively different alternatives");
+    expect(methodReview).toContain("operational correctness and feasibility");
+    expect(methodReview).toContain("implementation convenience");
+    expect(methodReview).toContain("Separate operational and empirical evidence");
+    expect(methodReview).toContain("macro-F1 `2 / (K * (K + 1))`");
+    expect(methodReview).toContain("does not validate cross-session transfer");
+    expect(methodReview).toContain("sample counts across sampling");
+    expect(methodReview).toContain("rates is not protocol fidelity");
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
     expect(responseTemplate).toContain("## Compact completion reply");
     expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");

@@ -24,13 +24,18 @@ Target type: <expert-result | pi-draft | synthesis>
 ## Evidence
 - <workspace path, command output, citation record, or other inspectable source>
 
-## Scientific pipeline evidence (required when applicable)
-- Data contract: <path>
-- Experimental protocol: <path>
-- Implementation and split logic: <paths>
-- Alignment and bounded smoke tests: <paths>
-- Export-equivalence result: <path>
-- Isolated packaging result: <path>
+## Method and pipeline evidence (include applicable items)
+- Input or data contract: <path>
+- Environment and dependency record: <path>
+- Method survey: <path>
+- Scientific protocol and decision rules: <path>
+- Implementation or procedure: <paths>
+- Operational or synthetic checks: <paths>
+- Representative real-data validation: <paths, or exact reason unavailable>
+- Baseline and candidate comparison: <path>
+- Per-group training curves and selected epochs: <paths>
+- Prediction diagnostics (counts, class coverage, entropy, confusion matrices): <paths>
+- Artifact equivalence and usability checks: <paths>
 
 ## Claims PI intends to use
 1. <claim>
