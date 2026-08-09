@@ -26,11 +26,15 @@ Target type: <expert-result | pi-draft | synthesis>
 
 ## Method and pipeline evidence (include applicable items)
 - Input or data contract: <path>
+- Environment and dependency record: <path>
 - Method survey: <path>
 - Scientific protocol and decision rules: <path>
 - Implementation or procedure: <paths>
-- Operational checks: <paths>
-- Decision-relevant evaluation: <paths>
+- Operational or synthetic checks: <paths>
+- Representative real-data validation: <paths, or exact reason unavailable>
+- Baseline and candidate comparison: <path>
+- Per-group training curves and selected epochs: <paths>
+- Prediction diagnostics (counts, class coverage, entropy, confusion matrices): <paths>
 - Artifact equivalence and usability checks: <paths>
 
 ## Claims PI intends to use

@@ -27,7 +27,7 @@
       {
         "id": "audit-model-validation",
         "title": "Audit Method Validation",
-        "description": "Audit method discovery, comparisons, selection evidence, and claim scope.",
+        "description": "Audit method discovery, representative validation, collapse risks, selection evidence, and claim scope.",
         "entry": "skills/audit-model-validation/SKILL.md",
         "targets": ["auditor"]
       },

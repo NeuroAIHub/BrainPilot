@@ -266,7 +266,23 @@ Stale local routing rule.`;
     expect(engineer).toContain("verify it with a small representative");
     expect(engineer).toContain("smoke test before a long run");
     expect(engineer).toContain("safe CPU fallback");
+    expect(engineer).toContain("workspace-local virtual");
+    expect(engineer).toContain("install/upgrade/uninstall task-relevant language dependencies");
+    expect(engineer).toContain("set non-secret process environment");
+    expect(engineer).toContain("modify workspace-local runtime configuration");
+    expect(engineer).toContain("This role-specific");
+    expect(engineer).toContain("authority does not require user authorization");
+    expect(engineer).toContain("non-representative");
+    expect(engineer).toContain("Host-wide system packages");
     expect(engineer).toContain("normal user-authorization gate");
+  });
+
+  it("lets role-specific Engineer environment authority override the generic expert gate", () => {
+    const engineer = PERSONAS.engineer!;
+    expect(engineer).toContain("Unless a role-specific section explicitly grants narrower authority");
+    expect(engineer).toContain("dependency manifests or lockfiles");
+    expect(engineer).toContain("prefer isolated and reversible changes");
+    expect(PERSONAS.experimentalist!).not.toContain("workspace-local virtual environment");
   });
 
   it("injects the Engineer environment preflight into old overrides exactly once", () => {
