@@ -28,10 +28,6 @@ export const EXAMPLE_MODEL = "claude-sonnet-4-6";
 export const DomainResourcesSchema = z.enum(["full", "base"]);
 export type DomainResources = z.infer<typeof DomainResourcesSchema>;
 
-/** Whether Principal turns in this session require a real Expert delegation. */
-export const WorkflowPolicySchema = z.enum(["direct", "expert_required"]);
-export type WorkflowPolicy = z.infer<typeof WorkflowPolicySchema>;
-
 export const SessionSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -39,8 +35,6 @@ export const SessionSchema = z.object({
   updatedAt: z.string(),
   /** Optional for compatibility with older runtimes; new runtimes always emit it. */
   domainResources: DomainResourcesSchema.optional(),
-  /** Optional for compatibility; omitted sessions behave as direct. */
-  workflowPolicy: WorkflowPolicySchema.optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -289,8 +283,6 @@ export const SessionStateSnapshotSchema = z.object({
   lastActivityTs: z.string(),
   /** Frozen when the session is created and persisted across restore. */
   domainResources: DomainResourcesSchema.optional(),
-  /** Frozen Principal delegation policy for this session. */
-  workflowPolicy: WorkflowPolicySchema.optional(),
   /**
    * Cumulative real token usage for this session (total + per-agent). Optional
    * for forward/backward compat: a frame from an older runtime, or before the

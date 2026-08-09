@@ -22,10 +22,6 @@ program
   .option("-s, --session <id>", "reuse an existing session id")
   .option("-a, --agent <name>", "target agent (default principal)")
   .option(
-    "--workflow-policy <policy>",
-    "session workflow policy: direct or expert_required",
-  )
-  .option(
     "-n, --max-events <n>",
     "stop after N events (safety bound)",
     (v) => parseInt(v, 10),
@@ -33,15 +29,11 @@ program
   .option("--mock", "print events but do not require a live server", false)
   .action(async (message: string, opts) => {
     try {
-      if (opts.workflowPolicy && !["direct", "expert_required"].includes(opts.workflowPolicy)) {
-        throw new Error("--workflow-policy must be direct or expert_required");
-      }
       const result = await run({
         baseUrl: opts.baseUrl,
         message,
         agent: opts.agent,
         sessionId: opts.session,
-        workflowPolicy: opts.workflowPolicy,
         maxEvents: opts.maxEvents,
         mock: opts.mock,
       });

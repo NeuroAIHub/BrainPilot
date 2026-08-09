@@ -155,7 +155,7 @@ describe("SessionManager (mock mode)", () => {
     expect(renderers.get("auditor")?.()).toContain(node.id);
   });
 
-  it("wires the Principal workflow guard only for expert-required sessions", async () => {
+  it("always wires the Principal workflow guard", async () => {
     const seen: Parameters<typeof mockAgentFactory>[0][] = [];
     const spyFactory: typeof mockAgentFactory = async (params) => {
       seen.push(params);
@@ -163,18 +163,11 @@ describe("SessionManager (mock mode)", () => {
     };
     const manager = new SessionManager({ persist: false, agentFactory: spyFactory });
 
-    const direct = await manager.createSession({ workflowPolicy: "direct" });
-    await manager.sendMessage(direct.id, "hello");
-    await waitFor(() => seen.some((params) => params.sessionId === direct.id));
-    expect(seen.find((params) => params.sessionId === direct.id)?.principalWorkflowGuard)
-      .toBeUndefined();
-
-    const required = await manager.createSession({ workflowPolicy: "expert_required" });
-    expect(required.workflowPolicy).toBe("expert_required");
-    await manager.sendMessage(required.id, "run the research task");
-    await waitFor(() => seen.some((params) => params.sessionId === required.id));
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "run the research task");
+    await waitFor(() => seen.some((params) => params.sessionId === session.id));
     const principal = seen.find(
-      (params) => params.sessionId === required.id && params.agentName === "principal",
+      (params) => params.sessionId === session.id && params.agentName === "principal",
     )!;
     expect(principal.principalWorkflowGuard?.renderState()).toContain(
       "requires a qualifying Expert delegation",
@@ -262,19 +255,33 @@ describe("SessionManager (mock mode)", () => {
     }
   });
 
-  it("persists and restores the session workflow policy", async () => {
-    const root = await mkdtemp(join(tmpdir(), "bp-workflow-policy-"));
+  it("ignores the removed workflow policy in legacy session metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-legacy-workflow-policy-"));
     try {
       const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: mockAgentFactory });
-      const session = await manager.createSession({ workflowPolicy: "expert_required" });
+      const session = await manager.createSession();
+      const metaPath = join(root, ".bp", session.id, "meta.json");
       const meta = JSON.parse(
-        await readFile(join(root, ".bp", session.id, "meta.json"), "utf8"),
-      ) as { workflowPolicy?: string };
-      expect(meta.workflowPolicy).toBe("expert_required");
+        await readFile(metaPath, "utf8"),
+      ) as Record<string, unknown>;
+      meta.workflowPolicy = "direct";
+      await writeFile(metaPath, JSON.stringify(meta));
 
-      const restored = new SessionManager({ dataRoot: root, persist: true, agentFactory: mockAgentFactory });
+      const seen: Parameters<typeof mockAgentFactory>[0][] = [];
+      const restored = new SessionManager({
+        dataRoot: root,
+        persist: true,
+        agentFactory: async (params) => {
+          seen.push(params);
+          return mockAgentFactory(params);
+        },
+      });
       await restored.restoreFromDisk();
-      expect(restored.getSession(session.id)?.workflowPolicy).toBe("expert_required");
+      await restored.sendMessage(session.id, "continue the research task");
+      await waitFor(() => seen.some((params) => params.sessionId === session.id));
+      expect(seen.find((params) => params.sessionId === session.id)?.principalWorkflowGuard)
+        .toBeDefined();
+      await waitFor(() => restored.getSessionState(session.id)?.workState.active === false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }
