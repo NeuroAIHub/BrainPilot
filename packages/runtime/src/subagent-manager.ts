@@ -21,6 +21,7 @@ export interface SubagentTask {
   profile: string;
   task: string;
   inputs?: SubagentInput[];
+  workspaceMode?: "isolated" | "shared";
 }
 
 export interface SubmittedSubagentResult {
@@ -239,6 +240,9 @@ export class SubagentManager {
       if (task.task.length > 16_000) throw new Error("subagent task exceeds 16000 characters");
       if (!task.profile?.trim()) throw new Error("each subagent task requires a profile");
       if ((task.inputs?.length ?? 0) > 32) throw new Error("a subagent task may have at most 32 inputs");
+      if (task.workspaceMode && task.workspaceMode !== "isolated" && task.workspaceMode !== "shared") {
+        throw new Error(`invalid subagent workspace mode: ${task.workspaceMode}`);
+      }
       if (task.name?.trim()) {
         const key = task.name.trim().toLowerCase();
         if (names.has(key)) throw new Error(`duplicate subagent task name: ${task.name}`);
@@ -306,7 +310,9 @@ export class SubagentManager {
   private async runOne(args: PreparedSubagentRun): Promise<SubagentResult> {
     const childId = args.childId;
     const base = join(this.opts.stateDir, "subagents", childId);
-    const cwd = join(base, "workspace");
+    const scratchDir = join(base, "workspace");
+    const sharedWorkspace = args.task.workspaceMode === "shared";
+    const cwd = sharedWorkspace ? this.opts.workspaceDir : scratchDir;
     const historyPath = join(base, "history.jsonl");
     const started = Date.now();
     let session: IAgentSession | undefined;
@@ -320,7 +326,11 @@ export class SubagentManager {
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled before start");
       this.update(childId, { status: "running", startedAt: new Date(started).toISOString() });
       await mkdir(cwd, { recursive: true });
-      const inputs = await this.materializeInputs(cwd, args.task.inputs ?? []);
+      const inputs = await this.materializeInputs(
+        sharedWorkspace ? scratchDir : cwd,
+        args.task.inputs ?? [],
+        cwd,
+      );
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled before session creation");
       const submitTool = this.submitTool(cwd, (value) => { submitted = value; });
       session = await this.opts.createChildSession({ childId, parentAgent: args.parentAgent, profile: args.profile, cwd, historyPath, submitTool });
@@ -330,7 +340,12 @@ export class SubagentManager {
         const u = this.usageFromEvent(event);
         if (u) addUsage(usage, u);
       });
-      const prompt = this.renderPrompt(args.task.task, args.context, inputs);
+      const prompt = this.renderPrompt(
+        args.task.task,
+        args.context,
+        inputs,
+        args.task.workspaceMode ?? "isolated",
+      );
       const timeout = args.profile.timeoutMs ?? this.timeoutMs;
       const run = async () => {
         await session!.prompt(prompt);
@@ -351,7 +366,7 @@ export class SubagentManager {
       }
       if (!submitted) throw new Error("subagent exited without calling submit_result");
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled");
-      const published = await this.publishArtifacts(childId, cwd, submitted.artifacts);
+      const published = await this.publishArtifacts(childId, cwd, submitted.artifacts, sharedWorkspace);
       const finished = Date.now();
       const result: SubagentResult = { ...submitted, artifacts: published, childId, profile: args.profile.name, status: "succeeded", durationMs: finished - started, usage };
       this.update(childId, { status: "succeeded", finishedAt: new Date(finished).toISOString(), durationMs: result.durationMs, resultSummary: submitted.summary, artifacts: published.map((item) => item.path) });
@@ -438,7 +453,11 @@ export class SubagentManager {
     };
   }
 
-  private async materializeInputs(cwd: string, inputs: SubagentInput[]): Promise<Array<{ alias: string; path: string; mode: string; source: string }>> {
+  private async materializeInputs(
+    materializeDir: string,
+    inputs: SubagentInput[],
+    childCwd = materializeDir,
+  ): Promise<Array<{ alias: string; path: string; mode: string; source: string }>> {
     const out: Array<{ alias: string; path: string; mode: string; source: string }> = [];
     const aliases = new Set<string>();
     for (const [index, input] of inputs.entries()) {
@@ -460,10 +479,13 @@ export class SubagentManager {
       if (mode === "copy") {
         const size = await this.treeSize(source, this.maxCopyBytes, actualRoot);
         if (size > this.maxCopyBytes) throw new Error(`input exceeds copy limit (${this.maxCopyBytes} bytes): ${input.path}`);
-        const dest = join(cwd, "inputs", alias);
-        await mkdir(join(cwd, "inputs"), { recursive: true });
+        const dest = join(materializeDir, "inputs", alias);
+        await mkdir(join(materializeDir, "inputs"), { recursive: true });
         await cp(source, dest, { recursive: true, dereference: false, errorOnExist: true });
-        out.push({ alias, path: relative(cwd, dest).split(sep).join("/"), mode, source: `${input.scope}:${input.path}` });
+        const path = isWithin(dest, childCwd)
+          ? relative(childCwd, dest).split(sep).join("/")
+          : await realpath(dest);
+        out.push({ alias, path, mode, source: `${input.scope}:${input.path}` });
       } else {
         out.push({ alias, path: await realpath(source), mode, source: `${input.scope}:${input.path}` });
       }
@@ -487,7 +509,12 @@ export class SubagentManager {
     return total;
   }
 
-  private async publishArtifacts(childId: string, cwd: string, artifacts: Array<{ path: string; description?: string }>): Promise<Array<{ path: string; description?: string }>> {
+  private async publishArtifacts(
+    childId: string,
+    cwd: string,
+    artifacts: Array<{ path: string; description?: string }>,
+    sharedWorkspace: boolean,
+  ): Promise<Array<{ path: string; description?: string }>> {
     const published: Array<{ path: string; description?: string }> = [];
     for (const artifact of artifacts) {
       const source = resolve(cwd, artifact.path);
@@ -497,6 +524,11 @@ export class SubagentManager {
       if (!isWithin(actualSource, actualCwd)) throw new Error(`artifact symlink escapes child workspace: ${artifact.path}`);
       await this.assertTreeConfined(source, actualCwd);
       const rel = artifact.path.split(/[\\/]+/).filter((part) => part && part !== ".").join("/");
+      if (sharedWorkspace) {
+        const workspaceRel = relative(actualCwd, actualSource).split(sep).join("/");
+        published.push({ path: workspaceRel, ...(artifact.description ? { description: artifact.description } : {}) });
+        continue;
+      }
       const destRel = `subagent-results/${childId}/${rel}`;
       const dest = join(this.opts.workspaceDir, ...destRel.split("/"));
       await mkdir(dirname(dest), { recursive: true });
@@ -516,9 +548,15 @@ export class SubagentManager {
     for (const entry of await readdir(path)) await this.assertTreeConfined(join(path, entry), allowedRoot);
   }
 
-  private renderPrompt(task: string, context: string | undefined, inputs: Array<{ alias: string; path: string; mode: string; source: string }>): string {
+  private renderPrompt(
+    task: string,
+    context: string | undefined,
+    inputs: Array<{ alias: string; path: string; mode: string; source: string }>,
+    workspaceMode: "isolated" | "shared",
+  ): string {
     return [
       "<subagent_task>", task.trim(), "</subagent_task>",
+      `<workspace_mode>${workspaceMode}</workspace_mode>`,
       context?.trim() ? `<context>\n${context.trim()}\n</context>` : "",
       `<inputs>\n${inputs.length ? JSON.stringify(inputs, null, 2) : "No file inputs were provided."}\n</inputs>`,
       "Complete only this task, then call submit_result.",
@@ -556,4 +594,3 @@ export class SubagentManager {
     return this.writeChain;
   }
 }
-

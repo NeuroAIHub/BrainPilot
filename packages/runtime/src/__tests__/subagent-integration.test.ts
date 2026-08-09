@@ -1,4 +1,4 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
@@ -17,6 +17,47 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000) {
 }
 
 describe("SessionManager subagent integration", () => {
+  it("lets a shared-mode leaf write a canonical artifact directly into the session workspace", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-subagent-shared-integration-"));
+    roots.push(root);
+    let result = "";
+    const factory: AgentSessionFactory = async ({ sessionId, cwd, systemTools }) => {
+      const tools = new Map(systemTools.map((tool) => [tool.name, tool]));
+      return {
+        sessionId,
+        isStreaming: false,
+        subscribe() { return () => {}; },
+        async prompt() {
+          const submit = tools.get("submit_result");
+          if (submit) {
+            await writeFile(join(cwd, "shared-report.md"), "canonical report", "utf8");
+            await submit.execute({ summary: "report complete", artifacts: [{ path: "shared-report.md" }] });
+            return;
+          }
+          const spawned = await tools.get("spawn_subagent")!.execute({
+            tasks: [{
+              profile: "literature-scout",
+              task: "write the canonical report",
+              workspaceMode: "shared",
+            }],
+          });
+          result = spawned.content[0]!.text;
+        },
+        async abort() {},
+        dispose() {},
+      } satisfies IAgentSession;
+    };
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: factory });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "research it", "librarian");
+    await waitFor(() => result.includes("shared-report.md"));
+
+    expect(result).toContain('"path": "shared-report.md"');
+    await expect(readFile(join(root, "workspaces", session.id, "shared-report.md"), "utf8"))
+      .resolves.toBe("canonical report");
+    await manager.deleteSession(session.id);
+  });
+
   it("lets an expert launch in the background, continue, then explicitly wait", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-subagent-async-integration-"));
     roots.push(root);
@@ -112,4 +153,3 @@ describe("SessionManager subagent integration", () => {
     await manager.deleteSession(session.id);
   });
 });
-
