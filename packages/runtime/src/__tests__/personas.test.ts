@@ -214,7 +214,8 @@ Stale local routing rule.`;
     expect(pi).toContain("MUST coordinate Experts and MUST");
     expect(pi).toContain("NOT perform the scientific execution yourself");
     expect(pi).toContain("engineer` inspects the real data structure");
-    expect(pi).toContain("experimentalist` reads that contract");
+    expect(pi).toContain("librarian` surveys credible alternatives");
+    expect(pi).toContain("experimentalist` reads the contract");
     expect(pi).toContain("Delegated task results are");
     expect(pi).toContain("Do not use `sleep`, polling loops");
     expect(pi).toContain("never for Agent coordination");
@@ -234,19 +235,26 @@ Stale local routing rule.`;
     expect(PERSONAS.experimentalist).toContain("source tensor axes");
   });
 
-  it("keeps research planning adaptive without weakening essential comparisons", () => {
+  it("uses broad, staged, decision-relevant method comparison", () => {
     const pi = PERSONAS.principal!;
+    const librarian = PERSONAS.librarian!;
     const experimentalist = PERSONAS.experimentalist!;
     const engineer = PERSONAS.engineer!;
 
     expect(pi).toContain("minimum valid deliverable");
     expect(pi).toContain("protocol proportional to those needs");
+    expect(pi).toContain("broad, low-cost, decision-relevant comparison");
+    expect(librarian).toContain("Method landscape");
+    expect(librarian).toContain("substantively different families");
     expect(experimentalist).toContain("smallest procedure that answers the");
     expect(experimentalist).toContain("Do not default to exhaustive nested");
+    expect(experimentalist).toContain("broad set of credible alternatives");
+    expect(experimentalist).toContain("selection evidence represents the intended use");
     expect(experimentalist).toContain("not as a reason to enlarge the");
-    expect(engineer).toContain("estimates runtime, memory use, and candidate feasibility");
-    expect(engineer).toContain("before removing a");
-    expect(engineer).toContain("superiority from an incomplete comparison");
+    expect(engineer).toContain("bounded operational check");
+    expect(engineer).toContain("decision-relevant evaluation");
+    expect(engineer).toContain("optional depth before removing a comparison");
+    expect(engineer).toMatch(/infer superiority from an\s+incomplete comparison/);
   });
 
   it("requires Engineer to inspect the environment and use working accelerators", () => {

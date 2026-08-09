@@ -26,8 +26,8 @@
       },
       {
         "id": "audit-model-validation",
-        "title": "Audit Model Validation",
-        "description": "Audit model comparisons, validation objectives, selection evidence, and claim scope.",
+        "title": "Audit Method Validation",
+        "description": "Audit method discovery, comparisons, selection evidence, and claim scope.",
         "entry": "skills/audit-model-validation/SKILL.md",
         "targets": ["auditor"]
       },
