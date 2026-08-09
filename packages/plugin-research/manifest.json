@@ -1,0 +1,19 @@
+{
+  "id": "org.brainpilot.research",
+  "version": "0.1.2",
+  "apiVersion": "1",
+  "displayName": "BrainPilot Research",
+  "description": "Source-grounded background research and canonical report workflow for Librarian.",
+  "categories": ["analysis", "workflow", "skills"],
+  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
+  "environments": ["local", "cloud"],
+  "contributes": {
+    "skills": [{
+      "id": "source-grounded-research-report",
+      "title": "Source-Grounded Research Report",
+      "description": "Research a bounded question from claim-appropriate authoritative sources and produce a canonical Markdown report.",
+      "entry": "skills/source-grounded-research-report/SKILL.md",
+      "targets": ["librarian"]
+    }]
+  }
+}

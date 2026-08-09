@@ -137,6 +137,17 @@ describe("targeted publish guards", () => {
     expect(manifest.version).toBe(plugin.version);
     expect(manifest.id).toBe("org.brainpilot.got");
   });
+
+  it("ships the Research system plugin as a pinned Runtime dependency", () => {
+    const runtime = readPkg("../../runtime/package.json");
+    const plugin = readPkg("../../plugin-research/package.json");
+    const manifest = readPkg("../../plugin-research/manifest.json");
+    expect(runtime.dependencies?.["@brainpilot/plugin-research"]).toMatch(/^\^/);
+    expect(plugin.files).toEqual(expect.arrayContaining(["manifest.json", "skills"]));
+    expect(plugin.version).toBe(ROOT.version);
+    expect(manifest.version).toBe(plugin.version);
+    expect(manifest.id).toBe("org.brainpilot.research");
+  });
 });
 
 describe("license is consistent across the repo", () => {
@@ -184,5 +195,9 @@ describe("root scripts", () => {
 
   it("publishes @brainpilot/plugin-got in release", () => {
     expect(pkg.scripts?.release).toContain("@brainpilot/plugin-got");
+  });
+
+  it("publishes @brainpilot/plugin-research in release", () => {
+    expect(pkg.scripts?.release).toContain("@brainpilot/plugin-research");
   });
 });
