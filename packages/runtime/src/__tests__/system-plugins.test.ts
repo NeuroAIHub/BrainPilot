@@ -37,7 +37,14 @@ describe("bundled system plugins", () => {
     ]) {
       expect(auditorSkills).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(skill))]));
     }
-    expect(systemPluginSkillPaths(plugins, snapshot, "engineer")).toEqual([]);
+    const engineerSkills = systemPluginSkillPaths(plugins, snapshot, "engineer");
+    expect(engineerSkills).toHaveLength(1);
+    expect(engineerSkills[0]).toMatch(/plugin-research.*create-data-inventory/);
+    const inventorySkill = await readFile(join(engineerSkills[0]!, "SKILL.md"), "utf8");
+    expect(inventorySkill).toContain("before creating or updating any data inventory");
+    expect(inventorySkill).toContain("docs/specs/data-inventory.md");
+    expect(inventorySkill).toContain("one canonical Markdown document");
+    expect(inventorySkill).not.toContain("forbidden/private");
     const librarianSkills = systemPluginSkillPaths(plugins, snapshot, "librarian");
     expect(librarianSkills).toHaveLength(1);
     expect(librarianSkills[0]).toMatch(/plugin-research.*source-grounded-research-report/);

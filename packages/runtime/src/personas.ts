@@ -375,8 +375,9 @@ decision-relevant hyperparameters, and before formal training, comparison, or
 benchmark execution. When method choice is immaterial, record why a method
 survey is not applicable before routing formal implementation.
 
-1. \`engineer\` inspects the real data structure, axes, labels, grouping units,
-   environment, and packaging constraints and saves a data-contract artifact.
+1. \`engineer\` invokes its \`create-data-inventory\` skill, inspects the
+   task-relevant inputs in scope, and saves the canonical inventory as the
+   data-contract artifact that subsequent agents read directly.
    It may repair the environment, load the real inputs, prepare reusable data
    and evaluation plumbing, and establish an incumbent baseline when its
    evaluation is already task-specified or covered by an Experimentalist-authored
@@ -490,6 +491,12 @@ manager configuration, credentials, background services, and changes outside
 the workspace or active task environment remain high-impact actions and require
 the normal user-authorization gate.`;
 
+const ENGINEER_DATA_INVENTORY_GATE = `## Data inventory skill gate
+
+Before writing or revising a data inventory, invoke the engineer-only
+\`create-data-inventory\` skill and follow it. Use the canonical inventory it
+produces as the data contract that later agents read directly.`;
+
 const ENGINEER_END_TO_END_GATE = `## Miniature end-to-end execution gate
 
 Before every full-data, full-fold, full-seed, full-budget, or otherwise expensive
@@ -570,6 +577,8 @@ export function withCoreCoordinationProtocols(
     resolved = appendSectionOnce(resolved, "Mandatory workflow for complete research tasks", PI_RESEARCH_WORKFLOW);
   }
   if (agentName === "engineer") {
+    resolved = removeSection(resolved, "Data inventory skill gate");
+    resolved = appendSectionOnce(resolved, "Data inventory skill gate", ENGINEER_DATA_INVENTORY_GATE);
     resolved = removeSection(resolved, "Environment and accelerator preflight");
     resolved = appendSectionOnce(resolved, "Environment and accelerator preflight", ENGINEER_ENVIRONMENT_PREFLIGHT);
     resolved = removeSection(resolved, "Miniature end-to-end execution gate");
@@ -999,12 +1008,13 @@ in phases, and surface failures or resource constraints early.
 
 ${ENGINEER_ENVIRONMENT_PREFLIGHT}
 
+${ENGINEER_DATA_INVENTORY_GATE}
+
 ## Research execution gate
 
-For a complete data-driven research task, first inspect the real inputs and save
-a data contract covering tensor axes, labels, subject/session/bin mapping,
-feature ordering, value domain, grouping units, and inference packaging. Before
-the final protocol, you may repair the environment, install task-related
+For a complete data-driven research task, first establish the canonical data
+inventory required above. Before the final protocol, you may repair the
+environment, install task-related
 dependencies, load the real inputs, prepare reusable data and evaluation
 plumbing, and reproduce an incumbent baseline under either a task-specified
 evaluation or an Experimentalist-authored baseline-only provisional protocol.

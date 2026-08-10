@@ -213,7 +213,7 @@ Stale local routing rule.`;
     expect(pi).toContain("Mandatory workflow for complete research tasks");
     expect(pi).toContain("MUST coordinate Experts and MUST");
     expect(pi).toContain("NOT perform the scientific execution yourself");
-    expect(pi).toContain("engineer` inspects the real data structure");
+    expect(pi).toContain("engineer` invokes its `create-data-inventory` skill");
     expect(pi).toContain("librarian` surveys credible alternatives");
     expect(pi).toContain("experimentalist` reads the contract");
     expect(pi).toContain("Delegated task results are");
@@ -228,6 +228,8 @@ Stale local routing rule.`;
   });
 
   it("requires data contracts, protocols, and independent method rechecks", () => {
+    expect(PERSONAS.principal).toContain("invokes its `create-data-inventory` skill");
+    expect(PERSONAS.principal).toMatch(/canonical inventory as the\s+data-contract artifact/);
     expect(PERSONAS.engineer).toContain("Research execution gate");
     expect(PERSONAS.engineer).toMatch(/start full training,\s+model search/);
     expect(PERSONAS.engineer).toContain("exported predictions match");
@@ -305,6 +307,23 @@ Stale local routing rule.`;
     expect(normalized).toContain("consume the configuration rather than duplicate its values");
     expect(normalized).toContain("test or bounded check showing that a configuration change reaches execution");
     expect(normalized).toContain("configuration, implementation, provenance, and validation paths");
+  });
+
+  it("requires Engineer to load the data-inventory skill before authoring the inventory", () => {
+    const engineer = personaFor("engineer", "expert");
+
+    expect(engineer).toContain("Data inventory skill gate");
+    expect(engineer).toContain("`create-data-inventory`");
+    expect(engineer).toMatch(/before writing or revising a data inventory/i);
+    expect(PERSONAS.experimentalist!).not.toContain("Data inventory skill gate");
+  });
+
+  it("injects the Engineer data-inventory skill gate into old overrides exactly once", () => {
+    const once = withCoreCoordinationProtocols("# Old Engineer", "engineer", "expert");
+    const twice = withCoreCoordinationProtocols(once, "engineer", "expert");
+
+    expect(twice.match(/^## Data inventory skill gate$/gm)).toHaveLength(1);
+    expect(twice).toMatch(/before writing or revising a data inventory/i);
   });
 
   it("requires Engineer to pass a miniature end-to-end gate before every full run", () => {
