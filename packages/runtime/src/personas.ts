@@ -490,6 +490,44 @@ manager configuration, credentials, background services, and changes outside
 the workspace or active task environment remain high-impact actions and require
 the normal user-authorization gate.`;
 
+const ENGINEER_END_TO_END_GATE = `## Miniature end-to-end execution gate
+
+Before every full-data, full-fold, full-seed, full-budget, or otherwise expensive
+run, pass a small end-to-end preflight through the same production entry point
+and all applicable workflow stages intended for the full run. Use representative
+real observations when available and a reduced configuration that preserves
+critical shapes, grouping and split semantics, and boundary cases. The preflight
+must cover data loading, preprocessing, fitting or training, evaluation,
+aggregation, serialization, and production of every required downstream
+artifact or report input. Check the exit status, required artifact presence,
+schema or content invariants, and that saved outputs can be read back.
+
+Repeat this gate after every material change to code, configuration,
+dependencies, or the execution environment. Unit tests, component-only tests,
+synthetic-only checks, or runs that skip later pipeline stages do not satisfy it.
+If the preflight fails, fix it and rerun the gate; you must not launch the full
+run. This gate establishes operational completeness and resource feasibility; it
+does not establish scientific validity and cannot replace the protocol's full
+representative evaluation.`;
+
+const EXPERIMENTALIST_END_TO_END_GATE = `## Miniature end-to-end preflight design
+
+For every planned full-data, full-fold, full-seed, full-budget, or otherwise
+expensive run, define a low-cost end-to-end preflight that uses the same
+production entry point and all applicable workflow stages. Specify
+representative sampling, grouping, folds, seeds, reduced budgets, critical
+shapes and boundary cases, expected artifacts and explicit acceptance criteria.
+The reduced design must preserve the split and grouping semantics needed to
+exercise the implementation without pretending to reproduce the full study.
+
+Do not authorize a full run until the Engineer provides passing preflight
+evidence covering the complete applicable pipeline, saved outputs, and output
+read-back. Require the preflight again after a material code, configuration,
+dependency, or environment change. A component test, synthetic-only check, or
+partial pipeline is insufficient. Treat the preflight as operational
+completeness and feasibility evidence, not scientific outcome evidence; it does
+not replace the protocol's representative full evaluation.`;
+
 function appendSectionOnce(persona: string, heading: string, section: string): string {
   const present = persona.split(/\r?\n/).some((line) => line.trim() === `## ${heading}`);
   return present ? persona : `${persona}\n\n${section}`;
@@ -534,6 +572,12 @@ export function withCoreCoordinationProtocols(
   if (agentName === "engineer") {
     resolved = removeSection(resolved, "Environment and accelerator preflight");
     resolved = appendSectionOnce(resolved, "Environment and accelerator preflight", ENGINEER_ENVIRONMENT_PREFLIGHT);
+    resolved = removeSection(resolved, "Miniature end-to-end execution gate");
+    resolved = appendSectionOnce(resolved, "Miniature end-to-end execution gate", ENGINEER_END_TO_END_GATE);
+  }
+  if (agentName === "experimentalist") {
+    resolved = removeSection(resolved, "Miniature end-to-end preflight design");
+    resolved = appendSectionOnce(resolved, "Miniature end-to-end preflight design", EXPERIMENTALIST_END_TO_END_GATE);
   }
   return resolved;
 }
@@ -839,6 +883,8 @@ it from the intended target. Treat the initial protocol as revisable when new
 decision-relevant evidence invalidates an assumption; record the revision rather
 than forcing later work to follow a disproven premise.
 
+${EXPERIMENTALIST_END_TO_END_GATE}
+
 ## Empirical iteration contract
 
 For modelling, prediction, optimization, or method-selection work, define before
@@ -978,6 +1024,8 @@ real-world suitability unless the protocol establishes that it represents the
 intended use. When alternatives must be compared, implement a common,
 decision-relevant evaluation where appropriate, screen credible alternatives
 efficiently, and allocate deeper work according to the declared decision rules.
+
+${ENGINEER_END_TO_END_GATE}
 
 ## Parameter configuration discipline
 

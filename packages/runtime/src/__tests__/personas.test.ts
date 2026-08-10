@@ -307,6 +307,41 @@ Stale local routing rule.`;
     expect(normalized).toContain("configuration, implementation, provenance, and validation paths");
   });
 
+  it("requires Engineer to pass a miniature end-to-end gate before every full run", () => {
+    const engineer = personaFor("engineer", "expert").replace(/\s+/g, " ");
+
+    expect(engineer).toContain("Before every full-data, full-fold, full-seed, full-budget");
+    expect(engineer).toContain("same production entry point");
+    expect(engineer).toContain("data loading, preprocessing, fitting or training, evaluation, aggregation, serialization");
+    expect(engineer).toContain("after every material change to code, configuration, dependencies, or the execution environment");
+    expect(engineer).toContain("must not launch the full run");
+    expect(engineer).toContain("does not establish scientific validity");
+  });
+
+  it("requires Experimentalist to design and approve the miniature end-to-end gate", () => {
+    const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
+
+    expect(experimentalist).toContain("Miniature end-to-end preflight design");
+    expect(experimentalist).toContain("same production entry point and all applicable workflow stages");
+    expect(experimentalist).toContain("sampling, grouping, folds, seeds, reduced budgets");
+    expect(experimentalist).toContain("expected artifacts and explicit acceptance criteria");
+    expect(experimentalist).toContain("Engineer provides passing preflight evidence");
+    expect(experimentalist).toContain("after a material code, configuration, dependency, or environment change");
+    expect(experimentalist).toContain("not scientific outcome evidence");
+  });
+
+  it("injects the end-to-end gates into existing role prompt overrides exactly once", () => {
+    const engineerOnce = withCoreCoordinationProtocols("# Old Engineer", "engineer", "expert");
+    const engineerTwice = withCoreCoordinationProtocols(engineerOnce, "engineer", "expert");
+    const experimentalistOnce = withCoreCoordinationProtocols("# Old Experimentalist", "experimentalist", "expert");
+    const experimentalistTwice = withCoreCoordinationProtocols(experimentalistOnce, "experimentalist", "expert");
+
+    expect(engineerTwice.match(/^## Miniature end-to-end execution gate$/gm)).toHaveLength(1);
+    expect(engineerTwice).toContain("same production entry point");
+    expect(experimentalistTwice.match(/^## Miniature end-to-end preflight design$/gm)).toHaveLength(1);
+    expect(experimentalistTwice.replace(/\s+/g, " ")).toContain("Engineer provides passing preflight evidence");
+  });
+
   it("requires Engineer to inspect the environment and use working accelerators", () => {
     const engineer = PERSONAS.engineer!;
     expect(engineer).toContain("Environment and accelerator preflight");
