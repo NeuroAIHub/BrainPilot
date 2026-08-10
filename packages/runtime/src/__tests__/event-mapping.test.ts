@@ -491,4 +491,123 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     const runError = captured.find((e) => e.type === "RUN_ERROR") as { message?: string } | undefined;
     expect(runError?.message).toMatch(/404.*no route/i);
   });
+
+  it("continues the same run once after stopReason:length", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+
+    let listener: ((event: unknown) => void) | undefined;
+    const prompts: string[] = [];
+    const session = {
+      subscribe(next: (event: unknown) => void) {
+        listener = next;
+        return () => {};
+      },
+      async prompt(text: string) {
+        prompts.push(text);
+        const stopReason = prompts.length === 1 ? "length" : "stop";
+        listener?.({ type: "message_start", message: { role: "assistant" } });
+        listener?.({ type: "message_end", message: { role: "assistant", stopReason } });
+      },
+      async abort() {},
+      dispose() {},
+    };
+    const agent = new MasAgent({
+      sessionId: "length-recovery",
+      name: "Engineer",
+      role: "expert",
+      session: session as never,
+      bus,
+    });
+
+    await agent.prompt("write the report");
+
+    expect(prompts).toHaveLength(2);
+    expect(prompts[1]).toMatch(/output token limit/i);
+    expect(prompts[1]).toMatch(/smaller chunks/i);
+    expect(captured.filter((event) => event.type === "RUN_STARTED")).toHaveLength(1);
+    expect(captured.filter((event) => event.type === "RUN_FINISHED")).toHaveLength(1);
+    expect(captured.some((event) => event.type === "RUN_ERROR")).toBe(false);
+  });
+
+  it("reports OUTPUT_LIMIT_EXCEEDED when the bounded recovery also reaches length", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+
+    let listener: ((event: unknown) => void) | undefined;
+    const prompts: string[] = [];
+    const session = {
+      subscribe(next: (event: unknown) => void) {
+        listener = next;
+        return () => {};
+      },
+      async prompt(text: string) {
+        prompts.push(text);
+        listener?.({ type: "message_start", message: { role: "assistant" } });
+        listener?.({ type: "message_end", message: { role: "assistant", stopReason: "length" } });
+      },
+      async abort() {},
+      dispose() {},
+    };
+    const agent = new MasAgent({
+      sessionId: "length-exhausted",
+      name: "Engineer",
+      role: "expert",
+      session: session as never,
+      bus,
+    });
+
+    await agent.prompt("write the report");
+
+    expect(prompts).toHaveLength(2);
+    expect(captured.some((event) => event.type === "RUN_FINISHED")).toBe(false);
+    const errors = captured.filter((event) => event.type === "RUN_ERROR") as Array<{
+      code?: string;
+      message?: string;
+    }>;
+    expect(errors).toHaveLength(1);
+    expect(errors[0]).toMatchObject({ code: "OUTPUT_LIMIT_EXCEEDED" });
+    expect(errors[0]?.message).toMatch(/maximum output token limit/i);
+  });
+
+  it("does not start output-limit recovery after the run is aborted", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+
+    let listener: ((event: unknown) => void) | undefined;
+    let release!: () => void;
+    const prompts: string[] = [];
+    const session = {
+      subscribe(next: (event: unknown) => void) {
+        listener = next;
+        return () => {};
+      },
+      prompt(text: string) {
+        prompts.push(text);
+        listener?.({ type: "message_start", message: { role: "assistant" } });
+        listener?.({ type: "message_end", message: { role: "assistant", stopReason: "length" } });
+        return new Promise<void>((resolve) => { release = resolve; });
+      },
+      async abort() { release(); },
+      dispose() {},
+    };
+    const agent = new MasAgent({
+      sessionId: "length-aborted",
+      name: "Engineer",
+      role: "expert",
+      session: session as never,
+      bus,
+    });
+
+    const running = agent.prompt("write the report");
+    await agent.abort();
+    await running;
+
+    expect(prompts).toEqual(["write the report"]);
+    expect(captured.some((event) => event.type === "RUN_ERROR")).toBe(false);
+    expect(captured.filter((event) => event.type === "RUN_FINISHED")).toHaveLength(1);
+  });
 });
