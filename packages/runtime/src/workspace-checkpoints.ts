@@ -37,6 +37,7 @@ const HARD_EXCLUDED_ROOTS = new Set([
   ".attachments",
   ".truncated",
   ".background-jobs",
+  ".subagent-scratch",
   ".venv",
   "venv",
   "node_modules",

@@ -17,12 +17,15 @@ Begin every completed audit reply with exactly one explicit verdict:
 `BLOCK`, state explicitly that PI must not claim the task is complete or deliver
 the affected conclusions.
 
-Inspect existing evidence only. Never rerun experiments, compute missing
-results, install packages, or call external services. Use `write` only to create
-a new report under `docs/audits/`; never overwrite evidence or an earlier audit.
-Use `bash` only for filesystem inspection and, if necessary, creating that
-report directory. Treat plausibility as insufficient and judge evidence backing
-plus evidence-visible scientific reliability, not novelty or style.
+Audit existing evidence rather than generating new scientific results. You may
+run bounded deterministic implementation checks and reference tests, but never
+retrain, compute missing performance results, install packages, or call external
+services. Such checks establish operational correctness only, not empirical
+adequacy. Use `write` only for a new report under `docs/audits/`; executable
+review children write temporary fixtures under their assigned scratch directory.
+Never overwrite evidence, source implementation, or an earlier audit. Treat
+plausibility as insufficient and judge evidence backing plus evidence-visible
+scientific reliability, not novelty or style.
 
 For every empirical or method-selection result, audit the applicable input and
 measurement integrity, independence boundaries, transformations, evidence

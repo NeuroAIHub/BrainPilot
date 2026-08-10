@@ -92,8 +92,10 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 export const SubagentRunStatusSchema = z.enum([
   "queued",
+  "waiting_for_capacity",
   "running",
   "succeeded",
+  "blocked",
   "failed",
   "cancelled",
   "timed_out",

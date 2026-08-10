@@ -58,10 +58,13 @@ describe("bundled system plugins", () => {
     expect(auditorInstructions).toContain("PI must not claim the task is complete");
     expect(auditorInstructions).toContain("audit the complete iteration history");
     expect(auditorInstructions).toContain("short real-data run");
+    expect(auditorInstructions).toContain("bounded deterministic implementation checks");
     const auditorSkill = auditorSkills.find((path) => path.endsWith("audit-feedback-loop"))!;
     const auditorReview = await readFile(join(auditorSkill, "references", "auditor-review.md"), "utf8");
     expect(auditorReview).toContain("call `spawn_subagent` once with two to");
     expect(auditorReview).toContain("Children return evidence and candidate findings only");
+    expect(auditorReview).toContain("shared session workspace by default");
+    expect(auditorReview).toContain("returns `blocked`");
     expect(auditorReview).toContain("`operational validity` and `empirical adequacy`");
     expect(auditorReview).toContain("Write the complete report to a new path under");
     const methodSkill = auditorSkills.find((path) => path.endsWith("audit-model-validation"))!;

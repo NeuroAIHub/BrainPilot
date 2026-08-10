@@ -1,8 +1,10 @@
 # Auditor review procedure
 
 Review the exact target PI supplied. Raw Expert output is a valid intermediate
-target. Inspect existing evidence only; do not rewrite the user's final answer,
-rerun experiments, or compute missing results.
+target. Audit existing evidence; do not rewrite the user's final answer, retrain,
+or compute missing scientific results. Bounded deterministic implementation and
+reference tests may verify operational correctness but cannot establish empirical
+adequacy.
 
 ## Route the audit by risk
 
@@ -35,19 +37,24 @@ surfaces can be inspected independently, call `spawn_subagent` once with two to
 four tasks and its default `wait=true`; do not launch background work, poll, or
 repeatedly wake children.
 
-Use the narrowest suitable read-only profiles:
+Use the least-capable suitable profile:
 
 - `evidence-extractor` for claim-to-evidence mapping;
 - `method-reviewer` for data, validation, and scientific-method risks;
-- `code-reviewer` for concrete implementation and export defects;
+- `code-reviewer` for concrete implementation, export defects, and bounded
+  executable reference tests when behavior cannot be established statically;
 - `repo-scout` only when code or artifact dependencies must first be mapped.
 
-Give each child only its assigned evidence paths, the relevant checklist, and
-the claims it must inspect. Avoid duplicate review of the same risk surface.
+Subagents use the shared session workspace by default. Before dispatch, verify
+that every assigned workspace path exists and give paths relative to that root.
+Use isolated mode only for untrusted material or explicit isolation, and pass
+every required file through `inputs`. Give each child only its assigned evidence
+paths, relevant checklist, and claims. Avoid duplicate review of one risk surface.
 Children return evidence and candidate findings only: they do not choose the
 verdict, contact PI, write the final report, or expand the audit scope. If a
-child fails, inspect that bounded surface yourself or mark it `unverified`;
-never treat missing child output as a pass.
+child returns `blocked`, fails, inspects no assigned path, or omits a required
+check, inspect that bounded surface yourself or mark it `unverified`; never treat
+missing access or output as a pass.
 
 ## Synthesize and report
 
