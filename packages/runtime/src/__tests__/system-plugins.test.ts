@@ -90,6 +90,38 @@ describe("bundled system plugins", () => {
     expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });
 
+  it("requires Auditor to verify parameter provenance and the evidence-to-validation chronology", async () => {
+    const plugins = loadBundledSystemPlugins({});
+    const snapshot = snapshotSystemPlugins(plugins);
+    const auditorSkills = systemPluginSkillPaths(plugins, snapshot, "auditor");
+    const feedback = auditorSkills.find((path) => path.endsWith("audit-feedback-loop"))!;
+    const evidence = auditorSkills.find((path) => path.endsWith("audit-evidence"))!;
+    const code = auditorSkills.find((path) => path.endsWith("audit-code-artifact"))!;
+    const validation = auditorSkills.find((path) => path.endsWith("audit-model-validation"))!;
+
+    const auditorReview = (await readFile(join(feedback, "references", "auditor-review.md"), "utf8")).replace(/\s+/g, " ");
+    expect(auditorReview).toContain("evidence → decision → code/config diff → representative real-data validation → report");
+    expect(auditorReview).toContain("mark the chronology `unverified`");
+    expect(auditorReview).toContain("out-of-order chain or validation of an older revision is a `flaw`");
+
+    const evidenceSkill = (await readFile(join(evidence, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
+    expect(evidenceSkill).toContain("decision-relevant evidence existed before the decision");
+    expect(evidenceSkill).toContain("post-hoc citation");
+
+    const codeSkill = (await readFile(join(code, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
+    expect(codeSkill).toContain("machine-readable configuration separate from the main implementation logic");
+    expect(codeSkill).toContain("Map each decision-relevant parameter");
+
+    const validationSkill = (await readFile(join(validation, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
+    expect(validationSkill).toContain("same or later code and configuration revision");
+    expect(validationSkill).toContain("For each material iteration");
+
+    const request = (await readFile(join(feedback, "references", "audit-request-template.md"), "utf8")).replace(/\s+/g, " ");
+    expect(request).toContain("Parameter configuration and provenance");
+    expect(request).toContain("Implementation checkpoint or diff");
+    expect(request).toContain("Validation run and code/config revision");
+  });
+
   it("rejects a bundled plugin outside its declared BrainPilot range", () => {
     expect(() => loadBundledSystemPlugins({}, "9.0.0")).toThrow(
       /requires BrainPilot .* current 9\.0\.0/,

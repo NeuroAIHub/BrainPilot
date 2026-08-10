@@ -40,6 +40,25 @@ If representative real-data validation or the diagnostics needed to rule out a
 degenerate predictor are missing, mark empirical adequacy `unverified` and narrow
 any confirmed claim accordingly.
 
+## Verify research chronology
+
+For empirical implementation, method-selection, or benchmark claims, inspect
+each material iteration as an evidence chain:
+
+`evidence → decision → code/config diff → representative real-data validation → report`
+
+Use inspectable artifact versions, task completion records, checkpoints or
+diffs, and validation-run metadata. Do not infer order from the report's section
+order or from citations added to the final prose. Confirm that each validation
+run used the same or a later code and configuration revision than the diff it is
+claimed to validate; a result from one iteration may motivate the next
+iteration's decision.
+
+When the supplied records cannot establish the order, mark the chronology
+`unverified`. An out-of-order chain or validation of an older revision is a
+`flaw`. Apply the normal verdict rule: a critical chronology flaw or unverified
+link requires `REVISE` or `BLOCK`, never `PASS`.
+
 ## Use bounded parallel review
 
 Review a small target with one risk surface directly. When two or more risk

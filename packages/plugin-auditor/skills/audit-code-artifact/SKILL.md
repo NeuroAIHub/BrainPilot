@@ -13,14 +13,19 @@ pipeline or manufacture missing validation evidence.
 1. Trace critical values across data loading, preprocessing, fitting, export, and
    inference. Check defaults, branches, feature order, transforms, and manifest
    declarations against the scientific protocol.
-2. Require existing numeric evidence that the reference pipeline, exported model
+2. Verify that decision-relevant tunable parameters live in machine-readable
+   configuration separate from the main implementation logic. Map each
+   decision-relevant parameter from its stable name, value, unit, and provenance
+   to the code that consumes it. Flag duplicated or unexplained values when they
+   prevent a reviewer from determining which setting actually ran.
+3. Require existing numeric evidence that the reference pipeline, exported model
    or raw weights, and final entry point produce equivalent predictions on fixed
    samples within a stated tolerance.
-3. Require an existing clean-directory or evaluator-like smoke test using only
+4. Require an existing clean-directory or evaluator-like smoke test using only
    collected artifacts and declared dependencies.
-4. Check for undeclared local modules, absolute workspace paths, environment
+5. Check for undeclared local modules, absolute workspace paths, environment
    variables, auxiliary files, incompatible versions, and entry-point assumptions.
-5. Separate implementation correctness from scientific adequacy: a correctly
+6. Separate implementation correctness from scientific adequacy: a correctly
    packaged artifact does not establish that its model or validation is suitable.
 
 For a bounded parallel review, use `code-reviewer` for concrete implementation

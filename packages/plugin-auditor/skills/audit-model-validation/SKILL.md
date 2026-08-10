@@ -61,7 +61,12 @@ claim that the artifact is operationally valid.
    Recompute durations, frequencies, window sizes, and other physical quantities
    after resampling or unit conversion; copying sample counts across sampling
    rates is not protocol fidelity.
-9. Bound every conclusion to the alternatives, evidence, conditions, and checks
+9. For each material iteration, verify that its representative real-data
+   validation ran on the same or later code and configuration revision than the
+   implementation diff under review. Preserve the valid iterative sequence in
+   which one result motivates the next decision; final validation of an older
+   revision cannot validate a newer candidate.
+10. Bound every conclusion to the alternatives, evidence, conditions, and checks
    actually completed.
 
 ## Audit techniques

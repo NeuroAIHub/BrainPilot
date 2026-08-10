@@ -17,11 +17,16 @@ evidence, and absence of evidence is `unverified`, not confirmation.
    only when a discrepancy or shared dependency makes the remainder material.
 2. Verify that cited sources exist, support the exact proposition, and are not
    overstated beyond population, method, or result scope.
-3. Reconcile conflicting Expert reports and distinguish direct evidence,
+3. Verify that decision-relevant evidence existed before the decision or
+   revision it is claimed to support. A post-hoc citation does not retroactively
+   ground an earlier choice. Use artifact versions, task records, checkpoints,
+   diffs, and run metadata; if they cannot establish order, identify the exact
+   missing chronology evidence and mark the link `unverified`.
+4. Reconcile conflicting Expert reports and distinguish direct evidence,
    interpretation, assumption, and unresolved uncertainty.
-4. Check that report text matches the latest artifact revision and does not turn
+5. Check that report text matches the latest artifact revision and does not turn
    limitations, missing checks, or qualified findings into unconditional claims.
-5. Record exact missing evidence and the likely owner; never fill gaps by
+6. Record exact missing evidence and the likely owner; never fill gaps by
    inference or by recomputing results.
 
 For a bounded parallel review, use `evidence-extractor` with the target report
