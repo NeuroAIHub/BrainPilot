@@ -444,17 +444,19 @@ describe("SessionManager conversation attachments (.attachments/)", () => {
     expect(onDisk).toBe("PDF");
   });
 
-  it("hides .attachments/ from the workspace root listing but lists it via /attachments", async () => {
+  it("hides internal workspace directories but lists attachments via /attachments", async () => {
     const m = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
     const s = await m.createSession({ title: "S" });
     await m.writeSessionFile(s.id, "notes.txt", b64("agent output"));
     await m.writeSessionFile(s.id, "/attachments/input.csv", b64("a,b"));
+    await mkdir(join(root, "workspaces", s.id, ".subagent-scratch"), { recursive: true });
 
     // Workspace root listing shows the agent file but NOT the .attachments dir.
     const wsRoot = await m.listSessionFiles(s.id, "/workspace");
     const names = wsRoot.map((e) => e.name);
     expect(names).toContain("notes.txt");
     expect(names).not.toContain(".attachments");
+    expect(names).not.toContain(".subagent-scratch");
 
     // The attachments tier is listed via its own prefix.
     const att = await m.listSessionFiles(s.id, "/attachments");

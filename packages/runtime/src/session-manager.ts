@@ -975,7 +975,7 @@ export class SessionManager {
     // (Only at the workspace root, and only when listing the workspace itself.)
     const atWorkspaceRoot = prefix === "/workspace" && dir === root;
     const visible = atWorkspaceRoot
-      ? dirents.filter((d) => d.name !== SessionManager.ATTACHMENTS_DIRNAME)
+      ? dirents.filter((d) => d.name !== SessionManager.ATTACHMENTS_DIRNAME && d.name !== ".subagent-scratch")
       : dirents;
     const entries = await Promise.all(
       visible.map(async (d) => {
@@ -2050,8 +2050,8 @@ export class SessionManager {
     const targets = agentName ? [entry.agents.get(agentName)].filter(Boolean) : [...entry.agents.values()];
     const directChild = agentName ? entry.subagents.list().find((child) => child.id === agentName) : undefined;
     const hasSubagentActivity = directChild
-      ? directChild.status === "queued" || directChild.status === "running"
-      : wholeSession && entry.subagents.list().some((child) => child.status === "queued" || child.status === "running");
+      ? directChild.status === "queued" || directChild.status === "waiting_for_capacity" || directChild.status === "running"
+      : wholeSession && entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running");
     const hasPendingInput = Boolean(entry.userInputs.active || entry.userInputs.queue.length > 0);
     const hasTargetInput = agentName !== undefined && (
       entry.userInputs.active?.agent === agentName
@@ -2988,7 +2988,7 @@ export class SessionManager {
     // Covers the acceptance→agent-running gap for a direct expert prompt.
     if (entry.activeRunId !== null) return true;
     if (entry.monitorManager.hasRunning() || entry.backgroundJobManager.hasRunning()) return true;
-    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "running")) return true;
+    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running")) return true;
     for (const agent of entry.agents.values()) {
       if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
     }

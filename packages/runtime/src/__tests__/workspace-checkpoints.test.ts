@@ -49,7 +49,9 @@ describe("WorkspaceCheckpointStore", () => {
   it("excludes generated environments and bounds provenance expansion", async () => {
     const { workspace, store } = await fixture();
     await mkdir(join(workspace, ".venv", "lib", "python", "site-packages"), { recursive: true });
+    await mkdir(join(workspace, ".subagent-scratch", "child-1"), { recursive: true });
     await writeFile(join(workspace, ".venv", "pyvenv.cfg"), "home = /usr/bin\n", "utf8");
+    await writeFile(join(workspace, ".subagent-scratch", "child-1", "fixture.py"), "print('temporary')\n", "utf8");
     for (let i = 0; i < 20; i++) {
       await writeFile(
         join(workspace, ".venv", "lib", "python", "site-packages", `dependency_${i}.py`),
@@ -68,6 +70,9 @@ describe("WorkspaceCheckpointStore", () => {
     expect(detail?.skipped.filter((item) => item.path.startsWith(".venv/"))).toEqual([
       expect.objectContaining({ path: ".venv/", reason: "internal" }),
     ]);
+    expect(detail?.skipped).toEqual(expect.arrayContaining([
+      expect.objectContaining({ path: ".subagent-scratch/", reason: "internal" }),
+    ]));
 
     const bounded = await store.provenance(checkpoint.id, 2);
     expect(bounded).toHaveLength(2);

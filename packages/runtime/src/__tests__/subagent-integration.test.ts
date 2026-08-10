@@ -31,14 +31,13 @@ describe("SessionManager subagent integration", () => {
           const submit = tools.get("submit_result");
           if (submit) {
             await writeFile(join(cwd, "shared-report.md"), "canonical report", "utf8");
-            await submit.execute({ summary: "report complete", artifacts: [{ path: "shared-report.md" }] });
+            await submit.execute({ outcome: "completed", summary: "report complete", artifacts: [{ path: "shared-report.md" }], inspected_paths: ["shared-report.md"] });
             return;
           }
           const spawned = await tools.get("spawn_subagent")!.execute({
             tasks: [{
               profile: "literature-scout",
               task: "write the canonical report",
-              workspaceMode: "shared",
             }],
           });
           result = spawned.content[0]!.text;
@@ -73,7 +72,7 @@ describe("SessionManager subagent integration", () => {
           const submit = tools.get("submit_result");
           if (submit) {
             await new Promise((resolve) => setTimeout(resolve, 10));
-            await submit.execute({ summary: "background complete" });
+            await submit.execute({ outcome: "completed", summary: "background complete" });
             return;
           }
           if (agentName === "engineer") {
@@ -115,7 +114,7 @@ describe("SessionManager subagent integration", () => {
           seen.push({ agent: agentName, tools: allowedToolNames, prompt, suppressed: suppressCoordinationHooks });
           const submit = tools.get("submit_result");
           if (submit) {
-            await submit.execute({ summary: "child complete", findings: ["verified"] });
+            await submit.execute({ outcome: "completed", summary: "child complete", findings: ["verified"] });
             listeners.forEach((listener) => listener({ type: "message_end", message: { role: "assistant", usage: { input: 2, output: 1 } } }));
             return;
           }

@@ -25,6 +25,10 @@ describe("subagent profile overrides", () => {
         expect.arrayContaining(["write", "edit"]),
       );
     }
+    expect(profiles.find((profile) => profile.name === "code-reviewer")?.builtinTools)
+      .toEqual(expect.arrayContaining(["write", "bash"]));
+    expect(profiles.find((profile) => profile.name === "code-reviewer")?.prompt)
+      .toContain("asymmetric dimensions and index-distinct values");
   });
 
   it("loads prompt and validated config overrides while stripping forbidden tools", async () => {

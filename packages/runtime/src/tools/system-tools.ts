@@ -304,7 +304,7 @@ export function createSpawnSubagentTool(deps: ToolDeps): SystemTool {
   return {
     name: "spawn_subagent",
     description:
-      "Run 1-4 context-isolated leaf subagents in parallel. By default this waits for structured results; " +
+      "Run 1-4 context-isolated leaf subagents in parallel in the shared session workspace. By default this waits for structured results; " +
       "set wait=false to receive child ids immediately, continue other work, then use wait_subagent or get_subagent. " +
       "Pass all required background explicitly; children do not inherit your conversation.",
     parameters: {
@@ -323,7 +323,7 @@ export function createSpawnSubagentTool(deps: ToolDeps): SystemTool {
               workspaceMode: {
                 type: "string",
                 enum: ["isolated", "shared"],
-                description: "Run in isolated scratch space or directly in the shared session workspace. Defaults to isolated.",
+                description: "Run directly in the shared session workspace or in isolated scratch space. Defaults to shared.",
               },
               inputs: {
                 type: "array",
