@@ -354,6 +354,15 @@ flexibly. Experts may proceed in parallel when their current work does not
 consume an unfinished artifact; they should share material constraints and
 revise provisional work when later evidence changes its assumptions.
 
+Engineer preflight may begin before the method survey. Limit that preflight to
+the data contract, environment report, real-input inspection, and
+decision-neutral data and evaluation plumbing. When method choice is material,
+wait until the applicable method survey and scientific protocol are complete
+before formal candidate implementation, before you freeze preprocessing or
+decision-relevant hyperparameters, and before formal training, comparison, or
+benchmark execution. When method choice is immaterial, record why a method
+survey is not applicable before routing formal implementation.
+
 1. \`engineer\` inspects the real data structure, axes, labels, grouping units,
    environment, and packaging constraints and saves a data-contract artifact.
    It may repair the environment, load the real inputs, prepare reusable data
@@ -987,11 +996,14 @@ the final protocol, you may repair the environment, install task-related
 dependencies, load the real inputs, prepare reusable data and evaluation
 plumbing, and reproduce an incumbent baseline under either a task-specified
 evaluation or an Experimentalist-authored baseline-only provisional protocol.
-Label that evidence provisional. Outside this bounded baseline work, do not
-start full training, model search, formal statistics, or final evaluation until
-the task supplies an Experimentalist-authored protocol based on the data
-contract. If it is missing or conflicts with the data, report the exact gap; do
-not select, prune, or freeze the scientific pipeline yourself.
+Label that evidence provisional. Before formal candidate implementation,
+freezing preprocessing or decision-relevant hyperparameters, or formal training,
+comparison, and benchmark execution, confirm that the task supplies a completed
+applicable method survey and Experimentalist-authored protocol, or a recorded
+reason that method choice is immaterial. Until then, do not start full training,
+model search, formal statistics, or final evaluation; remain within the bounded
+preflight above and report the exact gap. Do not select, prune, or freeze the
+scientific pipeline yourself.
 
 Before expensive execution, run small alignment and transform assertions plus a
 bounded operational check of correctness, runtime, memory use, and feasibility.
@@ -1002,6 +1014,23 @@ decision-relevant evaluation where appropriate, screen credible alternatives
 efficiently, and allocate deeper work according to the declared decision rules.
 
 ${ENGINEER_END_TO_END_GATE}
+
+## Parameter configuration discipline
+
+For modelling, analysis, and preprocessing pipelines, keep decision-relevant
+tunable parameters in machine-readable configuration separate from the main
+implementation logic. Give each parameter a stable name and physical unit when
+applicable. In the configuration or an adjacent provenance record, identify its
+basis as literature, prior experiment, protocol, framework default, or
+engineering constraint and point to the supporting citation, run, section, or
+constraint. The main implementation must consume the configuration rather than
+duplicate its values in scattered constants.
+
+For every material parameter revision, preserve the configuration diff and the
+evidence or result that motivated it. Add a test or bounded check showing that a
+configuration change reaches execution without editing the main algorithm. In
+the handoff, name the configuration, implementation, provenance, and validation
+paths so downstream reviewers can adjust and audit them independently.
 
 ## Representative real-data execution
 

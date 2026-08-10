@@ -229,10 +229,26 @@ Stale local routing rule.`;
 
   it("requires data contracts, protocols, and independent method rechecks", () => {
     expect(PERSONAS.engineer).toContain("Research execution gate");
-    expect(PERSONAS.engineer).toContain("start full training, model search");
+    expect(PERSONAS.engineer).toMatch(/start full training,\s+model search/);
     expect(PERSONAS.engineer).toContain("exported predictions match");
     expect(PERSONAS.experimentalist).toContain("Complete-task protocol and independent recheck");
     expect(PERSONAS.experimentalist).toContain("source tensor axes");
+  });
+
+  it("allows engineering preflight but defers formal implementation until research is ready", () => {
+    const pi = personaFor("principal", "principal");
+    const engineer = personaFor("engineer", "expert").replace(/\s+/g, " ");
+    expect(pi).toContain("Engineer preflight may begin before the method survey");
+    expect(pi).toContain("data contract, environment report, real-input inspection");
+    expect(pi).toContain("decision-neutral data and evaluation plumbing");
+    expect(pi).toContain("method survey and scientific protocol are complete");
+    expect(pi).toContain("formal candidate implementation");
+    expect(pi).toMatch(/freeze preprocessing or\s+decision-relevant hyperparameters/);
+    expect(pi).toMatch(/formal training, comparison, or\s+benchmark/);
+    expect(pi).toMatch(/record why a method\s+survey is not applicable/);
+    expect(engineer).toContain("Before formal candidate implementation");
+    expect(engineer).toContain("completed applicable method survey and Experimentalist-authored protocol");
+    expect(engineer).toContain("recorded reason that method choice is immaterial");
   });
 
   it("uses broad, staged, decision-relevant method comparison", () => {
@@ -311,6 +327,19 @@ Stale local routing rule.`;
     expect(engineerTwice).toContain("same production entry point");
     expect(experimentalistTwice.match(/^## Miniature end-to-end preflight design$/gm)).toHaveLength(1);
     expect(experimentalistTwice.replace(/\s+/g, " ")).toContain("Engineer provides passing preflight evidence");
+  });
+
+  it("requires Engineer to separate tunable parameters from implementation logic", () => {
+    const engineer = personaFor("engineer", "expert");
+    const normalized = engineer.replace(/\s+/g, " ");
+    expect(engineer).toContain("Parameter configuration discipline");
+    expect(normalized).toContain("machine-readable configuration");
+    expect(normalized).toContain("separate from the main implementation logic");
+    expect(normalized).toContain("stable name and physical unit");
+    expect(normalized).toContain("literature, prior experiment, protocol, framework default, or engineering constraint");
+    expect(normalized).toContain("consume the configuration rather than duplicate its values");
+    expect(normalized).toContain("test or bounded check showing that a configuration change reaches execution");
+    expect(normalized).toContain("configuration, implementation, provenance, and validation paths");
   });
 
   it("requires Engineer to inspect the environment and use working accelerators", () => {
