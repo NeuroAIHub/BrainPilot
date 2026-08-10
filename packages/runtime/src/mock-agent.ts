@@ -13,6 +13,7 @@
  *   - contains "[[error]]": emits an agent-level failure (auto_retry then end).
  */
 import type { IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
+import type { ThinkingLevel } from "@brainpilot/protocol";
 import { PROVIDER_MAX_RETRIES } from "./pi-retry.js";
 
 export interface MockSessionConfig {
@@ -45,6 +46,10 @@ export class MockAgentSession implements IAgentSession {
   subscribe(listener: (e: PiAgentEvent) => void): () => void {
     this.listeners.add(listener);
     return () => this.listeners.delete(listener);
+  }
+
+  setThinkingLevel(_level: ThinkingLevel): void {
+    // Mock mode has no provider reasoning state; keep the production interface.
   }
 
   private emit(e: PiAgentEvent): void {

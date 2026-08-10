@@ -28,6 +28,10 @@ export const EXAMPLE_MODEL = "claude-sonnet-4-6";
 export const DomainResourcesSchema = z.enum(["full", "base"]);
 export type DomainResources = z.infer<typeof DomainResourcesSchema>;
 
+/** Shared reasoning effort for every agent in a session. */
+export const ThinkingLevelSchema = z.enum(["off", "low", "medium", "high"]);
+export type ThinkingLevel = z.infer<typeof ThinkingLevelSchema>;
+
 export const SessionSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -35,6 +39,8 @@ export const SessionSchema = z.object({
   updatedAt: z.string(),
   /** Optional for compatibility with older runtimes; new runtimes always emit it. */
   domainResources: DomainResourcesSchema.optional(),
+  /** One reasoning effort shared by all agents in this session. */
+  thinkingLevel: ThinkingLevelSchema.optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 
@@ -900,6 +906,8 @@ export const ProviderProfileSchema = z.object({
   adapter: ProviderAdapterSchema.optional(),
   isShared: z.boolean(),
   models: z.array(z.string()),
+  /** Model ids declared capable of Pi extended thinking. */
+  reasoningModels: z.array(z.string()).optional(),
   icon: z.string(),
   iconColor: z.string(),
   notes: z.string(),
@@ -960,6 +968,8 @@ export const ProviderProfileCreateSchema = z.object({
   api_key: z.string().optional(),
   apiKey: z.string().optional(),
   models: modelsField,
+  reasoning_models: z.array(z.string().trim().min(1)).optional(),
+  reasoningModels: z.array(z.string().trim().min(1)).optional(),
   icon: z.string().optional(),
   icon_color: z.string().optional(),
   iconColor: z.string().optional(),

@@ -13,6 +13,7 @@
 import type {
   Session,
   DomainResources,
+  ThinkingLevel,
   AgentStatus,
   SubagentStatus,
   SessionStateSnapshot,
@@ -56,6 +57,7 @@ import type {
 export type {
   Session,
   DomainResources,
+  ThinkingLevel,
   AgentStatus,
   SubagentStatus,
   SessionStateSnapshot,
@@ -297,6 +299,7 @@ export interface ProviderCreate {
   adapter?: ProviderAdapter;
   apiKey: string;
   models?: string[];
+  reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -309,6 +312,7 @@ export interface ProviderUpdate {
   adapter?: ProviderAdapter;
   apiKey?: string;
   models?: string[];
+  reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -471,6 +475,8 @@ interface RawSession {
   updatedAt?: string;
   domain_resources?: unknown;
   domainResources?: unknown;
+  thinking_level?: unknown;
+  thinkingLevel?: unknown;
 }
 
 interface RawFileEntry {
@@ -507,6 +513,8 @@ interface RawProviderProfile {
   api?: string;
   adapter?: string;
   models?: string[];
+  reasoning_models?: string[];
+  reasoningModels?: string[];
   icon?: string;
   icon_color?: string;
   iconColor?: string;
@@ -696,6 +704,9 @@ export function normalizeSession(raw: RawSession): Session {
     updatedAt: isoValue(raw.updatedAt ?? raw.updated_at ?? raw.createdAt ?? raw.created_at),
     domainResources:
       (raw.domainResources ?? raw.domain_resources) === "base" ? "base" : "full",
+    thinkingLevel: ["off", "low", "medium", "high"].includes(String(raw.thinkingLevel ?? raw.thinking_level))
+      ? (raw.thinkingLevel ?? raw.thinking_level) as Session["thinkingLevel"]
+      : "medium",
   };
 }
 
@@ -806,6 +817,9 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     adapter: (raw.adapter ?? "auto") as ProviderAdapter,
     isShared: Boolean(raw.isShared ?? raw.is_shared),
     models: Array.isArray(raw.models) ? raw.models : [],
+    reasoningModels: Array.isArray(raw.reasoningModels)
+      ? raw.reasoningModels
+      : Array.isArray(raw.reasoning_models) ? raw.reasoning_models : (Array.isArray(raw.models) ? raw.models : []),
     icon: stringValue(raw.icon, "circle"),
     iconColor: stringValue(raw.iconColor ?? raw.icon_color, "#111111"),
     notes: stringValue(raw.notes),
@@ -827,6 +841,7 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
     adapter: data.adapter,
     api_key: data.apiKey,
     models: data.models,
+    reasoning_models: data.reasoningModels,
     icon: data.icon,
     icon_color: data.iconColor,
     notes: data.notes,
@@ -841,6 +856,7 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
     ...(data.adapter !== undefined ? { adapter: data.adapter } : {}),
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
+    ...(data.reasoningModels !== undefined ? { reasoning_models: data.reasoningModels } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),
     ...(data.iconColor !== undefined ? { icon_color: data.iconColor } : {}),
     ...(data.notes !== undefined ? { notes: data.notes } : {}),

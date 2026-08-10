@@ -1,6 +1,6 @@
 import { Bot, Paperclip, Square, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ProviderProfile } from "../../contracts/backend";
+import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
 import { useTurnTimer } from "../../contexts/useTurnTimer";
@@ -79,6 +79,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   // active" so the no-provider banner doesn't flash during initial load.
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("medium");
   // 可用命令（已通过真实 API 测试 /context ✅ /cost ✅；/compact 由 SDK 内置 ✅）
   // 不可用命令（已移除）：/usage ❌ /clear ❌ /init ❌
   const DEFAULT_SLASH_COMMANDS = ["/compact", "/context", "/cost"];
@@ -111,7 +112,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
       ? agents.flatMap((agent) => agent.activeTools ?? [])
@@ -121,10 +122,18 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
+  const reasoningSupported = Boolean(
+    selectedModel && (activeProvider?.reasoningModels ?? activeProvider?.models ?? []).includes(selectedModel),
+  );
 
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+
+  useEffect(() => {
+    if (currentSession?.thinkingLevel) setThinkingLevel(currentSession.thinkingLevel);
+    else if (isDraft) setThinkingLevel("medium");
+  }, [currentSession?.id, currentSession?.thinkingLevel, isDraft]);
 
   useEffect(() => () => {
     uploadAbortRef.current?.abort();
@@ -497,6 +506,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     const result = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
+      thinkingLevel: reasoningSupported ? thinkingLevel : "off",
     });
     if (result.ok && result.queued && result.messageId) {
       setQueuedPromptsBySession((current) => ({
@@ -909,6 +919,33 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
                   placeholder={t("chat.modelPlaceholder")}
                   title={activeProvider ? t("chat.providerTitle", { name: activeProvider.name }) : t("chat.noActiveProvider")}
                   value={selectedModel}
+                />
+              }
+              thinkingSelect={
+                <CustomSelect
+                  ariaLabel={t("chat.thinkingLevel")}
+                  className="thinking-select"
+                  disabled={!currentSandbox || !reasoningSupported}
+                  onChange={async (value) => {
+                    const next = value as ThinkingLevel;
+                    setThinkingLevel(next);
+                    setComposerError(null);
+                    if (!currentSession) return;
+                    try {
+                      await updateSessionThinking(currentSession.id, next);
+                    } catch (e) {
+                      setThinkingLevel(currentSession.thinkingLevel ?? "medium");
+                      setComposerError(e instanceof Error ? e.message : String(e));
+                    }
+                  }}
+                  options={[
+                    { value: "off", label: t("chat.thinkingLevel.off") },
+                    { value: "low", label: t("chat.thinkingLevel.low") },
+                    { value: "medium", label: t("chat.thinkingLevel.medium") },
+                    { value: "high", label: t("chat.thinkingLevel.high") },
+                  ]}
+                  title={t("chat.thinkingLevel.title")}
+                  value={reasoningSupported ? thinkingLevel : "off"}
                 />
               }
               sendButton={

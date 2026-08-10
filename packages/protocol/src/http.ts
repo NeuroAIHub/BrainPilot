@@ -28,6 +28,7 @@ import { AgUiEventSchema } from "./events.js";
 import {
   AgentStatusSchema,
   SessionSchema,
+  ThinkingLevelSchema,
   SessionStateSnapshotSchema,
   SessionStatsSchema,
   TraceDependencySchema,
@@ -105,6 +106,8 @@ export const CreateSessionRequestSchema = z.object({
   modelId: z.string().optional(),
   /** Per-session domain resources; omitted means full for backward compatibility. */
   domainResources: z.enum(["full", "base"]).optional(),
+  /** One reasoning effort shared by every agent in this session. */
+  thinkingLevel: ThinkingLevelSchema.optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
@@ -113,6 +116,12 @@ export const CreateSessionResponseSchema = z.object({
   session: SessionSchema.optional(),
 });
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>;
+
+export const UpdateSessionRequestSchema = z.object({
+  title: z.string().optional(),
+  thinkingLevel: ThinkingLevelSchema.optional(),
+});
+export type UpdateSessionRequest = z.infer<typeof UpdateSessionRequestSchema>;
 
 /* ------------------------------------------------------------------ *
  * GET /sessions  (list)  +  GET /sessions/:id  +  DELETE /sessions/:id

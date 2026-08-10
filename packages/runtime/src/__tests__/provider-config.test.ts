@@ -24,6 +24,15 @@ describe("resolveSessionProvider", () => {
     const root = await dataRootWith(file);
     const cfg = await resolveSessionProvider(root, { providerId: "a", modelId: "a2" });
     expect(cfg).toMatchObject({ providerId: "a", apiKey: "ka", baseUrl: "https://a", modelId: "a2" });
+    expect(cfg?.reasoningEnabled).toBe(true);
+  });
+
+  it("honours an explicit per-model reasoning allowlist", async () => {
+    const root = await dataRootWith({
+      profiles: [{ id: "a", apiKey: "ka", models: ["plain", "think"], reasoningModels: ["think"] }],
+    });
+    expect((await resolveSessionProvider(root, { modelId: "plain" }))?.reasoningEnabled).toBe(false);
+    expect((await resolveSessionProvider(root, { modelId: "think" }))?.reasoningEnabled).toBe(true);
   });
 
   it("falls back to the profile's first model when the ref's model is gone", async () => {

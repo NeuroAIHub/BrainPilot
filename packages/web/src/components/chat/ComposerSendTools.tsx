@@ -15,16 +15,20 @@ import type { ReactNode } from "react";
  */
 export function ComposerSendTools({
   modelSelect,
+  thinkingSelect,
   sendButton,
 }: {
   /** The model picker node (parent builds the stateful CustomSelect). */
   modelSelect: ReactNode;
+  /** Session-wide thinking-level picker. */
+  thinkingSelect: ReactNode;
   /** The send button node. */
   sendButton: ReactNode;
 }) {
   return (
     <div className="composer__send-tools">
       {modelSelect}
+      {thinkingSelect}
       {sendButton}
     </div>
   );

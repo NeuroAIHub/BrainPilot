@@ -1122,6 +1122,7 @@ function toHttpProfile(
     adapter: p.adapter ?? "auto",
     is_shared: false,
     models: p.models,
+    reasoning_models: p.reasoningModels ?? p.models,
     icon: p.icon ?? "circle",
     icon_color: p.iconColor ?? "#111111",
     notes: p.notes ?? "",
@@ -1166,6 +1167,9 @@ function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProf
     adapter: str(body.adapter) as StoredProviderProfile["adapter"] | undefined,
     apiKey: str(body.api_key) ?? str(body.apiKey),
     models: Array.isArray(body.models) ? (body.models as string[]) : undefined,
+    reasoningModels: Array.isArray(body.reasoning_models)
+      ? (body.reasoning_models as string[])
+      : Array.isArray(body.reasoningModels) ? (body.reasoningModels as string[]) : undefined,
     icon: str(body.icon),
     iconColor: str(body.icon_color) ?? str(body.iconColor),
     notes: str(body.notes),

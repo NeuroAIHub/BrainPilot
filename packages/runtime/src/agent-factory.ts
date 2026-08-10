@@ -192,6 +192,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     resourceLoader,
     settingsManager,
     sessionManager: SessionManager.open(params.historyPath),
+    thinkingLevel: params.thinkingLevel,
     ...(model ? { model } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(authStorage ? { authStorage } : {}),
@@ -289,6 +290,9 @@ class RealAgentSession implements IAgentSession {
   prompt(text: string, opts?: PromptOptions): Promise<void> {
     return this.s.prompt(text, opts);
   }
+  setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void {
+    this.s.setThinkingLevel(level);
+  }
   abort(): Promise<void> {
     return this.s.abort();
   }
@@ -309,6 +313,7 @@ interface PiSession {
   readonly isStreaming: boolean;
   subscribe(listener: (e: unknown) => void): () => void;
   prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
+  setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void;
   abort(): Promise<void>;
   dispose(): void;
 }
@@ -337,6 +342,7 @@ interface PiSdk {
     model?: unknown;
     modelRegistry?: unknown;
     authStorage?: unknown;
+    thinkingLevel?: import("@brainpilot/protocol").ThinkingLevel;
   }): Promise<{ session: PiSession }>;
   defineTool(def: {
     name: string;
