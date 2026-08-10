@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import {
   resolveGatewayModel,
   resolveSessionModel,
+  resolveCompactionSettings,
   GATEWAY_PROVIDER,
   type PiProviderSdk,
 } from "../pi-provider.js";
@@ -294,6 +295,21 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(cfg.providers["azure-openai"].baseUrl).toBe("https://my-res.openai.azure.com/openai");
   });
 
+  it("uses the provider context window instead of the environment default", () => {
+    process.env.ANTHROPIC_CONTEXT_WINDOW = "200000";
+    const { sdk, lastPath } = sessionSdk();
+    resolveSessionModel(sdk, agentDir, {
+      providerId: "long",
+      baseUrl: "https://gw.example",
+      apiKey: "sk-long",
+      modelId: "model-1m",
+      contextWindow: 1_000_000,
+    });
+    const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers.long.models[0].contextWindow).toBe(1_000_000);
+    delete process.env.ANTHROPIC_CONTEXT_WINDOW;
+  });
+
   it("writes openai-responses when selected", () => {
     const { sdk, lastPath } = sessionSdk();
     resolveSessionModel(sdk, agentDir, {
@@ -391,5 +407,20 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
       modelId: "m",
     });
     expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["mix"].api).toBe("openai-responses");
+  });
+});
+
+describe("resolveCompactionSettings", () => {
+  it("uses a 90% trigger and preserves 64K recent tokens for 1M contexts", () => {
+    expect(resolveCompactionSettings(1_000_000)).toEqual({
+      enabled: true,
+      reserveTokens: 100_000,
+      keepRecentTokens: 64_000,
+    });
+  });
+
+  it("leaves auto and 256K profiles on Pi defaults", () => {
+    expect(resolveCompactionSettings(undefined)).toBeUndefined();
+    expect(resolveCompactionSettings(262_144)).toBeUndefined();
   });
 });

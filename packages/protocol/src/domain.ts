@@ -897,6 +897,13 @@ export function deriveProviderApi(adapter?: ProviderAdapter): ProviderApi | unde
   }
 }
 
+/** Context-window presets exposed by provider settings. Omission means auto. */
+export const ProviderContextWindowSchema = z.union([
+  z.literal(262_144),
+  z.literal(1_000_000),
+]);
+export type ProviderContextWindow = z.infer<typeof ProviderContextWindowSchema>;
+
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -908,6 +915,7 @@ export const ProviderProfileSchema = z.object({
   adapter: ProviderAdapterSchema.optional(),
   isShared: z.boolean(),
   models: z.array(z.string()),
+  contextWindow: ProviderContextWindowSchema.optional(),
   /** Model ids declared capable of Pi extended thinking. */
   reasoningModels: z.array(z.string()).optional(),
   icon: z.string(),
@@ -970,6 +978,8 @@ export const ProviderProfileCreateSchema = z.object({
   api_key: z.string().optional(),
   apiKey: z.string().optional(),
   models: modelsField,
+  context_window: ProviderContextWindowSchema.nullable().optional(),
+  contextWindow: ProviderContextWindowSchema.nullable().optional(),
   reasoning_models: z.array(z.string().trim().min(1)).optional(),
   reasoningModels: z.array(z.string().trim().min(1)).optional(),
   icon: z.string().optional(),

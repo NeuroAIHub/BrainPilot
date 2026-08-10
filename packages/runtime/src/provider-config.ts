@@ -23,6 +23,7 @@ export interface ProviderConfig {
   adapter?: string;
   apiKey: string;
   modelId?: string;
+  contextWindow?: number;
   reasoningEnabled?: boolean;
 }
 
@@ -33,6 +34,7 @@ interface StoredProfile {
   adapter?: string;
   apiKey?: string;
   models?: string[];
+  contextWindow?: number;
   reasoningModels?: string[];
 }
 
@@ -82,6 +84,7 @@ export async function resolveSessionProvider(
     adapter: profile.adapter || undefined,
     apiKey: profile.apiKey,
     modelId,
+    contextWindow: profile.contextWindow,
     reasoningEnabled: modelId
       ? (profile.reasoningModels ?? profile.models ?? []).includes(modelId)
       : false,

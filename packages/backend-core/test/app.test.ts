@@ -597,6 +597,74 @@ describe("Hono app — local config routes", () => {
     expect((await del.json()) as { deleted: boolean }).toEqual({ deleted: true });
   });
 
+  it("provider profiles persist and return an explicit context window", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-context-"));
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: vi.fn() as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {},
+    });
+
+    const created = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Long context",
+        base_url: "https://gw.example",
+        api_key: "sk-secret",
+        models: ["model-1m"],
+        context_window: 1_000_000,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const profile = (await created.json()) as { id: string; context_window?: number };
+    expect(profile.context_window).toBe(1_000_000);
+
+    const updated = await app.request(`/api/provider/profiles/${profile.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context_window: 262_144 }),
+    });
+    expect(updated.status).toBe(200);
+    expect(((await updated.json()) as { context_window?: number }).context_window).toBe(262_144);
+
+    const stored = JSON.parse(
+      await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
+    ) as { profiles: Array<{ contextWindow?: number }> };
+    expect(stored.profiles[0]?.contextWindow).toBe(262_144);
+
+    const automatic = await app.request(`/api/provider/profiles/${profile.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context_window: null }),
+    });
+    expect(automatic.status).toBe(200);
+    expect((await automatic.json()) as Record<string, unknown>).not.toHaveProperty("context_window");
+    const cleared = JSON.parse(
+      await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
+    ) as { profiles: Array<{ contextWindow?: number }> };
+    expect(cleared.profiles[0]).not.toHaveProperty("contextWindow");
+  });
+
+  it("rejects unsupported provider context windows", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-context-invalid-"));
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: vi.fn() as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {},
+    });
+    const response = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bad", models: ["m"], context_window: 500_000 }),
+    });
+    expect(response.status).toBe(400);
+  });
+
   // #50: malformed provider profiles must 400, not silently create an unusable
   // active profile.
   describe("#50 provider profile validation", () => {

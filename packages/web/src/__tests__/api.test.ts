@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { api } from "../utils/api";
+import {
+  normalizeProviderProfile,
+  serializeProviderCreate,
+  serializeProviderUpdate,
+} from "../contracts/backend";
 
 // These exercise the real-fetch path (runtimeConfig.useMockBackend is false in
 // tests — VITE_USE_MOCK_BACKEND is unset). We stub globalThis.fetch and a
@@ -47,6 +52,28 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("provider context-window contract", () => {
+  it("serializes presets and uses null to restore automatic mode", () => {
+    expect(serializeProviderCreate({
+      name: "Long",
+      baseUrl: "https://gw.example",
+      apiKey: "key",
+      contextWindow: 1_000_000,
+    })).toMatchObject({ context_window: 1_000_000 });
+    expect(serializeProviderUpdate({ contextWindow: null })).toEqual({ context_window: null });
+  });
+
+  it("normalizes the provider context window from snake_case", () => {
+    const profile = normalizeProviderProfile({
+      id: "p",
+      name: "Long",
+      models: ["m"],
+      context_window: 262_144,
+    });
+    expect(profile.contextWindow).toBe(262_144);
+  });
 });
 
 describe("api.sessions.list — unwraps { sessions } and tolerates shape", () => {

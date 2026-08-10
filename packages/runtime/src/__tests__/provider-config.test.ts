@@ -27,6 +27,15 @@ describe("resolveSessionProvider", () => {
     expect(cfg?.reasoningEnabled).toBe(true);
   });
 
+  it("carries the provider context window into the session config", async () => {
+    const root = await dataRootWith({
+      profiles: [
+        { id: "long", apiKey: "key", models: ["m"], contextWindow: 1_000_000 },
+      ],
+    });
+    expect(await resolveSessionProvider(root, {})).toMatchObject({ contextWindow: 1_000_000 });
+  });
+
   it("honours an explicit per-model reasoning allowlist", async () => {
     const root = await dataRootWith({
       profiles: [{ id: "a", apiKey: "ka", models: ["plain", "think"], reasoningModels: ["think"] }],

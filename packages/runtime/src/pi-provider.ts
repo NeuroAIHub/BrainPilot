@@ -84,7 +84,27 @@ export interface SessionProviderConfig {
   adapter?: string;
   apiKey: string;
   modelId?: string;
+  /** Provider-level override; absent preserves env/default behavior. */
+  contextWindow?: number;
   reasoningEnabled?: boolean;
+}
+
+export interface CompactionSettings {
+  enabled: true;
+  reserveTokens: number;
+  keepRecentTokens: number;
+}
+
+/**
+ * A 1M context needs a proportionally larger safety margin than Pi's 16K
+ * default. This triggers compaction at 900K and retains one full 64K tool
+ * result plus nearby reasoning. Smaller/automatic contexts keep Pi defaults.
+ */
+export function resolveCompactionSettings(
+  contextWindow?: number,
+): CompactionSettings | undefined {
+  if (contextWindow !== 1_000_000) return undefined;
+  return { enabled: true, reserveTokens: 100_000, keepRecentTokens: 64_000 };
 }
 
 export interface ResolvedProvider {
@@ -249,7 +269,8 @@ export function resolveSessionModel(
               id: cfg.modelId,
               reasoning: cfg.reasoningEnabled ?? true,
               input: ["text"],
-              contextWindow: intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
+              contextWindow:
+                cfg.contextWindow ?? intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
               maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
             },
           ],
