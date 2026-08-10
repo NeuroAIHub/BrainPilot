@@ -25,13 +25,15 @@ interface AgentEndLike {
   messages?: Array<{ role?: string; stopReason?: string }>;
 }
 
-function endedInError(e: AgentEndLike): boolean {
+function endedUnsuccessfully(e: AgentEndLike): boolean {
   const messages = e.messages;
   if (!Array.isArray(messages)) return false;
   for (let i = messages.length - 1; i >= 0; i--) {
     const message = messages[i];
     if (message?.role === "assistant") {
-      return message.stopReason === "error" || message.stopReason === "aborted";
+      return message.stopReason === "error" ||
+        message.stopReason === "aborted" ||
+        message.stopReason === "length";
     }
   }
   return false;
@@ -155,7 +157,7 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
 
     pi.on("agent_end", async (e) => {
       if (deps.role === "trace") return;
-      if (endedInError(e)) {
+      if (endedUnsuccessfully(e)) {
         state = freshState();
         continuingFollowUp = false;
         return;

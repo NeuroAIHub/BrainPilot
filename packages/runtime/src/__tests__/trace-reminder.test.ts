@@ -241,6 +241,19 @@ describe("trace-reminder: failures and message envelope", () => {
     expect(pi.sent).toEqual([]);
   });
 
+  it("a length-limited run leaves recovery to MasAgent", () => {
+    const pi = fakePi();
+    makeTraceReminderExt({
+      role: "expert",
+      name: "engineer",
+      hasPendingTasks: () => true,
+      onUnreplied: () => {},
+    })(pi as never);
+    pi.fire("agent_start");
+    pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "length" }] });
+    expect(pi.sent).toEqual([]);
+  });
+
   it("every reminder is wrapped in a strip-able system-message marker", () => {
     const { sent } = runOnce("expert", ["read"], { hasPendingTasks: () => true });
     expect(sent).toHaveLength(1);
