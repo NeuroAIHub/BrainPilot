@@ -41,5 +41,8 @@ Target type: <expert-result | pi-draft | synthesis>
 1. <claim>
 
 ## Review scope
-<full review for revision 1, or named prior findings and changed claims for a re-review>
+<delivery claims and critical risk surfaces to check completely; homogeneous
+supporting material that may be sampled; for a re-review, prior audit, open
+finding IDs, changed paths, resolution evidence, new or changed claims, and any
+previously confirmed checks whose evidence dependencies may have changed>
 ```

@@ -129,7 +129,7 @@ export class SubagentManager {
 
   constructor(private readonly opts: SubagentManagerOptions) {
     this.semaphore = new Semaphore(opts.maxConcurrency ?? positiveEnv("BP_SUBAGENT_MAX_CONCURRENCY", 4));
-    this.timeoutMs = opts.timeoutMs ?? positiveEnv("BP_SUBAGENT_TIMEOUT_MS", 600_000);
+    this.timeoutMs = opts.timeoutMs ?? positiveEnv("BP_SUBAGENT_TIMEOUT_MS", 1_200_000);
     this.maxCopyBytes = opts.maxCopyBytes ?? positiveEnv("BP_SUBAGENT_COPY_MAX_BYTES", 256 * 1024 * 1024);
   }
 
