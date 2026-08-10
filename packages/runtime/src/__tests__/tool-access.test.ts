@@ -70,7 +70,21 @@ describe("tool access control (§9)", () => {
     expect(startDescription).toContain("do not sleep or poll");
     expect(startDescription).toContain("job_key");
     expect(startDescription).toContain("wakes you exactly when");
+    expect((createRunInBackgroundTool(d).parameters.required as string[])).toContain("timeout_ms");
     expect(createBackgroundJobTool(d).description).toContain("Do not repeatedly call list/get");
+  });
+
+  it("rejects background work without an explicit deadline", async () => {
+    const starts: unknown[] = [];
+    const d: ToolDeps = {
+      ...deps("engineer"),
+      runInBackground: async (input) => { starts.push(input); return { id: "job_test" }; },
+    };
+    const tool = createRunInBackgroundTool(d);
+
+    await expect(tool.execute({ job_key: "training", description: "train", command: "python train.py" }))
+      .resolves.toMatchObject({ isError: true });
+    expect(starts).toEqual([]);
   });
 
   it("dispatch_task and complete_task expose stable task-oriented contracts", async () => {

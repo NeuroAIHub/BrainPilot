@@ -52,7 +52,7 @@ describe("Monitor runtime integration", () => {
       toolNames.push(params.systemTools.map((tool) => tool.name));
       return mockAgentFactory(params);
     };
-    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const manager = new SessionManager({ persist: false, agentFactory: factory, runtimeCapabilities: [] });
     const session = await manager.createSession();
     await manager.sendMessage(session.id, "hello");
     await waitFor(() => toolNames.length > 0);

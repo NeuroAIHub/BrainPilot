@@ -15,13 +15,13 @@ import {
 } from "../system-plugins.js";
 
 describe("bundled system plugins", () => {
-  it("loads Auditor and GoT by default from their npm packages", async () => {
+  it("loads all official workflow plugins by default from their npm packages", async () => {
     const plugins = loadBundledSystemPlugins({});
     const snapshot = snapshotSystemPlugins(plugins);
     expect(systemPluginEnabled(snapshot, AUDITOR_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, GOT_PLUGIN_ID)).toBe(true);
-    expect(systemPluginEnabled(snapshot, MONITOR_PLUGIN_ID)).toBe(false);
-    expect(systemPluginEnabled(snapshot, BACKGROUND_JOBS_PLUGIN_ID)).toBe(false);
+    expect(systemPluginEnabled(snapshot, MONITOR_PLUGIN_ID)).toBe(true);
+    expect(systemPluginEnabled(snapshot, BACKGROUND_JOBS_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, RESEARCH_PLUGIN_ID)).toBe(true);
     const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
     expect(principalSkills).toHaveLength(1);

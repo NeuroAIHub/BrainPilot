@@ -357,12 +357,12 @@ describe("plugin marketplace control plane", () => {
   it("publishes the official Monitor capability only while its plugin is enabled", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-"));
     const id = "org.brainpilot.monitor";
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor", "builtin.backgroundJobs"]);
     expect((await installPlugin(dataDir, id))?.verified).toBe(true);
     await setPluginEnabled(dataDir, id, true);
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor"]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor", "builtin.backgroundJobs"]);
     await setPluginEnabled(dataDir, id, false);
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.backgroundJobs"]);
   });
 
   it("publishes the official Background Jobs capability only while enabled", async () => {
@@ -370,9 +370,9 @@ describe("plugin marketplace control plane", () => {
     const id = "org.brainpilot.background-jobs";
     expect((await installPlugin(dataDir, id))?.verified).toBe(true);
     await setPluginEnabled(dataDir, id, true);
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.backgroundJobs"]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor", "builtin.backgroundJobs"]);
     await setPluginEnabled(dataDir, id, false);
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor"]);
   });
   it("requires per-version trust before enabling executable Autoresearch", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-autoresearch-"));
@@ -403,7 +403,8 @@ describe("plugin marketplace control plane", () => {
       headers: { "content-type": "application/json" },
       body: "{}",
     });
-    expect(calls.find((call) => call.url.endsWith("/runtime/capabilities"))?.body).toBe('{"capabilities":[]}');
+    expect(calls.find((call) => call.url.endsWith("/runtime/capabilities"))?.body)
+      .toBe('{"capabilities":["builtin.monitor","builtin.backgroundJobs"]}');
 
     const id = "org.brainpilot.monitor";
     await app.request("/api/plugins/install", {
@@ -416,6 +417,6 @@ describe("plugin marketplace control plane", () => {
       headers: { "content-type": "application/json" },
       body: JSON.stringify({ enabled: true }),
     });
-    expect(calls.at(-1)?.body).toBe('{"capabilities":["builtin.monitor"]}');
+    expect(calls.at(-1)?.body).toBe('{"capabilities":["builtin.monitor","builtin.backgroundJobs"]}');
   });
 });

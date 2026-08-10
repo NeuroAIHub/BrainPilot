@@ -40,7 +40,7 @@ describe("Background Jobs runtime integration", () => {
     const session = await manager.createSession();
     await manager.sendMessage(
       session.id,
-      `[[tool:run_in_background {"job_key":"training-b","description":"train B","command":"printf 'progress\\n'; sleep 0.3"}]]`,
+      `[[tool:run_in_background {"job_key":"training-b","description":"train B","command":"printf 'progress\\n'; sleep 0.3","timeout_ms":2000}]]`,
       "engineer",
     );
     expect(toolNames.get("engineer")).toEqual(expect.arrayContaining(["run_in_background", "background_job"]));
@@ -60,7 +60,7 @@ describe("Background Jobs runtime integration", () => {
       tools.set(params.agentName, params.systemTools.map((tool) => tool.name));
       return mockAgentFactory(params);
     };
-    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const manager = new SessionManager({ persist: false, agentFactory: factory, runtimeCapabilities: [] });
     const session = await manager.createSession();
     await manager.sendMessage(session.id, "hello", "engineer");
     expect(tools.get("engineer")).not.toContain("run_in_background");
@@ -70,6 +70,24 @@ describe("Background Jobs runtime integration", () => {
     await (manager as unknown as { ensureAgent(sessionId: string, name: string): Promise<unknown> })
       .ensureAgent(session.id, "experimentalist");
     expect(tools.get("experimentalist")).toContain("run_in_background");
+    manager.shutdown();
+  });
+
+  it("injects the shared execution contract into Bash-enabled agents", async () => {
+    const prompts = new Map<string, string>();
+    const factory: AgentSessionFactory = async (params) => {
+      prompts.set(params.agentName, params.systemPrompt);
+      return mockAgentFactory(params);
+    };
+    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const session = await manager.createSession();
+
+    await manager.sendMessage(session.id, "inspect", "engineer");
+    expect(prompts.get("engineer")).toContain("Every `bash` call must explicitly set `timeout`");
+    expect(prompts.get("engineer")).toContain("must use `run_in_background`");
+
+    await manager.sendMessage(session.id, "research", "librarian");
+    expect(prompts.get("librarian")).not.toContain("Every `bash` call must explicitly set `timeout`");
     manager.shutdown();
   });
 
@@ -84,7 +102,7 @@ describe("Background Jobs runtime integration", () => {
     manager.subscribe(session.id, (event) => events.push(event));
     await manager.sendMessage(
       session.id,
-      `[[tool:run_in_background {"job_key":"long-job","description":"long job","command":"while :; do sleep 1; done"}]]`,
+      `[[tool:run_in_background {"job_key":"long-job","description":"long job","command":"while :; do sleep 1; done","timeout_ms":60000}]]`,
       "engineer",
     );
     await waitFor(() => events.some((event) => event.type === "CUSTOM"

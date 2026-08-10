@@ -391,10 +391,10 @@ export function createRunInBackgroundTool(deps: ToolDeps): SystemTool {
         job_key: { type: "string", minLength: 1, maxLength: 160, description: "Stable key for duplicate prevention, for example experiment-b-training" },
         description: { type: "string", minLength: 1, maxLength: 200 },
         command: { type: "string", minLength: 1, maxLength: 16_000 },
-        timeout_ms: { type: "number", minimum: 1_000, maximum: 86_400_000, description: "Default 1 hour; maximum 24 hours" },
+        timeout_ms: { type: "number", minimum: 1_000, maximum: 86_400_000, description: "Required job deadline in milliseconds; maximum 24 hours" },
         replace_existing: { type: "boolean", description: "Stop the active job with the same job_key before starting this one" },
       },
-      required: ["job_key", "description", "command"],
+      required: ["job_key", "description", "command", "timeout_ms"],
     },
     execute: async (params) => {
       if (!deps.runInBackground) return { ...ok("Background Jobs plugin is not enabled for this session"), isError: true };
@@ -402,12 +402,21 @@ export function createRunInBackgroundTool(deps: ToolDeps): SystemTool {
       const description = typeof params.description === "string" ? params.description.trim() : "";
       const command = typeof params.command === "string" ? params.command.trim() : "";
       if (!jobKey || !description || !command) return { ...ok("job_key, description, and command are required"), isError: true };
+      const timeoutMs = params.timeout_ms;
+      if (
+        typeof timeoutMs !== "number"
+        || !Number.isFinite(timeoutMs)
+        || timeoutMs < 1_000
+        || timeoutMs > 86_400_000
+      ) {
+        return { ...ok("timeout_ms is required and must be between 1000 and 86400000"), isError: true };
+      }
       try {
         const job = await deps.runInBackground({
           jobKey,
           description,
           command,
-          ...(typeof params.timeout_ms === "number" ? { timeoutMs: params.timeout_ms } : {}),
+          timeoutMs,
           ...(typeof params.replace_existing === "boolean" ? { replaceExisting: params.replace_existing } : {}),
         });
         return ok(JSON.stringify(job, null, 2));

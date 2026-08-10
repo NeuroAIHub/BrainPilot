@@ -181,6 +181,10 @@ const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
   },
 ];
 const TEST_PLUGIN_SOURCES = new Set<string>();
+const DEFAULT_RUNTIME_TOOL_PLUGINS = [
+  { id: "org.brainpilot.monitor", capability: "builtin.monitor" },
+  { id: "org.brainpilot.background-jobs", capability: "builtin.backgroundJobs" },
+] as const;
 
 export function pluginsDir(dataDir: string): string {
   return path.join(dataDir, "plugins");
@@ -551,11 +555,19 @@ export async function listInstalledPlugins(dataDir: string): Promise<InstalledPl
 }
 
 export async function listEnabledRuntimeTools(dataDir: string): Promise<string[]> {
-  return [...new Set((await listInstalledPlugins(dataDir)).flatMap((plugin) =>
-    plugin.enabled && plugin.compatibility?.compatible !== false
-      ? (plugin.manifest.contributes?.runtimeTools ?? []).map((tool) => tool.capability)
-      : [],
-  ))];
+  const installed = await listInstalledPlugins(dataDir);
+  const capabilities = new Set<string>();
+  for (const defaultPlugin of DEFAULT_RUNTIME_TOOL_PLUGINS) {
+    const override = installed.find((plugin) => plugin.manifest.id === defaultPlugin.id);
+    if (!override || (override.enabled && override.compatibility?.compatible !== false)) {
+      capabilities.add(defaultPlugin.capability);
+    }
+  }
+  for (const plugin of installed) {
+    if (!plugin.enabled || plugin.compatibility?.compatible === false) continue;
+    for (const tool of plugin.manifest.contributes?.runtimeTools ?? []) capabilities.add(tool.capability);
+  }
+  return [...capabilities];
 }
 
 export interface EnabledRuntimeExtension {
@@ -1068,7 +1080,7 @@ export async function installPlugin(dataDir: string, id: string, requestedVersio
       manifest: release.manifest,
       publisher: entry.publisher,
       verified: entry.verified === true,
-      enabled: false,
+      enabled: DEFAULT_RUNTIME_TOOL_PLUGINS.some((plugin) => plugin.id === release.manifest.id),
       installedAt: new Date().toISOString(),
       activeVersion: release.version,
       sourceFormat: entry.sourceFormat ?? "brainpilot",

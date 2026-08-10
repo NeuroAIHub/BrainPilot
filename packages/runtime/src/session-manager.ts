@@ -108,6 +108,7 @@ import {
 } from "./system-plugins.js";
 import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
 import { BackgroundJobManager, type BackgroundJobCompletion } from "./background-job-manager.js";
+import { withExecutionToolContract } from "./execution-contract.js";
 import { loadRuntimePluginExtension } from "./runtime-plugins.js";
 import { makeWorkspaceLeaseGuardExt } from "./extensions/workspace-lease-guard.js";
 
@@ -624,7 +625,9 @@ export class SessionManager {
       opts.routerSkillsDir ?? join(this.dataRoot, "bp_template", "skills-router");
     this.bundledSystemPlugins = loadBundledSystemPlugins(opts.systemPluginEnv ?? process.env);
     this.defaultSystemPlugins = snapshotSystemPlugins(this.bundledSystemPlugins);
-    for (const capability of opts.runtimeCapabilities ?? []) this.runtimeCapabilities.add(capability);
+    for (const capability of opts.runtimeCapabilities ?? ["builtin.monitor", "builtin.backgroundJobs"]) {
+      this.runtimeCapabilities.add(capability);
+    }
     this.runtimeExtensions = [...(opts.runtimeExtensions ?? [])];
     for (const plugin of this.defaultSystemPlugins) {
       if (plugin.reason === "experiment-override") {
@@ -2493,6 +2496,7 @@ export class SessionManager {
     if (args.profile.modelId && providerConfig?.modelId !== args.profile.modelId) {
       throw new Error(`subagent profile model is not available in this provider: ${args.profile.modelId}`);
     }
+    const allowedToolNames = [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)];
     return this.agentFactory({
       sessionId: entry.id,
       agentName: args.childId,
@@ -2500,8 +2504,8 @@ export class SessionManager {
       historyPath: args.historyPath,
       cwd: args.cwd,
       systemTools,
-      allowedToolNames: [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)],
-      systemPrompt: withLanguageDirective(args.profile.prompt),
+      allowedToolNames,
+      systemPrompt: withExecutionToolContract(withLanguageDirective(args.profile.prompt), allowedToolNames),
       suppressCoordinationHooks: true,
       skillPaths,
       managedPathRoots: { cwd: args.cwd, persistentDir: join(args.cwd, ".persistent-unavailable") },
@@ -2670,12 +2674,15 @@ export class SessionManager {
       cwd: sessionCwd,
       systemTools: agentTools,
       allowedToolNames,
-      systemPrompt: await this.loadPersona(
-        name,
-        role,
-        entry.domainResources,
-        entry.systemPlugins,
-        skillSearchEnabled,
+      systemPrompt: withExecutionToolContract(
+        await this.loadPersona(
+          name,
+          role,
+          entry.domainResources,
+          entry.systemPlugins,
+          skillSearchEnabled,
+        ),
+        allowedToolNames,
       ),
       skillPaths,
       extensionFactories,
