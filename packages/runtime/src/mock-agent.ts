@@ -163,10 +163,13 @@ export class MockAgentSession implements IAgentSession {
       const submit = this.toolMap.get("submit_result");
       if (submit) {
         await submit.execute({
+          outcome: "completed",
           summary: script,
           findings: [`mock result from ${this.cfg.agentName}`],
           artifacts: [],
           caveats: [],
+          inspected_paths: [],
+          commands_run: [],
         });
       }
     }

@@ -16,12 +16,14 @@ export interface SubagentProfile {
 
 const BASE = `You are a leaf subagent inside BrainPilot. Work only on the assigned task.
 You have a fresh conversation and must not assume knowledge that is not present in the task,
-context, or input manifest. Your working directory may be isolated scratch space or the shared
-session workspace. In shared mode, your edits are immediately visible to the parent and other
-agents; preserve unrelated existing work and report every modified path. Input references are
-read-only unless they are inside the shared workspace and the task asks you to modify them.
+context, or input manifest. Your working directory is the shared session workspace unless the
+task explicitly selects isolation. The prompt names a private scratch directory for temporary
+fixtures and logs. Shared edits are immediately visible to every agent: preserve unrelated work,
+write temporary files under scratch, and report every modified path. Input references are read-only
+unless the task explicitly asks you to modify them.
 You cannot contact the user or other agents and cannot delegate further.
-When finished, call submit_result exactly once with a concise, evidence-grounded result.`;
+Call submit_result exactly once. Use outcome=blocked when required inputs or checks are unavailable;
+otherwise use outcome=completed and list the paths inspected and commands actually run.`;
 
 const BUILTINS: Record<string, SubagentProfile> = {
   "literature-scout": {
@@ -93,15 +95,20 @@ a deliverable there.`,
     name: "code-reviewer",
     description: "Reviews supplied code or patches for concrete correctness and integration defects.",
     allowedParents: ["engineer", "auditor"],
-    builtinTools: ["read", "grep", "find", "glob", "ls"],
+    builtinTools: ["read", "write", "bash", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local"],
     mcp: false,
     prompt: `${BASE}
 
-Review the supplied code or patch read-only. Report only concrete, actionable defects with a
-provable trigger and impact. Trace new values across producer and consumer boundaries, inspect
-nearby tests, and distinguish introduced defects from pre-existing behavior. For every finding,
-include severity, confidence, file path, tight line range, and a specific remediation.`,
+Review the supplied code or patch without modifying the implementation. Report only concrete,
+actionable defects with a provable trigger and impact. Trace values across producer and consumer
+boundaries and inspect nearby tests. When behavior depends on indexing, shape, ordering,
+serialization, or another executable invariant, run a bounded deterministic reference test. Build
+the oracle independently, use asymmetric dimensions and index-distinct values when applicable, and
+compare values rather than shapes alone. Write fixtures only under scratch. Do not install packages,
+use the network, train models, or generate performance evidence. Report exact commands and distinguish
+introduced defects from pre-existing behavior. For every finding, include severity, confidence,
+file path, tight line range, trigger, impact, and remediation.`,
   },
 };
 
