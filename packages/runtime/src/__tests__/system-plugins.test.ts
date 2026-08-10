@@ -64,6 +64,9 @@ describe("bundled system plugins", () => {
     expect(auditorReview).toContain("call `spawn_subagent` once with two to");
     expect(auditorReview).toContain("Children return evidence and candidate findings only");
     expect(auditorReview).toContain("shared session workspace by default");
+    expect(auditorReview).toContain("representative set covering the main types and boundary cases");
+    expect(auditorReview).toContain("each assigned path with `realpath`");
+    expect(auditorReview).toContain("requests such as checking every number");
     expect(auditorReview).toContain("returns `blocked`");
     expect(auditorReview).toContain("`operational validity` and `empirical adequacy`");
     expect(auditorReview).toContain("Write the complete report to a new path under");
@@ -81,6 +84,9 @@ describe("bundled system plugins", () => {
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
     expect(responseTemplate).toContain("## Compact completion reply");
     expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");
+    const revisionLoop = await readFile(join(auditorSkill, "references", "revision-loop.md"), "utf8");
+    expect(revisionLoop).toContain("Previously confirmed checks remain valid");
+    expect(revisionLoop).toContain("Do not repeat an expensive check merely to");
     expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });
 

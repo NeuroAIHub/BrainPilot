@@ -22,6 +22,16 @@ as `pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` check
 requires `REVISE` or `BLOCK`, never `PASS`. Do not choose a method or redesign
 the work.
 
+Scope the review to the claims PI intends to deliver and the evidence dependencies
+needed to establish them. Check headline results, decision thresholds, leakage
+risks, conclusion-changing metrics, and critical implementation paths completely.
+For homogeneous supporting material such as repeated run files, table rows, or
+figures, inspect a representative set covering the main types and boundary cases.
+Expand that set only when a discrepancy, anomaly, or shared dependency makes the
+remaining material decision-relevant. A first review is not an independent full
+reproduction by default, and future hardening is out of scope unless it can
+undermine a current claim.
+
 For model-suitability, generalization, robustness, or selection claims, explicitly
 report two separate checks: `operational validity` and `empirical adequacy`.
 Protocol compliance, packaging checks, synthetic tensors, random-label
@@ -46,13 +56,21 @@ Use the least-capable suitable profile:
 - `repo-scout` only when code or artifact dependencies must first be mapped.
 
 Subagents use the shared session workspace by default. Before dispatch, verify
-that every assigned workspace path exists and give paths relative to that root.
-Use isolated mode only for untrusted material or explicit isolation, and pass
-every required file through `inputs`. Give each child only its assigned evidence
-paths, relevant checklist, and claims. Avoid duplicate review of one risk surface.
-Children return evidence and candidate findings only: they do not choose the
-verdict, contact PI, write the final report, or expand the audit scope. If a
-child returns `blocked`, fails, inspects no assigned path, or omits a required
+each assigned path with `realpath` and confirm it remains inside its declared
+workspace, data, or shared root. For shared-workspace files, give relative paths
+in the task instead of duplicating them through `inputs`. If a workspace symlink
+escapes its root, use an accessible declared data scope or prepared artifact;
+otherwise mark that check `unverified` before dispatch. Use isolated mode only
+for untrusted material or explicit isolation, and pass every required file
+through `inputs`.
+
+Give each child one risk surface, a finite claim list, exact evidence paths, and
+a bounded checklist sized to finish within its run budget. Do not assign open
+requests such as checking every number, figure, run, and variant. Avoid duplicate
+review of one risk surface, and use `repo-scout` only when dependencies are not
+already known. Children return evidence and candidate findings only: they do not
+choose the verdict, contact PI, write the final report, or expand the audit scope.
+If a child returns `blocked`, fails, inspects no assigned path, or omits a required
 check, inspect that bounded surface yourself or mark it `unverified`; never treat
 missing access or output as a pass.
 

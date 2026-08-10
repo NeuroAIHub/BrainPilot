@@ -10,8 +10,11 @@ evidence, and absence of evidence is `unverified`, not confirmation.
 
 ## Checks
 
-1. Verify every material number, metric, sample count, configuration, artifact,
-   and completion claim against a specific file, line, log, or structured output.
+1. Verify every decision-relevant number and every quantitative or completion
+   claim PI intends to deliver against a specific file, line, log, or structured
+   output. For homogeneous supporting numbers or artifacts, inspect a
+   representative set covering the main types and boundary cases, expanding it
+   only when a discrepancy or shared dependency makes the remainder material.
 2. Verify that cited sources exist, support the exact proposition, and are not
    overstated beyond population, method, or result scope.
 3. Reconcile conflicting Expert reports and distinguish direct evidence,
