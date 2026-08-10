@@ -25,6 +25,7 @@ import type {
   ProviderProfile,
   ProviderApi,
   ProviderAdapter,
+  ProviderContextWindow,
   FileEntry,
   FileContent,
   TraceNode,
@@ -68,6 +69,7 @@ export type {
   ProviderProfile,
   ProviderApi,
   ProviderAdapter,
+  ProviderContextWindow,
   FileEntry,
   FileContent,
   TraceNode,
@@ -297,6 +299,8 @@ export interface ProviderCreate {
   adapter?: ProviderAdapter;
   apiKey: string;
   models?: string[];
+  contextWindow?: ProviderContextWindow;
+  reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -309,6 +313,9 @@ export interface ProviderUpdate {
   adapter?: ProviderAdapter;
   apiKey?: string;
   models?: string[];
+  /** null clears an explicit preset and restores automatic resolution. */
+  contextWindow?: ProviderContextWindow | null;
+  reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -507,6 +514,10 @@ interface RawProviderProfile {
   api?: string;
   adapter?: string;
   models?: string[];
+  context_window?: number;
+  contextWindow?: number;
+  reasoning_models?: string[];
+  reasoningModels?: string[];
   icon?: string;
   icon_color?: string;
   iconColor?: string;
@@ -806,6 +817,10 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     adapter: (raw.adapter ?? "auto") as ProviderAdapter,
     isShared: Boolean(raw.isShared ?? raw.is_shared),
     models: Array.isArray(raw.models) ? raw.models : [],
+    contextWindow: (raw.contextWindow ?? raw.context_window) as ProviderContextWindow | undefined,
+    reasoningModels: Array.isArray(raw.reasoningModels)
+      ? raw.reasoningModels
+      : Array.isArray(raw.reasoning_models) ? raw.reasoning_models : (Array.isArray(raw.models) ? raw.models : []),
     icon: stringValue(raw.icon, "circle"),
     iconColor: stringValue(raw.iconColor ?? raw.icon_color, "#111111"),
     notes: stringValue(raw.notes),
@@ -827,6 +842,8 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
     adapter: data.adapter,
     api_key: data.apiKey,
     models: data.models,
+    context_window: data.contextWindow,
+    reasoning_models: data.reasoningModels,
     icon: data.icon,
     icon_color: data.iconColor,
     notes: data.notes,
@@ -841,6 +858,8 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
     ...(data.adapter !== undefined ? { adapter: data.adapter } : {}),
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
+    ...(data.contextWindow !== undefined ? { context_window: data.contextWindow } : {}),
+    ...(data.reasoningModels !== undefined ? { reasoning_models: data.reasoningModels } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),
     ...(data.iconColor !== undefined ? { icon_color: data.iconColor } : {}),
     ...(data.notes !== undefined ? { notes: data.notes } : {}),

@@ -16,7 +16,12 @@
  */
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
-import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
+import {
+  resolveCompactionSettings,
+  resolveGatewayModel,
+  resolveSessionModel,
+  type PiProviderSdk,
+} from "./pi-provider.js";
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeTaskContextExt } from "./extensions/task-context.js";
@@ -61,12 +66,14 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // #365: Pi performs retries inside the same LLM turn, before any subsequent
   // tool call can run. Pi increases the fixed 2s base exponentially, yielding
   // bounded waits of 2s, 4s, 8s, 16s, and 32s.
+  const compaction = resolveCompactionSettings(params.providerConfig?.contextWindow);
   settingsManager.applyOverrides({
     retry: {
       enabled: true,
       maxRetries: PROVIDER_MAX_RETRIES,
       baseDelayMs: PROVIDER_RETRY_BASE_DELAY_MS,
     },
+    ...(compaction ? { compaction } : {}),
   });
 
   // Override Pi's built-in bash with the public factory so each invocation
@@ -383,6 +390,7 @@ interface PiSdk {
     ): {
       applyOverrides(overrides: {
         retry: { enabled: boolean; maxRetries: number; baseDelayMs: number };
+        compaction?: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
       }): void;
       getShellCommandPrefix(): string | undefined;
       getShellPath(): string | undefined;

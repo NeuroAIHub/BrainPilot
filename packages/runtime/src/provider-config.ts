@@ -23,6 +23,8 @@ export interface ProviderConfig {
   adapter?: string;
   apiKey: string;
   modelId?: string;
+  contextWindow?: number;
+  reasoningEnabled?: boolean;
 }
 
 interface StoredProfile {
@@ -32,6 +34,8 @@ interface StoredProfile {
   adapter?: string;
   apiKey?: string;
   models?: string[];
+  contextWindow?: number;
+  reasoningModels?: string[];
 }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -80,5 +84,9 @@ export async function resolveSessionProvider(
     adapter: profile.adapter || undefined,
     apiKey: profile.apiKey,
     modelId,
+    contextWindow: profile.contextWindow,
+    reasoningEnabled: modelId
+      ? (profile.reasoningModels ?? profile.models ?? []).includes(modelId)
+      : false,
   };
 }
