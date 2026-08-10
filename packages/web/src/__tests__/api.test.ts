@@ -144,6 +144,32 @@ describe("api.sessions.create — unwraps the { id, session } envelope (#96)", (
     expect(out.id).toBe("abc");
     expect(out.title).toBe("bare title");
   });
+
+  it("sends the selected session-wide thinking level", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { id: "think", session: { id: "think", title: "t", thinkingLevel: "high" } },
+      }),
+    );
+    await api.sessions.create("t", { thinkingLevel: "high" });
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toMatchObject({
+      thinkingLevel: "high",
+    });
+  });
+
+  it("updates the shared thinking level on an existing session", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { id: "think", title: "t", thinkingLevel: "low" },
+      }),
+    );
+    await expect(api.sessions.updateThinking("think", "low")).resolves.toMatchObject({ thinkingLevel: "low" });
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      thinkingLevel: "low",
+    });
+  });
 });
 
 describe("api.sessions.respondToInput", () => {

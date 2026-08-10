@@ -13,6 +13,7 @@
 import type {
   Session,
   DomainResources,
+  ThinkingLevel,
   AgentStatus,
   SubagentStatus,
   SessionStateSnapshot,
@@ -57,6 +58,7 @@ import type {
 export type {
   Session,
   DomainResources,
+  ThinkingLevel,
   AgentStatus,
   SubagentStatus,
   SessionStateSnapshot,
@@ -478,6 +480,8 @@ interface RawSession {
   updatedAt?: string;
   domain_resources?: unknown;
   domainResources?: unknown;
+  thinking_level?: unknown;
+  thinkingLevel?: unknown;
 }
 
 interface RawFileEntry {
@@ -707,6 +711,9 @@ export function normalizeSession(raw: RawSession): Session {
     updatedAt: isoValue(raw.updatedAt ?? raw.updated_at ?? raw.createdAt ?? raw.created_at),
     domainResources:
       (raw.domainResources ?? raw.domain_resources) === "base" ? "base" : "full",
+    thinkingLevel: ["off", "low", "medium", "high"].includes(String(raw.thinkingLevel ?? raw.thinking_level))
+      ? (raw.thinkingLevel ?? raw.thinking_level) as Session["thinkingLevel"]
+      : "medium",
   };
 }
 

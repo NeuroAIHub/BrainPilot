@@ -156,6 +156,7 @@ export function resolveGatewayModel(sdk: PiProviderSdk, agentDir: string): Resol
           models: [
             {
               id: modelId,
+              reasoning: true,
               input: ["text"],
               contextWindow: intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
               maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
@@ -266,6 +267,7 @@ export function resolveSessionModel(
           models: [
             {
               id: cfg.modelId,
+              reasoning: cfg.reasoningEnabled ?? true,
               input: ["text"],
               contextWindow:
                 cfg.contextWindow ?? intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,

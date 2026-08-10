@@ -5,7 +5,7 @@
  * only runtime-internal shapes (the Pi-SDK-facing agent abstraction, config,
  * dependency bundles) that are NOT part of the wire contract.
  */
-import type { AgUiEvent, AgentState, TraceGraph } from "@brainpilot/protocol";
+import type { AgUiEvent, AgentState, ThinkingLevel, TraceGraph } from "@brainpilot/protocol";
 
 /** Agent role — drives tool access control (§9) and hook behavior (§8). */
 export type AgentRole = "principal" | "expert" | "trace";
@@ -41,6 +41,8 @@ export interface IAgentSession {
   subscribe(listener: (event: PiAgentEvent) => void): () => void;
   /** Send a prompt. Resolves when the run completes (or is aborted). */
   prompt(text: string, opts?: PromptOptions): Promise<void>;
+  /** Update the shared Pi reasoning effort for future turns. */
+  setThinkingLevel(level: ThinkingLevel): void;
   /**
    * Hard-abort the active run. For the real Pi session this aborts the provider
    * stream AND awaits the agent returning to idle (SDK `AgentSession.abort()`
@@ -173,6 +175,8 @@ export type AgentSessionFactory = (params: {
   allowedToolNames: string[];
   /** System prompt for the agent. */
   systemPrompt: string;
+  /** Session-wide reasoning effort shared by every agent. */
+  thinkingLevel: ThinkingLevel;
   /** Leaf sessions use submit_result and must not receive persistent-expert coordination hooks. */
   suppressCoordinationHooks?: boolean;
   /**

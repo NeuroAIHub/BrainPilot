@@ -90,6 +90,7 @@ describe("resolveGatewayModel", () => {
     expect(cfg.providers[GATEWAY_PROVIDER].api).toBe("anthropic-messages");
     // Key is referenced by env interpolation, never inlined.
     expect(cfg.providers[GATEWAY_PROVIDER].apiKey).toBe("$ANTHROPIC_API_KEY");
+    expect(cfg.providers[GATEWAY_PROVIDER].models[0].reasoning).toBe(true);
   });
 
   it("removes a trailing /v1 from the Anthropic gateway base URL (#416)", () => {

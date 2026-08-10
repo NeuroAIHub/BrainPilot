@@ -28,6 +28,10 @@ export const EXAMPLE_MODEL = "claude-sonnet-4-6";
 export const DomainResourcesSchema = z.enum(["full", "base"]);
 export type DomainResources = z.infer<typeof DomainResourcesSchema>;
 
+/** Shared reasoning effort for every agent in a session. */
+export const ThinkingLevelSchema = z.enum(["off", "low", "medium", "high"]);
+export type ThinkingLevel = z.infer<typeof ThinkingLevelSchema>;
+
 export const SessionSchema = z.object({
   id: z.string(),
   title: z.string(),
@@ -35,6 +39,8 @@ export const SessionSchema = z.object({
   updatedAt: z.string(),
   /** Optional for compatibility with older runtimes; new runtimes always emit it. */
   domainResources: DomainResourcesSchema.optional(),
+  /** One reasoning effort shared by all agents in this session. */
+  thinkingLevel: ThinkingLevelSchema.optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 

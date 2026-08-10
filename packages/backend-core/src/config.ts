@@ -250,7 +250,7 @@ export async function updateProfile(
   if (!profile) return undefined;
   // apiKey omitted in patch → keep existing (UI sends masked key, not the real one).
   const writable = profile as unknown as Record<string, unknown>;
-  for (const k of ["name", "baseUrl", "api", "adapter", "models", "icon", "iconColor", "notes"] as const) {
+  for (const k of ["name", "baseUrl", "api", "adapter", "models", "reasoningModels", "icon", "iconColor", "notes"] as const) {
     if (patch[k] !== undefined) writable[k] = patch[k];
   }
   if (patch.contextWindow === null) delete profile.contextWindow;
