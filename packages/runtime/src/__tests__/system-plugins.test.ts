@@ -58,9 +58,14 @@ describe("bundled system plugins", () => {
     expect(principalInstructions).toContain("never immediately claim that the");
     expect(principalInstructions).toContain("task is complete");
     expect(principalInstructions).toContain("Only `Verdict: PASS`");
+    expect(principalInstructions).toContain("iteration ledger including rejected rounds");
+    expect(principalInstructions).toContain("evidence alone is not a complete audit target");
     const auditorInstructions = (await systemPluginInstructions(plugins, snapshot, "auditor")).join("\n");
     expect(auditorInstructions).toContain("Begin every completed audit reply");
     expect(auditorInstructions).toContain("PI must not claim the task is complete");
+    expect(auditorInstructions).toContain("audit the complete iteration history");
+    expect(auditorInstructions).toContain("short real-data run");
+    expect(auditorInstructions).toContain("bounded deterministic implementation checks");
     const auditorSkill = auditorSkills.find((path) => path.endsWith("audit-feedback-loop"))!;
     const auditorReview = await readFile(join(auditorSkill, "references", "auditor-review.md"), "utf8");
     expect(auditorReview).toContain("call `spawn_subagent` once with two to");

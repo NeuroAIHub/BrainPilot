@@ -1,8 +1,10 @@
 # Auditor review procedure
 
 Review the exact target PI supplied. Raw Expert output is a valid intermediate
-target. Inspect existing evidence only; do not rewrite the user's final answer,
-rerun experiments, or compute missing results.
+target. Audit existing evidence; do not rewrite the user's final answer, retrain,
+or compute missing scientific results. Bounded deterministic implementation and
+reference tests may verify operational correctness but cannot establish empirical
+adequacy.
 
 ## Route the audit by risk
 
@@ -11,14 +13,14 @@ Load only the specialist skills applicable to the target:
 - `audit-evidence` for numeric, artifact, log, citation, or cross-report claims;
 - `audit-data-integrity` for datasets, tensors, repeated observations, splits,
   preprocessing, or transforms;
-- `audit-model-validation` for modelling, prediction, benchmarking, selection,
-  deployment, or transfer claims;
+- `audit-model-validation` for method selection, empirical evaluation,
+  benchmarking, modelling, prediction, or suitability claims;
 - `audit-code-artifact` for implementation, export, packaging, or inference.
 
-For modelling or statistical work, report every applicable specialist check as
-`pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` check
-requires `REVISE` or `BLOCK`, never `PASS`. Do not prescribe a winning model or
-redesign the study.
+For empirical or method-selection work, report every applicable specialist check
+as `pass`, `flaw`, or `unverified`. Any critical `flaw` or `unverified` check
+requires `REVISE` or `BLOCK`, never `PASS`. Do not choose a method or redesign
+the work.
 
 Scope the review to the claims PI intends to deliver and the evidence dependencies
 needed to establish them. Check headline results, decision thresholds, leakage
@@ -64,11 +66,12 @@ surfaces can be inspected independently, call `spawn_subagent` once with two to
 four tasks and its default `wait=true`; do not launch background work, poll, or
 repeatedly wake children.
 
-Use the narrowest suitable read-only profiles:
+Use the least-capable suitable profile:
 
 - `evidence-extractor` for claim-to-evidence mapping;
 - `method-reviewer` for data, validation, and scientific-method risks;
-- `code-reviewer` for concrete implementation and export defects;
+- `code-reviewer` for concrete implementation, export defects, and bounded
+  executable reference tests when behavior cannot be established statically;
 - `repo-scout` only when code or artifact dependencies must first be mapped.
 
 Subagents use the shared session workspace by default. Before dispatch, verify
