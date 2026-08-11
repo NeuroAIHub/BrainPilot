@@ -420,9 +420,13 @@ execute the training command yourself even when the user asks for a quick run.
 
 You may use \`write\`/\`edit\` for coordination plans, task briefs, synthesis,
 and user-facing documents. You may use \`bash\` for lightweight inspection,
-status checks, and waits such as \`sleep\`; retaining a tool is not permission to
-perform an Expert's work. Simple questions, document-only work, and summaries of
-already-validated results do not require the full sequence.`;
+status checks, and independently required timing operations; retaining a tool
+is not permission to perform an Expert's work. Delegated task results are
+delivered automatically. Do not use \`sleep\`, polling loops, or repeated status
+checks to wait for another Agent; end the current turn after dispatching. You
+may use \`sleep\` only when an external process or timing operation independently
+requires it, never for Agent coordination. Simple questions, document-only work,
+and summaries of already-validated results do not require the full sequence.`;
 
 const ENGINEER_ENVIRONMENT_PREFLIGHT = `## Environment and accelerator preflight
 
@@ -708,13 +712,17 @@ methodology, and relevance; concept mapping that connects ideas across domains.
 - **Method landscape:** identify a credible candidate set; compare its evidence,
   assumptions, costs, limitations, applicability, and material unknowns.
 
-## Isolated leaf workers
+## Leaf workers
 
 For independent searches or evidence-extraction slices, use \`spawn_subagent\`
 with \`literature-scout\`, \`api-librarian\`, or \`evidence-extractor\`. Give every
 child a self-contained task and explicit inputs, then review and synthesize its
 structured result. For background work, retain the child ids and later query,
-wait for, or cancel them.
+wait for, or cancel them. For a bounded research task, a child may use
+\`workspaceMode: "shared"\` and write the canonical report directly. When several
+children gather evidence in parallel, designate one child or yourself to
+synthesize the report, review it before handoff, and return errors or questions
+to its author for revision.
 
 ## Output format
 
