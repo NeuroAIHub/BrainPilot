@@ -76,6 +76,7 @@ import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles
 import { materializeSkills } from "./materialize-skills.js";
 import { materializeKb } from "./materialize-kb.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
+import { withExecutionToolContract } from "./execution-contract.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import { isWindows } from "./platform.js";
 import {
@@ -2275,6 +2276,7 @@ export class SessionManager {
     if (args.profile.modelId && providerConfig?.modelId !== args.profile.modelId) {
       throw new Error(`subagent profile model is not available in this provider: ${args.profile.modelId}`);
     }
+    const allowedToolNames = [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)];
     return this.agentFactory({
       sessionId: entry.id,
       agentName: args.childId,
@@ -2282,8 +2284,8 @@ export class SessionManager {
       historyPath: args.historyPath,
       cwd: args.cwd,
       systemTools,
-      allowedToolNames: [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)],
-      systemPrompt: withLanguageDirective(args.profile.prompt),
+      allowedToolNames,
+      systemPrompt: withExecutionToolContract(withLanguageDirective(args.profile.prompt), allowedToolNames),
       suppressCoordinationHooks: true,
       skillPaths,
       managedPathRoots: { cwd: args.cwd, persistentDir: join(args.cwd, ".persistent-unavailable") },
@@ -2408,12 +2410,15 @@ export class SessionManager {
       cwd: sessionCwd,
       systemTools: agentTools,
       allowedToolNames,
-      systemPrompt: await this.loadPersona(
-        name,
-        role,
-        entry.domainResources,
-        entry.systemPlugins,
-        skillSearchEnabled,
+      systemPrompt: withExecutionToolContract(
+        await this.loadPersona(
+          name,
+          role,
+          entry.domainResources,
+          entry.systemPlugins,
+          skillSearchEnabled,
+        ),
+        allowedToolNames,
       ),
       skillPaths,
       compatPluginProjections: name === "principal"
