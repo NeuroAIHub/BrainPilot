@@ -113,7 +113,7 @@ describe("task completion delivery while the creator is running", () => {
 
     expect(observed.principalPrompts).toEqual(["START"]);
     expect(observed.principalFollowUps[0]).toContain(
-      '<task_event kind="completed" task_id="task_000001" from="librarian">',
+      '<task_event kind="replied" task_id="task_000001" from="librarian">',
     );
     expect(runErrors).toEqual([]);
 

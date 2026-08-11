@@ -2981,13 +2981,12 @@ export class SessionManager {
   /**
    * Aggregate lifecycle for every execution owned by the session. Unlike
    * runState this includes experts, Trace, subagents, delivery-loop handoffs,
-   * monitors, and background jobs so external harnesses can await quiescence.
+   * and delivery-loop handoffs so external harnesses can await quiescence.
    */
   private deriveWorkActive(entry: SessionEntry): boolean {
     if (this.deriveRunActive(entry)) return true;
     // Covers the acceptance→agent-running gap for a direct expert prompt.
     if (entry.activeRunId !== null) return true;
-    if (entry.monitorManager.hasRunning() || entry.backgroundJobManager.hasRunning()) return true;
     if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running")) return true;
     for (const agent of entry.agents.values()) {
       if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
