@@ -19,6 +19,23 @@ byte-passthrough) and, in hosted deployments, by the platform layer.
 
 All wire types come from `@brainpilot/protocol` (the zod SSOT).
 
+## Auditor experiment switch
+
+The built-in Auditor remains enabled by default. Backend experiments can
+disable it when starting the Runtime:
+
+```bash
+BP_EXPERIMENT_DISABLE_PLUGINS=org.brainpilot.auditor brainpilot up
+```
+
+For Docker or static deployments, set the same variable in the Runtime
+container/process environment.
+
+The assignment is frozen into each new session's `meta.json`; use a new session
+for each experiment arm. When disabled, the Runtime removes the Principal's
+Auditor workflow instructions and rejects creation or delegation to the Auditor
+agent. This beta has no frontend toggle.
+
 ## Persistent storage contract
 
 The runtime is single-user: reusable cross-session files live directly under

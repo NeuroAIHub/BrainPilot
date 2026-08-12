@@ -3,7 +3,12 @@ import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { parseEvent, type AgUiEvent } from "@brainpilot/protocol";
-import { SessionManager, warnOnDeprecatedPersistentUserId, resolveSharedDir } from "../session-manager.js";
+import {
+  SessionManager,
+  resolveAuditorEnabled,
+  warnOnDeprecatedPersistentUserId,
+  resolveSharedDir,
+} from "../session-manager.js";
 import {
   PERSISTENT_LAYOUT_MARKER,
   PERSISTENT_LAYOUT_STAGING,
@@ -124,6 +129,73 @@ describe("SessionManager (mock mode)", () => {
     expect(seen[0]).toContain("Principal Investigator");
     expect(seen[0]).not.toMatch(/^You are the principal agent/);
     expect(seen[0]).not.toContain("mcp__builtin__");
+    expect(seen[0]).toContain("## Pre-delivery audit (mandatory)");
+  });
+
+  it("enables Auditor by default and disables only its exact experiment id", () => {
+    expect(resolveAuditorEnabled({})).toBe(true);
+    expect(resolveAuditorEnabled({ BP_EXPERIMENT_DISABLE_PLUGINS: "org.example.other" })).toBe(true);
+    expect(resolveAuditorEnabled({
+      BP_EXPERIMENT_DISABLE_PLUGINS: "org.example.other, org.brainpilot.auditor",
+    })).toBe(false);
+  });
+
+  it("removes Auditor instructions and rejects agent creation when disabled", async () => {
+    const seen = new Map<string, string>();
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      seen.set(params.agentName, params.systemPrompt);
+      return mockAgentFactory(params);
+    };
+    const sm = new SessionManager({
+      persist: false,
+      agentFactory: spyFactory,
+      auditorEnabled: false,
+    });
+    const s = await sm.createSession();
+    await sm.sendMessage(s.id, "hi");
+    await waitFor(() => seen.has("principal"));
+
+    expect(seen.get("principal")).not.toMatch(/\bauditor\b/i);
+    expect(seen.get("principal")).not.toContain("Pre-delivery audit");
+    expect(seen.get("principal")).toContain(
+      "Review the draft against the supplied evidence before delivery.",
+    );
+    await sm.ensureAgent(s.id, "librarian");
+    expect(seen.get("librarian")).not.toMatch(/\bauditor\b/i);
+    await expect(sm.ensureAgent(s.id, "auditor")).rejects.toThrow(
+      "Auditor is disabled for this session",
+    );
+    expect(sm.listAgents(s.id).map((agent) => agent.name)).not.toContain("auditor");
+  });
+
+  it("freezes the Auditor assignment in persisted session metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-auditor-toggle-"));
+    try {
+      const disabled = new SessionManager({
+        dataRoot: root,
+        persist: true,
+        agentFactory: mockAgentFactory,
+        auditorEnabled: false,
+      });
+      const session = await disabled.createSession();
+      const meta = JSON.parse(
+        await readFile(join(root, ".bp", session.id, "meta.json"), "utf8"),
+      ) as { auditorEnabled?: boolean };
+      expect(meta.auditorEnabled).toBe(false);
+
+      const restored = new SessionManager({
+        dataRoot: root,
+        persist: true,
+        agentFactory: mockAgentFactory,
+        auditorEnabled: true,
+      });
+      expect(await restored.restoreFromDisk()).toContain(session.id);
+      await expect(restored.ensureAgent(session.id, "auditor")).rejects.toThrow(
+        "Auditor is disabled for this session",
+      );
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
   });
 
   it("keeps high-impact action authorization in PI and expert personas", () => {

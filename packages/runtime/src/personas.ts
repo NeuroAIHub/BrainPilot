@@ -68,6 +68,34 @@ export function withLanguageDirective(persona: string): string {
 }
 
 /**
+ * Remove the v0.1.2 Auditor workflow when a session disables that agent.
+ * Applied after loading an optional on-disk persona so prompts materialized
+ * from v0.1.2 do not keep instructing PI to call an unavailable agent.
+ */
+export function withoutAuditorInstructions(persona: string): string {
+  return persona
+    .replace(
+      /\r?\nDo NOT personally perform fabrication\/reliability audit on expert claims\.[\s\S]*?Wait for the audit before relying on those\s+claims\.\r?\n/,
+      "\n",
+    )
+    .replace(
+      / After the draft\/report exists, send it to the `auditor` when it\r?\ncontains hard claims that require verification\./,
+      " Review the draft against the supplied evidence before delivery.",
+    )
+    .replace(
+      /\r?\n## Pre-delivery audit \(mandatory\)\r?\n[\s\S]*?(?=\r?\n## User-facing communication style(?:\r?\n|$))/,
+      "\n",
+    )
+    .replace(/writer and\r?\nauditor can inspect/, "writer can inspect")
+    .replace(
+      / Do not ask the auditor to review raw expert output; the Principal\r?\nwill route your handoff to the writer first when a report-like deliverable is\r?\nneeded\./,
+      "",
+    )
+    .replace(", or audit workflow", "")
+    .replace(/\n{3,}/g, "\n\n");
+}
+
+/**
  * Persistent cross-session storage directive (#257; flattened by #287). Your
  * working directory is the per-session workspace — anything there is scoped to
  * THIS session. A separate persistent root, given here as an absolute path, is

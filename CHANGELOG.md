@@ -3,6 +3,20 @@
 This file records notable changes to the public BrainPilot release. For the complete commit
 history, follow the comparison links for each version.
 
+## [0.1.3-beta.0] - 2026-08-12
+
+This prerelease is based directly on `v0.1.2` and contains no intervening
+post-`v0.1.2` features.
+
+### Runtime
+
+- Added a backend-only experiment switch for the built-in Auditor. Auditor
+  remains enabled by default; set
+  `BP_EXPERIMENT_DISABLE_PLUGINS=org.brainpilot.auditor` before Runtime startup
+  to disable its Principal instructions and agent availability for new sessions.
+- Persisted the Auditor assignment per session so restored experiment sessions
+  retain their original enabled or disabled state.
+
 ## [0.1.2] - 2026-07-28
 
 This release improves tool-state accuracy, managed MCP configuration, knowledge-base packaging,
@@ -106,5 +120,6 @@ workflow, Graph of Trace, the built-in scientific skills library, provider confi
 integration, local CLI, web interface, and Docker sandbox support.
 
 [0.1.2]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.1...v0.1.2
+[0.1.3-beta.0]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.2...v0.1.3-beta.0
 [0.1.1]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.0

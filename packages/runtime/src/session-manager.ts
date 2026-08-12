@@ -47,6 +47,7 @@ import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
   personaFor,
+  withoutAuditorInstructions,
   withLanguageDirective,
   withPersistentRootDirective,
   withSharedRootDirective,
@@ -117,6 +118,21 @@ const DEFAULT_MAX_CONCURRENT_AGENTS = 4;
 const DEFAULT_USER_INPUT_TIMEOUT_MS = 5 * 60 * 1000;
 const MAX_OUTSTANDING_USER_INPUTS = 8;
 const MAX_USER_INPUT_ANSWER_LENGTH = 10_000;
+export const AUDITOR_PLUGIN_ID = "org.brainpilot.auditor";
+export const AUDITOR_DISABLE_ENV = "BP_EXPERIMENT_DISABLE_PLUGINS";
+
+/** Auditor is enabled unless its exact id appears in the experiment disable list. */
+export function resolveAuditorEnabled(
+  env: Record<string, string | undefined> = process.env,
+): boolean {
+  const disabled = new Set(
+    (env[AUDITOR_DISABLE_ENV] ?? "")
+      .split(",")
+      .map((item) => item.trim())
+      .filter(Boolean),
+  );
+  return !disabled.has(AUDITOR_PLUGIN_ID);
+}
 
 /**
  * #256 default upload size cap (1 GiB) when `BP_UPLOAD_MAX_BYTES` is unset.
@@ -250,6 +266,7 @@ interface SessionMeta {
   updatedAt?: string;
   lastActivityAt?: number;
   domainResources?: DomainResources;
+  auditorEnabled?: boolean;
 }
 
 interface SessionEntry {
@@ -287,6 +304,8 @@ interface SessionEntry {
   providerRef: SessionProviderRef;
   /** Frozen per-session domain-resource mode; never read from global state. */
   domainResources: DomainResources;
+  /** Frozen per-session Auditor experiment assignment. */
+  auditorEnabled: boolean;
   /**
    * Cumulative real token usage for this session: whole-session `total` plus a
    * per-agent breakdown (keyed by agent name). Fed by each MasAgent's `onUsage`
@@ -389,6 +408,8 @@ export interface SessionManagerOptions {
    * inject directly.
    */
   sharedDir?: string;
+  /** Override the default Auditor state; otherwise resolved from the experiment env. */
+  auditorEnabled?: boolean;
 }
 
 /** Roles inferred from agent name. */
@@ -459,6 +480,7 @@ export class SessionManager {
   private readonly agentFactory: AgentSessionFactory;
   private readonly persist: boolean;
   private readonly userInputTimeoutMs: number;
+  private readonly defaultAuditorEnabled: boolean;
   private lastActivityAt = 0;
 
   // #76: active mailbox delivery. A delivery loop drains a target agent's inbox
@@ -530,6 +552,7 @@ export class SessionManager {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
+    this.defaultAuditorEnabled = opts.auditorEnabled ?? resolveAuditorEnabled();
     this.userInputTimeoutMs =
       typeof opts.userInputTimeoutMs === "number"
         && Number.isFinite(opts.userInputTimeoutMs)
@@ -1163,6 +1186,7 @@ export class SessionManager {
     name: string,
     role: AgentRole,
     domainResources: DomainResources,
+    auditorEnabled: boolean,
     /**
      * #309: when false, strip router / skill_search teaching from the persona
      * (always-on Meta-Skills guidance is kept). Ignored when domainResources
@@ -1181,13 +1205,13 @@ export class SessionManager {
     // / on-disk prompt.md) so it also reaches users who scaffolded earlier, and
     // applies whether the persona came from disk or the built-in constant.
     const selected = base ?? personaFor(name, role);
-    let filtered = selected;
+    let filtered = auditorEnabled ? selected : withoutAuditorInstructions(selected);
     if (domainResources === "base") {
       // Stronger isolation: no skills, no router, no local KB instructions.
-      filtered = withoutDomainResourceInstructions(selected);
+      filtered = withoutDomainResourceInstructions(filtered);
     } else if (!skillSearchEnabled) {
       // #309: skill_search toggle off — hide router teaching only.
-      filtered = withoutRouterSkillInstructions(selected);
+      filtered = withoutRouterSkillInstructions(filtered);
     }
     let persona = withLanguageDirective(filtered);
     // #257: tell working agents (not the passive trace recorder) where the
@@ -1221,7 +1245,12 @@ export class SessionManager {
      * fresh ones, and `writeMeta` is skipped so the canonical file is not
      * clobbered with boot-time values. Public callers should not pass this.
      */
-    _restore?: { createdAt: string; updatedAt: string; lastActivityAt: number },
+    _restore?: {
+      createdAt: string;
+      updatedAt: string;
+      lastActivityAt: number;
+      auditorEnabled?: boolean;
+    },
   ): Promise<Session> {
     if (this.memWatchdog?.isOverSoftLimit()) {
       throw new Error("memory budget exceeded: refusing new session");
@@ -1245,6 +1274,7 @@ export class SessionManager {
     const lastActivityAt = _restore ? _restore.lastActivityAt : Date.now();
     const persistBase = this.persist ? this.bpDir(id) : undefined;
     const domainResources = resolveDomainResources(input.domainResources);
+    const auditorEnabled = _restore?.auditorEnabled ?? this.defaultAuditorEnabled;
 
     // Provider ref: explicit input wins; otherwise reuse an existing on-disk ref
     // (restore path) so reviving a session never clobbers its chosen model.
@@ -1286,6 +1316,7 @@ export class SessionManager {
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       domainResources,
+      auditorEnabled,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
       stats: emptySessionStats(id),
     };
@@ -1996,6 +2027,9 @@ export class SessionManager {
   async ensureAgent(sessionId: string, name: string): Promise<MasAgent> {
     const entry = this.sessions.get(sessionId);
     if (!entry) throw new Error(`session not found: ${sessionId}`);
+    if (name === "auditor" && !entry.auditorEnabled) {
+      throw new Error("agent unavailable: Auditor is disabled for this session");
+    }
     const existing = entry.agents.get(name);
     if (existing && existing.status !== "stopped") return existing;
 
@@ -2059,6 +2093,7 @@ export class SessionManager {
         name,
         role,
         entry.domainResources,
+        entry.auditorEnabled,
         skillSearchEnabled,
       ),
       skillPaths,
@@ -2686,6 +2721,7 @@ export class SessionManager {
       updatedAt: entry.updatedAt,
       lastActivityAt: entry.lastActivityAt,
       domainResources: entry.domainResources,
+      auditorEnabled: entry.auditorEnabled,
     };
     await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
     await writeFile(join(this.bpDir(entry.id), "meta.json"), JSON.stringify(meta, null, 2), "utf8").catch(() => {});
@@ -2886,6 +2922,8 @@ export class SessionManager {
           updatedAt: meta.updatedAt ?? now,
           lastActivityAt:
             typeof meta.lastActivityAt === "number" ? meta.lastActivityAt : Date.now(),
+          auditorEnabled:
+            typeof meta.auditorEnabled === "boolean" ? meta.auditorEnabled : undefined,
         },
       );
       return sid;
