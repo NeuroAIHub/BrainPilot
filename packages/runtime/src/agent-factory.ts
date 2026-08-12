@@ -23,6 +23,7 @@ import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeGoTContextExt } from "./extensions/got-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
+import { makeOpenAiToolSchemaCompatExt } from "./extensions/openai-tool-schema-compat.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
 import {
   installBrainPilotRetryClassifier,
@@ -166,6 +167,10 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
       }),
     );
   }
+  // #452: keep this LAST. Pi has already combined built-in, custom, MCP, and
+  // extension tools when before_provider_request runs, so one final rewrite
+  // fixes every active tool source without changing their canonical schemas.
+  extensionFactories.push(makeOpenAiToolSchemaCompatExt());
   const additionalExtensionPaths = params.compatPluginProjections
     ?.flatMap((projection) => projection.extensionPaths ?? []);
   const resourceLoader = new DefaultResourceLoader({
