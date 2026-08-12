@@ -86,8 +86,10 @@ export type AgentStatus = z.infer<typeof AgentStatusSchema>;
 
 export const SubagentRunStatusSchema = z.enum([
   "queued",
+  "waiting_for_capacity",
   "running",
   "succeeded",
+  "blocked",
   "failed",
   "cancelled",
   "timed_out",
@@ -266,9 +268,14 @@ export type SessionStats = z.infer<typeof SessionStatsSchema>;
  * (`CUSTOM:session_state`), push events, and `GET /sessions/:id/state`.
  */
 export const SessionStateSnapshotSchema = z.object({
+  /** Foreground PI lifecycle only; delegated/background work does not hold this active. */
   runState: z.object({
     active: z.boolean(),
     runId: z.string().nullable(),
+  }),
+  /** Aggregate lifecycle for all work owned by the session. */
+  workState: z.object({
+    active: z.boolean(),
   }),
   agents: z.array(AgentStatusSchema),
   /** Optional for compatibility with runtimes predating isolated subagents. */

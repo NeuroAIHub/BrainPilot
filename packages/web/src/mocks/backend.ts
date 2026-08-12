@@ -482,6 +482,7 @@ export const mockBackend = {
     await wait(80);
     return {
       runState: { active: false, runId: null },
+      workState: { active: false },
       agents: [
         { name: "principal", status: "idle", task: "Ready for a research prompt", updatedAt: new Date().toISOString(), alive: true },
         { name: "librarian", status: "idle", task: "Monitoring literature context", updatedAt: new Date().toISOString(), alive: true },

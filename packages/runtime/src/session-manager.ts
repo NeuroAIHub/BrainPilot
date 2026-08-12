@@ -46,7 +46,7 @@ import {
   type TaskNotification,
   type TaskRecord,
 } from "./task-ledger.js";
-import { GraphOfTrace, type TraceAuditTarget } from "./trace.js";
+import { GraphOfTrace } from "./trace.js";
 import { WorkspaceCheckpointStore } from "./workspace-checkpoints.js";
 import { MasAgent, addUsage, emptyTokenUsage } from "./mas-agent.js";
 import {
@@ -69,8 +69,11 @@ import {
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { renderTaskListBlock } from "./extensions/task-context.js";
-import { renderGoTAuditContext, renderPrincipalGoTContext } from "./extensions/got-context.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import {
+  isSubstantiveScientificExecutionRequest,
+  renderPrincipalWorkflowBlock,
+} from "./extensions/principal-workflow-guard.js";
 import { loadCompatPluginProjections } from "./compat-hooks.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
@@ -282,6 +285,9 @@ interface SessionMeta {
   updatedAt?: string;
   lastActivityAt?: number;
   domainResources?: DomainResources;
+  workflowTaskSeqBaseline?: number;
+  workflowReminderClaimed?: boolean;
+  workflowViolationEmitted?: boolean;
   systemPlugins?: SystemPluginSnapshot[];
 }
 
@@ -299,10 +305,6 @@ interface SessionEntry {
   workspaceOperationActive: boolean;
   /** Host-bound source record while Trace processes one durable event. */
   currentTraceRecord?: TraceNodeRecord;
-  /** Host-bound immutable target for one Auditor turn. */
-  currentTraceAuditTarget?: TraceAuditTarget;
-  /** Deduplicates durable Auditor targets by node/parent identity. */
-  traceAuditQueued: Set<string>;
   agents: Map<string, MasAgent>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
@@ -318,6 +320,11 @@ interface SessionEntry {
   providerRef: SessionProviderRef;
   /** Frozen per-session domain-resource mode; never read from global state. */
   domainResources: DomainResources;
+  /** Host-owned state for the current explicit-user delegation epoch. */
+  workflowTaskSeqBaseline: number;
+  workflowReminderClaimed: boolean;
+  workflowViolationEmitted: boolean;
+  workflowGuardRequired: boolean;
   /** Frozen system-plugin state for reproducible experiment sessions. */
   systemPlugins: SystemPluginSnapshot[];
   /**
@@ -975,7 +982,7 @@ export class SessionManager {
     // (Only at the workspace root, and only when listing the workspace itself.)
     const atWorkspaceRoot = prefix === "/workspace" && dir === root;
     const visible = atWorkspaceRoot
-      ? dirents.filter((d) => d.name !== SessionManager.ATTACHMENTS_DIRNAME)
+      ? dirents.filter((d) => d.name !== SessionManager.ATTACHMENTS_DIRNAME && d.name !== ".subagent-scratch")
       : dirents;
     const entries = await Promise.all(
       visible.map(async (d) => {
@@ -1343,6 +1350,9 @@ export class SessionManager {
       providerId?: string;
       modelId?: string;
       domainResources?: DomainResources;
+      workflowTaskSeqBaseline?: number;
+      workflowReminderClaimed?: boolean;
+      workflowViolationEmitted?: boolean;
       systemPlugins?: SystemPluginSnapshot[];
     } = {},
     /**
@@ -1418,7 +1428,13 @@ export class SessionManager {
       persist: this.persist,
       bus,
       createChildSession: (args) => this.createSubagentSession(entry, args),
-      runWithProviderCapacity: (fn, borrowParent) => this.withProviderSlot(id, fn, borrowParent, true),
+      runWithProviderCapacity: (fn, capacity) => this.withProviderSlot(
+        id,
+        fn,
+        capacity.borrowParent,
+        capacity.allowNestedBorrow,
+        capacity.parentPromotion,
+      ),
       onUsage: (childId, usage) => {
         entry.tokenUsage.byAgent[childId] = usage;
         entry.tokenUsage.total = sumAgentUsage(entry.tokenUsage.byAgent);
@@ -1455,8 +1471,6 @@ export class SessionManager {
       checkpoints,
       workspaceOperationActive: false,
       currentTraceRecord: undefined,
-      currentTraceAuditTarget: undefined,
-      traceAuditQueued: new Set(),
       agents: new Map(),
       deliveryErrors: new Map(),
       runActive: false,
@@ -1464,6 +1478,10 @@ export class SessionManager {
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       domainResources,
+      workflowTaskSeqBaseline: input.workflowTaskSeqBaseline ?? 0,
+      workflowReminderClaimed: input.workflowReminderClaimed === true,
+      workflowViolationEmitted: input.workflowViolationEmitted === true,
+      workflowGuardRequired: false,
       systemPlugins,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
       stats: emptySessionStats(id),
@@ -1503,7 +1521,6 @@ export class SessionManager {
         throw err;
       }
       await this.loadTrace(entry);
-      this.rebuildQueuedTraceAudits(entry);
       // Rehydrate cumulative token usage so the running total survives restarts.
       await this.loadUsage(entry);
       // Rehydrate full per-run/per-session stats (tokens+tools+skills+errors).
@@ -1711,6 +1728,16 @@ export class SessionManager {
     // never overlap.
     const resumeTargetAfterRun = await this.resumeTaskDelivery(entry, agentName);
 
+    // A substantive follow-up extends the current Principal workflow epoch.
+    // Exempt follow-ups never turn an already-required epoch off.
+    if (
+      agentName === "principal"
+      && agent.isStreaming
+      && isSubstantiveScientificExecutionRequest(content)
+    ) {
+      entry.workflowGuardRequired = true;
+    }
+
     // Concurrent send: the target agent is still streaming its previous run.
     // A plain prompt() would hit the SDK's "already processing" guard. Queue
     // the message as a follow-up onto the current run instead — no new runId,
@@ -1727,6 +1754,20 @@ export class SessionManager {
       return { accepted: true, runId, queued: true };
     }
 
+    // Start a fresh host-owned delegation epoch only for a new, idle Principal
+    // user turn. Task-result deliveries and queued follow-ups remain in the
+    // existing epoch, so a completed delegation continues to satisfy the guard.
+    if (agentName === "principal") {
+      entry.workflowTaskSeqBaseline = entry.taskLedger.list().reduce(
+        (highest, task) => Math.max(highest, task.seq),
+        0,
+      );
+      entry.workflowGuardRequired = isSubstantiveScientificExecutionRequest(content);
+      entry.workflowReminderClaimed = false;
+      entry.workflowViolationEmitted = false;
+      await this.writeMeta(entry);
+    }
+
     // runState tracks the Principal's user-facing turn for status/timing/Stop.
     // It does not disable the composer: another user message is accepted above
     // through Pi's followUp queue while the Principal is still streaming.
@@ -1736,8 +1777,8 @@ export class SessionManager {
     // #70: emit an initial session_state frame here — onStatusChange only fires
     // on a status *change*, and ensureAgent creates the agent as idle without
     // emitting, so without this the panel stays empty until the first
-    // setStatus("running"). This first frame carries runState.active=true + the
-    // freshly-ensured agent.
+    // setStatus("running"). This first frame carries the appropriate PI and
+    // aggregate lifecycle values plus the freshly-ensured agent.
     this.emitSessionState(entry);
     // issue #42: persist + broadcast the user's own prompt as a role:"user"
     // CHUNK *before* the agent runs, so SSE replay reconstructs the full
@@ -2050,8 +2091,8 @@ export class SessionManager {
     const targets = agentName ? [entry.agents.get(agentName)].filter(Boolean) : [...entry.agents.values()];
     const directChild = agentName ? entry.subagents.list().find((child) => child.id === agentName) : undefined;
     const hasSubagentActivity = directChild
-      ? directChild.status === "queued" || directChild.status === "running"
-      : wholeSession && entry.subagents.list().some((child) => child.status === "queued" || child.status === "running");
+      ? directChild.status === "queued" || directChild.status === "waiting_for_capacity" || directChild.status === "running"
+      : wholeSession && entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running");
     const hasPendingInput = Boolean(entry.userInputs.active || entry.userInputs.queue.length > 0);
     const hasTargetInput = agentName !== undefined && (
       entry.userInputs.active?.agent === agentName
@@ -2311,7 +2352,6 @@ export class SessionManager {
       trace: entry.trace,
       checkpoints: entry.checkpoints,
       currentTraceRecord: () => entry.currentTraceRecord,
-      currentTraceAuditTarget: () => entry.currentTraceAuditTarget,
       dispatchTask: async (target, content) => {
         const task = await entry.taskLedger.dispatch(name, target, content);
         entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "created", task }));
@@ -2322,8 +2362,8 @@ export class SessionManager {
       completeTask: async (taskId, reply) => {
         const before = entry.taskLedger.get(taskId);
         const task = await entry.taskLedger.complete(taskId, name, reply);
-        if (before?.status !== "completed") {
-          entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "completed", task }));
+        if (before?.status !== "replied") {
+          entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "replied", task }));
           this.touch(entry);
           this.emitSessionState(entry);
         }
@@ -2356,7 +2396,11 @@ export class SessionManager {
         context,
         tasks,
       }) : undefined,
-      waitSubagents: role === "expert" ? (childIds) => entry.subagents.waitFor(name, childIds) : undefined,
+      waitSubagents: role === "expert" ? (childIds) => entry.subagents.waitFor(
+        name,
+        childIds,
+        this.providerLease.getStore(),
+      ) : undefined,
       getSubagents: role === "expert" ? (childIds) => entry.subagents.listForParent(name, childIds) : undefined,
       cancelSubagents: role === "expert" ? (childIds) => entry.subagents.cancelForParent(name, childIds) : undefined,
       listSubagentProfiles: role === "expert" ? async () => (await allowedSubagentProfiles(this.dataRoot, name)).map((profile) => ({
@@ -2447,12 +2491,15 @@ export class SessionManager {
       renderAgentStatus:
         name === "principal" ? () => this.renderAgentStatus(entry) : undefined,
       renderTaskContext: () => this.renderTaskContext(entry, name),
-      renderGoTContext:
+      principalWorkflowGuard:
         name === "principal"
-          ? () => renderPrincipalGoTContext(entry.trace.getGraphV2())
-          : name === "auditor"
-            ? () => this.renderGoTAuditContext(entry)
-            : undefined,
+          ? {
+              renderState: () => this.renderPrincipalWorkflowState(entry),
+              hasQualifyingDelegation: () => this.hasQualifyingPrincipalDelegation(entry),
+              claimReminder: () => this.claimPrincipalWorkflowReminder(entry),
+              onViolation: () => this.emitPrincipalWorkflowViolation(entry),
+            }
+          : undefined,
     });
 
     const agent = new MasAgent({
@@ -2550,20 +2597,42 @@ export class SessionManager {
     );
   }
 
-  private renderGoTAuditContext(entry: SessionEntry): string {
-    const target = entry.currentTraceAuditTarget;
-    if (!target) return "";
-    return renderGoTAuditContext({
-      graph: entry.trace.getGraphV2(),
-      target,
-      targetNode: entry.trace.getNodeDetail(target.nodeId),
-      ...(target.parentNodeId
-        ? { parentNode: entry.trace.getNodeDetail(target.parentNodeId) }
-        : {}),
-      neighborhood: entry.trace.getNeighborhood(target.nodeId, 2),
-    });
+  private hasQualifyingPrincipalDelegation(entry: SessionEntry): boolean {
+    const nonSubstantiveTargets = new Set(["principal", "trace", "auditor", "writer"]);
+    return entry.taskLedger.list().some((task) =>
+      task.created_by === "principal"
+      && task.seq > entry.workflowTaskSeqBaseline
+      && !nonSubstantiveTargets.has(task.assigned_to),
+    );
   }
 
+  private renderPrincipalWorkflowState(entry: SessionEntry): string {
+    return renderPrincipalWorkflowBlock(
+      entry.workflowGuardRequired && !this.hasQualifyingPrincipalDelegation(entry),
+    );
+  }
+
+  private async claimPrincipalWorkflowReminder(entry: SessionEntry): Promise<boolean> {
+    if (
+      entry.workflowReminderClaimed
+      || this.hasQualifyingPrincipalDelegation(entry)
+    ) return false;
+    entry.workflowReminderClaimed = true;
+    await this.writeMeta(entry);
+    return true;
+  }
+
+  private async emitPrincipalWorkflowViolation(entry: SessionEntry): Promise<void> {
+    if (entry.workflowViolationEmitted || this.hasQualifyingPrincipalDelegation(entry)) return;
+    entry.workflowViolationEmitted = true;
+    entry.bus.emit(ev.systemMessage(
+      entry.id,
+      "warning",
+      "Principal ignored the required Expert-delegation reminder; the research workflow remains incomplete.",
+      { agent: "principal", recoverable: true },
+    ));
+    await this.writeMeta(entry);
+  }
   async destroyAgent(sessionId: string, name: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
@@ -2589,6 +2658,7 @@ export class SessionManager {
     fn: () => Promise<T>,
     borrowParent = false,
     allowNestedBorrow = false,
+    parentPromotion?: Promise<object>,
   ): Promise<T> {
     if (this.maxConcurrentAgents <= 0) return fn();
     // A custom tool runs inside the owning prompt's async chain. Its first
@@ -2608,7 +2678,40 @@ export class SessionManager {
       sem = new ProviderSemaphore(this.maxConcurrentAgents);
       this.providerSlots.set(sessionId, sem);
     }
-    const release = await sem.acquire();
+    const slot = sem.acquire();
+    if (parentPromotion && inherited?.sessionId === sessionId) {
+      const winner = await Promise.race([
+        slot.then((release) => ({ kind: "slot" as const, release })),
+        parentPromotion.then((lease) => ({ kind: "parent" as const, lease })),
+      ]);
+      if (winner.kind === "parent") {
+        const waitingParent = winner.lease as { sessionId: string; childLane: ProviderSemaphore };
+        if (waitingParent.sessionId === sessionId) {
+          // The owning parent chose to wait after starting background work.
+          // Reuse that currently-paused lease (including on a later turn) so
+          // concurrency=1 does not deadlock, then return any later global grant.
+          void slot.then((release) => release());
+          const releaseBorrowed = await waitingParent.childLane.acquire();
+          try {
+            return await this.providerLease.run(waitingParent, fn);
+          } finally {
+            releaseBorrowed();
+          }
+        }
+        const release = await slot;
+        try {
+          return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
+        } finally {
+          release();
+        }
+      }
+      try {
+        return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
+      } finally {
+        winner.release();
+      }
+    }
+    const release = await slot;
     try {
       return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
     } finally {
@@ -2662,10 +2765,10 @@ export class SessionManager {
       const entry = this.sessions.get(sessionId);
       if (!entry) return;
       if (entry.taskLedger.isPaused(name)) return;
-      // Trace and Auditor bind exactly one durable event to host-owned state.
+      // Trace binds exactly one durable event to host-owned state.
       const notifications = entry.taskLedger.peekBatch(
         name,
-        name === "trace" || name === "auditor" ? 1 : undefined,
+        name === "trace" ? 1 : undefined,
       );
       if (notifications.length === 0) return;
       const agent = await this.ensureAgent(sessionId, name);
@@ -2676,25 +2779,31 @@ export class SessionManager {
       const traceRecord = name === "trace"
         ? this.parseInternalEnvelope<TraceNodeRecord>(notifications[0]?.content, "Trace-Record")
         : undefined;
-      const auditTarget = name === "auditor"
-        ? this.coerceTraceAuditTarget(this.parseInternalEnvelope(notifications[0]?.content, "Trace-Audit-Target"))
-        : undefined;
       if (name === "trace") entry.currentTraceRecord = traceRecord;
-      if (name === "auditor") entry.currentTraceAuditTarget = auditTarget;
-      // #167: cap concurrent provider calls across experts in this session.
+      const taskEvents = this.renderTaskEvents(notifications);
       let ran = false;
       try {
-        ran = await this.withProviderSlot(sessionId, async () => {
-          // Stop may have paused delivery while this run waited for a provider
-          // semaphore slot. Do not start a new model call after Stop completed.
-          const current = this.sessions.get(sessionId);
-          if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
-          await agent.prompt(this.renderTaskEvents(notifications));
-          return true;
-        });
+        if (agent.isStreaming) {
+          // The notification is already durable. Queue it into the active Pi
+          // run, then fence that run before acknowledging the batch.
+          await agent.followUpAndWait(taskEvents);
+          ran = true;
+        } else {
+          // #167: cap new provider runs across experts in this session.
+          ran = await this.withProviderSlot(sessionId, async () => {
+            // Stop may have paused delivery while this run waited for a provider
+            // semaphore slot. Do not start a new model call after Stop completed.
+            const current = this.sessions.get(sessionId);
+            if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
+            // A user run can start while this delivery waits for a provider
+            // slot. Inject rather than racing it with a second plain prompt.
+            if (agent.isStreaming) await agent.followUpAndWait(taskEvents);
+            else await agent.prompt(taskEvents);
+            return true;
+          });
+        }
       } finally {
         if (name === "trace") entry.currentTraceRecord = undefined;
-        if (name === "auditor") entry.currentTraceAuditTarget = undefined;
       }
       if (!ran || entry.taskLedger.isPaused(name)) return;
 
@@ -2729,16 +2838,6 @@ export class SessionManager {
         ));
         return;
       }
-      if (name === "auditor" && auditTarget) {
-        const pending = entry.trace.listPendingAuditTargets([auditTarget.nodeId])
-          .find((target) => this.traceAuditKey(target) === this.traceAuditKey(auditTarget));
-        if (pending?.fingerprint === auditTarget.fingerprint) {
-          // A clean turn is not a completed audit unless the bound target was
-          // concluded. Keep the notification durable and pause to avoid a spin.
-          await entry.taskLedger.pauseAgent(name);
-          return;
-        }
-      }
       // Linearize acknowledgement with pauseDelivery(): if Stop won the ledger
       // write race, retain the batch for the next explicit user turn.
       const acknowledged = await entry.taskLedger.acknowledgeIfActive(
@@ -2747,17 +2846,6 @@ export class SessionManager {
       );
       if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
-      if (name === "trace") {
-        void this.enqueuePendingTraceAudits(entry);
-      } else if (name === "auditor" && auditTarget) {
-        entry.traceAuditQueued.delete(this.traceAuditKey(auditTarget));
-        const latest = entry.trace.auditFingerprint(auditTarget.nodeId, auditTarget.parentNodeId);
-        const stillPending = entry.trace.listPendingAuditTargets([auditTarget.nodeId])
-          .some((target) => this.traceAuditKey(target) === this.traceAuditKey(auditTarget));
-        if (stillPending && latest && latest !== auditTarget.fingerprint) {
-          void this.enqueueTraceAudit(entry, { ...auditTarget, fingerprint: latest });
-        }
-      }
     }
   }
 
@@ -2767,58 +2855,6 @@ export class SessionManager {
     const line = content.split("\n").find((candidate) => candidate.startsWith(prefix));
     if (!line) return undefined;
     try { return JSON.parse(line.slice(prefix.length)) as T; } catch { return undefined; }
-  }
-
-  private rebuildQueuedTraceAudits(entry: SessionEntry): void {
-    entry.traceAuditQueued.clear();
-    if (!systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) return;
-    const notifications = entry.taskLedger.peekBatch("auditor", Number.MAX_SAFE_INTEGER, Number.MAX_SAFE_INTEGER);
-    for (const notification of notifications) {
-      const target = this.coerceTraceAuditTarget(
-        this.parseInternalEnvelope(notification.content, "Trace-Audit-Target"),
-      );
-      if (target) entry.traceAuditQueued.add(this.traceAuditKey(target));
-    }
-  }
-
-  private traceAuditKey(target: Pick<TraceAuditTarget, "nodeId" | "parentNodeId">): string {
-    return target.parentNodeId ? `${target.nodeId}<-${target.parentNodeId}` : target.nodeId;
-  }
-
-  private coerceTraceAuditTarget(value: unknown): TraceAuditTarget | undefined {
-    if (!value || typeof value !== "object") return undefined;
-    const raw = value as Record<string, unknown>;
-    if (typeof raw.nodeId !== "string" || typeof raw.fingerprint !== "string") return undefined;
-    return {
-      nodeId: raw.nodeId,
-      ...(typeof raw.parentNodeId === "string" ? { parentNodeId: raw.parentNodeId } : {}),
-      fingerprint: raw.fingerprint,
-    };
-  }
-
-  private async enqueuePendingTraceAudits(entry: SessionEntry): Promise<void> {
-    if (!systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) return;
-    for (const target of entry.trace.listPendingAuditTargets()) await this.enqueueTraceAudit(entry, target);
-  }
-
-  private async enqueueTraceAudit(entry: SessionEntry, target: TraceAuditTarget): Promise<void> {
-    if (!systemPluginEnabled(entry.systemPlugins, AUDITOR_PLUGIN_ID)) return;
-    const key = this.traceAuditKey(target);
-    if (entry.traceAuditQueued.has(key)) return;
-    entry.traceAuditQueued.add(key);
-    try {
-      await this.ensureAgent(entry.id, "auditor");
-      const instruction = target.parentNodeId
-        ? `[后台 GoT 审计] 请独立审查节点 ${target.nodeId} 的候选因果父节点 ${target.parentNodeId}。读取必要的局部 Trace 证据，然后用 edit_trace_review 提交一次结论和理由。不要通知 PI。`
-        : `[后台 GoT 审计] 请独立审查节点 ${target.nodeId} 的内容与证据充分性。读取必要的局部 Trace 证据，然后用 edit_trace_review 提交一次结论和理由。不要通知 PI。`;
-      await entry.taskLedger.enqueueSystem(
-        "auditor",
-        `${instruction}\nTrace-Audit-Target: ${JSON.stringify(target)}`,
-      );
-      this.wakeAgent(entry.id, "auditor");
-    } catch {
-      entry.traceAuditQueued.delete(key);
-    }
   }
 
   /**
@@ -2967,13 +3003,26 @@ export class SessionManager {
     return false;
   }
 
-  /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
-  private hasAnyAgentActivity(entry: SessionEntry): boolean {
-    if (entry.runActive || entry.userInputs.active || entry.userInputs.queue.length > 0) return true;
+  /**
+   * Aggregate lifecycle for every execution owned by the session. Unlike
+   * runState this includes experts, Trace, subagents, delivery-loop handoffs,
+   * and delivery-loop handoffs so external harnesses can await quiescence.
+   */
+  private deriveWorkActive(entry: SessionEntry): boolean {
+    if (this.deriveRunActive(entry)) return true;
+    // Covers the acceptance→agent-running gap for a direct expert prompt.
+    if (entry.activeRunId !== null) return true;
+    if (entry.subagents.hasActiveExecutions()) return true;
+    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running")) return true;
     for (const agent of entry.agents.values()) {
       if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
     }
     return [...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`));
+  }
+
+  /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
+  private hasAnyAgentActivity(entry: SessionEntry): boolean {
+    return this.deriveWorkActive(entry) || Boolean(entry.userInputs.active) || entry.userInputs.queue.length > 0;
   }
 
   private beginWorkspaceOperation(entry: SessionEntry, action: "restore" | "roll back"): void {
@@ -3001,8 +3050,8 @@ export class SessionManager {
    * event. This is the wholesale source the web Agents panel replaces its
    * agents list from; it is pushed on every agent status transition
    * (`onStatusChange`), an initial frame in `sendMessage`, and on delivery-loop
-   * entry/exit. `runState.active` is DERIVED (any non-trace agent running / a
-   * pending delivery), so a delegated expert keeps the run visibly active. The
+   * entry/exit. `runState.active` is PI-only; `workState.active` is the
+   * aggregate completion authority for the whole session. The
    * ring buffer replays the last frame on reconnect, so a re-subscribing client
    * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
    */
@@ -3010,6 +3059,7 @@ export class SessionManager {
     entry.bus.emit(
       ev.custom({ sessionId: entry.id }, "session_state", {
         runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
+        workState: { active: this.deriveWorkActive(entry) },
         agents: this.listAgents(entry.id),
         subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3034,6 +3084,7 @@ export class SessionManager {
 
   getSessionState(sessionId: string): {
     runState: { active: boolean; runId: string | null };
+    workState: { active: boolean };
     agents: AgentStatus[];
     subagents?: import("@brainpilot/protocol").SubagentStatus[];
     lastActivityTs: string;
@@ -3044,6 +3095,7 @@ export class SessionManager {
     if (!entry) return undefined;
     return {
       runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
+      workState: { active: this.deriveWorkActive(entry) },
       agents: this.listAgents(sessionId),
       subagents: entry.subagents.list(),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3379,6 +3431,9 @@ export class SessionManager {
       updatedAt: entry.updatedAt,
       lastActivityAt: entry.lastActivityAt,
       domainResources: entry.domainResources,
+      workflowTaskSeqBaseline: entry.workflowTaskSeqBaseline,
+      workflowReminderClaimed: entry.workflowReminderClaimed,
+      workflowViolationEmitted: entry.workflowViolationEmitted,
       systemPlugins: entry.systemPlugins,
     };
     await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
@@ -3575,6 +3630,10 @@ export class SessionManager {
           id: sid,
           title: meta.title,
           domainResources: resolveDomainResources(meta.domainResources),
+          workflowTaskSeqBaseline:
+            typeof meta.workflowTaskSeqBaseline === "number" ? meta.workflowTaskSeqBaseline : 0,
+          workflowReminderClaimed: meta.workflowReminderClaimed === true,
+          workflowViolationEmitted: meta.workflowViolationEmitted === true,
           systemPlugins: meta.systemPlugins,
         },
         {

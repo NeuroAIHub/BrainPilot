@@ -54,6 +54,7 @@ describe("state authority (§10)", () => {
 
     type Snap = {
       runState: { active: boolean; runId: string | null };
+      workState: { active: boolean };
       agents: Array<{ name: string; status: string }>;
     };
     const snapshots: Snap[] = [];
@@ -76,6 +77,7 @@ describe("state authority (§10)", () => {
     // principal already present.
     const first = snapshots[0]!;
     expect(first.runState.active).toBe(true);
+    expect(first.workState.active).toBe(true);
     expect(first.agents.some((a) => a.name === "principal")).toBe(true);
 
     // Somewhere we saw principal running, and the final snapshot is idle.
@@ -84,6 +86,7 @@ describe("state authority (§10)", () => {
     ).toBe(true);
     const last = snapshots[snapshots.length - 1]!;
     expect(last.agents.find((a) => a.name === "principal")?.status).toBe("idle");
+    expect(last.workState.active).toBe(false);
 
     // Reconnect snapshot: the ring buffer replay ends on the latest
     // session_state, so a re-subscribing client recovers the idle state.

@@ -960,6 +960,7 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
   const raw = asDict(rawValue);
   const camelized = camelizeObject(raw) as Record<string, unknown>;
   const rs = (camelized.runState ?? {}) as Record<string, unknown>;
+  const ws = (camelized.workState ?? {}) as Record<string, unknown>;
   const agentsRaw = Array.isArray(camelized.agents) ? camelized.agents : [];
   const agents: AgentStatus[] = agentsRaw.map((entry) => {
     const a = asDict(entry);
@@ -1022,6 +1023,10 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     runState: {
       active: rs.active === true,
       runId: optionalString(rs.runId) ?? null,
+    },
+    workState: {
+      // Compatibility fallback for runtimes where runState was aggregate.
+      active: typeof ws.active === "boolean" ? ws.active : rs.active === true,
     },
     agents,
     subagents,

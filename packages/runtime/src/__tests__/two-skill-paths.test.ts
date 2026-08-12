@@ -194,14 +194,14 @@ describe("two-path skill loading", () => {
     expect(captured.length).toBe(2);
     for (const params of captured) {
       expect(params.systemTools.map((t) => t.name)).not.toContain("skill_search");
-      // App Meta-Skills still load; the targeted system-plugin Skill is added
-      // only to Principal, not unrelated Experts.
-      expect(params.skillPaths).toEqual(params.agentName === "principal"
-        ? [
-            join(root, "bp_template", "skills"),
-            expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
-          ]
-        : [join(root, "bp_template", "skills")]);
+      // App Meta-Skills still load alongside system-plugin Skills targeted to
+      // the current role, independently of the router toggle.
+      expect(params.skillPaths).toEqual([
+        join(root, "bp_template", "skills"),
+        params.agentName === "principal"
+          ? expect.stringMatching(/plugin-auditor.*audit-feedback-loop/)
+          : expect.stringMatching(/plugin-research.*source-grounded-research-report/),
+      ]);
       expect(params.systemTools.map((t) => t.name)).toContain("get_domain_knowledge_local");
       // Prompt no longer teaches skill_search / router library.
       expect(params.systemPrompt).not.toMatch(/skill_search/i);

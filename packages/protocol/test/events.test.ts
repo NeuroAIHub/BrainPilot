@@ -286,6 +286,9 @@ describe("discriminated union behavior", () => {
     };
     expect(TaskStateValueSchema.parse({ op: "snapshot", tasks: [task] })).toEqual({ op: "snapshot", tasks: [task] });
     expect(TaskStateValueSchema.parse({ op: "created", task })).toEqual({ op: "created", task });
+    const replied = { ...task, status: "replied" as const, reply: "blocked" };
+    expect(TaskStateValueSchema.parse({ op: "replied", task: replied })).toEqual({ op: "replied", task: replied });
+    expect(TaskStateValueSchema.safeParse({ op: "replied", task: { ...replied, status: "completed" } }).success).toBe(false);
     expect(CUSTOM_EVENT.TASK_STATE).toBe("task_state");
     expect(TaskStateValueSchema.safeParse({ op: "failed", task }).success).toBe(false);
   });

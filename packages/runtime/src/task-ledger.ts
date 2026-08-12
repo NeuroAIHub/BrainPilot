@@ -2,7 +2,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { dirname } from "node:path";
 
-export type TaskStatus = "pending" | "completed" | "cancelled";
+export type TaskStatus = "pending" | "replied" | "cancelled";
 
 export interface TaskRecord {
   id: string;
@@ -23,7 +23,7 @@ interface StoredTask extends TaskRecord {
 
 export type TaskNotificationKind =
   | "assigned"
-  | "completed"
+  | "replied"
   | "cancelled"
   | "unhandled"
   | "system"
@@ -83,27 +83,33 @@ function validateStoredLedger(value: unknown): StoredLedger {
   if (!Array.isArray(tasks) || !Array.isArray(notifications)) throw new Error("tasks and notifications must be arrays");
 
   const taskIds = new Set<string>();
+  const normalizedTasks: StoredTask[] = [];
   let maxTaskSeq = 0;
   for (const task of tasks) {
     if (!isRecord(task) || typeof task.id !== "string" || !Number.isInteger(task.seq) || Number(task.seq) < 1) throw new Error("invalid task record");
     if (taskIds.has(task.id)) throw new Error(`duplicate task id: ${task.id}`);
     if (typeof task.created_by !== "string" || typeof task.assigned_to !== "string" || typeof task.content !== "string") throw new Error(`invalid task fields: ${task.id}`);
-    if (task.status !== "pending" && task.status !== "completed" && task.status !== "cancelled") throw new Error(`invalid task status: ${task.id}`);
+    const status = task.status === "completed" ? "replied" : task.status;
+    if (status !== "pending" && status !== "replied" && status !== "cancelled") throw new Error(`invalid task status: ${task.id}`);
     if (typeof task.created_at !== "number") throw new Error(`invalid task timestamp: ${task.id}`);
     taskIds.add(task.id);
+    normalizedTasks.push({ ...task, status } as StoredTask);
     maxTaskSeq = Math.max(maxTaskSeq, Number(task.seq));
   }
 
   const notificationIds = new Set<string>();
+  const normalizedNotifications: TaskNotification[] = [];
   let maxNotificationSeq = 0;
-  const kinds = new Set<TaskNotificationKind>(["assigned", "completed", "cancelled", "unhandled", "system", "trace"]);
+  const kinds = new Set<TaskNotificationKind>(["assigned", "replied", "cancelled", "unhandled", "system", "trace"]);
   for (const notification of notifications) {
     if (!isRecord(notification) || typeof notification.id !== "string" || !Number.isInteger(notification.seq) || Number(notification.seq) < 1) throw new Error("invalid notification record");
     if (notificationIds.has(notification.id)) throw new Error(`duplicate notification id: ${notification.id}`);
-    if (!kinds.has(notification.kind as TaskNotificationKind)) throw new Error(`invalid notification kind: ${notification.id}`);
+    const kind = notification.kind === "completed" ? "replied" : notification.kind;
+    if (!kinds.has(kind as TaskNotificationKind)) throw new Error(`invalid notification kind: ${notification.id}`);
     if (typeof notification.to_agent !== "string" || typeof notification.from_agent !== "string" || typeof notification.content !== "string" || typeof notification.created_at !== "number") throw new Error(`invalid notification fields: ${notification.id}`);
     if (notification.task_id !== undefined && (!taskIds.has(String(notification.task_id)))) throw new Error(`notification references missing task: ${notification.id}`);
     notificationIds.add(notification.id);
+    normalizedNotifications.push({ ...notification, kind } as TaskNotification);
     maxNotificationSeq = Math.max(maxNotificationSeq, Number(notification.seq));
   }
   if (Number(nextTaskSeq) <= maxTaskSeq) throw new Error("next_task_seq does not exceed existing tasks");
@@ -114,8 +120,8 @@ function validateStoredLedger(value: unknown): StoredLedger {
   return {
     next_task_seq: Number(nextTaskSeq),
     next_notification_seq: Number(nextNotificationSeq),
-    tasks: tasks as StoredTask[],
-    notifications: notifications as TaskNotification[],
+    tasks: normalizedTasks,
+    notifications: normalizedNotifications,
     delivery_paused: value.delivery_paused === true,
     paused_agents: [...new Set(pausedAgents)],
   };
@@ -226,13 +232,13 @@ export class TaskLedger {
       const task = this.tasks.find((candidate) => candidate.id === taskId);
       if (!task) throw new Error(`task not found: ${taskId}`);
       if (task.assigned_to !== assignee) throw new Error(`task ${taskId} is assigned to ${task.assigned_to}`);
-      if (task.status === "completed") {
+      if (task.status === "replied") {
         if (task.reply === reply) return this.publicTask(task);
-        throw new Error(`task ${taskId} is already completed with a different reply`);
+        throw new Error(`task ${taskId} already has a different reply`);
       }
       if (task.status !== "pending") throw new Error(`task ${taskId} is ${task.status}`);
-      this.enqueue("completed", task.created_by, assignee, reply, task.id);
-      task.status = "completed";
+      this.enqueue("replied", task.created_by, assignee, reply, task.id);
+      task.status = "replied";
       task.reply = reply;
       task.completed_at = Date.now();
       this.notifications = this.notifications.filter(
@@ -336,7 +342,7 @@ export class TaskLedger {
   }
 
   list(): TaskRecord[] {
-    const rank: Record<TaskStatus, number> = { pending: 0, completed: 1, cancelled: 2 };
+    const rank: Record<TaskStatus, number> = { pending: 0, replied: 1, cancelled: 2 };
     return [...this.tasks]
       .sort((a, b) => rank[a.status] - rank[b.status] || a.seq - b.seq)
       .map((task) => this.publicTask(task));
