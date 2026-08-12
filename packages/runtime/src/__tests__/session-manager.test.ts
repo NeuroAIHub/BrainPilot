@@ -170,7 +170,10 @@ describe("SessionManager (mock mode)", () => {
       (params) => params.sessionId === session.id && params.agentName === "principal",
     )!;
     expect(principal.principalWorkflowGuard?.renderState()).toContain(
-      "requires a qualifying Expert delegation",
+      "only for substantive scientific execution",
+    );
+    expect(principal.principalWorkflowGuard?.renderState()).toContain(
+      "do not require Expert delegation",
     );
 
     const dispatch = principal.systemTools.find((tool) => tool.name === "dispatch_task")!;
