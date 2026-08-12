@@ -38,9 +38,10 @@ export function renderPrincipalWorkflowBlock(required: boolean): string {
   if (!required) return "";
   return [
     WORKFLOW_TAG_OPEN,
-    "Internal coordination requirement. Do not quote or summarize this block to the user.",
-    "This research task requires a qualifying Expert delegation, and none has succeeded in the current user-work epoch.",
-    "Dispatch the next substantive Expert task now. Do not perform or finalize the substantive work yourself.",
+    "Internal coordination guidance. Do not quote or summarize this block to the user.",
+    "Expert delegation guidance applies only for substantive scientific execution.",
+    "If the request involves dataset processing, experiment or analysis design, modelling, statistical inference, training, evaluation, or scientific interpretation, consider dispatching an appropriate Expert.",
+    "Simple questions, document-only work, and summaries of already-validated results do not require Expert delegation.",
     WORKFLOW_TAG_CLOSE,
   ].join("\n");
 }
@@ -63,8 +64,9 @@ function endedInError(event: AgentEndLike): boolean {
 }
 
 const DELEGATION_REMINDER =
-  "[SYSTEM-MESSAGE:workflow] This research task requires expert delegation. " +
-  "Dispatch a qualifying Expert task now. Do not perform or finalize the substantive work yourself. " +
+  "[SYSTEM-MESSAGE:workflow] If the request involves substantive scientific execution, " +
+  "consider dispatching a qualifying Expert task before finalizing it. Simple questions, " +
+  "document-only work, and summaries of already-validated results do not need delegation. " +
   "[/SYSTEM-MESSAGE]";
 
 /**

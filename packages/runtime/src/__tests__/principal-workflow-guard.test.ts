@@ -57,7 +57,9 @@ describe("principal workflow guard", () => {
     const original: Message = { role: "user", content: [{ type: "text", text: "task" }] };
     const injected = pi.context!({ messages: [original, stale] });
     expect(injected?.messages).toHaveLength(2);
-    expect(injected?.messages[1]?.content[0]?.text).toContain("requires a qualifying Expert delegation");
+    expect(injected?.messages[1]?.content[0]?.text).toContain("only for substantive scientific execution");
+    expect(injected?.messages[1]?.content[0]?.text).toContain("do not require Expert delegation");
+    expect(injected?.messages[1]?.content[0]?.text).not.toContain("Do not perform or finalize");
 
     setDelegated(true);
     const stripped = pi.context!({ messages: injected!.messages });
@@ -68,7 +70,9 @@ describe("principal workflow guard", () => {
     const { pi, violation } = setup();
     await pi.end!({ messages: [{ role: "assistant", stopReason: "stop" }] });
     expect(pi.followUps).toHaveLength(1);
-    expect(pi.followUps[0]).toContain("Dispatch a qualifying Expert task now");
+    expect(pi.followUps[0]).toContain("If the request involves substantive scientific execution");
+    expect(pi.followUps[0]).toContain("consider dispatching a qualifying Expert task");
+    expect(pi.followUps[0]).not.toContain("Do not perform or finalize");
 
     await pi.end!({ messages: [{ role: "assistant", stopReason: "stop" }] });
     expect(pi.followUps).toHaveLength(1);
