@@ -60,6 +60,10 @@ describe("bundled system plugins", () => {
     expect(principalInstructions).toContain("Only `Verdict: PASS`");
     expect(principalInstructions).toContain("iteration ledger including rejected rounds");
     expect(principalInstructions).toContain("evidence alone is not a complete audit target");
+    expect(principalInstructions).toContain("one final audit");
+    expect(principalInstructions).toContain("Do not dispatch Auditor for intermediate");
+    expect(principalInstructions).toContain("Any change to an audited claim, evidence file, or artifact after PASS invalidates that PASS");
+    expect(principalInstructions).not.toContain("Raw Expert output is a valid intermediate audit target");
     const auditorInstructions = (await systemPluginInstructions(plugins, snapshot, "auditor")).join("\n");
     expect(auditorInstructions).toContain("Begin every completed audit reply");
     expect(auditorInstructions).toContain("PI must not claim the task is complete");
@@ -77,6 +81,11 @@ describe("bundled system plugins", () => {
     expect(auditorReview).toContain("returns `blocked`");
     expect(auditorReview).toContain("`operational validity` and `empirical adequacy`");
     expect(auditorReview).toContain("Write the complete report to a new path under");
+    expect(auditorReview).toContain("frozen final delivery candidate");
+    expect(auditorReview).not.toContain("Raw Expert output is a valid intermediate");
+    const piOrchestration = await readFile(join(auditorSkill, "references", "pi-orchestration.md"), "utf8");
+    expect(piOrchestration).toContain("Start one final audit");
+    expect(piOrchestration).toContain("Do not audit intermediate rounds");
     const methodSkill = auditorSkills.find((path) => path.endsWith("audit-model-validation"))!;
     const methodReview = await readFile(join(methodSkill, "SKILL.md"), "utf8");
     expect(methodReview).toContain("Audit Method Validation");

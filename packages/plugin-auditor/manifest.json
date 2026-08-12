@@ -13,7 +13,7 @@
       {
         "id": "audit-feedback-loop",
         "title": "Audit Feedback Loop",
-        "description": "Coordinate PI and Auditor review, correction, and incremental re-review.",
+        "description": "Coordinate the final pre-delivery audit, correction, and incremental re-review.",
         "entry": "skills/audit-feedback-loop/SKILL.md",
         "targets": ["principal", "auditor"]
       },

@@ -1,11 +1,13 @@
 ---
 name: audit-feedback-loop
-description: Coordinate iterative evidence and reliability reviews between BrainPilot's Principal Investigator and Auditor. Use when PI needs to audit its own draft, an Expert result, or a multi-agent synthesis; when Auditor receives such a review task; or when a previous audit requires correction and incremental re-review.
+description: Coordinate the final pre-delivery evidence and reliability review between BrainPilot's Principal Investigator and Auditor, including correction and incremental re-review when that final audit finds a problem.
 ---
 
 # Audit Feedback Loop
 
-Use the durable task system for every handoff. Do not ask the user to relay audit findings.
+Use the durable task system for every handoff. Audit the frozen final delivery
+candidate rather than intermediate rounds or draft corrections. Do not ask the
+user to relay audit findings.
 
 ## Select the role procedure
 

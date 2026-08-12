@@ -1,10 +1,11 @@
 # Auditor review procedure
 
-Review the exact target PI supplied. Raw Expert output is a valid intermediate
-target. Audit existing evidence; do not rewrite the user's final answer, retrain,
-or compute missing scientific results. Bounded deterministic implementation and
-reference tests may verify operational correctness but cannot establish empirical
-adequacy.
+Review the exact frozen final delivery candidate PI supplied. It may reference
+raw Expert artifacts as evidence, but an intermediate round or draft correction
+is not an audit target. Audit existing evidence; do not rewrite the user's final
+answer, retrain, or compute missing scientific results. Bounded deterministic
+implementation and reference tests may verify operational correctness but cannot
+establish empirical adequacy.
 
 ## Route the audit by risk
 

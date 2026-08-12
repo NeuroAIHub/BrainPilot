@@ -227,14 +227,18 @@ Stale local routing rule.`;
     expect(pi).toContain("execute the training command yourself");
   });
 
-  it("requires data contracts, protocols, and independent method rechecks", () => {
+  it("requires data contracts, protocols, and targeted result review", () => {
     expect(PERSONAS.principal).toContain("invokes its `create-data-inventory` skill");
     expect(PERSONAS.principal).toMatch(/canonical inventory as the\s+data-contract artifact/);
     expect(PERSONAS.engineer).toContain("Research execution gate");
     expect(PERSONAS.engineer).toMatch(/start full training,\s+model search/);
     expect(PERSONAS.engineer).toContain("exported predictions match");
-    expect(PERSONAS.experimentalist).toContain("Complete-task protocol and independent recheck");
+    expect(PERSONAS.experimentalist).toContain("Protocol and result review");
     expect(PERSONAS.experimentalist).toContain("source tensor axes");
+    expect(PERSONAS.experimentalist).toMatch(/Do not\s+routinely rerun the implementation or recompute reported metrics/);
+    expect(PERSONAS.experimentalist).toMatch(/targeted independent calculation only/);
+    expect(PERSONAS.experimentalist).toContain("final audit gate");
+    expect(PERSONAS.experimentalist).not.toContain("After every implementation round, independently compare both the code");
   });
 
   it("allows engineering preflight but defers formal implementation until research is ready", () => {

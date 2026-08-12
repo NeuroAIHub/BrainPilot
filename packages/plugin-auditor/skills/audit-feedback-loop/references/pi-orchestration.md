@@ -2,7 +2,7 @@
 
 ## Start an audit
 
-Audit an Expert result, PI reasoning/draft, or a multi-agent synthesis when it contains numeric results, artifact claims, external citations, datasets, benchmarks, empirical or method-selection conclusions, or conflicting Expert claims. Skip greetings, clarification, progress notices, and other replies without hard claims.
+Start one final audit after all planned Expert work, iteration, corrections, PI synthesis, and user-facing drafting are complete. Freeze the exact claims, evidence paths, artifacts, and intended deliverable that Auditor must review. Do not audit intermediate rounds, individual Expert completions, or draft corrections merely because they contain hard claims.
 
 For data-driven or method-selection work, the audit request must identify the applicable input contract, protocol, method survey, implementation or procedure, operational checks, decision-relevant evidence, and artifact checks. If expected evidence does not exist, ask its producing Expert to create it before requesting a final audit.
 
@@ -11,7 +11,7 @@ For data-driven or method-selection work, the audit request must identify the ap
 3. Dispatch it to `auditor` with `dispatch_task`.
 4. Stop the turn and wait for the completion event.
 
-Raw Expert output is a valid intermediate target. Do not require Writer to turn it into a report first.
+The final candidate may cite raw Expert artifacts as evidence, but it must include the complete intended delivery scope. Do not ask Auditor to review an unfinished subset that will predictably change before delivery.
 
 ## Process the verdict
 
@@ -37,4 +37,4 @@ PI owns all routing. Auditor advises PI and does not direct Experts. Never ask t
 
 ## Final delivery gate
 
-Before delivering substantive hard claims, ensure the latest relevant revision has a `pass`, or explicitly disclose unresolved low-risk limitations. Do not silently override an open high-risk finding.
+Before delivering substantive hard claims, ensure the frozen final delivery candidate has a `pass`, or explicitly disclose unresolved low-risk limitations. Do not silently override an open high-risk finding. Any post-PASS change to an audited claim, evidence file, or artifact invalidates the PASS and requires another audit before delivery.
