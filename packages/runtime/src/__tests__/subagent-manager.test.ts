@@ -62,6 +62,18 @@ async function fixture(opts: { submit?: boolean; outcome?: "completed" | "blocke
 }
 
 describe("SubagentManager", () => {
+  it("releases a settled execution while preserving its completed result", async () => {
+    const f = await fixture();
+    const [result] = await f.manager.runBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-cleanup",
+      tasks: [{ name: "cleanup", profile: "literature-scout", task: "finish once" }],
+    });
+
+    expect((f.manager as unknown as { executions: Map<string, Promise<unknown>> }).executions.size).toBe(0);
+    await expect(f.manager.waitFor("librarian", [result.childId])).resolves.toEqual([result]);
+  });
+
   it("starts a background batch, exposes live status, and waits by child id", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
