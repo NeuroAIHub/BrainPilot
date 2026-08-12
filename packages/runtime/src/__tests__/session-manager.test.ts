@@ -140,7 +140,7 @@ describe("SessionManager (mock mode)", () => {
     expect(seen).toEqual([]);
   });
 
-  it("always wires the Principal workflow guard", async () => {
+  it("activates the Principal workflow guard only for substantive scientific execution", async () => {
     const seen: Parameters<typeof mockAgentFactory>[0][] = [];
     const spyFactory: typeof mockAgentFactory = async (params) => {
       seen.push(params);
@@ -148,8 +148,14 @@ describe("SessionManager (mock mode)", () => {
     };
     const manager = new SessionManager({ persist: false, agentFactory: spyFactory });
 
+    const simple = await manager.createSession();
+    await manager.sendMessage(simple.id, "What is a confidence interval?");
+    await waitFor(() => seen.some((params) => params.sessionId === simple.id));
+    expect(seen.find((params) => params.sessionId === simple.id)?.principalWorkflowGuard?.renderState())
+      .toBe("");
+
     const session = await manager.createSession();
-    await manager.sendMessage(session.id, "run the research task");
+    await manager.sendMessage(session.id, "Train a model on the dataset and evaluate it");
     await waitFor(() => seen.some((params) => params.sessionId === session.id));
     const principal = seen.find(
       (params) => params.sessionId === session.id && params.agentName === "principal",

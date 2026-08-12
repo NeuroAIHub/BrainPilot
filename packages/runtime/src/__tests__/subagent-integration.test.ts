@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { SessionManager } from "../session-manager.js";
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, SystemTool } from "../types.js";
+import { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true, maxRetries: 3, retryDelay: 20 }))));
@@ -17,6 +18,140 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000) {
 }
 
 describe("SessionManager subagent integration", () => {
+  it("rejects checkpoint restore while a default shared background subagent is running", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-subagent-restore-gate-"));
+    roots.push(root);
+    let releaseChild!: () => void;
+    const childMayFinish = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let markChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => { markChildStarted = resolve; });
+    const factory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
+      const tools = new Map(systemTools.map((tool) => [tool.name, tool]));
+      return {
+        sessionId,
+        isStreaming: false,
+        subscribe() { return () => {}; },
+        async prompt() {
+          const submit = tools.get("submit_result");
+          if (submit) {
+            markChildStarted();
+            await childMayFinish;
+            await submit.execute({ outcome: "completed", summary: "background complete" });
+            return;
+          }
+          if (agentName === "engineer") {
+            await tools.get("spawn_subagent")!.execute({
+              wait: false,
+              tasks: [{ name: "shared-writer", profile: "code-runner", task: "write shared output" }],
+            });
+          }
+        },
+        async abort() { releaseChild(); },
+        dispose() {},
+      } satisfies IAgentSession;
+    };
+    const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: factory });
+    const session = await manager.createSession();
+    const workspace = join(root, "workspaces", session.id);
+    const store = new WorkspaceCheckpointStore(session.id, workspace, join(root, ".bp", session.id));
+    await writeFile(join(workspace, "value.txt"), "old\n", "utf8");
+    const checkpoint = await store.capture("principal");
+    await writeFile(join(workspace, "value.txt"), "new\n", "utf8");
+    const preview = await manager.getTraceRestorePreview(session.id, checkpoint.id);
+
+    await manager.sendMessage(session.id, "start background work", "engineer");
+    await childStarted;
+    await waitFor(() => {
+      const state = manager.getSessionState(session.id);
+      return state?.subagents?.some((child) => child.status === "running") === true
+        && state.agents.every((agent) => agent.status !== "running")
+        && state.runState.runId === null;
+    });
+
+    try {
+      await expect(manager.restoreTraceCheckpoint(session.id, checkpoint.id, preview!.stateToken))
+        .rejects.toMatchObject({ code: "SESSION_ACTIVE" });
+    } finally {
+      releaseChild();
+      await waitFor(() => manager.getSessionState(session.id)?.subagents?.every((child) => child.status === "succeeded") === true);
+      await manager.deleteSession(session.id);
+    }
+  });
+
+  it("keeps restore blocked until a cancelled shared subagent abort settles", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-subagent-stop-restore-"));
+    roots.push(root);
+    let releaseChild!: () => void;
+    const childMayFinish = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let markChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => { markChildStarted = resolve; });
+    let releaseAbort!: () => void;
+    const abortMayFinish = new Promise<void>((resolve) => { releaseAbort = resolve; });
+    let markAbortStarted!: () => void;
+    const abortStarted = new Promise<void>((resolve) => { markAbortStarted = resolve; });
+    const factory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
+      const tools = new Map(systemTools.map((tool) => [tool.name, tool]));
+      return {
+        sessionId,
+        isStreaming: false,
+        subscribe() { return () => {}; },
+        async prompt() {
+          if (tools.has("submit_result")) {
+            markChildStarted();
+            await childMayFinish;
+            throw new Error("aborted");
+          }
+          if (agentName === "engineer") {
+            await tools.get("spawn_subagent")!.execute({
+              wait: false,
+              tasks: [{ name: "shared-writer", profile: "code-runner", task: "write shared output" }],
+            });
+          }
+        },
+        async abort() {
+          if (!tools.has("submit_result")) return;
+          markAbortStarted();
+          await abortMayFinish;
+          releaseChild();
+        },
+        dispose() {},
+      } satisfies IAgentSession;
+    };
+    const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: factory });
+    const session = await manager.createSession();
+    const workStates: boolean[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "CUSTOM" && event.name === "session_state") {
+        workStates.push((event.value as { workState: { active: boolean } }).workState.active);
+      }
+    });
+    const workspace = join(root, "workspaces", session.id);
+    const store = new WorkspaceCheckpointStore(session.id, workspace, join(root, ".bp", session.id));
+    await writeFile(join(workspace, "value.txt"), "old\n", "utf8");
+    const checkpoint = await store.capture("principal");
+    await writeFile(join(workspace, "value.txt"), "new\n", "utf8");
+    const preview = await manager.getTraceRestorePreview(session.id, checkpoint.id);
+
+    await manager.sendMessage(session.id, "start background work", "engineer");
+    await childStarted;
+    await waitFor(() => manager.getSessionState(session.id)?.runState.runId === null);
+    const interrupting = manager.interrupt(session.id);
+    await abortStarted;
+    await waitFor(() => manager.getSessionState(session.id)?.subagents?.some((child) => child.status === "cancelled") === true);
+
+    try {
+      await expect(manager.restoreTraceCheckpoint(session.id, checkpoint.id, preview!.stateToken))
+        .rejects.toMatchObject({ code: "SESSION_ACTIVE" });
+    } finally {
+      releaseAbort();
+      await interrupting;
+      await waitFor(() => manager.getSessionState(session.id)?.workState.active === false);
+      const terminalWorkActive = workStates.at(-1);
+      await manager.deleteSession(session.id);
+      expect(terminalWorkActive).toBe(false);
+    }
+  });
+
   it("lets a shared-mode leaf write a canonical artifact directly into the session workspace", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-subagent-shared-integration-"));
     roots.push(root);
@@ -54,6 +189,58 @@ describe("SessionManager subagent integration", () => {
     expect(result).toContain('"path": "shared-report.md"');
     await expect(readFile(join(root, "workspaces", session.id, "shared-report.md"), "utf8"))
       .resolves.toBe("canonical report");
+    await manager.deleteSession(session.id);
+  });
+
+  it("keeps a background child behind the provider cap after its parent continues", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-subagent-background-cap-"));
+    roots.push(root);
+    let releaseParent!: () => void;
+    const parentMayFinish = new Promise<void>((resolve) => { releaseParent = resolve; });
+    let markChildCreated!: () => void;
+    const childCreated = new Promise<void>((resolve) => { markChildCreated = resolve; });
+    let parentPromptActive = false;
+    let childPromptStarted = false;
+    let childOverlappedParent = false;
+    const factory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
+      const tools = new Map(systemTools.map((tool) => [tool.name, tool]));
+      const isChild = tools.has("submit_result");
+      if (isChild) markChildCreated();
+      return {
+        sessionId,
+        isStreaming: false,
+        subscribe() { return () => {}; },
+        async prompt() {
+          if (isChild) {
+            childPromptStarted = true;
+            childOverlappedParent = parentPromptActive;
+            await tools.get("submit_result")!.execute({ outcome: "completed", summary: "background complete" });
+            return;
+          }
+          if (agentName === "engineer") {
+            parentPromptActive = true;
+            await tools.get("spawn_subagent")!.execute({
+              wait: false,
+              tasks: [{ name: "background-cap", profile: "code-runner", task: "run after the parent" }],
+            });
+            await parentMayFinish;
+            parentPromptActive = false;
+          }
+        },
+        async abort() { releaseParent(); },
+        dispose() {},
+      } satisfies IAgentSession;
+    };
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: factory, maxConcurrentAgents: 1 });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "start background work", "engineer");
+    await childCreated;
+    await new Promise<void>((resolve) => setImmediate(resolve));
+
+    expect(childPromptStarted).toBe(false);
+    releaseParent();
+    await waitFor(() => manager.getSessionState(session.id)?.subagents?.[0]?.status === "succeeded");
+    expect(childOverlappedParent).toBe(false);
     await manager.deleteSession(session.id);
   });
 

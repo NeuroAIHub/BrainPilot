@@ -52,6 +52,14 @@ interface PreparedSubagentRun {
   task: SubagentTask;
   profile: SubagentProfile;
   borrowParent: boolean;
+  allowNestedBorrow: boolean;
+  parentPromotion?: Promise<object>;
+}
+
+interface ProviderCapacityOptions {
+  borrowParent: boolean;
+  allowNestedBorrow: boolean;
+  parentPromotion?: Promise<object>;
 }
 
 interface PersistedState { version: 1; runs: SubagentStatus[] }
@@ -72,7 +80,7 @@ interface SubagentManagerOptions {
     historyPath: string;
     submitTool: SystemTool;
   }) => Promise<IAgentSession>;
-  runWithProviderCapacity: <T>(fn: () => Promise<T>, borrowParent: boolean) => Promise<T>;
+  runWithProviderCapacity: <T>(fn: () => Promise<T>, options: ProviderCapacityOptions) => Promise<T>;
   onUsage: (childId: string, usage: TokenUsage) => void;
   onRunFinished: (info: { childId: string; status: "ok" | "error" | "aborted"; usage: TokenUsage; startedAt: number; finishedAt: number }) => void;
   onChanged: () => void;
@@ -122,6 +130,7 @@ export class SubagentManager {
   private readonly active = new Map<string, { parentAgent: string; session: IAgentSession }>();
   private readonly executions = new Map<string, Promise<SubagentResult>>();
   private readonly results = new Map<string, SubagentResult>();
+  private readonly parentPromotions = new Map<string, (parentLease: object) => void>();
   private readonly semaphore: Semaphore;
   private writeChain: Promise<void> = Promise.resolve();
   private readonly timeoutMs: number;
@@ -151,6 +160,8 @@ export class SubagentManager {
 
   list(): SubagentStatus[] { return [...this.statuses.values()]; }
 
+  hasActiveExecutions(): boolean { return this.executions.size > 0; }
+
   listForParent(parentAgent: string, childIds?: string[]): SubagentStatus[] {
     const runs = childIds
       ? this.validateOwnedIds(parentAgent, childIds).map((id) => this.statuses.get(id)!)
@@ -164,7 +175,7 @@ export class SubagentManager {
     context?: string;
     tasks: SubagentTask[];
   }): Promise<SubagentResult[]> {
-    const prepared = await this.prepareBatch(args);
+    const prepared = await this.prepareBatch(args, true);
     const results = await Promise.all(prepared.map((run) => this.launch(run)));
     // A completed batch is a natural durability boundary. Waiting here avoids
     // a late status write racing session teardown/restore and makes callers
@@ -180,13 +191,16 @@ export class SubagentManager {
     context?: string;
     tasks: SubagentTask[];
   }): Promise<SubagentStatus[]> {
-    const prepared = await this.prepareBatch(args);
+    const prepared = await this.prepareBatch(args, false, true);
     for (const run of prepared) void this.launch(run);
     return prepared.map((run) => ({ ...run.status }));
   }
 
-  async waitFor(parentAgent: string, childIds: string[]): Promise<SubagentResult[]> {
+  async waitFor(parentAgent: string, childIds: string[], parentLease?: object): Promise<SubagentResult[]> {
     const ids = this.validateOwnedIds(parentAgent, childIds);
+    if (parentLease !== undefined) {
+      for (const id of ids) this.parentPromotions.get(id)?.(parentLease);
+    }
     return Promise.all(ids.map(async (id) => {
       const execution = this.executions.get(id);
       if (execution) return execution;
@@ -270,7 +284,7 @@ export class SubagentManager {
 
   private async prepareBatch(args: {
     parentAgent: string; rootRunId: string | null; context?: string; tasks: SubagentTask[];
-  }): Promise<PreparedSubagentRun[]> {
+  }, allowParentBorrow: boolean, allowParentPromotion = false): Promise<PreparedSubagentRun[]> {
     if ((args.context?.length ?? 0) > 32_000) throw new Error("subagent context exceeds 32000 characters");
     this.validateBatch(args.tasks);
     const profiles = await Promise.all(args.tasks.map(async (task) => {
@@ -291,10 +305,18 @@ export class SubagentManager {
       };
       this.statuses.set(childId, status);
       this.emit(status);
+      let parentPromotion: Promise<object> | undefined;
+      if (allowParentPromotion) {
+        parentPromotion = new Promise<object>((resolvePromotion) => {
+          this.parentPromotions.set(childId, resolvePromotion);
+        });
+      }
       return {
         childId, status, parentAgent: args.parentAgent,
         rootRunId: args.rootRunId, context: args.context, task, profile,
-        borrowParent: index === 0,
+        borrowParent: allowParentBorrow && index === 0,
+        allowNestedBorrow: allowParentBorrow,
+        parentPromotion,
       };
     });
   }
@@ -306,6 +328,7 @@ export class SubagentManager {
       this.results.set(run.childId, result);
       return result;
     }).finally(() => {
+      this.parentPromotions.delete(run.childId);
       if (this.executions.get(run.childId) === execution) {
         this.executions.delete(run.childId);
       }
@@ -378,7 +401,11 @@ export class SubagentManager {
         } finally {
           if (timer) clearTimeout(timer);
         }
-      }, args.borrowParent);
+      }, {
+        borrowParent: args.borrowParent,
+        allowNestedBorrow: args.allowNestedBorrow,
+        parentPromotion: args.parentPromotion,
+      });
       if (!submitted) throw new Error("subagent exited without calling submit_result");
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled");
       const published = await this.publishArtifacts(childId, cwd, submitted.artifacts, sharedWorkspace);

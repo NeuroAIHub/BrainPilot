@@ -34,6 +34,23 @@ export interface PrincipalWorkflowGuardDeps {
 export const WORKFLOW_TAG_OPEN = "<principal_workflow_state>";
 export const WORKFLOW_TAG_CLOSE = "</principal_workflow_state>";
 
+const INFORMATIONAL_REQUEST = /^(?:what\s+(?:is|are|does)|why\b|how\s+(?:do|does|is|are|can|could|would|should|to)\b|(?:(?:please|can you|could you)\s+)?(?:explain|define|describe|summari[sz]e|translate|proofread|rewrite|polish)\b|什么是|为什么|为何|如何理解|怎么理解|(?:请(?:帮我)?)?(?:解释|介绍|概述|总结|翻译|润色))/i;
+const CONCEPTUAL_REQUEST = /\b(?:principles?|concepts?|differences?|pros?\s+and\s+cons?|advantages?|disadvantages?|overview|tutorial|meaning|definition|theory)\b|(?:原理|概念|区别|差异|优缺点|优势|劣势|含义|定义|理论|教程)/i;
+const DIRECT_EXECUTION_ACTION = /\b(?:process|clean|transform|train|fit|fine[- ]?tune|optimi[sz]e|simulate|run|execute|implement|build|develop|design|perform|conduct|model|predict|classify|cluster|forecast)\b|(?:处理|清洗|转换|训练|拟合|微调|优化|模拟|运行|执行|实现|构建|开发|设计|建模|预测|分类|聚类)/i;
+const INPUT_BOUND_ACTION = /\b(?:analy[sz]e|evaluate|benchmark|validate|test|compare|interpret|infer|inspect|check|find|detect|identify)\b|(?:分析|评估|基准测试|验证|测试|比较|解读|推断|检查|查看|看看|寻找|找出|识别|检测)/i;
+const SCIENTIFIC_SCOPE = /\b(?:data|dataset|experiment|study|analysis|model|statistic|inference|training|evaluation|benchmark|simulation|prediction|classification|clustering|forecast|scientific|literature|results?|treatments?)s?\b|(?:数据|数据集|实验|研究|分析|模型|统计|推断|训练|评估|基准|模拟|预测|分类|聚类|科学|文献|结果|处理组)/i;
+const CONCRETE_INPUT = /\b(?:(?:this|that|these|those|the|my|our|attached|uploaded|provided|given|current|existing)\s+(?:[\w-]+\s+){0,3}(?:data|dataset|file|table|results?|predictions?|checkpoint|validation\s+set|test\s+set)|(?:attached|uploaded|provided|trained|saved)\s+(?:[\w-]+\s+){0,2}models?)\b|(?:[\w./-]+\.(?:csv|tsv|json|jsonl|parquet|xlsx?|sav|h5|pt|pth|onnx))\b|(?:(?:这个|这份|这组|这些|上述|当前|现有|我的|我们的|附件中的|上传的|提供的)(?:[^，。,.]{0,12})(?:数据|数据集|文件|表格|结果|预测|检查点|验证集|测试集)|(?:上传的|提供的|训练好的|保存的)(?:[^，。,.]{0,8})模型)/i;
+
+/** Host-side gate for the bounded delegation reminder; prompt prose alone cannot suppress a follow-up. */
+export function isSubstantiveScientificExecutionRequest(content: string): boolean {
+  const normalized = content.trim();
+  if (!normalized || INFORMATIONAL_REQUEST.test(normalized)) return false;
+  const hasConcreteInput = CONCRETE_INPUT.test(normalized);
+  if (CONCEPTUAL_REQUEST.test(normalized) && !hasConcreteInput) return false;
+  return (DIRECT_EXECUTION_ACTION.test(normalized) && SCIENTIFIC_SCOPE.test(normalized))
+    || (hasConcreteInput && INPUT_BOUND_ACTION.test(normalized));
+}
+
 export function renderPrincipalWorkflowBlock(required: boolean): string {
   if (!required) return "";
   return [

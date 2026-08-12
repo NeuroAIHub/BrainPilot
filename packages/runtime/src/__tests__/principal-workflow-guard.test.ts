@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  isSubstantiveScientificExecutionRequest,
   makePrincipalWorkflowGuardExt,
   renderPrincipalWorkflowBlock,
   WORKFLOW_TAG_OPEN,
@@ -48,6 +49,21 @@ function setup(overrides: {
 }
 
 describe("principal workflow guard", () => {
+  it("requires the host guard only for explicit scientific execution requests", () => {
+    expect(isSubstantiveScientificExecutionRequest("What is a confidence interval?")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("Explain how model training works.")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("Please explain how to train a model.")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("请介绍一下模型训练")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("Polish this document.")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("Compare regression and classification models.")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("比较这两种模型的原理。")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("Train a model on the dataset and evaluate it.")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("Design an experiment to compare treatments.")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("Find patterns in this dataset.")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("帮我看看这组数据，找出异常。")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("请分析这个数据集并训练模型")).toBe(true);
+  });
+
   it("injects one fresh ephemeral state block and removes stale copies", () => {
     const { pi, setDelegated } = setup();
     const stale: Message = {

@@ -70,7 +70,10 @@ import {
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { renderTaskListBlock } from "./extensions/task-context.js";
 import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
-import { renderPrincipalWorkflowBlock } from "./extensions/principal-workflow-guard.js";
+import {
+  isSubstantiveScientificExecutionRequest,
+  renderPrincipalWorkflowBlock,
+} from "./extensions/principal-workflow-guard.js";
 import { loadCompatPluginProjections } from "./compat-hooks.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
@@ -321,6 +324,7 @@ interface SessionEntry {
   workflowTaskSeqBaseline: number;
   workflowReminderClaimed: boolean;
   workflowViolationEmitted: boolean;
+  workflowGuardRequired: boolean;
   /** Frozen system-plugin state for reproducible experiment sessions. */
   systemPlugins: SystemPluginSnapshot[];
   /**
@@ -1424,7 +1428,13 @@ export class SessionManager {
       persist: this.persist,
       bus,
       createChildSession: (args) => this.createSubagentSession(entry, args),
-      runWithProviderCapacity: (fn, borrowParent) => this.withProviderSlot(id, fn, borrowParent, true),
+      runWithProviderCapacity: (fn, capacity) => this.withProviderSlot(
+        id,
+        fn,
+        capacity.borrowParent,
+        capacity.allowNestedBorrow,
+        capacity.parentPromotion,
+      ),
       onUsage: (childId, usage) => {
         entry.tokenUsage.byAgent[childId] = usage;
         entry.tokenUsage.total = sumAgentUsage(entry.tokenUsage.byAgent);
@@ -1471,6 +1481,7 @@ export class SessionManager {
       workflowTaskSeqBaseline: input.workflowTaskSeqBaseline ?? 0,
       workflowReminderClaimed: input.workflowReminderClaimed === true,
       workflowViolationEmitted: input.workflowViolationEmitted === true,
+      workflowGuardRequired: false,
       systemPlugins,
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
       stats: emptySessionStats(id),
@@ -1717,6 +1728,16 @@ export class SessionManager {
     // never overlap.
     const resumeTargetAfterRun = await this.resumeTaskDelivery(entry, agentName);
 
+    // A substantive follow-up extends the current Principal workflow epoch.
+    // Exempt follow-ups never turn an already-required epoch off.
+    if (
+      agentName === "principal"
+      && agent.isStreaming
+      && isSubstantiveScientificExecutionRequest(content)
+    ) {
+      entry.workflowGuardRequired = true;
+    }
+
     // Concurrent send: the target agent is still streaming its previous run.
     // A plain prompt() would hit the SDK's "already processing" guard. Queue
     // the message as a follow-up onto the current run instead — no new runId,
@@ -1736,14 +1757,12 @@ export class SessionManager {
     // Start a fresh host-owned delegation epoch only for a new, idle Principal
     // user turn. Task-result deliveries and queued follow-ups remain in the
     // existing epoch, so a completed delegation continues to satisfy the guard.
-    if (
-      agentName === "principal"
-      && !this.deriveWorkActive(entry)
-    ) {
+    if (agentName === "principal") {
       entry.workflowTaskSeqBaseline = entry.taskLedger.list().reduce(
         (highest, task) => Math.max(highest, task.seq),
         0,
       );
+      entry.workflowGuardRequired = isSubstantiveScientificExecutionRequest(content);
       entry.workflowReminderClaimed = false;
       entry.workflowViolationEmitted = false;
       await this.writeMeta(entry);
@@ -2377,7 +2396,11 @@ export class SessionManager {
         context,
         tasks,
       }) : undefined,
-      waitSubagents: role === "expert" ? (childIds) => entry.subagents.waitFor(name, childIds) : undefined,
+      waitSubagents: role === "expert" ? (childIds) => entry.subagents.waitFor(
+        name,
+        childIds,
+        this.providerLease.getStore(),
+      ) : undefined,
       getSubagents: role === "expert" ? (childIds) => entry.subagents.listForParent(name, childIds) : undefined,
       cancelSubagents: role === "expert" ? (childIds) => entry.subagents.cancelForParent(name, childIds) : undefined,
       listSubagentProfiles: role === "expert" ? async () => (await allowedSubagentProfiles(this.dataRoot, name)).map((profile) => ({
@@ -2585,7 +2608,7 @@ export class SessionManager {
 
   private renderPrincipalWorkflowState(entry: SessionEntry): string {
     return renderPrincipalWorkflowBlock(
-      !this.hasQualifyingPrincipalDelegation(entry),
+      entry.workflowGuardRequired && !this.hasQualifyingPrincipalDelegation(entry),
     );
   }
 
@@ -2635,6 +2658,7 @@ export class SessionManager {
     fn: () => Promise<T>,
     borrowParent = false,
     allowNestedBorrow = false,
+    parentPromotion?: Promise<object>,
   ): Promise<T> {
     if (this.maxConcurrentAgents <= 0) return fn();
     // A custom tool runs inside the owning prompt's async chain. Its first
@@ -2654,7 +2678,40 @@ export class SessionManager {
       sem = new ProviderSemaphore(this.maxConcurrentAgents);
       this.providerSlots.set(sessionId, sem);
     }
-    const release = await sem.acquire();
+    const slot = sem.acquire();
+    if (parentPromotion && inherited?.sessionId === sessionId) {
+      const winner = await Promise.race([
+        slot.then((release) => ({ kind: "slot" as const, release })),
+        parentPromotion.then((lease) => ({ kind: "parent" as const, lease })),
+      ]);
+      if (winner.kind === "parent") {
+        const waitingParent = winner.lease as { sessionId: string; childLane: ProviderSemaphore };
+        if (waitingParent.sessionId === sessionId) {
+          // The owning parent chose to wait after starting background work.
+          // Reuse that currently-paused lease (including on a later turn) so
+          // concurrency=1 does not deadlock, then return any later global grant.
+          void slot.then((release) => release());
+          const releaseBorrowed = await waitingParent.childLane.acquire();
+          try {
+            return await this.providerLease.run(waitingParent, fn);
+          } finally {
+            releaseBorrowed();
+          }
+        }
+        const release = await slot;
+        try {
+          return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
+        } finally {
+          release();
+        }
+      }
+      try {
+        return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
+      } finally {
+        winner.release();
+      }
+    }
+    const release = await slot;
     try {
       return await this.providerLease.run({ sessionId, childLane: new ProviderSemaphore(1) }, fn);
     } finally {
@@ -2955,6 +3012,7 @@ export class SessionManager {
     if (this.deriveRunActive(entry)) return true;
     // Covers the acceptance→agent-running gap for a direct expert prompt.
     if (entry.activeRunId !== null) return true;
+    if (entry.subagents.hasActiveExecutions()) return true;
     if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running")) return true;
     for (const agent of entry.agents.values()) {
       if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
@@ -2964,11 +3022,7 @@ export class SessionManager {
 
   /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
   private hasAnyAgentActivity(entry: SessionEntry): boolean {
-    if (entry.runActive || entry.userInputs.active || entry.userInputs.queue.length > 0) return true;
-    for (const agent of entry.agents.values()) {
-      if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
-    }
-    return [...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`));
+    return this.deriveWorkActive(entry) || Boolean(entry.userInputs.active) || entry.userInputs.queue.length > 0;
   }
 
   private beginWorkspaceOperation(entry: SessionEntry, action: "restore" | "roll back"): void {

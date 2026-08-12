@@ -17,6 +17,7 @@ async function fixture(opts: { submit?: boolean; outcome?: "completed" | "blocke
   const data = join(root, "data");
   await Promise.all([mkdir(workspace, { recursive: true }), mkdir(state, { recursive: true }), mkdir(data, { recursive: true })]);
   const seen: Array<{ id: string; cwd: string; historyPath: string; prompt: string }> = [];
+  const providerBorrowRequests: boolean[] = [];
   let active = 0;
   let maxActive = 0;
   const manager = new SubagentManager({
@@ -50,7 +51,11 @@ async function fixture(opts: { submit?: boolean; outcome?: "completed" | "blocke
       };
       return session;
     },
-    runWithProviderCapacity: async (fn) => { await opts.capacityGate?.(); return fn(); },
+    runWithProviderCapacity: async (fn, capacity) => {
+      providerBorrowRequests.push(capacity.borrowParent);
+      await opts.capacityGate?.();
+      return fn();
+    },
     onUsage: () => {},
     onRunFinished: () => {},
     onChanged: () => {},
@@ -58,7 +63,7 @@ async function fixture(opts: { submit?: boolean; outcome?: "completed" | "blocke
     timeoutMs: opts.timeoutMs ?? 2_000,
     maxCopyBytes: opts.maxCopyBytes,
   });
-  return { root, workspace, state, data, manager, seen, maxActive: () => maxActive };
+  return { root, workspace, state, data, manager, seen, providerBorrowRequests, maxActive: () => maxActive };
 }
 
 describe("SubagentManager", () => {
@@ -93,6 +98,23 @@ describe("SubagentManager", () => {
       expect.objectContaining({ childId: started[0]!.id, status: "succeeded" }),
     ]);
     await expect(f.manager.waitFor("engineer", [started[0]!.id])).rejects.toThrow("not owned");
+  });
+
+  it("borrows parent provider capacity only for a synchronous batch", async () => {
+    const f = await fixture();
+    await f.manager.runBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-sync-capacity",
+      tasks: [{ name: "sync", profile: "literature-scout", task: "run synchronously" }],
+    });
+    const [background] = await f.manager.startBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-background-capacity",
+      tasks: [{ name: "background", profile: "literature-scout", task: "run in background" }],
+    });
+    await f.manager.waitFor("librarian", [background!.id]);
+
+    expect(f.providerBorrowRequests).toEqual([true, false]);
   });
 
   it("runs same-profile children with isolated histories/workspaces and stable result order", async () => {
