@@ -197,7 +197,8 @@ describe("searchSkills — query mode", () => {
     );
     expect(out.keywords).toEqual(["EEG"]);
     expect(out.results[0].name).toBe("eeg-paradigm-designer");
-    expect(out.results[0].keyword_hits).toBeGreaterThan(0);
+    expect(out.results[0].keyword_hits).toBe(1);
+    expect(out.results[0].score).toBe(13);
     expect(out.total_matched).toBe(1);
     expect(out.results[0].matched_fields).toEqual(expect.arrayContaining(["name", "description"]));
   });

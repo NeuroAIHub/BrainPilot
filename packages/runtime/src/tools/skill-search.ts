@@ -58,7 +58,9 @@ export interface QueryResultEntry {
   name: string;
   description: string;
   relative_paths: string[];
+  /** Legacy case-insensitive occurrence count within the description. */
   keyword_hits: number;
+  /** Field-weighted relevance score used for ranking. */
   score: number;
   matched_fields: string[];
   matched_terms: string[];
@@ -359,7 +361,7 @@ export async function searchSkills(base: string, args: SkillSearchArgs): Promise
         name: skill.name,
         description: skill.description,
         relative_paths: skill.relative_paths,
-        keyword_hits: score,
+        keyword_hits: countKeywordHits(skill.description, kws),
         score,
         matched_fields: matchedFields,
         matched_terms: matchedTerms,
