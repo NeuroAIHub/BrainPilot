@@ -305,6 +305,10 @@ export class SubagentManager {
     const execution = this.runOne(run).then((result) => {
       this.results.set(run.childId, result);
       return result;
+    }).finally(() => {
+      if (this.executions.get(run.childId) === execution) {
+        this.executions.delete(run.childId);
+      }
     });
     this.executions.set(run.childId, execution);
     return execution;
