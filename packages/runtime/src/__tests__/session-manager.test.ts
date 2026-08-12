@@ -127,39 +127,53 @@ describe("SessionManager (mock mode)", () => {
     expect(seen[0]).not.toContain("mcp__builtin__");
   });
 
-  it("wires fresh ephemeral GoT renderers for Principal and bound Auditor turns", async () => {
-    const renderers = new Map<string, () => string>();
+  it("does not wire GoT context renderers into agent turns", async () => {
+    const seen: string[] = [];
     const spyFactory: typeof mockAgentFactory = async (params) => {
-      if (params.renderGoTContext) renderers.set(params.agentName, params.renderGoTContext);
+      if ("renderGoTContext" in params) seen.push(params.agentName);
       return mockAgentFactory(params);
     };
     const sm = new SessionManager({ persist: false, agentFactory: spyFactory });
     const session = await sm.createSession();
     await sm.sendMessage(session.id, "hi");
-    await waitFor(() => renderers.has("principal"));
+    await waitFor(() => sm.listAgents(session.id).some((agent) => agent.name === "principal"));
+    expect(seen).toEqual([]);
+  });
 
-    const internal = sm as unknown as {
-      sessions: Map<string, {
-        trace: import("../trace.js").GraphOfTrace;
-        currentTraceAuditTarget?: import("../trace.js").TraceAuditTarget;
-      }>;
-      ensureAgent(sessionId: string, name: string): Promise<unknown>;
+  it("always wires the Principal workflow guard", async () => {
+    const seen: Parameters<typeof mockAgentFactory>[0][] = [];
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      seen.push(params);
+      return mockAgentFactory(params);
     };
-    const entry = internal.sessions.get(session.id)!;
-    const node = entry.trace.createNode({ title: "Review me" });
-    expect(renderers.get("principal")?.()).toContain(`"id":"${node.id}"`);
+    const manager = new SessionManager({ persist: false, agentFactory: spyFactory });
 
-    await internal.ensureAgent(session.id, "auditor");
-    entry.currentTraceAuditTarget = entry.trace.listPendingAuditTargets([node.id])[0];
-    expect(renderers.get("auditor")?.()).toContain("<bound_target>");
-    expect(renderers.get("auditor")?.()).toContain(node.id);
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "run the research task");
+    await waitFor(() => seen.some((params) => params.sessionId === session.id));
+    const principal = seen.find(
+      (params) => params.sessionId === session.id && params.agentName === "principal",
+    )!;
+    expect(principal.principalWorkflowGuard?.renderState()).toContain(
+      "only for substantive scientific execution",
+    );
+    expect(principal.principalWorkflowGuard?.renderState()).toContain(
+      "do not require Expert delegation",
+    );
+
+    const dispatch = principal.systemTools.find((tool) => tool.name === "dispatch_task")!;
+    await dispatch.execute({ to: "writer", content: "polish a document" });
+    expect(principal.principalWorkflowGuard?.hasQualifyingDelegation()).toBe(false);
+    await dispatch.execute({ to: "engineer", content: "inspect the data contract" });
+    expect(principal.principalWorkflowGuard?.hasQualifyingDelegation()).toBe(true);
+    expect(principal.principalWorkflowGuard?.renderState()).toBe("");
   });
 
   it("keeps high-impact action authorization in PI and expert personas", () => {
     expect(PERSONAS.principal).toContain("## User authorization gate");
     expect(PERSONAS.principal).toContain("Use `ask_user` first");
     expect(PERSONAS.principal).toContain("## Incremental planning for heavy work");
-    expect(PERSONAS.principal).toContain("dry run, smoke test, tiny dataset");
+    expect(PERSONAS.principal).toContain("broad, low-cost, decision-relevant comparison");
     expect(PERSONAS.engineer).toContain("## High-impact action gate");
     expect(PERSONAS.engineer).toContain('complete_task(task_id="<exact assigned ID>"');
     expect(PERSONAS.engineer).toContain("## Execution discipline");
@@ -224,6 +238,38 @@ describe("SessionManager (mock mode)", () => {
         reason: "experiment-override",
         version: "0.1.2",
       });
+    } finally {
+      await rm(root, { recursive: true, force: true });
+    }
+  });
+
+  it("ignores the removed workflow policy in legacy session metadata", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-legacy-workflow-policy-"));
+    try {
+      const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: mockAgentFactory });
+      const session = await manager.createSession();
+      const metaPath = join(root, ".bp", session.id, "meta.json");
+      const meta = JSON.parse(
+        await readFile(metaPath, "utf8"),
+      ) as Record<string, unknown>;
+      meta.workflowPolicy = "direct";
+      await writeFile(metaPath, JSON.stringify(meta));
+
+      const seen: Parameters<typeof mockAgentFactory>[0][] = [];
+      const restored = new SessionManager({
+        dataRoot: root,
+        persist: true,
+        agentFactory: async (params) => {
+          seen.push(params);
+          return mockAgentFactory(params);
+        },
+      });
+      await restored.restoreFromDisk();
+      await restored.sendMessage(session.id, "continue the research task");
+      await waitFor(() => seen.some((params) => params.sessionId === session.id));
+      expect(seen.find((params) => params.sessionId === session.id)?.principalWorkflowGuard)
+        .toBeDefined();
+      await waitFor(() => restored.getSessionState(session.id)?.workState.active === false);
     } finally {
       await rm(root, { recursive: true, force: true });
     }

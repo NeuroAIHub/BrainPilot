@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Code and Artifact"
+  short_description: "Check exports, packaging, and isolated inference"
+  default_prompt: "Use $audit-code-artifact to audit this implementation and its packaged artifact."

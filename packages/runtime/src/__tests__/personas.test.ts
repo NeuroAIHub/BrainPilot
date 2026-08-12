@@ -205,7 +205,196 @@ Stale local routing rule.`;
     const migrated = withoutLegacyAuditorInstructions(legacy);
     expect(migrated).toContain("Keep this custom guidance.");
     expect(migrated).not.toContain("Auditor review is independent");
-    expect(migrated).toContain("enabled review mechanism");
+    expect(migrated).toContain("records structurally valid causal parents directly");
+  });
+
+  it("requires PI to delegate complete research execution while retaining coordination tools", () => {
+    const pi = PERSONAS.principal!;
+    expect(pi).toContain("Mandatory workflow for complete research tasks");
+    expect(pi).toContain("MUST coordinate Experts and MUST");
+    expect(pi).toContain("NOT perform the scientific execution yourself");
+    expect(pi).toContain("engineer` invokes its `create-data-inventory` skill");
+    expect(pi).toContain("librarian` surveys credible alternatives");
+    expect(pi).toContain("experimentalist` reads the contract");
+    expect(pi).toContain("Delegated task results are");
+    expect(pi).toContain("Do not use `sleep`, polling loops");
+    expect(pi).toContain("never for Agent coordination");
+    expect(pi).toContain("Do not write analysis");
+    expect(pi).toContain("The training prohibition is absolute");
+    expect(pi).toContain("smoke-test training");
+    expect(pi).toContain("Delegate every such run to `engineer`");
+    expect(pi).toContain("you must not");
+    expect(pi).toContain("execute the training command yourself");
+  });
+
+  it("requires data contracts, protocols, and independent method rechecks", () => {
+    expect(PERSONAS.principal).toContain("invokes its `create-data-inventory` skill");
+    expect(PERSONAS.principal).toMatch(/canonical inventory as the\s+data-contract artifact/);
+    expect(PERSONAS.engineer).toContain("Research execution gate");
+    expect(PERSONAS.engineer).toMatch(/start full training,\s+model search/);
+    expect(PERSONAS.engineer).toContain("exported predictions match");
+    expect(PERSONAS.experimentalist).toContain("Complete-task protocol and independent recheck");
+    expect(PERSONAS.experimentalist).toContain("source tensor axes");
+  });
+
+  it("allows engineering preflight but defers formal implementation until research is ready", () => {
+    const pi = personaFor("principal", "principal");
+    const engineer = personaFor("engineer", "expert").replace(/\s+/g, " ");
+    expect(pi).toContain("Engineer preflight may begin before the method survey");
+    expect(pi).toContain("data contract, environment report, real-input inspection");
+    expect(pi).toContain("decision-neutral data and evaluation plumbing");
+    expect(pi).toContain("method survey and scientific protocol are complete");
+    expect(pi).toContain("formal candidate implementation");
+    expect(pi).toMatch(/freeze preprocessing or\s+decision-relevant hyperparameters/);
+    expect(pi).toMatch(/formal training, comparison, or\s+benchmark/);
+    expect(pi).toMatch(/record why a method\s+survey is not applicable/);
+    expect(engineer).toContain("Before formal candidate implementation");
+    expect(engineer).toContain("completed applicable method survey and Experimentalist-authored protocol");
+    expect(engineer).toContain("recorded reason that method choice is immaterial");
+  });
+
+  it("uses broad, staged, decision-relevant method comparison", () => {
+    const pi = PERSONAS.principal!;
+    const librarian = PERSONAS.librarian!;
+    const experimentalist = PERSONAS.experimentalist!;
+    const engineer = PERSONAS.engineer!;
+
+    expect(pi).toContain("minimum valid deliverable");
+    expect(pi).toContain("protocol proportional to those needs");
+    expect(pi).toContain("broad, low-cost, decision-relevant comparison");
+    expect(librarian).toContain("Method landscape");
+    expect(librarian).toContain("substantively different families");
+    expect(experimentalist).toContain("smallest procedure that answers the");
+    expect(experimentalist).toContain("Do not default to exhaustive nested");
+    expect(experimentalist).toContain("broad set of credible alternatives");
+    expect(experimentalist).toContain("selection evidence represents the intended use");
+    expect(experimentalist).toContain("not as a reason to enlarge the");
+    expect(engineer).toContain("bounded operational check");
+    expect(engineer).toContain("decision-relevant evaluation");
+    expect(engineer).toContain("optional depth before removing a comparison");
+    expect(engineer).toMatch(/infer superiority from an\s+incomplete comparison/);
+  });
+
+  it("requires result-driven real-data iteration before empirical completion", () => {
+    const pi = PERSONAS.principal!;
+    const experimentalist = PERSONAS.experimentalist!;
+    const engineer = PERSONAS.engineer!;
+
+    expect(pi).toContain("Empirical completion gate");
+    expect(pi).toContain("complete iteration ledger");
+    expect(pi).toContain("stop-no-meaningful-improvement");
+    expect(pi).toContain("not an executable stopping rule");
+
+    expect(experimentalist).toContain("Empirical iteration contract");
+    expect(experimentalist).toContain("minimum meaningful improvement");
+    expect(experimentalist).toContain("Issue exactly one");
+    expect(experimentalist).toContain("Loss decrease, finite");
+
+    expect(engineer).toContain("Representative real-data execution");
+    expect(engineer).toContain("Empirical result bundle");
+    expect(engineer).toContain("screening run cannot serve as the");
+    expect(engineer).toContain("do not hand off the model as scientifically complete");
+  });
+
+  it("requires Engineer to load the data-inventory skill before authoring the inventory", () => {
+    const engineer = personaFor("engineer", "expert");
+
+    expect(engineer).toContain("Data inventory skill gate");
+    expect(engineer).toContain("`create-data-inventory`");
+    expect(engineer).toMatch(/before writing or revising a data inventory/i);
+    expect(PERSONAS.experimentalist!).not.toContain("Data inventory skill gate");
+  });
+
+  it("injects the Engineer data-inventory skill gate into old overrides exactly once", () => {
+    const once = withCoreCoordinationProtocols("# Old Engineer", "engineer", "expert");
+    const twice = withCoreCoordinationProtocols(once, "engineer", "expert");
+
+    expect(twice.match(/^## Data inventory skill gate$/gm)).toHaveLength(1);
+    expect(twice).toMatch(/before writing or revising a data inventory/i);
+  });
+
+  it("requires Engineer to pass a miniature end-to-end gate before every full run", () => {
+    const engineer = personaFor("engineer", "expert").replace(/\s+/g, " ");
+
+    expect(engineer).toContain("Before every full-data, full-fold, full-seed, full-budget");
+    expect(engineer).toContain("same production entry point");
+    expect(engineer).toContain("data loading, preprocessing, fitting or training, evaluation, aggregation, serialization");
+    expect(engineer).toContain("after every material change to code, configuration, dependencies, or the execution environment");
+    expect(engineer).toContain("must not launch the full run");
+    expect(engineer).toContain("does not establish scientific validity");
+  });
+
+  it("requires Experimentalist to design and approve the miniature end-to-end gate", () => {
+    const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
+
+    expect(experimentalist).toContain("Miniature end-to-end preflight design");
+    expect(experimentalist).toContain("same production entry point and all applicable workflow stages");
+    expect(experimentalist).toContain("sampling, grouping, folds, seeds, reduced budgets");
+    expect(experimentalist).toContain("expected artifacts and explicit acceptance criteria");
+    expect(experimentalist).toContain("Engineer provides passing preflight evidence");
+    expect(experimentalist).toContain("after a material code, configuration, dependency, or environment change");
+    expect(experimentalist).toContain("not scientific outcome evidence");
+  });
+
+  it("injects the end-to-end gates into existing role prompt overrides exactly once", () => {
+    const engineerOnce = withCoreCoordinationProtocols("# Old Engineer", "engineer", "expert");
+    const engineerTwice = withCoreCoordinationProtocols(engineerOnce, "engineer", "expert");
+    const experimentalistOnce = withCoreCoordinationProtocols("# Old Experimentalist", "experimentalist", "expert");
+    const experimentalistTwice = withCoreCoordinationProtocols(experimentalistOnce, "experimentalist", "expert");
+
+    expect(engineerTwice.match(/^## Miniature end-to-end execution gate$/gm)).toHaveLength(1);
+    expect(engineerTwice).toContain("same production entry point");
+    expect(experimentalistTwice.match(/^## Miniature end-to-end preflight design$/gm)).toHaveLength(1);
+    expect(experimentalistTwice.replace(/\s+/g, " ")).toContain("Engineer provides passing preflight evidence");
+  });
+
+  it("requires Engineer to separate tunable parameters from implementation logic", () => {
+    const engineer = personaFor("engineer", "expert");
+    const normalized = engineer.replace(/\s+/g, " ");
+    expect(engineer).toContain("Parameter configuration discipline");
+    expect(normalized).toContain("machine-readable configuration");
+    expect(normalized).toContain("separate from the main implementation logic");
+    expect(normalized).toContain("stable name and physical unit");
+    expect(normalized).toContain("literature, prior experiment, protocol, framework default, or engineering constraint");
+    expect(normalized).toContain("consume the configuration rather than duplicate its values");
+    expect(normalized).toContain("test or bounded check showing that a configuration change reaches execution");
+    expect(normalized).toContain("configuration, implementation, provenance, and validation paths");
+  });
+
+  it("requires Engineer to inspect the environment and use working accelerators", () => {
+    const engineer = PERSONAS.engineer!;
+    expect(engineer).toContain("Environment and accelerator preflight");
+    expect(engineer).toContain("CPU and available memory");
+    expect(engineer).toContain("available VRAM");
+    expect(engineer).toContain("prefer GPU or another suitable accelerator");
+    expect(engineer).toContain("verify it with a small representative");
+    expect(engineer).toContain("smoke test before a long run");
+    expect(engineer).toContain("safe CPU fallback");
+    expect(engineer).toContain("workspace-local virtual");
+    expect(engineer).toContain("install/upgrade/uninstall task-relevant language dependencies");
+    expect(engineer).toContain("set non-secret process environment");
+    expect(engineer).toContain("modify workspace-local runtime configuration");
+    expect(engineer).toContain("This role-specific");
+    expect(engineer).toContain("authority does not require user authorization");
+    expect(engineer).toContain("non-representative");
+    expect(engineer).toContain("Host-wide system packages");
+    expect(engineer).toContain("normal user-authorization gate");
+  });
+
+  it("lets role-specific Engineer environment authority override the generic expert gate", () => {
+    const engineer = PERSONAS.engineer!;
+    expect(engineer).toContain("Unless a role-specific section explicitly grants narrower authority");
+    expect(engineer).toContain("dependency manifests or lockfiles");
+    expect(engineer).toContain("prefer isolated and reversible changes");
+    expect(PERSONAS.experimentalist!).not.toContain("workspace-local virtual environment");
+  });
+
+  it("injects the Engineer environment preflight into old overrides exactly once", () => {
+    const legacy = "# Custom Engineer\n\nLocal instructions.";
+    const once = withCoreCoordinationProtocols(legacy, "engineer", "expert");
+    const twice = withCoreCoordinationProtocols(once, "engineer", "expert");
+    expect(twice.match(/^## Environment and accelerator preflight$/gm)).toHaveLength(1);
+    expect(twice).toContain("prefer GPU or another suitable accelerator");
   });
 
   it("authoring experts mention their write/run capability", () => {

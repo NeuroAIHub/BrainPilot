@@ -20,9 +20,9 @@ import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeTaskContextExt } from "./extensions/task-context.js";
-import { makeGoTContextExt } from "./extensions/got-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
+import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
 import {
   installBrainPilotRetryClassifier,
@@ -138,8 +138,8 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   if (params.renderTaskContext) {
     extensionFactories.push(makeTaskContextExt({ renderTasks: params.renderTaskContext }));
   }
-  if (params.renderGoTContext) {
-    extensionFactories.push(makeGoTContextExt({ renderContext: params.renderGoTContext }));
+  if (params.principalWorkflowGuard) {
+    extensionFactories.push(makePrincipalWorkflowGuardExt(params.principalWorkflowGuard));
   }
   // #346: rewrite logical /workspace (and /data, …) onto durable volume roots
   // BEFORE other path guards run, so subsequent handlers see post-rewrite paths.

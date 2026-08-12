@@ -14,9 +14,21 @@ Create the next audit request with:
 - each prior finding ID and the producer's resolution claim;
 - changed files or replacement text;
 - new evidence;
-- any newly introduced hard claims.
+- any newly introduced hard claims;
+- previously confirmed checks whose evidence dependencies may have changed.
 
-Auditor classifies prior findings as `resolved` or `unresolved`, preserves their IDs, assigns new IDs only to new problems, and checks whether the correction introduced a new defect.
+Previously confirmed checks remain valid when their evidence dependencies are
+unchanged. Re-review only the open findings, changed paths, resolution evidence,
+new or changed claims, and directly affected dependencies. Reopen a confirmed
+check only when its code, data, metric definition, or evidence changed; a new
+result contradicts it; its prior basis proved wrong; or the correction altered
+a shared computation or data path. Do not repeat an expensive check merely to
+confirm it again.
+
+Auditor classifies prior findings as `resolved` or `unresolved`, preserves their
+IDs, assigns new IDs only to new problems, and checks the bounded correction for
+new defects. The next-audit scope in the report must name exact finding IDs and
+affected paths rather than request another full review.
 
 ## Stop conditions
 
