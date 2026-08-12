@@ -109,6 +109,42 @@ describe("rewriteLogicalPath", () => {
     expect(r.path).toBe(abs);
   });
 
+  it("prefers physical roots when the data root itself is mounted at /data", () => {
+    const mountedCwd = resolve("/data/workspaces/s1");
+    const mountedPersistentDir = resolve("/data/data");
+    const mountedRoots: ManagedPathRoots = {
+      cwd: mountedCwd,
+      persistentDir: mountedPersistentDir,
+    };
+
+    const workspace = rewriteLogicalPath("/data/workspaces/s1/scripts/train.py", mountedRoots);
+    expect(workspace).toMatchObject({
+      ok: true,
+      path: "/data/workspaces/s1/scripts/train.py",
+      rewritten: false,
+      root: "workspace",
+      abs: resolve(mountedCwd, "scripts/train.py"),
+    });
+
+    const physicalData = rewriteLogicalPath("/data/data/models/best.pkl", mountedRoots);
+    expect(physicalData).toMatchObject({
+      ok: true,
+      path: "/data/data/models/best.pkl",
+      rewritten: false,
+      root: "data",
+      abs: resolve(mountedPersistentDir, "models/best.pkl"),
+    });
+
+    const logicalData = rewriteLogicalPath("/data/models/best.pkl", mountedRoots);
+    expect(logicalData).toMatchObject({
+      ok: true,
+      path: resolve(mountedPersistentDir, "models/best.pkl"),
+      rewritten: true,
+      root: "data",
+      abs: resolve(mountedPersistentDir, "models/best.pkl"),
+    });
+  });
+
   it("rejects traversal out of /workspace", () => {
     const r = rewriteLogicalPath("/workspace/../../etc/passwd", roots);
     expect(r.ok).toBe(false);

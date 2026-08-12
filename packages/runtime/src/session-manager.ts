@@ -76,6 +76,7 @@ import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles
 import { materializeSkills } from "./materialize-skills.js";
 import { materializeKb } from "./materialize-kb.js";
 import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
+import { withExecutionToolContract } from "./execution-contract.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import { isWindows } from "./platform.js";
 import {
@@ -1672,6 +1673,15 @@ export class SessionManager {
     // file the user just attached. No-op when nothing was staged.
     await this.drainLocalUploads(sessionId);
 
+    // Snapshot user/Bench-provided inputs before the first agent prompt. Without
+    // this baseline the first record_trace diffs against Git's empty tree and
+    // incorrectly attributes every pre-existing workspace file to that event.
+    // A concurrent follow-up or ask_user answer must not snapshot a workspace
+    // while an agent is already mutating it.
+    if (!entry.runActive && !agent.isStreaming) {
+      await entry.checkpoints.ensureBaseline().catch(() => undefined);
+    }
+
     // Defense-in-depth for old clients/direct callers: ordinary text answers
     // the one visible FIFO head. Queued questions are never addressable.
     const visibleInput = entry.userInputs.active;
@@ -2266,6 +2276,7 @@ export class SessionManager {
     if (args.profile.modelId && providerConfig?.modelId !== args.profile.modelId) {
       throw new Error(`subagent profile model is not available in this provider: ${args.profile.modelId}`);
     }
+    const allowedToolNames = [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)];
     return this.agentFactory({
       sessionId: entry.id,
       agentName: args.childId,
@@ -2273,8 +2284,8 @@ export class SessionManager {
       historyPath: args.historyPath,
       cwd: args.cwd,
       systemTools,
-      allowedToolNames: [...args.profile.builtinTools, ...systemTools.map((tool) => tool.name)],
-      systemPrompt: withLanguageDirective(args.profile.prompt),
+      allowedToolNames,
+      systemPrompt: withExecutionToolContract(withLanguageDirective(args.profile.prompt), allowedToolNames),
       suppressCoordinationHooks: true,
       skillPaths,
       managedPathRoots: { cwd: args.cwd, persistentDir: join(args.cwd, ".persistent-unavailable") },
@@ -2399,12 +2410,15 @@ export class SessionManager {
       cwd: sessionCwd,
       systemTools: agentTools,
       allowedToolNames,
-      systemPrompt: await this.loadPersona(
-        name,
-        role,
-        entry.domainResources,
-        entry.systemPlugins,
-        skillSearchEnabled,
+      systemPrompt: withExecutionToolContract(
+        await this.loadPersona(
+          name,
+          role,
+          entry.domainResources,
+          entry.systemPlugins,
+          skillSearchEnabled,
+        ),
+        allowedToolNames,
       ),
       skillPaths,
       compatPluginProjections: name === "principal"
