@@ -10,7 +10,7 @@ Use the durable task system for every handoff. Do not ask the user to relay audi
 ## Select the role procedure
 
 - If you are `principal`, read [references/pi-orchestration.md](references/pi-orchestration.md) and follow it. Load the request template before dispatching an audit. Load the revision-loop reference after receiving a `revise` or `block` verdict.
-- If you are `auditor`, read [references/auditor-review.md](references/auditor-review.md) and follow it. Load the response template before completing the assigned audit task.
+- If you are `auditor`, read [references/auditor-review.md](references/auditor-review.md) and follow it. Load only the specialist audit skills relevant to the assigned risks, then load the response template before completing the task.
 - If you are any other agent, provide an evidence-addressable result to PI; do not start or adjudicate the audit loop yourself.
 
 ## Load only the needed templates
@@ -19,4 +19,13 @@ Use the durable task system for every handoff. Do not ask the user to relay audi
 - Audit response: [references/audit-response-template.md](references/audit-response-template.md)
 - Correction and incremental re-review: [references/revision-loop.md](references/revision-loop.md)
 
-Keep audit content in `dispatch_task` and `complete_task`. Do not use a separate audit-report submission tool.
+Keep audit requests in `dispatch_task`, full findings in the versioned report,
+and only the compact report pointer in `complete_task`. Do not use a separate
+audit-report submission tool.
+
+## Specialist audit skills
+
+- [Data integrity](../audit-data-integrity/SKILL.md)
+- [Model validation](../audit-model-validation/SKILL.md)
+- [Code and artifact](../audit-code-artifact/SKILL.md)
+- [Evidence](../audit-evidence/SKILL.md)

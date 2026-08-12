@@ -6,7 +6,9 @@ import {
   collectAllSkills,
   countKeywordHits,
   normalizeKeywords,
+  normalizeSearchText,
   parseFrontmatterDescription,
+  scoreSkill,
   searchSkills,
   createSkillSearchTool,
 } from "../tools/skill-search.js";
@@ -28,7 +30,10 @@ async function makeFixtureBase(): Promise<string> {
     join(a, "SKILL.md"),
     `---
 name: eeg-paradigm-designer
-description: "Design oddball, N400, P300 EEG paradigms with stimulus timing tables."
+description: >-
+  Design oddball, N400, P300 EEG paradigms with stimulus timing tables.
+domain: electrophysiology
+aliases: [ERP designer, event-related potential]
 ---
 
 Body content for the EEG paradigm designer.`,
@@ -80,6 +85,9 @@ describe("parseFrontmatterDescription", () => {
     expect(parseFrontmatterDescription("no frontmatter")).toBe("");
     expect(parseFrontmatterDescription(`---\nname: foo\n---\nbody`)).toBe("");
   });
+  it("parses folded YAML descriptions", () => {
+    expect(parseFrontmatterDescription("---\ndescription: >-\n  line one\n  line two\n---\nbody")).toBe("line one line two");
+  });
 });
 
 describe("countKeywordHits", () => {
@@ -111,6 +119,11 @@ describe("normalizeKeywords", () => {
 
   it("handles a single keyword string with no commas", () => {
     expect(normalizeKeywords("fMRI")).toEqual(["fMRI"]);
+  });
+
+  it("deduplicates Unicode-normalized terms", () => {
+    expect(normalizeKeywords("EEG, eeg, ＥＥＧ")).toEqual(["EEG"]);
+    expect(normalizeSearchText("signal_processing/EEG")).toBe("signal processing eeg");
   });
 
   // Defensive fallback: the JSON schema now advertises `keywords` as a plain
@@ -145,6 +158,30 @@ describe("collectAllSkills", () => {
     expect(eeg.description).toMatch(/oddball/i);
     // Both paths are recorded.
     expect(eeg.relative_paths).toHaveLength(2);
+    expect(eeg.domain).toBe("electrophysiology");
+    expect(eeg.aliases).toContain("ERP designer");
+    expect(eeg.categories).toEqual(expect.arrayContaining(["02_Cross-Domain", "05_EEG_ERP"]));
+  });
+});
+
+describe("scoreSkill", () => {
+  it("weights names and aliases above description-only matches", () => {
+    const named = scoreSkill({
+      name: "eeg-cleaning",
+      description: "general utilities",
+      aliases: [],
+      categories: ["signals"],
+      relative_paths: ["signals/eeg-cleaning"],
+    }, ["eeg"]);
+    const described = scoreSkill({
+      name: "utilities",
+      description: "supports EEG",
+      aliases: [],
+      categories: ["misc"],
+      relative_paths: ["misc/utilities"],
+    }, ["eeg"]);
+    expect(named.score).toBeGreaterThan(described.score);
+    expect(named.matchedFields).toContain("name");
   });
 });
 
@@ -160,15 +197,15 @@ describe("searchSkills — query mode", () => {
     );
     expect(out.keywords).toEqual(["EEG"]);
     expect(out.results[0].name).toBe("eeg-paradigm-designer");
-    expect(out.results[0].keyword_hits).toBeGreaterThan(0);
-    // Other skills with no hits are still returned (lower rank), which is
-    // fine — total_matched only counts hit>0 entries.
+    expect(out.results[0].keyword_hits).toBe(1);
+    expect(out.results[0].score).toBe(13);
     expect(out.total_matched).toBe(1);
+    expect(out.results[0].matched_fields).toEqual(expect.arrayContaining(["name", "description"]));
   });
 
   it("topk truncates the result list", async () => {
     const out = JSON.parse(
-      await searchSkills(base, { mode: "query", keywords: "x", topk: 1 }),
+      await searchSkills(base, { mode: "query", keywords: "publication", topk: 1 }),
     );
     expect(out.returned).toBe(1);
     expect(out.results).toHaveLength(1);

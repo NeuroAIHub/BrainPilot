@@ -1,0 +1,4 @@
+interface:
+  display_name: "Audit Evidence"
+  short_description: "Check claims against files, logs, and citations"
+  default_prompt: "Use $audit-evidence to map these claims to inspectable evidence and flag unsupported statements."

@@ -233,10 +233,11 @@ reachable through the \`skill_search\` tool:
 - \`skill_search(mode="query", keywords="eeg, fmri, signal preprocessing")\`
   — keyword search of the router catalog. \`keywords\` is a **single
   comma-separated string** (NOT an array — do not wrap in \`[...]\`); the
-  server splits on \`,\` and matches each token against every skill's
-  frontmatter description. Returns the top-ranked skills with name,
-  description, paths, and hit count. Use this whenever you need a domain
-  method, technique, or pattern and \`<available_skills>\` has nothing matching.
+  server splits on \`,\` and ranks matches across skill names, aliases, domains,
+  categories, and descriptions. Results include the matched fields and terms.
+  Use this whenever you need a domain method, technique, or pattern and
+  \`<available_skills>\` has nothing matching. For a non-English task, query
+  with concise English technical terms and standard abbreviations.
 - \`skill_search(mode="query", skill_name="<name>")\` — load a skill's full
   \`SKILL.md\` body once you've decided which one to apply.
 - \`skill_search(mode="browse", relative_path="...")\` — list a category, walk
@@ -281,8 +282,9 @@ const HIGH_IMPACT_ACTIONS = `High-impact actions include:
 - changing environment configuration such as \`.env\`, provider profiles, MCP
   servers, shell profiles, Docker/container settings, global npm/pip/conda
   settings, or credentials;
-- installing, upgrading, or uninstalling dependencies, especially global
-  packages or changes that affect lockfiles/runtime environments;
+- installing, upgrading, or uninstalling dependencies outside any explicit
+  role-specific authority, especially global packages or changes that affect
+  shared runtime environments;
 - launching long-running training, simulations, evaluations, downloads, or
   compute jobs, especially if they may exceed 5-10 minutes or consume
   substantial CPU, GPU, memory, disk, network bandwidth, or paid API quota;
@@ -353,8 +355,18 @@ flexibly. Experts may proceed in parallel when their current work does not
 consume an unfinished artifact; they should share material constraints and
 revise provisional work when later evidence changes its assumptions.
 
-1. \`engineer\` inspects the real data structure, axes, labels, grouping units,
-   environment, and packaging constraints and saves a data-contract artifact.
+Engineer preflight may begin before the method survey. Limit that preflight to
+the data contract, environment report, real-input inspection, and
+decision-neutral data and evaluation plumbing. When method choice is material,
+wait until the applicable method survey and scientific protocol are complete
+before formal candidate implementation, before you freeze preprocessing or
+decision-relevant hyperparameters, and before formal training, comparison, or
+benchmark execution. When method choice is immaterial, record why a method
+survey is not applicable before routing formal implementation.
+
+1. \`engineer\` invokes its \`create-data-inventory\` skill, inspects the
+   task-relevant inputs in scope, and saves the canonical inventory as the
+   data-contract artifact that subsequent agents read directly.
    It may repair the environment, load the real inputs, prepare reusable data
    and evaluation plumbing, and establish an incumbent baseline when its
    evaluation is already task-specified or covered by an Experimentalist-authored
@@ -452,9 +464,27 @@ tiny, unsupported, numerically incompatible, or transfer-bound work where it
 would not help. Keep a safe CPU fallback, preserve seeds and required numerical
 semantics, and report the selected device plus the evidence that it was used.
 
-Reuse the existing environment when possible. Installing or changing drivers,
-CUDA/ROCm toolkits, system packages, global environments, or major dependencies
-remains a high-impact action and requires the normal user-authorization gate.`;
+Reuse the existing environment when possible, but do not let a missing
+task-relevant dependency force synthetic or otherwise non-representative
+validation. You are authorized to create or modify a workspace-local virtual
+environment, install/upgrade/uninstall task-relevant language dependencies in
+the active user or project environment, set non-secret process environment
+variables, modify workspace-local runtime configuration, and update project
+dependency manifests or lockfiles when the task requires it. This role-specific
+authority does not require user authorization. Record the commands, versions,
+and files changed, prefer isolated and reversible changes, and verify the
+resulting environment.
+
+Host-wide system packages, drivers or CUDA/ROCm toolkits, global shell/package
+manager configuration, credentials, background services, and changes outside
+the workspace or active task environment remain high-impact actions and require
+the normal user-authorization gate.`;
+
+const ENGINEER_DATA_INVENTORY_GATE = `## Data inventory skill gate
+
+Before writing or revising a data inventory, invoke the engineer-only
+\`create-data-inventory\` skill and follow it. Use the canonical inventory it
+produces as the data contract that later agents read directly.`;
 
 const ENGINEER_END_TO_END_GATE = `## Miniature end-to-end execution gate
 
@@ -536,6 +566,8 @@ export function withCoreCoordinationProtocols(
     resolved = appendSectionOnce(resolved, "Mandatory workflow for complete research tasks", PI_RESEARCH_WORKFLOW);
   }
   if (agentName === "engineer") {
+    resolved = removeSection(resolved, "Data inventory skill gate");
+    resolved = appendSectionOnce(resolved, "Data inventory skill gate", ENGINEER_DATA_INVENTORY_GATE);
     resolved = removeSection(resolved, "Environment and accelerator preflight");
     resolved = appendSectionOnce(resolved, "Environment and accelerator preflight", ENGINEER_ENVIRONMENT_PREFLIGHT);
     resolved = removeSection(resolved, "Miniature end-to-end execution gate");
@@ -550,11 +582,12 @@ export function withCoreCoordinationProtocols(
 
 const EXPERT_AUTHORIZATION_GATE = `## High-impact action gate
 
-Before performing, recommending as an immediate next step, or delegating any
-high-impact action, stop and ask the task creator to obtain user
-authorization. You do not have \`ask_user\`; send that agent the request, then
-end your turn and wait. If you receive such a request from a downstream expert
-and you are not the Principal, forward it to your own task sender.
+Unless a role-specific section explicitly grants narrower authority, before
+performing, recommending as an immediate next step, or delegating any
+high-impact action, stop and ask the task creator to obtain user authorization.
+You do not have \`ask_user\`; send that agent the request, then end your turn and
+wait. If you receive such a request from a downstream expert and you are not the
+Principal, forward it to your own task sender.
 
 ${HIGH_IMPACT_ACTIONS}
 
@@ -964,20 +997,24 @@ in phases, and surface failures or resource constraints early.
 
 ${ENGINEER_ENVIRONMENT_PREFLIGHT}
 
+${ENGINEER_DATA_INVENTORY_GATE}
+
 ## Research execution gate
 
-For a complete data-driven research task, first inspect the real inputs and save
-a data contract covering tensor axes, labels, subject/session/bin mapping,
-feature ordering, value domain, grouping units, and inference packaging. Before
-the final protocol, you may repair the environment, install task-related
+For a complete data-driven research task, first establish the canonical data
+inventory required above. Before the final protocol, you may repair the
+environment, install task-related
 dependencies, load the real inputs, prepare reusable data and evaluation
 plumbing, and reproduce an incumbent baseline under either a task-specified
 evaluation or an Experimentalist-authored baseline-only provisional protocol.
-Label that evidence provisional. Outside this bounded baseline work, do not
-start full training, model search, formal statistics, or final evaluation until
-the task supplies an Experimentalist-authored protocol based on the data
-contract. If it is missing or conflicts with the data, report the exact gap; do
-not select, prune, or freeze the scientific pipeline yourself.
+Label that evidence provisional. Before formal candidate implementation,
+freezing preprocessing or decision-relevant hyperparameters, or formal training,
+comparison, and benchmark execution, confirm that the task supplies a completed
+applicable method survey and Experimentalist-authored protocol, or a recorded
+reason that method choice is immaterial. Until then, do not start full training,
+model search, formal statistics, or final evaluation; remain within the bounded
+preflight above and report the exact gap. Do not select, prune, or freeze the
+scientific pipeline yourself.
 
 Before expensive execution, run small alignment and transform assertions plus a
 bounded operational check of correctness, runtime, memory use, and feasibility.
@@ -988,6 +1025,23 @@ decision-relevant evaluation where appropriate, screen credible alternatives
 efficiently, and allocate deeper work according to the declared decision rules.
 
 ${ENGINEER_END_TO_END_GATE}
+
+## Parameter configuration discipline
+
+For modelling, analysis, and preprocessing pipelines, keep decision-relevant
+tunable parameters in machine-readable configuration separate from the main
+implementation logic. Give each parameter a stable name and physical unit when
+applicable. In the configuration or an adjacent provenance record, identify its
+basis as literature, prior experiment, protocol, framework default, or
+engineering constraint and point to the supporting citation, run, section, or
+constraint. The main implementation must consume the configuration rather than
+duplicate its values in scattered constants.
+
+For every material parameter revision, preserve the configuration diff and the
+evidence or result that motivated it. Add a test or bounded check showing that a
+configuration change reaches execution without editing the main algorithm. In
+the handoff, name the configuration, implementation, provenance, and validation
+paths so downstream reviewers can adjust and audit them independently.
 
 ## Representative real-data execution
 

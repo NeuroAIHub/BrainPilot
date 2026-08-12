@@ -9,13 +9,43 @@
   "protocols": { "agentInstructions": "1" },
   "environments": ["local", "cloud"],
   "contributes": {
-    "skills": [{
-      "id": "audit-feedback-loop",
-      "title": "Audit Feedback Loop",
-      "description": "Coordinate PI and Auditor review, correction, and incremental re-review.",
-      "entry": "skills/audit-feedback-loop/SKILL.md",
-      "targets": ["principal", "auditor"]
-    }],
+    "skills": [
+      {
+        "id": "audit-feedback-loop",
+        "title": "Audit Feedback Loop",
+        "description": "Coordinate PI and Auditor review, correction, and incremental re-review.",
+        "entry": "skills/audit-feedback-loop/SKILL.md",
+        "targets": ["principal", "auditor"]
+      },
+      {
+        "id": "audit-data-integrity",
+        "title": "Audit Data Integrity",
+        "description": "Audit data semantics, sample alignment, leakage, splits, and preprocessing boundaries.",
+        "entry": "skills/audit-data-integrity/SKILL.md",
+        "targets": ["auditor"]
+      },
+      {
+        "id": "audit-model-validation",
+        "title": "Audit Method Validation",
+        "description": "Audit method discovery, representative validation, collapse risks, selection evidence, and claim scope.",
+        "entry": "skills/audit-model-validation/SKILL.md",
+        "targets": ["auditor"]
+      },
+      {
+        "id": "audit-code-artifact",
+        "title": "Audit Code and Artifact",
+        "description": "Audit implementation correctness, export equivalence, packaging, and isolated inference.",
+        "entry": "skills/audit-code-artifact/SKILL.md",
+        "targets": ["auditor"]
+      },
+      {
+        "id": "audit-evidence",
+        "title": "Audit Evidence",
+        "description": "Audit numeric, artifact, log, and citation claims against inspectable evidence.",
+        "entry": "skills/audit-evidence/SKILL.md",
+        "targets": ["auditor"]
+      }
+    ],
     "agentInstructions": [
       {
         "id": "principal-audit-loop",
@@ -30,14 +60,6 @@
         "title": "Auditor role",
         "entry": "prompts/auditor.md",
         "targets": ["auditor"],
-        "mode": "append",
-        "priority": 100
-      },
-      {
-        "id": "trace-audit-contract",
-        "title": "Trace audit contract",
-        "entry": "prompts/trace.md",
-        "targets": ["trace"],
         "mode": "append",
         "priority": 100
       }

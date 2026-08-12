@@ -213,7 +213,7 @@ Stale local routing rule.`;
     expect(pi).toContain("Mandatory workflow for complete research tasks");
     expect(pi).toContain("MUST coordinate Experts and MUST");
     expect(pi).toContain("NOT perform the scientific execution yourself");
-    expect(pi).toContain("engineer` inspects the real data structure");
+    expect(pi).toContain("engineer` invokes its `create-data-inventory` skill");
     expect(pi).toContain("librarian` surveys credible alternatives");
     expect(pi).toContain("experimentalist` reads the contract");
     expect(pi).toContain("Delegated task results are");
@@ -228,11 +228,29 @@ Stale local routing rule.`;
   });
 
   it("requires data contracts, protocols, and independent method rechecks", () => {
+    expect(PERSONAS.principal).toContain("invokes its `create-data-inventory` skill");
+    expect(PERSONAS.principal).toMatch(/canonical inventory as the\s+data-contract artifact/);
     expect(PERSONAS.engineer).toContain("Research execution gate");
-    expect(PERSONAS.engineer).toContain("start full training, model search");
+    expect(PERSONAS.engineer).toMatch(/start full training,\s+model search/);
     expect(PERSONAS.engineer).toContain("exported predictions match");
     expect(PERSONAS.experimentalist).toContain("Complete-task protocol and independent recheck");
     expect(PERSONAS.experimentalist).toContain("source tensor axes");
+  });
+
+  it("allows engineering preflight but defers formal implementation until research is ready", () => {
+    const pi = personaFor("principal", "principal");
+    const engineer = personaFor("engineer", "expert").replace(/\s+/g, " ");
+    expect(pi).toContain("Engineer preflight may begin before the method survey");
+    expect(pi).toContain("data contract, environment report, real-input inspection");
+    expect(pi).toContain("decision-neutral data and evaluation plumbing");
+    expect(pi).toContain("method survey and scientific protocol are complete");
+    expect(pi).toContain("formal candidate implementation");
+    expect(pi).toMatch(/freeze preprocessing or\s+decision-relevant hyperparameters/);
+    expect(pi).toMatch(/formal training, comparison, or\s+benchmark/);
+    expect(pi).toMatch(/record why a method\s+survey is not applicable/);
+    expect(engineer).toContain("Before formal candidate implementation");
+    expect(engineer).toContain("completed applicable method survey and Experimentalist-authored protocol");
+    expect(engineer).toContain("recorded reason that method choice is immaterial");
   });
 
   it("uses broad, staged, decision-relevant method comparison", () => {
@@ -278,6 +296,23 @@ Stale local routing rule.`;
     expect(engineer).toContain("do not hand off the model as scientifically complete");
   });
 
+  it("requires Engineer to load the data-inventory skill before authoring the inventory", () => {
+    const engineer = personaFor("engineer", "expert");
+
+    expect(engineer).toContain("Data inventory skill gate");
+    expect(engineer).toContain("`create-data-inventory`");
+    expect(engineer).toMatch(/before writing or revising a data inventory/i);
+    expect(PERSONAS.experimentalist!).not.toContain("Data inventory skill gate");
+  });
+
+  it("injects the Engineer data-inventory skill gate into old overrides exactly once", () => {
+    const once = withCoreCoordinationProtocols("# Old Engineer", "engineer", "expert");
+    const twice = withCoreCoordinationProtocols(once, "engineer", "expert");
+
+    expect(twice.match(/^## Data inventory skill gate$/gm)).toHaveLength(1);
+    expect(twice).toMatch(/before writing or revising a data inventory/i);
+  });
+
   it("requires Engineer to pass a miniature end-to-end gate before every full run", () => {
     const engineer = personaFor("engineer", "expert").replace(/\s+/g, " ");
 
@@ -313,6 +348,19 @@ Stale local routing rule.`;
     expect(experimentalistTwice.replace(/\s+/g, " ")).toContain("Engineer provides passing preflight evidence");
   });
 
+  it("requires Engineer to separate tunable parameters from implementation logic", () => {
+    const engineer = personaFor("engineer", "expert");
+    const normalized = engineer.replace(/\s+/g, " ");
+    expect(engineer).toContain("Parameter configuration discipline");
+    expect(normalized).toContain("machine-readable configuration");
+    expect(normalized).toContain("separate from the main implementation logic");
+    expect(normalized).toContain("stable name and physical unit");
+    expect(normalized).toContain("literature, prior experiment, protocol, framework default, or engineering constraint");
+    expect(normalized).toContain("consume the configuration rather than duplicate its values");
+    expect(normalized).toContain("test or bounded check showing that a configuration change reaches execution");
+    expect(normalized).toContain("configuration, implementation, provenance, and validation paths");
+  });
+
   it("requires Engineer to inspect the environment and use working accelerators", () => {
     const engineer = PERSONAS.engineer!;
     expect(engineer).toContain("Environment and accelerator preflight");
@@ -322,7 +370,23 @@ Stale local routing rule.`;
     expect(engineer).toContain("verify it with a small representative");
     expect(engineer).toContain("smoke test before a long run");
     expect(engineer).toContain("safe CPU fallback");
+    expect(engineer).toContain("workspace-local virtual");
+    expect(engineer).toContain("install/upgrade/uninstall task-relevant language dependencies");
+    expect(engineer).toContain("set non-secret process environment");
+    expect(engineer).toContain("modify workspace-local runtime configuration");
+    expect(engineer).toContain("This role-specific");
+    expect(engineer).toContain("authority does not require user authorization");
+    expect(engineer).toContain("non-representative");
+    expect(engineer).toContain("Host-wide system packages");
     expect(engineer).toContain("normal user-authorization gate");
+  });
+
+  it("lets role-specific Engineer environment authority override the generic expert gate", () => {
+    const engineer = PERSONAS.engineer!;
+    expect(engineer).toContain("Unless a role-specific section explicitly grants narrower authority");
+    expect(engineer).toContain("dependency manifests or lockfiles");
+    expect(engineer).toContain("prefer isolated and reversible changes");
+    expect(PERSONAS.experimentalist!).not.toContain("workspace-local virtual environment");
   });
 
   it("injects the Engineer environment preflight into old overrides exactly once", () => {
