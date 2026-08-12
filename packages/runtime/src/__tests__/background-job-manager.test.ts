@@ -63,8 +63,10 @@ describe("BackgroundJobManager", () => {
     await waitFor(() => manager.get(job.id)?.stdoutTail?.includes("progress") === true);
     expect(completions).toEqual([]);
     await waitFor(() => completions.length === 1);
-    expect(completions[0]?.stdoutTail).toContain("progress");
-    expect(completions[0]?.stderrTail).toContain("diagnostic");
+    expect(completions[0]).not.toHaveProperty("stdoutTail");
+    expect(completions[0]).not.toHaveProperty("stderrTail");
+    expect(manager.get(job.id)?.stdoutTail).toContain("progress");
+    expect(manager.get(job.id)?.stderrTail).toContain("diagnostic");
     expect(await readFile(job.logPath, "utf8")).toContain("progress");
   });
 

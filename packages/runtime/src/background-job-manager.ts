@@ -44,8 +44,6 @@ export interface BackgroundJobCompletion {
   exitCode: number | null;
   signal: NodeJS.Signals | null;
   logPath: string;
-  stdoutTail?: string;
-  stderrTail?: string;
   logTruncated: boolean;
 }
 
@@ -315,8 +313,6 @@ export class BackgroundJobManager {
         exitCode,
         signal,
         logPath: info.logPath,
-        ...(info.stdoutTail ? { stdoutTail: info.stdoutTail } : {}),
-        ...(info.stderrTail ? { stderrTail: info.stderrTail } : {}),
         logTruncated: info.logTruncated === true,
       });
     }

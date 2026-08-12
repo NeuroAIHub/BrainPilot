@@ -49,7 +49,10 @@ describe("Background Jobs runtime integration", () => {
     await waitFor(() => prompts.some((item) => item.text.includes("<background_job_events")));
     const completion = prompts.filter((item) => item.text.includes("<background_job_events"));
     expect(completion).toHaveLength(1);
-    expect(completion[0]?.text).toContain("progress");
+    expect(completion[0]?.text).not.toContain("progress");
+    expect(completion[0]?.text).not.toContain("stdout_tail");
+    expect(completion[0]?.text).toContain("log_path=");
+    expect(completion[0]?.text).toContain("Inspect the referenced log only when needed");
     expect(completion[0]?.text).toContain("untrusted=\"true\"");
     manager.shutdown();
   });

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { withExecutionToolContract } from "../execution-contract.js";
+import { createRunInBackgroundTool } from "../tools/system-tools.js";
 
 describe("agent execution tool contract", () => {
   it("does not burden agents that cannot invoke Bash", () => {
@@ -22,5 +23,13 @@ describe("agent execution tool contract", () => {
     expect(prompt).toContain("explicit `timeout_ms`");
     expect(prompt).toContain("model training");
     expect(prompt).toContain("Monitor is for streaming observation");
+  });
+
+  it("lets agents continue independent work before waiting for a background job", () => {
+    const tool = createRunInBackgroundTool({} as never);
+
+    expect(tool.description).toContain("continue other independent work");
+    expect(tool.description).toContain("If no other actionable work remains");
+    expect(tool.description).toContain("do not sleep or poll");
   });
 });

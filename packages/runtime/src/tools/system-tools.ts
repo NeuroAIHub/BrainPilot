@@ -384,7 +384,8 @@ export function createRunInBackgroundTool(deps: ToolDeps): SystemTool {
       "the runtime wakes you exactly when the job completes, fails, or times out, including for silent commands. " +
       "Always choose a stable job_key for the logical workload. A second active job with the same key is rejected unless " +
       "replace_existing=true, which stops the old process group before starting the replacement. " +
-      "After starting, do not sleep or poll. If this is your only remaining work, end the current turn and wait for the completion event.",
+      "After starting, continue other independent work already in scope, but do not sleep or poll. " +
+      "If no other actionable work remains, end the current turn and wait for the completion event.",
     parameters: {
       type: "object",
       properties: {
