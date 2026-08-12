@@ -277,7 +277,7 @@ describe("SessionManager (mock mode)", () => {
         .toBeDefined();
       await waitFor(() => restored.getSessionState(session.id)?.workState.active === false);
     } finally {
-      await rm(root, { recursive: true, force: true });
+      await rm(root, { recursive: true, force: true, maxRetries: 5, retryDelay: 20 });
     }
   });
 
