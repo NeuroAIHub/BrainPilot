@@ -715,12 +715,12 @@ export function FileSidebar({
     return !isDirty || window.confirm(t("files.editor.confirmDiscard"));
   }, [isDirty, t]);
 
-  const selectFile = async (node: FileNode, line?: number) => {
+  const selectFile = async (node: FileNode, line?: number, discardConfirmed = false) => {
     if (node.path === selectedPath) {
       setRequestedLine(line);
       return;
     }
-    if (!confirmDiscard()) return;
+    if (!discardConfirmed && !confirmDiscard()) return;
     setSelectedPath(node.path);
     setSelectedContent(null);
     setDraftContent("");
@@ -771,7 +771,7 @@ export function FileSidebar({
           if (index === parts.length - 1) {
             if (child.type !== "file") throw new Error(t("files.error.linkNotFile"));
             setExpandedPaths((current) => new Set([...current, ...expanded]));
-            await selectFile(child, openFileRequest.line);
+            await selectFile(child, openFileRequest.line, true);
             return;
           }
           if (child.type !== "folder" && child.type !== "symlink") {

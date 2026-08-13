@@ -8,7 +8,7 @@ import { runtimeConfig } from "../../config";
 import { PromptComposer } from "../chat/PromptComposer";
 import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
-import { fileSidebarScopeKey } from "../files/fileSidebarScope";
+import { fileRequestForScope, fileSidebarScopeKey } from "../files/fileSidebarScope";
 import { IconButton } from "../primitives/IconButton";
 import { SearchDialog } from "../search/SearchDialog";
 import { SettingsDialog, type SettingsTab } from "../settings/SettingsDialog";
@@ -52,7 +52,9 @@ export function DesktopShell() {
   };
   const [isFilesOpen, setIsFilesOpen] = useState(false);
   const [hasUnsavedFileChanges, setHasUnsavedFileChanges] = useState(false);
-  const [openFileRequest, setOpenFileRequest] = useState<(WorkspaceFileTarget & { requestId: number }) | null>(null);
+  const [openFileRequest, setOpenFileRequest] = useState<(
+    WorkspaceFileTarget & { requestId: number; scopeKey: string }
+  ) | null>(null);
   const [fileSidebarWidth, setFileSidebarWidth] = useState(420);
   const [isFileSidebarResizing, setIsFileSidebarResizing] = useState(false);
   const [sandboxOverlayDismissed, setSandboxOverlayDismissed] = useState(false);
@@ -67,8 +69,12 @@ export function DesktopShell() {
   const openWorkspaceFile = useCallback((target: WorkspaceFileTarget) => {
     setIsFilesOpen(true);
     openFileRequestIdRef.current += 1;
-    setOpenFileRequest({ ...target, requestId: openFileRequestIdRef.current });
-  }, []);
+    setOpenFileRequest({
+      ...target,
+      requestId: openFileRequestIdRef.current,
+      scopeKey: fileSidebarScopeKey(currentSession?.id),
+    });
+  }, [currentSession?.id]);
 
   useEffect(() => {
     if (operation === "creating" || operation === "rebuilding") {
@@ -271,7 +277,7 @@ export function DesktopShell() {
           // while preserving the shell-owned open preference and width.
           key={fileSidebarScopeKey(currentSession?.id)}
           isOpen={isFilesOpen}
-          openFileRequest={openFileRequest}
+          openFileRequest={fileRequestForScope(openFileRequest, currentSession?.id)}
           onClose={() => {
             if (!confirmFileNavigation()) return;
             setIsFilesOpen(false);
