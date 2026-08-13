@@ -2810,7 +2810,10 @@ export class SessionManager {
   private wakeAgent(sessionId: string, name: string): void {
     const current = this.sessions.get(sessionId);
     if (!current || current.workspaceOperationActive || current.taskLedger.isPaused(name)) return;
-    if (current.agents.get(name)?.isStreaming) return;
+    // Task events must still enter the delivery loop while the owner is
+    // streaming so they can be injected as a Pi follow-up. Only defer a pure
+    // Monitor wake until the active turn becomes idle.
+    if (current.agents.get(name)?.isStreaming && current.taskLedger.count(name) === 0) return;
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
     this.deliveryLoops.add(key);
@@ -2855,7 +2858,11 @@ export class SessionManager {
       const monitorBatch = notifications.length === 0 ? entry.monitorEvents.get(name)?.[0] : undefined;
       if (notifications.length === 0 && !monitorBatch) return;
       const agent = await this.ensureAgent(sessionId, name);
-      if (agent.status === "stopped" || agent.isStreaming) return;
+      if (agent.status === "stopped") return;
+      // A task notification may be injected into an active turn below. A
+      // Monitor-only delivery must wait for idle because monitor output starts
+      // a fresh agent turn rather than joining the current one.
+      if (agent.isStreaming && notifications.length === 0) return;
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
