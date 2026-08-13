@@ -51,6 +51,37 @@ describe("MonitorManager", () => {
     });
   });
 
+  it("coalesces consecutive duplicate lines without waking for each duplicate", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "engineer",
+      description: "deduplicate progress",
+      command: nodeCommand(
+        "console.log('running');" +
+        "setTimeout(() => console.log('running'), 250);" +
+        "setTimeout(() => console.log('running'), 300);" +
+        "setTimeout(() => console.log('completed'), 350)",
+      ),
+      timeoutMs: 2_000,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+    expect(batches).toHaveLength(2);
+    expect(batches[0]?.lines).toEqual(["running"]);
+    expect(batches[1]?.lines).toEqual(["Omitted 2 duplicate lines", "completed"]);
+  });
+
+  it("reports trailing duplicate suppression when the monitor ends", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "engineer",
+      description: "deduplicate terminal output",
+      command: nodeCommand("console.log('same'); console.log('same'); console.log('same')"),
+      timeoutMs: 2_000,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+    expect(batches.flatMap((batch) => batch.lines)).toEqual(["same", "Omitted 2 duplicate lines"]);
+  });
+
   it("spends no event callback on a silent command", async () => {
     const { manager, batches } = await fixture();
     manager.start({

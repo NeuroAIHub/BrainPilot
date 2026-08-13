@@ -56,6 +56,7 @@ describe("tool access control (§9)", () => {
     expect(description).toContain("Do not run sleep commands or poll");
     expect(description).toContain("end the current turn");
     expect(description).toContain("wake you automatically");
+    expect(description).toContain("Consecutive identical stdout lines are coalesced");
   });
 
   it("documents background completion wakeups and forbids polling", () => {

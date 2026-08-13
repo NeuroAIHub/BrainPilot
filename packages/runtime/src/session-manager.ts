@@ -665,10 +665,13 @@ export class SessionManager {
     this.memWatchdog?.start();
   }
 
-  /** Replace backend-managed runtime capabilities; disabling a process capability stops its live work. */
+  /**
+   * Replace backend-managed marketplace capabilities. Bundled defaults remain
+   * active; removing a non-default process capability stops its live work.
+   */
   async setRuntimeCapabilities(capabilities: readonly RuntimeCapability[], runtimeExtensions: readonly RuntimeExtensionDescriptor[] = []): Promise<void> {
-    const wasMonitorEnabled = this.runtimeCapabilities.has("builtin.monitor");
-    const wereBackgroundJobsEnabled = this.runtimeCapabilities.has("builtin.backgroundJobs");
+    const wasMonitorEnabled = this.runtimeCapabilityEnabled("builtin.monitor");
+    const wereBackgroundJobsEnabled = this.runtimeCapabilityEnabled("builtin.backgroundJobs");
     this.runtimeCapabilities.clear();
     for (const capability of capabilities) this.runtimeCapabilities.add(capability);
     const previous = JSON.stringify(this.runtimeExtensions);
@@ -680,8 +683,8 @@ export class SessionManager {
         }
       }
     }
-    const monitorEnabled = this.runtimeCapabilities.has("builtin.monitor");
-    const backgroundJobsEnabled = this.runtimeCapabilities.has("builtin.backgroundJobs");
+    const monitorEnabled = this.runtimeCapabilityEnabled("builtin.monitor");
+    const backgroundJobsEnabled = this.runtimeCapabilityEnabled("builtin.backgroundJobs");
     for (const entry of this.sessions.values()) {
       const monitor = entry.systemPlugins.find((plugin) => plugin.id === MONITOR_PLUGIN_ID);
       if (monitor) {
@@ -692,7 +695,10 @@ export class SessionManager {
       const backgroundJobs = entry.systemPlugins.find((plugin) => plugin.id === BACKGROUND_JOBS_PLUGIN_ID);
       if (backgroundJobs) {
         backgroundJobs.enabled = backgroundJobsEnabled;
-        backgroundJobs.reason = "marketplace";
+        const bundledDefault = this.defaultSystemPlugins.find((plugin) => plugin.id === BACKGROUND_JOBS_PLUGIN_ID);
+        backgroundJobs.reason = bundledDefault?.reason === "experiment-override"
+          ? "experiment-override"
+          : bundledDefault?.enabled ? "default" : "marketplace";
         void this.writeMeta(entry);
       }
     }
@@ -705,6 +711,11 @@ export class SessionManager {
   }
 
   private runtimeCapabilityEnabled(capability: RuntimeCapability): boolean {
+    if (capability === "builtin.backgroundJobs") {
+      const bundledDefault = this.defaultSystemPlugins.find((plugin) => plugin.id === BACKGROUND_JOBS_PLUGIN_ID);
+      if (bundledDefault?.reason === "experiment-override") return false;
+      if (bundledDefault?.enabled) return true;
+    }
     return this.runtimeCapabilities.has(capability);
   }
 
@@ -3667,7 +3678,9 @@ export class SessionManager {
         return {
           ...current,
           enabled: this.runtimeCapabilityEnabled("builtin.backgroundJobs"),
-          reason: "marketplace" as const,
+          reason: current.reason === "experiment-override"
+            ? "experiment-override" as const
+            : current.enabled ? "default" as const : "marketplace" as const,
         };
       }
       if (!previous || typeof previous.enabled !== "boolean") return { ...current };

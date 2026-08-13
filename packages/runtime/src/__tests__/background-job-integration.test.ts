@@ -1,8 +1,8 @@
 import { describe, expect, it } from "vitest";
 import { mockAgentFactory } from "../agent-factory.js";
 import { SessionManager } from "../session-manager.js";
+import { BACKGROUND_JOBS_PLUGIN_ID } from "../system-plugins.js";
 import type { AgentSessionFactory } from "../types.js";
-import type { AgUiEvent } from "@brainpilot/protocol";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
   const deadline = Date.now() + timeoutMs;
@@ -57,7 +57,7 @@ describe("Background Jobs runtime integration", () => {
     manager.shutdown();
   });
 
-  it("does not expose the job tools to Principal or without the plugin capability", async () => {
+  it("exposes default job tools to execution experts but not Principal", async () => {
     const tools = new Map<string, string[]>();
     const factory: AgentSessionFactory = async (params) => {
       tools.set(params.agentName, params.systemTools.map((tool) => tool.name));
@@ -66,8 +66,8 @@ describe("Background Jobs runtime integration", () => {
     const manager = new SessionManager({ persist: false, agentFactory: factory, runtimeCapabilities: [] });
     const session = await manager.createSession();
     await manager.sendMessage(session.id, "hello", "engineer");
-    expect(tools.get("engineer")).not.toContain("run_in_background");
-    await manager.setRuntimeCapabilities(["builtin.backgroundJobs"]);
+    expect(tools.get("engineer")).toContain("run_in_background");
+    await manager.setRuntimeCapabilities([]);
     await manager.sendMessage(session.id, "hello", "principal");
     expect(tools.get("principal")).not.toContain("run_in_background");
     await (manager as unknown as { ensureAgent(sessionId: string, name: string): Promise<unknown> })
@@ -94,27 +94,20 @@ describe("Background Jobs runtime integration", () => {
     manager.shutdown();
   });
 
-  it("cancels live jobs immediately when the plugin capability is disabled", async () => {
+  it("allows the bundled background job system plugin to be disabled by experiment override", async () => {
+    const tools = new Map<string, string[]>();
+    const factory: AgentSessionFactory = async (params) => {
+      tools.set(params.agentName, params.systemTools.map((tool) => tool.name));
+      return mockAgentFactory(params);
+    };
     const manager = new SessionManager({
       persist: false,
-      agentFactory: mockAgentFactory,
-      runtimeCapabilities: ["builtin.backgroundJobs"],
+      agentFactory: factory,
+      systemPluginEnv: { BP_EXPERIMENT_DISABLE_PLUGINS: BACKGROUND_JOBS_PLUGIN_ID },
     });
     const session = await manager.createSession();
-    const events: AgUiEvent[] = [];
-    manager.subscribe(session.id, (event) => events.push(event));
-    await manager.sendMessage(
-      session.id,
-      `[[tool:run_in_background {"job_key":"long-job","description":"long job","command":"while :; do sleep 1; done","timeout_ms":60000}]]`,
-      "engineer",
-    );
-    await waitFor(() => events.some((event) => event.type === "CUSTOM"
-      && event.name === "background_job_state"
-      && (event.value as { status?: string }).status === "running"));
-    await manager.setRuntimeCapabilities([]);
-    await waitFor(() => events.some((event) => event.type === "CUSTOM"
-      && event.name === "background_job_state"
-      && (event.value as { status?: string }).status === "cancelled"));
+    await manager.sendMessage(session.id, "hello", "engineer");
+    expect(tools.get("engineer")).not.toContain("run_in_background");
     manager.shutdown();
   });
 });

@@ -44,6 +44,8 @@ interface RunningMonitor {
   stdoutBuffer: string;
   stderrBuffer: string;
   pendingLines: string[];
+  lastStdoutLine?: string;
+  suppressedDuplicateLines: number;
   batchTimer?: NodeJS.Timeout;
   timeoutTimer?: NodeJS.Timeout;
   rateWindowStartedAt: number;
@@ -125,6 +127,7 @@ export class MonitorManager {
       stdoutBuffer: "",
       stderrBuffer: "",
       pendingLines: [],
+      suppressedDuplicateLines: 0,
       rateWindowStartedAt: Date.now(),
       rateLines: 0,
       terminalPromise,
@@ -138,7 +141,6 @@ export class MonitorManager {
       const tail = running.decoder.end();
       if (tail) this.consumeText(running, tail);
       if (running.stdoutBuffer) this.acceptLine(running, running.stdoutBuffer);
-      this.flush(running);
       if (running.info.status === "running" || running.info.status === "stopping") {
         this.finish(running, code === 0 ? "completed" : "failed", code, signal);
       } else {
@@ -233,6 +235,12 @@ export class MonitorManager {
       this.flood(running, `stdout line exceeded ${MONITOR_MAX_LINE_BYTES} bytes`);
       return;
     }
+    if (running.lastStdoutLine !== undefined && line === running.lastStdoutLine) {
+      running.suppressedDuplicateLines++;
+      return;
+    }
+    this.appendDuplicateSummary(running);
+    running.lastStdoutLine = line;
     const now = Date.now();
     if (now - running.rateWindowStartedAt >= MONITOR_RATE_WINDOW_MS) {
       running.rateWindowStartedAt = now;
@@ -248,6 +256,13 @@ export class MonitorManager {
       running.batchTimer = setTimeout(() => this.flush(running), MONITOR_BATCH_MS);
       running.batchTimer.unref?.();
     }
+  }
+
+  private appendDuplicateSummary(running: RunningMonitor): void {
+    if (running.suppressedDuplicateLines === 0) return;
+    const count = running.suppressedDuplicateLines;
+    running.pendingLines.push(`Omitted ${count} duplicate ${count === 1 ? "line" : "lines"}`);
+    running.suppressedDuplicateLines = 0;
   }
 
   private flush(running: RunningMonitor): void {
@@ -286,11 +301,13 @@ export class MonitorManager {
   ): void {
     if (running.info.finishedAt) return;
     if (running.timeoutTimer) clearTimeout(running.timeoutTimer);
-    if (running.batchTimer) clearTimeout(running.batchTimer);
+    this.appendDuplicateSummary(running);
+    this.flush(running);
     if (stderr) this.consumeStderr(running, Buffer.from(stderr));
+    const finalStatus = running.info.status === "flooded" ? "flooded" : status;
     running.info = {
       ...running.info,
-      status,
+      status: finalStatus,
       finishedAt: new Date().toISOString(),
       exitCode,
       signal,
