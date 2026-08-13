@@ -22,6 +22,15 @@ async function waitFor(predicate: () => boolean, timeoutMs = 4_000): Promise<voi
   }
 }
 
+function processIsAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 async function fixture() {
   const batches: MonitorEventBatch[] = [];
   const states: MonitorInfo[] = [];
@@ -83,6 +92,25 @@ describe("MonitorManager", () => {
     });
     expect(await second.manager.stop(persistent.id, "experimentalist")).toBe(true);
     expect(second.manager.list()[0]?.finishedAt).toBeDefined();
+  });
+
+  it("force-kills a timed-out command that ignores SIGTERM", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "principal",
+      description: "ignore term",
+      command: nodeCommand("console.log(process.pid); process.on('SIGTERM', () => {}); setInterval(() => {}, 1000)"),
+      timeoutMs: 800,
+    });
+    await waitFor(() => batches.length > 0);
+    const pid = Number(batches[0]?.lines[0]);
+    expect(Number.isInteger(pid)).toBe(true);
+    try {
+      await waitFor(() => !processIsAlive(pid), 2_500);
+      expect(manager.list()[0]?.status).toBe("timed_out");
+    } finally {
+      if (processIsAlive(pid)) process.kill(pid, "SIGKILL");
+    }
   });
 
   it("stops a monitor that emits an oversized line", async () => {

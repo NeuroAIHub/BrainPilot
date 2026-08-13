@@ -144,6 +144,7 @@ export class MonitorManager {
         running.info.status = "timed_out";
         this.opts.onState?.(publicInfo(running));
         this.killProcess(running, "SIGTERM");
+        void this.waitThenKill(running);
       }, timeoutMs);
       running.timeoutTimer.unref?.();
     }
@@ -261,6 +262,7 @@ export class MonitorManager {
     running.info.status = "flooded";
     this.opts.onState?.(publicInfo(running));
     this.killProcess(running, "SIGTERM");
+    void this.waitThenKill(running);
   }
 
   private finish(
@@ -294,17 +296,33 @@ export class MonitorManager {
     }
   }
 
+  private processTreeAlive(running: RunningMonitor): boolean {
+    if (process.platform === "win32" || !running.child.pid) {
+      return running.child.exitCode === null && running.child.signalCode === null;
+    }
+    try {
+      process.kill(-running.child.pid, 0);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
   private async waitThenKill(running: RunningMonitor): Promise<void> {
+    const gracePeriod = new Promise<void>((resolve) => setTimeout(resolve, 1_000));
     const settled = await Promise.race([
       running.terminalPromise.then(() => true),
-      new Promise<false>((resolve) => setTimeout(() => resolve(false), 1_000)),
+      gracePeriod.then(() => false),
     ]);
-    if (!settled) {
-      this.killProcess(running, "SIGKILL");
-      await Promise.race([
-        running.terminalPromise,
-        new Promise<void>((resolve) => setTimeout(resolve, 250)),
-      ]);
-    }
+    // With `shell: true`, the shell can exit on SIGTERM while a descendant in
+    // the detached process group keeps running. The direct-child promise alone
+    // therefore does not prove that the monitored process tree is gone.
+    if (settled && !this.processTreeAlive(running)) return;
+    await gracePeriod;
+    this.killProcess(running, "SIGKILL");
+    await Promise.race([
+      running.terminalPromise,
+      new Promise<void>((resolve) => setTimeout(resolve, 250)),
+    ]);
   }
 }
