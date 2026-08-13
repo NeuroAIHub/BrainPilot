@@ -33,6 +33,7 @@ interface StoredProfile {
   api?: string;
   adapter?: string;
   apiKey?: string;
+  apiKeyEnv?: string;
   models?: string[];
   contextWindow?: number;
   reasoningModels?: string[];
@@ -71,7 +72,10 @@ export async function resolveSessionProvider(
     profiles.find((p) => p.id === ref.providerId) ??
     profiles.find((p) => p.id === file?.selectedProfileId) ??
     profiles[0];
-  if (!profile?.apiKey) return undefined;
+  const apiKey = profile?.apiKey || (profile?.apiKeyEnv
+    ? process.env[profile.apiKeyEnv]?.trim()
+    : undefined);
+  if (!profile || !apiKey) return undefined;
 
   // Model: the session's choice if still offered by the profile, else default.
   const modelId =
@@ -82,7 +86,7 @@ export async function resolveSessionProvider(
     baseUrl: profile.baseUrl || undefined,
     api: profile.api || undefined,
     adapter: profile.adapter || undefined,
-    apiKey: profile.apiKey,
+    apiKey,
     modelId,
     contextWindow: profile.contextWindow,
     reasoningEnabled: modelId
