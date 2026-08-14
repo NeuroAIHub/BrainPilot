@@ -188,6 +188,11 @@ export function createApp(options: CreateAppOptions): Hono {
   // therefore offers an explicit restart action that intentionally interrupts
   // all current agents, then waits for the replacement runtime to be healthy.
   api.post("/runtime/restart", async (c) => {
+    if (orchestrator.runtimeLifecycle === "external") {
+      return c.json({
+        error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+      }, 409);
+    }
     const userId = resolveUserId(c);
     await orchestrator.stopRuntime(userId);
     clients.clear();
