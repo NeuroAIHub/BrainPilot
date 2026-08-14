@@ -2457,6 +2457,7 @@ export class SessionManager {
 
     return {
       content: [{ type: "text", text: truncatedText + notice }],
+      ...(result.terminate ? { terminate: true } : {}),
     };
   }
 

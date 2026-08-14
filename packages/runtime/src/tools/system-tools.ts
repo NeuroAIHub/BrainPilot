@@ -78,6 +78,29 @@ function ok(text: string): { content: [{ type: "text"; text: string }] } {
   return { content: [{ type: "text", text }] };
 }
 
+type BackgroundJobRecord = Record<string, unknown>;
+
+function backgroundJobRecords(value: unknown): BackgroundJobRecord[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is BackgroundJobRecord => Boolean(item) && typeof item === "object")
+    : [];
+}
+
+function compactBackgroundJob(job: BackgroundJobRecord): BackgroundJobRecord {
+  const keys = job.status === "running"
+    ? ["id", "jobKey", "description", "status", "timeoutMs", "startedAt"]
+    : ["id", "jobKey", "description", "status", "startedAt", "finishedAt", "durationMs", "exitCode", "signal", "logPath", "logTruncated"];
+  return Object.fromEntries(keys.flatMap((key) => job[key] === undefined ? [] : [[key, job[key]]]));
+}
+
+function runningBackgroundJobSignature(jobs: BackgroundJobRecord[]): string | undefined {
+  const ids = jobs
+    .filter((job) => job.status === "running")
+    .map((job) => String(job.id ?? job.jobKey ?? "running"))
+    .sort();
+  return ids.length ? ids.join("|") : undefined;
+}
+
 /** Detail/read tools are deliberately bounded so one graph query cannot eat a turn. */
 const TRACE_DETAIL_MAX_TOKENS = 1500;
 /** File samples sent to the Trace model; complete evidence stays in the checkpoint store. */
@@ -430,12 +453,24 @@ export function createRunInBackgroundTool(deps: ToolDeps): SystemTool {
 }
 
 export function createBackgroundJobTool(deps: ToolDeps): SystemTool {
+  let lastRunningSignature: string | undefined;
+  const observeRunningJobs = (jobs: BackgroundJobRecord[]): boolean => {
+    const signature = runningBackgroundJobSignature(jobs);
+    const repeated = signature !== undefined && signature === lastRunningSignature;
+    lastRunningSignature = signature;
+    return repeated;
+  };
+  const repeatedStatusResult = () => ({
+    ...ok("Background jobs are still running with no terminal state change. The runtime is ending this turn; completion events will wake you automatically."),
+    terminate: true,
+  });
   return {
     name: "background_job",
     description:
       "Manage one-shot jobs created by run_in_background. Use action=list to inspect your jobs, get to read one job's status, " +
       "bounded stdout/stderr tail and log path, or stop to cancel its entire process group. " +
-      "Do not repeatedly call list/get to wait for completion; the runtime sends a completion event automatically.",
+      "Do not repeatedly call list/get to wait for completion; the runtime sends a completion event automatically. " +
+      "A repeated nonterminal status check ends the current turn until a job state changes.",
     parameters: {
       type: "object",
       properties: {
@@ -449,12 +484,26 @@ export function createBackgroundJobTool(deps: ToolDeps): SystemTool {
         return { ...ok("Background Jobs plugin is not enabled for this session"), isError: true };
       }
       const action = params.action;
-      if (action === "list") return ok(JSON.stringify({ jobs: deps.listBackgroundJobs() }, null, 2));
+      if (action === "list") {
+        const jobs = backgroundJobRecords(deps.listBackgroundJobs());
+        if (observeRunningJobs(jobs)) return repeatedStatusResult();
+        return ok(JSON.stringify({ jobs: jobs.map(compactBackgroundJob) }, null, 2));
+      }
       const jobId = typeof params.job_id === "string" ? params.job_id.trim() : "";
       if (!jobId) return { ...ok("job_id is required for get and stop"), isError: true };
       if (action === "get") {
         const job = deps.getBackgroundJob(jobId);
-        return job ? ok(JSON.stringify(job, null, 2)) : { ...ok(`background job ${jobId} was not found`), isError: true };
+        if (!job || typeof job !== "object") {
+          return { ...ok(`background job ${jobId} was not found`), isError: true };
+        }
+        const record = job as BackgroundJobRecord;
+        const jobs = backgroundJobRecords(deps.listBackgroundJobs());
+        if (record.status === "running") {
+          if (observeRunningJobs(jobs.length ? jobs : [record])) return repeatedStatusResult();
+          return ok(`${JSON.stringify(compactBackgroundJob(record), null, 2)}\n\nThe job is still running. Continue other work or end this turn; completion will be delivered automatically.`);
+        }
+        observeRunningJobs(jobs);
+        return ok(JSON.stringify(record, null, 2));
       }
       if (action === "stop") {
         return await deps.stopBackgroundJob(jobId)

@@ -281,6 +281,8 @@ export interface SystemTool {
 export interface SystemToolResult {
   content: Array<{ type: "text"; text: string }>;
   isError?: boolean;
+  /** Stop the Pi agent loop after this tool batch without another model call. */
+  terminate?: boolean;
 }
 
 /** Listener for outgoing AG-UI events, scoped to a session. */

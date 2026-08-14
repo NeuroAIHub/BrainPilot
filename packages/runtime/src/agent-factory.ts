@@ -14,7 +14,14 @@
  *   - `SystemTool` is adapted to Pi's `defineTool` (params is a plain JSON
  *     schema, which `defineTool` accepts — verified empirically).
  */
-import type { AgentSessionFactory, IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
+import type {
+  AgentSessionFactory,
+  IAgentSession,
+  PiAgentEvent,
+  PromptOptions,
+  SystemTool,
+  SystemToolResult,
+} from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
 import {
   resolveCompactionSettings,
@@ -42,6 +49,15 @@ export function isMockMode(env: Record<string, string | undefined> = process.env
 export const mockAgentFactory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
   return new MockAgentSession({ sessionId, agentName, systemTools });
 };
+
+export const TOOL_CALL_EFFICIENCY_DIRECTIVE = `## Tool-call efficiency
+
+Put independent, non-conflicting tool calls whose inputs are already known in
+one assistant response; keep dependent or conflicting calls sequential.`;
+
+export function appendSystemPromptSections(rolePrompt?: string): string[] {
+  return [TOOL_CALL_EFFICIENCY_DIRECTIVE, ...(rolePrompt ? [rolePrompt] : [])];
+}
 
 /**
  * Wrap the real Pi SDK. Imported lazily so mock-mode tests never load the SDK
@@ -187,7 +203,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     ...(params.skillPaths && params.skillPaths.length > 0
       ? { additionalSkillPaths: params.skillPaths }
       : {}),
-    appendSystemPrompt: params.systemPrompt ? [params.systemPrompt] : [],
+    appendSystemPrompt: appendSystemPromptSections(params.systemPrompt),
     extensionFactories,
   });
   await resourceLoader.reload();
@@ -287,6 +303,22 @@ export function selectFactory(): AgentSessionFactory {
 }
 
 /** Adapt a BrainPilot SystemTool to a Pi `defineTool` definition. */
+export function toPiToolResult(toolName: string, res: SystemToolResult): {
+  content: SystemToolResult["content"];
+  details: Record<string, never>;
+  terminate?: boolean;
+} {
+  if (res.isError) {
+    const text = res.content.map((c) => c.text).join("\n");
+    throw new Error(text || `${toolName} failed`);
+  }
+  return {
+    content: res.content,
+    details: {},
+    ...(res.terminate ? { terminate: true } : {}),
+  };
+}
+
 function adaptTool(defineTool: PiSdk["defineTool"], tool: SystemTool): unknown {
   return defineTool({
     name: tool.name,
@@ -296,15 +328,7 @@ function adaptTool(defineTool: PiSdk["defineTool"], tool: SystemTool): unknown {
     parameters: tool.parameters,
     execute: async (_toolCallId: string, params: Record<string, unknown>) => {
       const res = await tool.execute(params ?? {});
-      // Pi's AgentToolResult has NO `isError`; failures are signalled by
-      // THROWING. Surface our SystemToolResult.isError as a thrown error so
-      // the agent sees a failed tool call (→ tool_execution_end isError →
-      // system_message warning in MasAgent).
-      if (res.isError) {
-        const text = res.content.map((c) => c.text).join("\n");
-        throw new Error(text || `${tool.name} failed`);
-      }
-      return { content: res.content, details: {} };
+      return toPiToolResult(tool.name, res);
     },
   });
 }
