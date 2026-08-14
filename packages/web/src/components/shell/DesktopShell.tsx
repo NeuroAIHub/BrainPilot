@@ -19,14 +19,30 @@ import { Sidebar } from "../sidebar/Sidebar";
 import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
 import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
-import type { SessionWorkspaceFileTarget } from "../chat/workspaceFileLink";
+import {
+  buildWorkspaceFileDeepLink,
+  parseWorkspaceFileLocation,
+  resolveWorkspaceFileSession,
+  type SessionWorkspaceFileTarget,
+} from "../chat/workspaceFileLink";
 
 const PluginMarketplace = lazy(() => import("../plugins/PluginMarketplace").then((module) => ({ default: module.PluginMarketplace })));
 
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
-  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView, traceUnread, hiddenErrorsUnread } = useSessions();
+  const {
+    sessions,
+    sessionsListStatus,
+    currentSession,
+    currentView,
+    isRefreshingMessages,
+    refreshMessages,
+    selectSession,
+    setCurrentView,
+    traceUnread,
+    hiddenErrorsUnread,
+  } = useSessions();
   const t = useT();
   // #131 — the sidebar collapses to an icon rail either manually (user toggle)
   // or automatically at narrow widths. Both feed the same `isCollapsed` state so
@@ -58,6 +74,10 @@ export function DesktopShell() {
   const [sandboxOverlayDismissed, setSandboxOverlayDismissed] = useState(false);
   const [isWarningOpen, setIsWarningOpen] = useState(false);
   const hasWarnedRef = useRef(false);
+  const initialWorkspaceFileTargetRef = useRef(
+    typeof window === "undefined" ? null : parseWorkspaceFileLocation(window.location),
+  );
+  const deepLinkHandledRef = useRef(false);
   const openFileRequestIdRef = useRef(0);
   const sidebarResizeRef = useRef<{ pointerX: number; width: number } | null>(null);
   const confirmFileNavigation = useCallback(
@@ -68,7 +88,47 @@ export function DesktopShell() {
     setIsFilesOpen(true);
     openFileRequestIdRef.current += 1;
     setOpenFileRequest({ ...target, requestId: openFileRequestIdRef.current });
+    window.history.replaceState(
+      window.history.state,
+      "",
+      buildWorkspaceFileDeepLink(target.sessionId, target),
+    );
   }, []);
+
+  useEffect(() => {
+    const initialTarget = initialWorkspaceFileTargetRef.current;
+    if (deepLinkHandledRef.current || !initialTarget || sessionsListStatus !== "ready") return;
+
+    const resolved = resolveWorkspaceFileSession(
+      initialTarget,
+      sessions.map((session) => session.id),
+      currentSession?.id,
+    );
+    if (!resolved) {
+      deepLinkHandledRef.current = true;
+      return;
+    }
+
+    // A canonical URL owns its session. Switch first, then issue the file-open
+    // request only after the context reflects that owner, preventing a request
+    // from briefly reaching the previously active workspace.
+    if (currentSession?.id !== resolved.sessionId) {
+      selectSession(resolved.sessionId);
+      return;
+    }
+
+    deepLinkHandledRef.current = true;
+    setActivePage("workspace");
+    setCurrentView("chat");
+    openWorkspaceFile(resolved);
+  }, [
+    currentSession?.id,
+    openWorkspaceFile,
+    selectSession,
+    sessions,
+    sessionsListStatus,
+    setCurrentView,
+  ]);
 
   useEffect(() => {
     if (openFileRequest && !fileRequestMatchesSession(openFileRequest.sessionId, currentSession?.id)) setOpenFileRequest(null);

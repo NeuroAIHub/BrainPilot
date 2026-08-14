@@ -5,8 +5,121 @@ export type WorkspaceFileTarget = {
 
 export type SessionWorkspaceFileTarget = WorkspaceFileTarget & { sessionId: string };
 
+export type WorkspaceFileLocation = Pick<Location, "pathname" | "search" | "hash">;
+
 const EXTERNAL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const MANAGED_ROOTS = ["/workspace", "/data"] as const;
+const APPLICATION_ROUTE_ROOTS = new Set(["api", "assets", "sessions"]);
+
+function parseLineHash(hash: string): number | undefined {
+  const lineMatch = /^(?:#)?(?:L|line-?)(\d+)$/i.exec(hash);
+  const line = lineMatch ? Number(lineMatch[1]) : undefined;
+  return line && line > 0 ? line : undefined;
+}
+
+function normalizeManagedPath(decodedPath: string): string | null {
+  const portablePath = decodedPath.replace(/\\/g, "/");
+  if (portablePath.includes("\0")) return null;
+
+  const rooted = portablePath.startsWith("/") ? portablePath : `/workspace/${portablePath}`;
+  const parts: string[] = [];
+  for (const part of rooted.split("/")) {
+    if (!part || part === ".") continue;
+    if (part === "..") {
+      if (parts.length <= 1) return null;
+      parts.pop();
+      continue;
+    }
+    parts.push(part);
+  }
+  const normalized = `/${parts.join("/")}`;
+  if (!MANAGED_ROOTS.some((root) => normalized.startsWith(`${root}/`))) return null;
+  return normalized;
+}
+
+function parseCanonicalLocation(
+  location: WorkspaceFileLocation,
+): SessionWorkspaceFileTarget | null {
+  const match = /^\/sessions\/([^/]+)\/files\/?$/.exec(location.pathname);
+  if (!match) return null;
+
+  let sessionId: string;
+  try {
+    sessionId = decodeURIComponent(match[1]);
+  } catch {
+    return null;
+  }
+  if (!sessionId) return null;
+
+  const rawPath = new URLSearchParams(location.search).get("path");
+  if (!rawPath) return null;
+  const path = normalizeManagedPath(rawPath);
+  if (!path) return null;
+
+  const line = parseLineHash(location.hash);
+  return { sessionId, path, ...(line ? { line } : {}) };
+}
+
+/**
+ * Build the stable browser URL used when a workspace link is copied or the
+ * current page is refreshed. Browser-facing paths stay in BrainPilot's POSIX
+ * virtual namespace on every host OS; the backend owns native disk mapping.
+ */
+export function buildWorkspaceFileDeepLink(
+  sessionId: string,
+  target: WorkspaceFileTarget,
+): string {
+  if (!sessionId) throw new TypeError("A session id is required for a workspace file link");
+  const path = normalizeManagedPath(target.path);
+  if (!path) throw new TypeError("Workspace file links must stay under /workspace or /data");
+  const hash = target.line && target.line > 0 ? `#L${Math.floor(target.line)}` : "";
+  return `/sessions/${encodeURIComponent(sessionId)}/files?path=${encodeURIComponent(path)}${hash}`;
+}
+
+/**
+ * Resolve the initial browser location. New links carry their session id;
+ * legacy naked URLs such as `/docs/report.md` intentionally leave it absent so
+ * the shell can use the restored active session and then canonicalize the URL.
+ */
+export function parseWorkspaceFileLocation(
+  location: WorkspaceFileLocation,
+): SessionWorkspaceFileTarget | WorkspaceFileTarget | null {
+  const canonical = parseCanonicalLocation(location);
+  if (canonical) return canonical;
+  if (location.pathname.startsWith("/sessions/")) return null;
+
+  let decodedPathname: string;
+  try {
+    decodedPathname = decodeURIComponent(location.pathname).replace(/\\/g, "/");
+  } catch {
+    return null;
+  }
+  const firstSegment = decodedPathname.split("/").find(Boolean)?.toLowerCase();
+  if (firstSegment && APPLICATION_ROUTE_ROOTS.has(firstSegment)) return null;
+  const isExplicitManagedPath = MANAGED_ROOTS.some(
+    (root) => decodedPathname === root || decodedPathname.startsWith(`${root}/`),
+  );
+  const legacyPath = isExplicitManagedPath
+    ? location.pathname
+    : location.pathname.replace(/^\/+/, "");
+  return parseWorkspaceFileHref(`${legacyPath}${location.hash}`);
+}
+
+/** Bind a parsed startup target to an existing session without ever allowing a
+ * canonical URL for one session to fall through into another session. */
+export function resolveWorkspaceFileSession(
+  target: SessionWorkspaceFileTarget | WorkspaceFileTarget,
+  availableSessionIds: readonly string[],
+  currentSessionId: string | null | undefined,
+): SessionWorkspaceFileTarget | null {
+  if ("sessionId" in target) {
+    return availableSessionIds.includes(target.sessionId) ? target : null;
+  }
+  const sessionId = currentSessionId && availableSessionIds.includes(currentSessionId)
+    ? currentSessionId
+    : availableSessionIds[0];
+  return sessionId ? { ...target, sessionId } : null;
+}
 
 /**
  * Resolve a Markdown href into a Files-panel target. Relative links are rooted
@@ -17,6 +130,18 @@ const MANAGED_ROOTS = ["/workspace", "/data"] as const;
 export function parseWorkspaceFileHref(href: string): WorkspaceFileTarget | null {
   const trimmed = href.trim();
   if (!trimmed || trimmed.startsWith("#") || trimmed.startsWith("//")) return null;
+
+  if (trimmed.startsWith("/sessions/")) {
+    try {
+      const url = new URL(trimmed, "http://brainpilot.local");
+      const canonical = parseCanonicalLocation(url);
+      return canonical
+        ? { path: canonical.path, ...(canonical.line ? { line: canonical.line } : {}) }
+        : null;
+    } catch {
+      return null;
+    }
+  }
 
   let rawPath = trimmed;
   if (trimmed.toLowerCase().startsWith("brainpilot-file:")) {
@@ -43,24 +168,8 @@ export function parseWorkspaceFileHref(href: string): WorkspaceFileTarget | null
     return null;
   }
 
-  const rooted = decoded.startsWith("/") ? decoded : `/workspace/${decoded}`;
-  const parts: string[] = [];
-  for (const part of rooted.split("/")) {
-    if (!part || part === ".") continue;
-    if (part === "..") {
-      if (parts.length <= 1) return null;
-      parts.pop();
-      continue;
-    }
-    parts.push(part);
-  }
-  const normalized = `/${parts.join("/")}`;
-  if (!MANAGED_ROOTS.some((root) => normalized === root || normalized.startsWith(`${root}/`))) {
-    return null;
-  }
-  if (normalized === "/workspace" || normalized === "/data") return null;
-
-  const lineMatch = /^(?:L|line-?)(\d+)$/i.exec(hash);
-  const line = lineMatch ? Number(lineMatch[1]) : undefined;
-  return { path: normalized, ...(line && line > 0 ? { line } : {}) };
+  const normalized = normalizeManagedPath(decoded);
+  if (!normalized) return null;
+  const line = parseLineHash(hash);
+  return { path: normalized, ...(line ? { line } : {}) };
 }

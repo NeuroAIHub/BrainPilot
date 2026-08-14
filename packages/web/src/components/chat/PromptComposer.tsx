@@ -696,6 +696,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             turnTiming={turnTiming}
             runningAgents={runningAgents}
             groupExpertActivity
+            workspaceFileSessionId={currentSession?.id}
             onRetryCancel={() => void interruptCurrent()}
             onOpenWorkspaceFile={openWorkspaceFile}
           />
