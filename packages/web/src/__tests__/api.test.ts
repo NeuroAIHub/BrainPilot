@@ -149,10 +149,12 @@ describe("api.sessions.create — unwraps the { id, session } envelope (#96)", (
     fetchMock.mockResolvedValueOnce(
       makeResponse({
         contentType: "application/json",
-        json: { id: "think", session: { id: "think", title: "t", thinkingLevel: "high" } },
+        json: { id: "think", session: { id: "think", title: "t", thinkingLevel: "high", reasoningSupported: true } },
       }),
     );
-    await api.sessions.create("t", { thinkingLevel: "high" });
+    await expect(api.sessions.create("t", { thinkingLevel: "high" })).resolves.toMatchObject({
+      reasoningSupported: true,
+    });
     expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toMatchObject({
       thinkingLevel: "high",
     });

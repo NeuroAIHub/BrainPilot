@@ -482,6 +482,8 @@ interface RawSession {
   domainResources?: unknown;
   thinking_level?: unknown;
   thinkingLevel?: unknown;
+  reasoning_supported?: unknown;
+  reasoningSupported?: unknown;
 }
 
 interface RawFileEntry {
@@ -714,6 +716,9 @@ export function normalizeSession(raw: RawSession): Session {
     thinkingLevel: ["off", "low", "medium", "high"].includes(String(raw.thinkingLevel ?? raw.thinking_level))
       ? (raw.thinkingLevel ?? raw.thinking_level) as Session["thinkingLevel"]
       : "medium",
+    reasoningSupported: typeof (raw.reasoningSupported ?? raw.reasoning_supported) === "boolean"
+      ? (raw.reasoningSupported ?? raw.reasoning_supported) as boolean
+      : undefined,
   };
 }
 

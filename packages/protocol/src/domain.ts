@@ -41,6 +41,8 @@ export const SessionSchema = z.object({
   domainResources: DomainResourcesSchema.optional(),
   /** One reasoning effort shared by all agents in this session. */
   thinkingLevel: ThinkingLevelSchema.optional(),
+  /** Whether the model bound to this session supports extended reasoning. */
+  reasoningSupported: z.boolean().optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 

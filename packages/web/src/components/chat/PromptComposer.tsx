@@ -56,6 +56,20 @@ export function shouldClearQueuedPrompts(runActive: { active: boolean } | null):
   return runActive?.active !== true;
 }
 
+export function resolveComposerReasoningSupport(input: {
+  isDraft: boolean;
+  sessionReasoningSupported?: boolean;
+  selectedModel: string;
+  activeProviderModels: readonly string[];
+  activeProviderReasoningModels?: readonly string[];
+}): boolean {
+  if (!input.isDraft) return input.sessionReasoningSupported === true;
+  return Boolean(
+    input.selectedModel
+    && (input.activeProviderReasoningModels ?? input.activeProviderModels).includes(input.selectedModel),
+  );
+}
+
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
   if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
     URL.revokeObjectURL(attachment.previewUrl);
@@ -120,9 +134,13 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
-  const reasoningSupported = Boolean(
-    selectedModel && (activeProvider?.reasoningModels ?? activeProvider?.models ?? []).includes(selectedModel),
-  );
+  const reasoningSupported = resolveComposerReasoningSupport({
+    isDraft,
+    sessionReasoningSupported: currentSession?.reasoningSupported,
+    selectedModel,
+    activeProviderModels: activeProvider?.models ?? [],
+    activeProviderReasoningModels: activeProvider?.reasoningModels,
+  });
 
   useEffect(() => {
     attachmentsRef.current = attachments;

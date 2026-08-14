@@ -287,6 +287,7 @@ interface SessionMeta {
   lastActivityAt?: number;
   domainResources?: DomainResources;
   thinkingLevel?: ThinkingLevel;
+  reasoningSupported?: boolean;
   workflowTaskSeqBaseline?: number;
   workflowReminderClaimed?: boolean;
   workflowViolationEmitted?: boolean;
@@ -322,6 +323,8 @@ interface SessionEntry {
   providerRef: SessionProviderRef;
   /** One Pi reasoning effort shared by every main agent and leaf subagent. */
   thinkingLevel: ThinkingLevel;
+  /** Frozen reasoning capability of the provider/model bound to this session. */
+  reasoningSupported: boolean;
   /** Frozen per-session domain-resource mode; never read from global state. */
   domainResources: DomainResources;
   /** Host-owned state for the current explicit-user delegation epoch. */
@@ -1355,6 +1358,7 @@ export class SessionManager {
       modelId?: string;
       domainResources?: DomainResources;
       thinkingLevel?: ThinkingLevel;
+      reasoningSupported?: boolean;
       workflowTaskSeqBaseline?: number;
       workflowReminderClaimed?: boolean;
       workflowViolationEmitted?: boolean;
@@ -1401,8 +1405,9 @@ export class SessionManager {
         ? await this.readProviderRef(id)
         : {};
     const providerConfig = await resolveSessionProvider(this.dataRoot, providerRef);
+    const reasoningSupported = input.reasoningSupported ?? (providerConfig?.reasoningEnabled !== false);
     const requestedThinkingLevel = input.thinkingLevel ?? "medium";
-    const thinkingLevel: ThinkingLevel = providerConfig?.reasoningEnabled === false
+    const thinkingLevel: ThinkingLevel = !reasoningSupported
       ? "off"
       : requestedThinkingLevel;
 
@@ -1488,6 +1493,7 @@ export class SessionManager {
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       thinkingLevel,
+      reasoningSupported,
       domainResources,
       workflowTaskSeqBaseline: input.workflowTaskSeqBaseline ?? 0,
       workflowReminderClaimed: input.workflowReminderClaimed === true,
@@ -1571,8 +1577,7 @@ export class SessionManager {
       e.title = patch.title.trim();
     }
     if (patch.thinkingLevel !== undefined) {
-      const provider = await resolveSessionProvider(this.dataRoot, e.providerRef);
-      e.thinkingLevel = provider?.reasoningEnabled === false ? "off" : patch.thinkingLevel;
+      e.thinkingLevel = e.reasoningSupported ? patch.thinkingLevel : "off";
       for (const agent of e.agents.values()) agent.setThinkingLevel(e.thinkingLevel);
       e.subagents.setThinkingLevel(e.thinkingLevel);
     }
@@ -3446,6 +3451,7 @@ export class SessionManager {
       updatedAt: e.updatedAt,
       domainResources: e.domainResources,
       thinkingLevel: e.thinkingLevel,
+      reasoningSupported: e.reasoningSupported,
     };
   }
 
@@ -3459,6 +3465,7 @@ export class SessionManager {
       lastActivityAt: entry.lastActivityAt,
       domainResources: entry.domainResources,
       thinkingLevel: entry.thinkingLevel,
+      reasoningSupported: entry.reasoningSupported,
       workflowTaskSeqBaseline: entry.workflowTaskSeqBaseline,
       workflowReminderClaimed: entry.workflowReminderClaimed,
       workflowViolationEmitted: entry.workflowViolationEmitted,
@@ -3659,6 +3666,7 @@ export class SessionManager {
           title: meta.title,
           domainResources: resolveDomainResources(meta.domainResources),
           thinkingLevel: meta.thinkingLevel ?? "medium",
+          reasoningSupported: meta.reasoningSupported,
           workflowTaskSeqBaseline:
             typeof meta.workflowTaskSeqBaseline === "number" ? meta.workflowTaskSeqBaseline : 0,
           workflowReminderClaimed: meta.workflowReminderClaimed === true,

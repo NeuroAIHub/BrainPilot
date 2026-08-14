@@ -100,6 +100,7 @@ describe("SessionManager (mock mode)", () => {
       thinkingLevel: "high",
     });
     expect(session.thinkingLevel).toBe("off");
+    expect(session.reasoningSupported).toBe(false);
   });
 
   it("persists the user message as a role:user CHUNK with the client uuid (#42)", async () => {
@@ -279,7 +280,9 @@ describe("SessionManager (mock mode)", () => {
       const session = await manager.createSession();
       const meta = JSON.parse(await readFile(join(root, ".bp", session.id, "meta.json"), "utf8")) as {
         systemPlugins?: Array<{ id: string; enabled: boolean; reason: string }>;
+        reasoningSupported?: boolean;
       };
+      expect(meta.reasoningSupported).toBe(true);
       expect(meta.systemPlugins).toContainEqual({
         id: "org.brainpilot.auditor",
         enabled: false,
