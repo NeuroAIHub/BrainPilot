@@ -19,14 +19,30 @@ import { Sidebar } from "../sidebar/Sidebar";
 import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
 import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
-import type { WorkspaceFileTarget } from "../chat/workspaceFileLink";
+import {
+  buildWorkspaceFileDeepLink,
+  parseWorkspaceFileLocation,
+  resolveWorkspaceFileSession,
+  type WorkspaceFileTarget,
+} from "../chat/workspaceFileLink";
 
 const PluginMarketplace = lazy(() => import("../plugins/PluginMarketplace").then((module) => ({ default: module.PluginMarketplace })));
 
 export function DesktopShell() {
   const { isAuthReady } = useAuth();
   const { currentSandbox, operation, error, stats } = useSandbox();
-  const { currentSession, currentView, isRefreshingMessages, refreshMessages, setCurrentView, traceUnread, hiddenErrorsUnread } = useSessions();
+  const {
+    sessions,
+    sessionsListStatus,
+    currentSession,
+    currentView,
+    isRefreshingMessages,
+    refreshMessages,
+    selectSession,
+    setCurrentView,
+    traceUnread,
+    hiddenErrorsUnread,
+  } = useSessions();
   const t = useT();
   // #131 — the sidebar collapses to an icon rail either manually (user toggle)
   // or automatically at narrow widths. Both feed the same `isCollapsed` state so
@@ -60,6 +76,10 @@ export function DesktopShell() {
   const [sandboxOverlayDismissed, setSandboxOverlayDismissed] = useState(false);
   const [isWarningOpen, setIsWarningOpen] = useState(false);
   const hasWarnedRef = useRef(false);
+  const initialWorkspaceFileTargetRef = useRef(
+    typeof window === "undefined" ? null : parseWorkspaceFileLocation(window.location),
+  );
+  const deepLinkHandledRef = useRef(false);
   const openFileRequestIdRef = useRef(0);
   const sidebarResizeRef = useRef<{ pointerX: number; width: number } | null>(null);
   const confirmFileNavigation = useCallback(
@@ -67,6 +87,7 @@ export function DesktopShell() {
     [hasUnsavedFileChanges, t],
   );
   const openWorkspaceFile = useCallback((target: WorkspaceFileTarget) => {
+    if (!currentSession?.id) return;
     setIsFilesOpen(true);
     openFileRequestIdRef.current += 1;
     setOpenFileRequest({
@@ -74,7 +95,44 @@ export function DesktopShell() {
       requestId: openFileRequestIdRef.current,
       scopeKey: fileSidebarScopeKey(currentSession?.id),
     });
+    window.history.replaceState(
+      window.history.state,
+      "",
+      buildWorkspaceFileDeepLink(currentSession.id, target),
+    );
   }, [currentSession?.id]);
+
+  useEffect(() => {
+    const initialTarget = initialWorkspaceFileTargetRef.current;
+    if (deepLinkHandledRef.current || !initialTarget || sessionsListStatus !== "ready") return;
+
+    const resolved = resolveWorkspaceFileSession(
+      initialTarget,
+      sessions.map((session) => session.id),
+      currentSession?.id,
+    );
+    if (!resolved) {
+      deepLinkHandledRef.current = true;
+      return;
+    }
+
+    if (currentSession?.id !== resolved.sessionId) {
+      selectSession(resolved.sessionId);
+      return;
+    }
+
+    deepLinkHandledRef.current = true;
+    setActivePage("workspace");
+    setCurrentView("chat");
+    openWorkspaceFile(resolved);
+  }, [
+    currentSession?.id,
+    openWorkspaceFile,
+    selectSession,
+    sessions,
+    sessionsListStatus,
+    setCurrentView,
+  ]);
 
   useEffect(() => {
     if (operation === "creating" || operation === "rebuilding") {

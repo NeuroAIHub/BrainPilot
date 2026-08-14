@@ -60,6 +60,7 @@ interface MessageStreamProps {
    * so demo replay keeps its flat, curated presentation.
    */
   groupExpertActivity?: boolean;
+  workspaceFileSessionId?: string;
   /** Open a workspace path referenced by an assistant Markdown link. */
   onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 }
@@ -96,6 +97,7 @@ function MessageStreamImpl({
   onRetryCancel,
   runningAgents,
   groupExpertActivity = false,
+  workspaceFileSessionId,
   onOpenWorkspaceFile,
 }: MessageStreamProps) {
   const t = useT();
@@ -397,7 +399,11 @@ function MessageStreamImpl({
         {message.kind === "error" ? (
           <p className="message-card__content--plain message-row__error">{displayContent}</p>
         ) : (
-          <MarkdownMessage content={displayContent} onOpenWorkspaceFile={onOpenWorkspaceFile} />
+          <MarkdownMessage
+            content={displayContent}
+            workspaceFileSessionId={workspaceFileSessionId}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
+          />
         )}
         {message.streaming && message.kind !== "error" ? (
           <span className="message-row__streaming-cursor" aria-hidden="true" />
@@ -479,6 +485,7 @@ function MessageStreamImpl({
         {isExpert ? <span className="message-card__agent-badge">{step.agent}</span> : null}
         <MarkdownMessage
           content={step.content || (step.streaming ? t("chat.streamingPending") : "")}
+          workspaceFileSessionId={workspaceFileSessionId}
           onOpenWorkspaceFile={onOpenWorkspaceFile}
         />
       </div>

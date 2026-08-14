@@ -33,6 +33,7 @@ export interface AgentMessageFilter {
 
 interface SessionContextValue {
   sessions: Session[];
+  sessionsListStatus: SessionsListStatus;
   currentSession: Session | null;
   messages: ChatMessage[];
   isLoading: boolean;
@@ -1340,6 +1341,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const value = useMemo(
     () => ({
       sessions,
+      sessionsListStatus,
       currentSession,
       messages,
       isLoading,
@@ -1381,6 +1383,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     }),
     [
       sessions,
+      sessionsListStatus,
       currentSession,
       messages,
       isLoading,
