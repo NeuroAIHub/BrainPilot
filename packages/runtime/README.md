@@ -35,6 +35,18 @@ new session for each ablation arm. Disabling the Auditor removes its Agent
 instructions, Skill paths, Agent availability, tools, and background GoT review
 dispatch from that session.
 
+### Monitor tool contract
+
+The optional Monitor capability is event-driven. Eligible agents receive
+`start_monitor`, `list_monitors`, and `stop_monitor`; there is deliberately no
+`wait_monitor`. After starting a monitor, an agent should end its current turn
+instead of sleeping or polling. The Runtime starts a new turn for the owning
+agent when the monitored process emits output.
+
+Tool lists are fixed when an agent is created. Enabling Monitor applies to new
+sessions and agents created afterwards; an already-running agent needs a new
+session or a Runtime restart before it can use the Monitor tools.
+
 ## Persistent storage contract
 
 The runtime is single-user: reusable cross-session files live directly under
