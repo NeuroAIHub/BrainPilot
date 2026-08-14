@@ -133,7 +133,10 @@ export class MockAgentSession implements IAgentSession {
       if (tool) {
         try {
           const res = await tool.execute(args);
-          const textOut = res.content.map((c) => c.text).join("");
+          const textOut = res.content
+            .filter((c) => c.type === "text")
+            .map((c) => c.text)
+            .join("");
           this.emit({
             type: "tool_execution_end",
             toolCallId,

@@ -2406,7 +2406,11 @@ export class SessionManager {
     maxTokens: number,
   ): Promise<SystemToolResult> {
     // Concatenate all text blocks to estimate total tokens.
-    const fullText = result.content.map((c) => c.text).join("");
+    const imageBlocks = result.content.filter((c) => c.type === "image");
+    const fullText = result.content
+      .filter((c): c is Extract<SystemToolResult["content"][number], { type: "text" }> => c.type === "text")
+      .map((c) => c.text)
+      .join("");
     const estimated = estimateTokens(fullText);
     if (estimated <= maxTokens) return result;
 
@@ -2456,7 +2460,7 @@ export class SessionManager {
       `完整内容已保存至 workspace/${relPath} ，可用 read 工具读取]`;
 
     return {
-      content: [{ type: "text", text: truncatedText + notice }],
+      content: [{ type: "text", text: truncatedText + notice }, ...imageBlocks],
       ...(result.terminate ? { terminate: true } : {}),
     };
   }

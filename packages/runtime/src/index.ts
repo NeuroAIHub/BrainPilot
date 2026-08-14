@@ -123,6 +123,7 @@ export type {
   PiAgentEvent,
   PiAssistantMessageEvent,
   SystemTool,
+  SystemToolContentBlock,
   SystemToolResult,
   EventListener,
 } from "./types.js";

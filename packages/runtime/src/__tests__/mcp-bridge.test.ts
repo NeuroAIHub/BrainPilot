@@ -107,6 +107,41 @@ describe("McpBridge", () => {
     expect(res.isError).toBe(true);
   });
 
+  it("preserves MCP image blocks instead of serializing base64 as text", async () => {
+    const bridge = new McpBridge(async () =>
+      fakeClient({
+        callTool: async () => ({
+          content: [
+            { type: "text", text: "chart" },
+            { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
+          ],
+          isError: false,
+        }),
+      }),
+    );
+    const [tool] = await bridge.connectAll({ mcpServers: { vision: { command: "x" } } });
+
+    await expect(tool!.execute({})).resolves.toEqual({
+      content: [
+        { type: "text", text: "chart" },
+        { type: "image", data: "aW1hZ2UtYnl0ZXM=", mimeType: "image/png" },
+      ],
+      isError: false,
+    });
+  });
+
+  it("falls back to text for malformed image blocks", async () => {
+    const bridge = new McpBridge(async () =>
+      fakeClient({ callTool: async () => ({ content: [{ type: "image", data: 123, mimeType: "image/png" }] }) }),
+    );
+    const [tool] = await bridge.connectAll({ mcpServers: { vision: { command: "x" } } });
+
+    const result = await tool!.execute({});
+    expect(result.content).toEqual([
+      { type: "text", text: '{"type":"image","data":123,"mimeType":"image/png"}' },
+    ]);
+  });
+
   it("skips a failing server without aborting the rest", async () => {
     const connect = vi.fn(async (name: string) => {
       if (name === "bad") throw new Error("spawn failed");

@@ -279,11 +279,16 @@ export interface SystemTool {
 }
 
 export interface SystemToolResult {
-  content: Array<{ type: "text"; text: string }>;
+  content: SystemToolContentBlock[];
   isError?: boolean;
   /** Stop the Pi agent loop after this tool batch without another model call. */
   terminate?: boolean;
 }
+
+/** Content blocks accepted by Pi tool results. */
+export type SystemToolContentBlock =
+  | { type: "text"; text: string }
+  | { type: "image"; data: string; mimeType: string };
 
 /** Listener for outgoing AG-UI events, scoped to a session. */
 export type EventListener = (event: AgUiEvent) => void;

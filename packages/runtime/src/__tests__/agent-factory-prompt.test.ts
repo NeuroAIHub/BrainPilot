@@ -20,4 +20,10 @@ describe("agent factory prompt assembly", () => {
       terminate: true,
     })).toMatchObject({ terminate: true });
   });
+
+  it("preserves image blocks for Pi's model-capability downgrade", () => {
+    expect(toPiToolResult("mcp__vision__render", {
+      content: [{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }],
+    }).content).toEqual([{ type: "image", data: "aW1hZ2U=", mimeType: "image/png" }]);
+  });
 });

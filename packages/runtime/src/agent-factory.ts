@@ -309,7 +309,10 @@ export function toPiToolResult(toolName: string, res: SystemToolResult): {
   terminate?: boolean;
 } {
   if (res.isError) {
-    const text = res.content.map((c) => c.text).join("\n");
+    const text = res.content
+      .filter((c): c is Extract<SystemToolResult["content"][number], { type: "text" }> => c.type === "text")
+      .map((c) => c.text)
+      .join("\n");
     throw new Error(text || `${toolName} failed`);
   }
   return {

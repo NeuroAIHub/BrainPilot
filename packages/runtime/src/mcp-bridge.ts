@@ -19,7 +19,7 @@
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
 import { isWindows } from "./platform.js";
-import type { SystemTool, SystemToolResult } from "./types.js";
+import type { SystemTool, SystemToolContentBlock, SystemToolResult } from "./types.js";
 import { loadCompatPluginProjections } from "./compat-hooks.js";
 
 /**
@@ -358,12 +358,18 @@ function isPlaceholderSpec(spec: McpServerSpec): boolean {
   return !spec.command?.trim();
 }
 
-/** Map an MCP tool-call `content` payload into our text-content shape. */
-function normalizeContent(content: unknown): Array<{ type: "text"; text: string }> {
+/** Preserve MCP text/image blocks in the Pi-compatible tool-result shape. */
+function normalizeContent(content: unknown): SystemToolContentBlock[] {
   if (Array.isArray(content)) {
     return content.map((item) => {
-      if (item && typeof item === "object" && (item as { type?: string }).type === "text") {
-        return { type: "text", text: String((item as { text?: unknown }).text ?? "") };
+      if (item && typeof item === "object") {
+        const block = item as { type?: unknown; text?: unknown; data?: unknown; mimeType?: unknown };
+        if (block.type === "text") {
+          return { type: "text", text: String(block.text ?? "") };
+        }
+        if (block.type === "image" && typeof block.data === "string" && typeof block.mimeType === "string") {
+          return { type: "image", data: block.data, mimeType: block.mimeType };
+        }
       }
       return { type: "text", text: safe(item) };
     });
