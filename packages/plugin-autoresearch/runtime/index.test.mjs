@@ -38,6 +38,24 @@ async function init(tools) {
 }
 
 describe("autoresearch runtime extension", () => {
+  it("registers lifecycle tools without starting a research session", async () => {
+    const { tools, stored } = await harness([]);
+    expect([...tools.keys()].sort()).toEqual([
+      "autoresearch_finish",
+      "autoresearch_init",
+      "autoresearch_pause",
+      "autoresearch_record",
+      "autoresearch_resume",
+      "autoresearch_run",
+      "autoresearch_status",
+      "autoresearch_stop",
+    ]);
+    expect(stored.has("session.json")).toBe(false);
+    const status = await tools.get("autoresearch_status").execute();
+    expect(status.details).toEqual({ status: "idle" });
+    expect(stored.has("session.json")).toBe(false);
+  });
+
   it("accepts baseline and improvements, then verifies the best result", async () => {
     const { tools, stored } = await harness([ok(10), ok(8), ok(8)]);
     await init(tools);

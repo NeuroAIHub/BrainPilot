@@ -2723,6 +2723,8 @@ export class SessionManager {
       // dead-waits on a silent expert.
       onUnreplied: (agentName) => this.writeFallbackToTaskCreators(entry, agentName),
       hasPendingTasks: () => entry.taskLedger.pendingAssignedTo(name).length > 0,
+      hasBackgroundContinuation: () =>
+        entry.backgroundJobManager.hasRunning(name) || this.hasBackgroundJobEvents(entry, name),
       claimTaskReminder: (agentName) => entry.taskLedger.claimReminder(agentName),
       // #97: only the principal gets the live team-status block injected each
       // turn (it is the coordinator). Other roles run without it.

@@ -180,6 +180,9 @@ an assigned task, return its result with:
 
 Plain text alone does not complete a task. If blocked, complete it with the
 reason and safe fallback instead of inventing a separate failure status.
+\`complete_task\` is terminal: never use it for partial progress or while a
+required background job is still running. After \`run_in_background\` succeeds,
+end the current turn; the runtime will wake you with the terminal job event.
 
 If another agent must contribute, create an independent task with
 \`dispatch_task(to="<agent>", content="<self-contained task and acceptance criteria>")\`,

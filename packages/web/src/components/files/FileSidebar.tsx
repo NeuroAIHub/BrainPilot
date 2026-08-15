@@ -19,7 +19,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { FileContent, FileEntry } from "../../contracts/backend";
+import { FileContent } from "../../contracts/backend";
 import { runtimeConfig } from "../../config";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
@@ -31,6 +31,13 @@ import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
 import { fileRequestMatchesSession } from "./fileSidebarScope";
+import {
+  applyDirectoryListing,
+  createFileSidebarRoot,
+  directoryListingChildren,
+  findFileSidebarNode,
+  type FileSidebarTreeNode,
+} from "./fileSidebarTree";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
 import { PluginPreviewHost } from "./PluginPreviewHost";
 import { matchEnabledPreviewer, type EnabledPreviewer } from "./previewerRegistry";
@@ -45,11 +52,7 @@ type DataUploadState = {
   phase: UploadProgress["phase"];
 };
 
-type FileNode = FileEntry & {
-  path: string;
-  children?: FileNode[];
-  loaded?: boolean;
-};
+type FileNode = FileSidebarTreeNode;
 
 type FileSidebarProps = {
   isOpen: boolean;
@@ -82,22 +85,6 @@ export function isInlineEditable(name: string): boolean {
 function parentPath(path: string): string {
   const index = path.lastIndexOf("/");
   return index > 0 ? path.slice(0, index) : WORKSPACE_ROOT_PATH;
-}
-
-function makeRootTree(): FileNode {
-  return {
-    name: "",
-    path: "", // synthetic container — its children are the rendered roots
-    type: "folder",
-    size: 0,
-    modified: 0,
-    permissions: "",
-    loaded: true,
-    children: [
-      { name: "workspace", path: WORKSPACE_ROOT_PATH, type: "folder", size: 0, modified: 0, permissions: "" },
-      { name: "data", path: DATA_ROOT_PATH, type: "folder", size: 0, modified: 0, permissions: "" },
-    ],
-  };
 }
 
 function joinPath(parent: string, name: string) {
@@ -179,16 +166,6 @@ function sortNodes(nodes: FileNode[]): FileNode[] {
   });
 }
 
-function updateNode(root: FileNode, path: string, updater: (node: FileNode) => FileNode): FileNode {
-  if (root.path === path) {
-    return updater(root);
-  }
-  return {
-    ...root,
-    children: root.children?.map((child) => updateNode(child, path, updater)),
-  };
-}
-
 /**
  * Turn raw runtime upload errors into short, human-readable copy. The runtime
  * returns `file too large: N bytes exceeds limit of M` (#256); without this the
@@ -214,22 +191,6 @@ function formatSidebarError(message: string, t: (key: string, params?: Record<st
   return message;
 }
 
-function findNode(root: FileNode, path: string | null): FileNode | null {
-  if (!path) {
-    return null;
-  }
-  if (root.path === path) {
-    return root;
-  }
-  for (const child of root.children ?? []) {
-    const found = findNode(child, path);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-}
-
 export function FileSidebar({
   isOpen,
   openFileRequest,
@@ -251,7 +212,7 @@ export function FileSidebar({
   // mode. A full rename rides with the planned session-management cleanup.
   const sandboxId = currentSession?.id ?? null;
   const t = useT();
-  const [tree, setTree] = useState<FileNode>(makeRootTree);
+  const [tree, setTree] = useState<FileNode>(createFileSidebarRoot);
   // Both roots start expanded so the two tiers are visible at a glance.
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set([WORKSPACE_ROOT_PATH, DATA_ROOT_PATH]),
@@ -363,8 +324,7 @@ export function FileSidebar({
         console.debug("[FileSidebar] listFiles", { sandboxId, path });
         const entries = await api.sandbox.listFiles(sandboxId, path);
         console.debug("[FileSidebar] listFiles ok", { sandboxId, path, count: entries.length });
-        const children = entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) }));
-        setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+        setTree(applyDirectoryListing(path, entries));
       } catch (err) {
         // The runtime now returns a distinct error (instead of an empty array)
         // when readdir fails for a reason other than ENOENT (#193). Surface it
@@ -421,24 +381,24 @@ export function FileSidebar({
     };
   }, [onResize, onResizeEnd]);
 
-  const selectedNode = useMemo(() => findNode(tree, selectedPath), [selectedPath, tree]);
+  const selectedNode = useMemo(() => findFileSidebarNode(tree, selectedPath), [selectedPath, tree]);
   const selectedFile = selectedNode?.type === "file" ? selectedNode : null;
   const selectedDownloadCount = selectedDownloadPaths.size;
 
-  const getNodeForPath = useCallback((path: string) => findNode(tree, path), [tree]);
+  const getNodeForPath = useCallback((path: string) => findFileSidebarNode(tree, path), [tree]);
 
   const loadDirectoryEntries = useCallback(
     async (path: string): Promise<FileNode[]> => {
       if (!sandboxId) {
         throw new Error("No active sandbox");
       }
-      const cached = findNode(tree, path);
+      const cached = findFileSidebarNode(tree, path);
       if (cached?.loaded && cached.children) {
         return cached.children;
       }
       const entries = await api.sandbox.listFiles(sandboxId, path);
-      const children = sortNodes(entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) })));
-      setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+      const children = sortNodes(directoryListingChildren(path, entries));
+      setTree(applyDirectoryListing(path, children));
       return children;
     },
     [sandboxId, tree],
@@ -763,10 +723,11 @@ export function FileSidebar({
       const expanded = new Set<string>([directory]);
       try {
         for (let index = 1; index < parts.length; index += 1) {
-          const entries = await api.sandbox.listFiles(sandboxId, directory);
+          const requestedDirectory = directory;
+          const entries = await api.sandbox.listFiles(sandboxId, requestedDirectory);
           if (cancelled) return;
-          const children = sortNodes(entries.map((entry) => ({ ...entry, path: joinPath(directory, entry.name) })));
-          setTree((current) => updateNode(current, directory, (node) => ({ ...node, children, loaded: true })));
+          const children = sortNodes(directoryListingChildren(requestedDirectory, entries));
+          setTree(applyDirectoryListing(requestedDirectory, children));
           const child = children.find((entry) => entry.name === parts[index]);
           if (!child) throw new Error(t("files.error.linkNotFound"));
           if (index === parts.length - 1) {

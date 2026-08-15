@@ -144,6 +144,13 @@ const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
     releaseNotes: "Initial range-backed NIfTI-1 metadata and central axial slice preview.",
   },
   {
+    plugin: "nifti-viewer",
+    source: "nifti-viewer/0.1.1",
+    version: "0.1.1",
+    publishedAt: "2026-08-14T00:00:00.000Z",
+    releaseNotes: "Add bounded whole-file .nii.gz preview and clarify that the displayed plane is a voxel-space central z slice without orientation transforms.",
+  },
+  {
     plugin: "superpowers",
     source: "superpowers/6.2.0",
     version: "6.2.0",

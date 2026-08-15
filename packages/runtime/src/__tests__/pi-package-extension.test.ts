@@ -2,8 +2,9 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { DefaultResourceLoader, SettingsManager } from "@earendil-works/pi-coding-agent";
+import { createAgentSession, DefaultResourceLoader, SessionManager, SettingsManager } from "@earendil-works/pi-coding-agent";
 import { afterEach, describe, expect, it } from "vitest";
+import { mergeLoadedExtensionToolNames } from "../agent-factory.js";
 
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
@@ -52,5 +53,43 @@ describe("trusted Pi package extensions", () => {
     await expect(handler("context")({ messages: [] }, {})).resolves.toBeUndefined();
     await handler("session_compact")({}, {});
     await expect(handler("context")({ messages: [] }, {})).resolves.toEqual(expect.objectContaining({ messages: expect.any(Array) }));
+  });
+
+  it("keeps tools from explicitly loaded extensions active under Pi's hard allowlist", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "bp-extension-tool-"));
+    roots.push(root);
+    const agentDir = path.join(root, "agent");
+    const settingsManager = SettingsManager.create(root, agentDir, { projectTrusted: true });
+    const loader = new DefaultResourceLoader({
+      cwd: root,
+      agentDir,
+      settingsManager,
+      noExtensions: true,
+      noSkills: true,
+      noContextFiles: true,
+      extensionFactories: [(pi) => pi.registerTool({
+        name: "probe",
+        label: "Probe",
+        description: "Probe extension visibility",
+        parameters: { type: "object", properties: {} },
+        execute: async () => ({ content: [{ type: "text", text: "ok" }], details: {} }),
+      })],
+    });
+    await loader.reload();
+
+    const tools = mergeLoadedExtensionToolNames(["read"], loader);
+    const { session } = await createAgentSession({
+      cwd: root,
+      tools,
+      resourceLoader: loader,
+      settingsManager,
+      sessionManager: SessionManager.inMemory(root),
+    });
+    try {
+      expect(session.getAllTools().map((tool) => tool.name)).toContain("probe");
+      expect(session.getActiveToolNames()).toContain("probe");
+    } finally {
+      session.dispose();
+    }
   });
 });

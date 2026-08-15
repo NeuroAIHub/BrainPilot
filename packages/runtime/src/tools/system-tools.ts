@@ -204,7 +204,9 @@ export function createCompleteTaskTool(deps: ToolDeps): SystemTool {
   return {
     name: "complete_task",
     description:
-      "Complete one task assigned to you and return its result to the task creator. Include conclusions and relevant workspace file paths; if blocked, explain why.",
+      "Complete one task assigned to you and return its final result to the task creator. " +
+      "Do not use it for partial progress or while required background work is still running. " +
+      "Include conclusions and relevant workspace file paths; if blocked, explain why.",
     parameters: {
       type: "object",
       properties: {

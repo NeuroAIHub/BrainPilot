@@ -44,6 +44,8 @@ export interface TraceReminderDeps {
   name: string;
   onUnreplied: (agentName: string) => void | Promise<void>;
   hasPendingTasks?: () => boolean;
+  /** True while a started background job can still wake this agent. */
+  hasBackgroundContinuation?: () => boolean;
   claimTaskReminder?: (agentName: string) => Promise<boolean>;
 }
 
@@ -87,7 +89,7 @@ const MERGED_REMINDER = SYS(
 interface RunState {
   traced: boolean;
   traceWorthy: boolean;
-  dispatched: boolean;
+  continuation: "none" | "delegated" | "background";
   reminded: boolean;
 }
 
@@ -95,9 +97,36 @@ function freshState(): RunState {
   return {
     traced: false,
     traceWorthy: false,
-    dispatched: false,
+    continuation: "none",
     reminded: false,
   };
+}
+
+type ReminderKind = "trace" | "reply" | "merged";
+
+function resolveReminder(
+  state: RunState,
+  hasPendingTasks: boolean,
+  hasBackgroundContinuation: boolean,
+): { kind: ReminderKind | null; needReply: boolean } {
+  // A successful run_in_background call transfers continuation ownership to
+  // the runtime, which will wake this agent on terminal completion. Injecting
+  // a follow-up here contradicts that contract and can force a premature
+  // terminal complete_task reply.
+  if (state.continuation === "background" && hasBackgroundContinuation) {
+    return { kind: null, needReply: false };
+  }
+
+  const needTrace = state.traceWorthy && !state.traced;
+  const needReply = hasPendingTasks && state.continuation !== "delegated";
+  const kind = needReply && needTrace
+    ? "merged"
+    : needReply
+      ? "reply"
+      : needTrace
+        ? "trace"
+        : null;
+  return { kind, needReply };
 }
 
 /**
@@ -144,8 +173,15 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
         return;
       }
 
+      if (tool === "run_in_background") {
+        state.continuation = "background";
+        return;
+      }
+
       if (tool === "dispatch_task") {
-        state.dispatched = true;
+        // Background continuation dominates delegation when both occur in one
+        // run: the terminal job event is the next reliable wake-up boundary.
+        if (state.continuation !== "background") state.continuation = "delegated";
         state.traceWorthy = true;
         return;
       }
@@ -163,23 +199,27 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
         return;
       }
 
-      const needTrace = state.traceWorthy && !state.traced;
-      const needReply =
-        (deps.hasPendingTasks?.() ?? false) &&
-        !state.dispatched;
+      const backgroundCanWake = state.continuation === "background"
+        && (deps.hasBackgroundContinuation?.() ?? true);
+      const decision = resolveReminder(
+        state,
+        deps.hasPendingTasks?.() ?? false,
+        backgroundCanWake,
+      );
       const sendReminder = (reminder: string): void => {
         state.reminded = true;
         continuingFollowUp = true;
         pi.sendUserMessage(reminder, { deliverAs: "followUp" });
       };
 
-      if (!state.reminded && (needTrace || needReply)) {
-        let reminder: string;
-        if (needReply && needTrace) reminder = MERGED_REMINDER;
-        else if (needReply) reminder = REPLY_REMINDER;
-        else reminder = TRACE_REMINDER;
+      if (!state.reminded && decision.kind) {
+        const reminder = decision.kind === "merged"
+          ? MERGED_REMINDER
+          : decision.kind === "reply"
+            ? REPLY_REMINDER
+            : TRACE_REMINDER;
 
-        if (needReply && deps.claimTaskReminder) {
+        if (decision.needReply && deps.claimTaskReminder) {
           const claimed = await deps.claimTaskReminder(deps.name);
           if (claimed) sendReminder(reminder);
           else await deps.onUnreplied(deps.name);
@@ -191,7 +231,7 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
 
       // One reminder is the hard limit. If an expert still did not return its
       // task, notify its creator through the host fallback.
-      if (state.reminded && needReply) await deps.onUnreplied(deps.name);
+      if (state.reminded && decision.needReply) await deps.onUnreplied(deps.name);
       state = freshState();
       continuingFollowUp = false;
     });

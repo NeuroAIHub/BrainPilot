@@ -1,0 +1,33 @@
+{
+  "id": "org.brainpilot.nifti-viewer",
+  "version": "0.1.1",
+  "apiVersion": "1",
+  "displayName": "Neuroscience Data Viewer",
+  "description": "Read-only metadata and central voxel-space z-slice previews for NIfTI-1 .nii and .nii.gz neuroimaging files.",
+  "categories": ["visualization"],
+  "kind": "previewer",
+  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
+  "protocols": { "preview": "1" },
+  "environments": ["local", "cloud", "browser"],
+  "permissions": ["read:workspace"],
+  "contributes": {
+    "previewers": [
+      {
+        "id": "nifti-central-z-slice",
+        "match": { "extensions": [".nii"] },
+        "priority": 100,
+        "mode": "readonly",
+        "delivery": "range",
+        "entry": "ui/index.html"
+      },
+      {
+        "id": "nifti-gzip-central-z-slice",
+        "match": { "extensions": [".nii.gz"] },
+        "priority": 100,
+        "mode": "readonly",
+        "delivery": "whole",
+        "entry": "ui/index.html"
+      }
+    ]
+  }
+}

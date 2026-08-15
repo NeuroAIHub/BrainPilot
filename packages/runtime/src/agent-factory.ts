@@ -59,6 +59,28 @@ export function appendSystemPromptSections(rolePrompt?: string): string[] {
   return [TOOL_CALL_EFFICIENCY_DIRECTIVE, ...(rolePrompt ? [rolePrompt] : [])];
 }
 
+type LoadedExtensionTools = {
+  getExtensions(): {
+    extensions: Array<{ tools: Map<string, unknown> }>;
+  };
+};
+
+/**
+ * Pi applies `tools` as a hard allowlist after extensions register. Merge only
+ * tools from extensions that the explicitly configured resource loader actually
+ * loaded; disabled marketplace plugins never reach this loader.
+ */
+export function mergeLoadedExtensionToolNames(
+  allowedToolNames: readonly string[],
+  resourceLoader: LoadedExtensionTools,
+): string[] {
+  const names = new Set(allowedToolNames);
+  for (const extension of resourceLoader.getExtensions().extensions) {
+    for (const name of extension.tools.keys()) names.add(name);
+  }
+  return [...names];
+}
+
 /**
  * Wrap the real Pi SDK. Imported lazily so mock-mode tests never load the SDK
  * (and never need API credentials).
@@ -153,6 +175,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
       name: params.agentName,
       onUnreplied: params.onUnreplied ?? (() => {}),
       hasPendingTasks: params.hasPendingTasks,
+      hasBackgroundContinuation: params.hasBackgroundContinuation,
       claimTaskReminder: params.claimTaskReminder,
     }));
   }
@@ -207,10 +230,11 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     extensionFactories,
   });
   await resourceLoader.reload();
+  const allowedToolNames = mergeLoadedExtensionToolNames(params.allowedToolNames, resourceLoader);
 
   const { session } = await createAgentSession({
     cwd: params.cwd,
-    tools: params.allowedToolNames,
+    tools: allowedToolNames,
     customTools,
     resourceLoader,
     settingsManager,
@@ -448,7 +472,10 @@ interface PiSdk {
     additionalExtensionPaths?: string[];
     /** Inline Pi extensions: each is called with the per-session ExtensionAPI. */
     extensionFactories?: unknown[];
-  }) => { reload(): Promise<void> };
+  }) => {
+    reload(): Promise<void>;
+    getExtensions(): { extensions: Array<{ tools: Map<string, unknown> }> };
+  };
   getAgentDir(): string;
   AuthStorage: {
     create(path: string): unknown;

@@ -104,6 +104,8 @@ describe("tool access control (§9)", () => {
 
     const complete = createCompleteTaskTool(d);
     expect((complete.parameters.required as string[])).toEqual(["task_id", "reply"]);
+    expect(complete.description).toContain("final result");
+    expect(complete.description).toContain("Do not use it for partial progress");
     expect((await complete.execute({ task_id: "task_000001", reply: "done" })).isError).toBeUndefined();
   });
 

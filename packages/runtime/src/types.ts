@@ -230,6 +230,8 @@ export type AgentSessionFactory = (params: {
    */
   onUnreplied?: (agentName: string) => void | Promise<void>;
   hasPendingTasks?: () => boolean;
+  /** Whether background work can still deliver a terminal wake to this agent. */
+  hasBackgroundContinuation?: () => boolean;
   claimTaskReminder?: (agentName: string) => Promise<boolean>;
   /**
    * #97: compute a fresh "team status" block to inject at the top of every turn

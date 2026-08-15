@@ -10,6 +10,7 @@ interface SentMessage {
 interface ToolCall {
   name: string;
   args?: Record<string, unknown>;
+  isError?: boolean;
 }
 
 function fakePi() {
@@ -47,6 +48,7 @@ function runOnce(
     name: deps?.name ?? role,
     onUnreplied: deps?.onUnreplied ?? (() => {}),
     hasPendingTasks: deps?.hasPendingTasks ?? (() => role === "expert"),
+    hasBackgroundContinuation: deps?.hasBackgroundContinuation,
     claimTaskReminder: deps?.claimTaskReminder,
   })(pi as never);
   pi.fire("agent_start");
@@ -54,7 +56,7 @@ function runOnce(
     const spec = typeof call === "string" ? { name: call, args: {} } : call;
     const event = { toolCallId: `t${index}`, toolName: spec.name, args: spec.args ?? {} };
     pi.fire("tool_execution_start", event);
-    pi.fire("tool_execution_end", { ...event, isError: false });
+    pi.fire("tool_execution_end", { ...event, isError: spec.isError ?? false });
   });
   pi.fire("agent_end", { messages: [{ role: "assistant", stopReason: "end_turn" }] });
   return { kinds: kindsOf(pi.sent), sent: pi.sent };
@@ -116,6 +118,36 @@ describe("trace-reminder: flat task activity", () => {
     expect(runOnce("expert", [
       { name: "dispatch_task", args: { to: "writer" } },
     ], pendingEngineerTask).kinds).toEqual(["trace"]);
+  });
+
+  it("lets an expert with a successfully started background job end and wait", () => {
+    expect(runOnce("expert", [
+      { name: "run_in_background", args: { job_key: "training" } },
+    ], pendingEngineerTask).kinds).toEqual([]);
+  });
+
+  it("keeps the reply requirement when background startup fails", () => {
+    expect(runOnce("expert", [
+      { name: "run_in_background", args: { job_key: "training" }, isError: true },
+    ], pendingEngineerTask).kinds).toEqual(["reply"]);
+  });
+
+  it("restores the task reminder when no background wake remains", () => {
+    expect(runOnce("expert", [
+      { name: "run_in_background", args: { job_key: "training" } },
+      { name: "background_job", args: { action: "stop", job_id: "job_training" } },
+    ], {
+      ...pendingEngineerTask,
+      hasBackgroundContinuation: () => false,
+    }).kinds).toEqual(["merged"]);
+  });
+
+  it("background continuation dominates earlier work and delegation", () => {
+    expect(runOnce("expert", [
+      "write",
+      { name: "dispatch_task", args: { to: "writer" } },
+      { name: "run_in_background", args: { job_key: "training" } },
+    ], pendingEngineerTask).kinds).toEqual([]);
   });
 
   it("substantive work before a peer request still requires trace, not reply", () => {
