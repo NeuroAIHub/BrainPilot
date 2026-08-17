@@ -14,7 +14,7 @@ import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { join, resolve, sep, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   CUSTOM_EVENT,
@@ -518,11 +518,12 @@ export class SessionManager {
   // never invoked concurrently).
   private readonly deliveryLoops = new Set<string>();
 
-  // External MCP tools (§9 decision 2): loaded once, lazily, shared by all
-  // non-trace agents. Null until first agent is created.
+  // External MCP tools (§9 decision 2): shared by all non-trace agents and
+  // refreshed for newly-created agents when the on-disk config changes.
   private mcpBridge: McpBridge | null;
   private mcpTools: SystemTool[] = [];
-  private mcpLoaded = false;
+  private mcpConfigFingerprint: string | null = null;
+  private mcpRefresh: Promise<SystemTool[]> | null = null;
 
   // Built-in skills directory, loaded through Pi's native skill pipeline
   // (`additionalSkillPaths`). The bundled @brainpilot/skills content is
@@ -747,23 +748,42 @@ export class SessionManager {
   }
 
   /**
-   * Load external MCP tools once. No-op in mock mode (BP_MOCK=1) and when no
-   * `mcp_servers.json` is present, so the default path stays zero-overhead.
+   * Load external MCP tools for a newly-created agent. The small config is
+   * re-read so Settings/plugin enable changes apply without a runtime restart;
+   * existing agents retain the tool array already handed to their Pi session.
    */
   private async ensureMcpTools(): Promise<SystemTool[]> {
-    if (this.mcpLoaded) return this.mcpTools;
-    this.mcpLoaded = true;
     if (isMockMode() && !this.mcpBridge) return this.mcpTools;
-    try {
-      const cfg = await loadMcpServersConfig(this.dataRoot);
-      if (!cfg) return this.mcpTools;
-      if (!this.mcpBridge) this.mcpBridge = new McpBridge();
-      this.mcpTools = await this.mcpBridge.connectAll(cfg);
-    } catch (err) {
-      // eslint-disable-next-line no-console
-      console.error("[mcp] bridge load failed:", (err as Error).message);
-    }
-    return this.mcpTools;
+    if (this.mcpRefresh) return this.mcpRefresh;
+
+    const refresh = async (): Promise<SystemTool[]> => {
+      try {
+        const cfg = await loadMcpServersConfig(this.dataRoot);
+        const fingerprint = createHash("sha256")
+          .update(JSON.stringify(cfg))
+          .digest("hex");
+        if (fingerprint === this.mcpConfigFingerprint) return this.mcpTools;
+
+        await this.mcpBridge?.close();
+        this.mcpTools = [];
+        if (cfg) {
+          if (!this.mcpBridge) this.mcpBridge = new McpBridge();
+          this.mcpTools = await this.mcpBridge.connectAll(cfg);
+        }
+        this.mcpConfigFingerprint = fingerprint;
+      } catch (err) {
+        // Preserve the last usable tool set when a transient/partial config
+        // write cannot be read. A later ensureAgent call retries the refresh.
+        // eslint-disable-next-line no-console
+        console.error("[mcp] bridge load failed:", (err as Error).message);
+      }
+      return this.mcpTools;
+    };
+
+    this.mcpRefresh = refresh().finally(() => {
+      this.mcpRefresh = null;
+    });
+    return this.mcpRefresh;
   }
 
   private bpDir(sid: string): string {

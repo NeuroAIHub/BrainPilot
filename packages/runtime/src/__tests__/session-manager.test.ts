@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,6 +10,7 @@ import {
 } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
+import { McpBridge } from "../mcp-bridge.js";
 
 function mgr(): SessionManager {
   // persist:false keeps tests hermetic; mock factory => no Pi SDK / API.
@@ -152,6 +153,72 @@ describe("SessionManager (mock mode)", () => {
     expect(principalTools).toContain("dispatch_task");
     expect(principalTools).toContain("complete_task");
     expect(principalTools).toContain("ask_user");
+  });
+
+  it("reloads plugin MCP projections for agents created after enable and disable (#469)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-hot-"));
+    const runtimeDir = join(root, "plugins", "runtime");
+    const pluginRoot = join(root, "plugins", "execution", "browser", "1.0.0");
+    const pluginData = join(root, "plugins", "data", "browser", "1.0.0");
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    const projectionPath = join(runtimeDir, "browser.json");
+    await mkdir(runtimeDir, { recursive: true });
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(pluginData, { recursive: true });
+    await writeFile(mcpConfigPath, JSON.stringify({
+      mcpServers: { browser: { command: "fake-browser" } },
+    }));
+
+    const closed = vi.fn();
+    const bridge = new McpBridge(async () => ({
+      listTools: async () => ({
+        tools: [{
+          name: "navigate",
+          description: "Navigate",
+          inputSchema: { type: "object", properties: {} },
+        }],
+      }),
+      callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      close: async () => { closed(); },
+    }));
+    const seen: string[][] = [];
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      if (params.agentName === "principal") seen.push(params.systemTools.map((tool) => tool.name));
+      return mockAgentFactory(params);
+    };
+    const manager = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: spyFactory,
+      mcpBridge: bridge,
+    });
+
+    const before = await manager.createSession();
+    await manager.sendMessage(before.id, "hi");
+    await waitFor(() => seen.length === 1);
+    expect(seen[0]).not.toContain("mcp__browser__navigate");
+
+    await writeFile(projectionPath, JSON.stringify({
+      schemaVersion: 1,
+      id: "browser",
+      version: "1.0.0",
+      format: "brainpilot",
+      root: pluginRoot,
+      dataDir: pluginData,
+      mcpConfigPath,
+    }));
+    const enabled = await manager.createSession();
+    await manager.sendMessage(enabled.id, "hi");
+    await waitFor(() => seen.length === 2);
+    expect(seen[1]).toContain("mcp__browser__navigate");
+
+    await rm(projectionPath);
+    const disabled = await manager.createSession();
+    await manager.sendMessage(disabled.id, "hi");
+    await waitFor(() => seen.length === 3);
+    expect(seen[2]).not.toContain("mcp__browser__navigate");
+    expect(closed).toHaveBeenCalledOnce();
+    await manager.emergencySaveAll();
   });
 
   it("injects the built-in persona (not the old placeholder) for the principal", async () => {
