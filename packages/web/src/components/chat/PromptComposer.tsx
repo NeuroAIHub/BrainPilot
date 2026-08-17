@@ -18,6 +18,7 @@ import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
+import type { WorkspaceFileTarget } from "./workspaceFileLink";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
 import { shouldShowNoProviderBanner } from "./noProviderBanner";
@@ -81,9 +82,10 @@ type PromptComposerProps = {
    *  no-provider banner's CTA. Optional so the composer still renders standalone
    *  (e.g. in tests). */
   onOpenProviderSettings?: () => void;
+  onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 };
 
-export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps = {}) {
+export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: PromptComposerProps = {}) {
   const t = useT();
   const [suggestedTasks, setSuggestedTasks] = useState<string[]>([]);
   const [activeProvider, setActiveProvider] = useState<ProviderProfile | null>(null);
@@ -697,6 +699,8 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             runningAgents={runningAgents}
             groupExpertActivity
             onRetryCancel={() => void interruptCurrent()}
+            workspaceFileSessionId={currentSession?.id}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
           />
         ) : null}
 
