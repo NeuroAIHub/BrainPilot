@@ -16,6 +16,7 @@ import { serve } from "@hono/node-server";
 import { stream } from "hono/streaming";
 import {
   CreateSessionRequestSchema,
+  UpdateSessionRequestSchema,
   SendMessageRequestSchema,
   InterruptRequestSchema,
   TraceDependencyDecisionRequestSchema,
@@ -56,10 +57,11 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
     return s ? c.json(s) : c.json({ error: "not found" }, 404);
   });
 
-  // #29: rename — PUT the session title and persist it to meta.json.
+  // Update session metadata and the shared reasoning effort.
   app.put("/sessions/:id", async (c) => {
-    const body = (await c.req.json().catch(() => ({}))) as { title?: unknown };
-    const s = await manager.renameSession(c.req.param("id"), body?.title);
+    const parsed = UpdateSessionRequestSchema.safeParse(await c.req.json().catch(() => ({})));
+    if (!parsed.success) return c.json({ error: "invalid body" }, 400);
+    const s = await manager.updateSession(c.req.param("id"), parsed.data);
     return s ? c.json(s) : c.json({ error: "not found" }, 404);
   });
 

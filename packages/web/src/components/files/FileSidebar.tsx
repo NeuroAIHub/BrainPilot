@@ -9,6 +9,9 @@ import {
   Folder,
   FolderOpen,
   Package,
+  Eye,
+  Pencil,
+  Save,
   Maximize2,
   Minimize2,
   RefreshCw,
@@ -16,7 +19,7 @@ import {
   Upload,
   X,
 } from "lucide-react";
-import { FileContent, FileEntry } from "../../contracts/backend";
+import { FileContent } from "../../contracts/backend";
 import { runtimeConfig } from "../../config";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { useSessions } from "../../contexts/SessionContext";
@@ -27,6 +30,13 @@ import { createZipBlob, type ZipEntry } from "../../utils/zip";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
+import {
+  applyDirectoryListing,
+  createFileSidebarRoot,
+  directoryListingChildren,
+  findFileSidebarNode,
+  type FileSidebarTreeNode,
+} from "./fileSidebarTree";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
 import { PluginPreviewHost } from "./PluginPreviewHost";
 import { matchEnabledPreviewer, type EnabledPreviewer } from "./previewerRegistry";
@@ -41,15 +51,13 @@ type DataUploadState = {
   phase: UploadProgress["phase"];
 };
 
-type FileNode = FileEntry & {
-  path: string;
-  children?: FileNode[];
-  loaded?: boolean;
-};
+type FileNode = FileSidebarTreeNode;
 
 type FileSidebarProps = {
   isOpen: boolean;
+  openFileRequest?: { path: string; line?: number; requestId: number } | null;
   onClose: () => void;
+  onDirtyChange?: (dirty: boolean) => void;
   onResize: (width: number) => void;
   onResizeEnd: () => void;
   onResizeStart: () => void;
@@ -69,20 +77,13 @@ const DEFAULT_PREVIEW_WIDTH = 560;
 const WORKSPACE_ROOT_PATH = "/workspace";
 const DATA_ROOT_PATH = "/data";
 
-function makeRootTree(): FileNode {
-  return {
-    name: "",
-    path: "", // synthetic container — its children are the rendered roots
-    type: "folder",
-    size: 0,
-    modified: 0,
-    permissions: "",
-    loaded: true,
-    children: [
-      { name: "workspace", path: WORKSPACE_ROOT_PATH, type: "folder", size: 0, modified: 0, permissions: "" },
-      { name: "data", path: DATA_ROOT_PATH, type: "folder", size: 0, modified: 0, permissions: "" },
-    ],
-  };
+export function isInlineEditable(name: string): boolean {
+  return /\.(?:md|txt)$/i.test(name);
+}
+
+function parentPath(path: string): string {
+  const index = path.lastIndexOf("/");
+  return index > 0 ? path.slice(0, index) : WORKSPACE_ROOT_PATH;
 }
 
 function joinPath(parent: string, name: string) {
@@ -164,16 +165,6 @@ function sortNodes(nodes: FileNode[]): FileNode[] {
   });
 }
 
-function updateNode(root: FileNode, path: string, updater: (node: FileNode) => FileNode): FileNode {
-  if (root.path === path) {
-    return updater(root);
-  }
-  return {
-    ...root,
-    children: root.children?.map((child) => updateNode(child, path, updater)),
-  };
-}
-
 /**
  * Turn raw runtime upload errors into short, human-readable copy. The runtime
  * returns `file too large: N bytes exceeds limit of M` (#256); without this the
@@ -199,23 +190,16 @@ function formatSidebarError(message: string, t: (key: string, params?: Record<st
   return message;
 }
 
-function findNode(root: FileNode, path: string | null): FileNode | null {
-  if (!path) {
-    return null;
-  }
-  if (root.path === path) {
-    return root;
-  }
-  for (const child of root.children ?? []) {
-    const found = findNode(child, path);
-    if (found) {
-      return found;
-    }
-  }
-  return null;
-}
-
-export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeStart, width }: FileSidebarProps) {
+export function FileSidebar({
+  isOpen,
+  openFileRequest,
+  onClose,
+  onDirtyChange,
+  onResize,
+  onResizeEnd,
+  onResizeStart,
+  width,
+}: FileSidebarProps) {
   const { currentSandbox } = useSandbox();
   const { currentSession } = useSessions();
   // The runtime always addresses a workspace by session id (workspaces/<sid>/),
@@ -227,13 +211,19 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   // mode. A full rename rides with the planned session-management cleanup.
   const sandboxId = currentSession?.id ?? null;
   const t = useT();
-  const [tree, setTree] = useState<FileNode>(makeRootTree);
+  const [tree, setTree] = useState<FileNode>(createFileSidebarRoot);
   // Both roots start expanded so the two tiers are visible at a glance.
   const [expandedPaths, setExpandedPaths] = useState<Set<string>>(
     () => new Set([WORKSPACE_ROOT_PATH, DATA_ROOT_PATH]),
   );
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [selectedContent, setSelectedContent] = useState<FileContent | null>(null);
+  const [draftContent, setDraftContent] = useState("");
+  const [isEditing, setIsEditing] = useState(false);
+  const [isSaving, setIsSaving] = useState(false);
+  const [editError, setEditError] = useState<string | null>(null);
+  const [conflictContent, setConflictContent] = useState<FileContent | null>(null);
+  const [requestedLine, setRequestedLine] = useState<number | undefined>(undefined);
   const [selectedDownloadPaths, setSelectedDownloadPaths] = useState<Set<string>>(() => new Set());
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isDownloadingSelection, setIsDownloadingSelection] = useState(false);
@@ -248,6 +238,23 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
   const isUploadingToData = dataUploadState != null;
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const dataUploadInputRef = useRef<HTMLInputElement | null>(null);
+  const isDirty = selectedContent !== null && draftContent !== selectedContent.content;
+
+  useEffect(() => {
+    onDirtyChange?.(isDirty);
+  }, [isDirty, onDirtyChange]);
+
+  useEffect(() => () => onDirtyChange?.(false), [onDirtyChange]);
+
+  useEffect(() => {
+    if (!isDirty) return;
+    const warnBeforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warnBeforeUnload);
+    return () => window.removeEventListener("beforeunload", warnBeforeUnload);
+  }, [isDirty]);
 
   useEffect(() => () => dataUploadAbortRef.current?.abort(), []);
 
@@ -316,8 +323,7 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
         console.debug("[FileSidebar] listFiles", { sandboxId, path });
         const entries = await api.sandbox.listFiles(sandboxId, path);
         console.debug("[FileSidebar] listFiles ok", { sandboxId, path, count: entries.length });
-        const children = entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) }));
-        setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+        setTree(applyDirectoryListing(path, entries));
       } catch (err) {
         // The runtime now returns a distinct error (instead of an empty array)
         // when readdir fails for a reason other than ENOENT (#193). Surface it
@@ -339,6 +345,10 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
       setSelectedDownloadPaths(new Set());
       setSelectedPath(null);
       setSelectedContent(null);
+      setDraftContent("");
+      setIsEditing(false);
+      setEditError(null);
+      setConflictContent(null);
       setIsPreviewMaximized(false);
     }
   }, [currentSandbox?.status, isOpen, loadDirectory]);
@@ -370,24 +380,24 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
     };
   }, [onResize, onResizeEnd]);
 
-  const selectedNode = useMemo(() => findNode(tree, selectedPath), [selectedPath, tree]);
+  const selectedNode = useMemo(() => findFileSidebarNode(tree, selectedPath), [selectedPath, tree]);
   const selectedFile = selectedNode?.type === "file" ? selectedNode : null;
   const selectedDownloadCount = selectedDownloadPaths.size;
 
-  const getNodeForPath = useCallback((path: string) => findNode(tree, path), [tree]);
+  const getNodeForPath = useCallback((path: string) => findFileSidebarNode(tree, path), [tree]);
 
   const loadDirectoryEntries = useCallback(
     async (path: string): Promise<FileNode[]> => {
       if (!sandboxId) {
         throw new Error("No active sandbox");
       }
-      const cached = findNode(tree, path);
+      const cached = findFileSidebarNode(tree, path);
       if (cached?.loaded && cached.children) {
         return cached.children;
       }
       const entries = await api.sandbox.listFiles(sandboxId, path);
-      const children = sortNodes(entries.map((entry) => ({ ...entry, path: joinPath(path, entry.name) })));
-      setTree((current) => updateNode(current, path, (node) => ({ ...node, children, loaded: true })));
+      const children = sortNodes(directoryListingChildren(path, entries));
+      setTree(applyDirectoryListing(path, children));
       return children;
     },
     [sandboxId, tree],
@@ -661,9 +671,23 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
     }
   };
 
-  const selectFile = async (node: FileNode) => {
+  const confirmDiscard = useCallback(() => {
+    return !isDirty || window.confirm(t("files.editor.confirmDiscard"));
+  }, [isDirty, t]);
+
+  const selectFile = async (node: FileNode, line?: number, discardConfirmed = false) => {
+    if (node.path === selectedPath) {
+      setRequestedLine(line);
+      return;
+    }
+    if (!discardConfirmed && !confirmDiscard()) return;
     setSelectedPath(node.path);
     setSelectedContent(null);
+    setDraftContent("");
+    setIsEditing(false);
+    setEditError(null);
+    setConflictContent(null);
+    setRequestedLine(line);
     if (!sandboxId) {
       return;
     }
@@ -674,13 +698,82 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
       return;
     }
     try {
-      setSelectedContent(await api.sandbox.readFile(sandboxId, node.path));
+      const loaded = await api.sandbox.readFile(sandboxId, node.path);
+      setSelectedContent(loaded);
+      setDraftContent(loaded.content);
     } catch (err) {
-      setSelectedContent({
-        path: node.path,
-        content: err instanceof Error ? err.message : t("files.error.previewFailed"),
-        size: node.size,
-      });
+      setEditError(err instanceof Error ? err.message : t("files.error.previewFailed"));
+    }
+  };
+
+  useEffect(() => {
+    if (!isOpen || !openFileRequest || !sandboxId || currentSandbox?.status !== "running") return;
+    let cancelled = false;
+
+    const openLinkedFile = async () => {
+      if (openFileRequest.path !== selectedPath && !confirmDiscard()) return;
+      const parts = openFileRequest.path.split("/").filter(Boolean);
+      if (parts.length < 2 || (parts[0] !== "workspace" && parts[0] !== "data")) {
+        setError(t("files.error.invalidLink"));
+        return;
+      }
+
+      let directory = `/${parts[0]}`;
+      const expanded = new Set<string>([directory]);
+      try {
+        for (let index = 1; index < parts.length; index += 1) {
+          const requestedDirectory = directory;
+          const entries = await api.sandbox.listFiles(sandboxId, requestedDirectory);
+          if (cancelled) return;
+          const children = sortNodes(directoryListingChildren(requestedDirectory, entries));
+          setTree(applyDirectoryListing(requestedDirectory, children));
+          const child = children.find((entry) => entry.name === parts[index]);
+          if (!child) throw new Error(t("files.error.linkNotFound"));
+          if (index === parts.length - 1) {
+            if (child.type !== "file") throw new Error(t("files.error.linkNotFile"));
+            setExpandedPaths((current) => new Set([...current, ...expanded]));
+            await selectFile(child, openFileRequest.line, true);
+            return;
+          }
+          if (child.type !== "folder" && child.type !== "symlink") {
+            throw new Error(t("files.error.linkNotFound"));
+          }
+          directory = child.path;
+          expanded.add(directory);
+        }
+      } catch (err) {
+        if (!cancelled) setError(err instanceof Error ? err.message : t("files.error.linkNotFound"));
+      }
+    };
+
+    void openLinkedFile();
+    return () => {
+      cancelled = true;
+    };
+  }, [openFileRequest?.requestId, isOpen, sandboxId, currentSandbox?.status]);
+
+  const saveSelectedFile = async (force = false) => {
+    if (!sandboxId || !selectedFile || !selectedContent || !isInlineEditable(selectedFile.name)) return;
+    setIsSaving(true);
+    setEditError(null);
+    try {
+      if (!force) {
+        const latest = await api.sandbox.readFile(sandboxId, selectedFile.path);
+        if (latest.content !== selectedContent.content) {
+          setConflictContent(latest);
+          return;
+        }
+      }
+      const blob = new Blob([draftContent], { type: "text/plain;charset=utf-8" });
+      const saved = await api.sandbox.uploadFile(sandboxId, selectedFile.path, blob);
+      const nextContent = { path: selectedFile.path, content: draftContent, size: saved.size };
+      setSelectedContent(nextContent);
+      setConflictContent(null);
+      await loadDirectory(parentPath(selectedFile.path));
+    } catch (err) {
+      setEditError(err instanceof Error ? err.message : t("files.editor.saveFailed"));
+    } finally {
+      setIsSaving(false);
     }
   };
 
@@ -919,13 +1012,36 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 
       <FilePreviewPanel
         content={selectedContent}
+        conflictContent={conflictContent}
+        draftContent={draftContent}
+        editError={editError}
         file={isOpen ? selectedFile : null}
+        isDirty={isDirty}
+        isEditing={isEditing}
         isMaximized={isPreviewMaximized}
+        isSaving={isSaving}
+        requestedLine={requestedLine}
         onClose={() => {
+          if (!confirmDiscard()) return;
           setSelectedPath(null);
           setSelectedContent(null);
+          setDraftContent("");
+          setIsEditing(false);
+          setEditError(null);
+          setConflictContent(null);
           setIsPreviewMaximized(false);
         }}
+        onDraftChange={setDraftContent}
+        onEdit={() => setIsEditing(true)}
+        onPreview={() => setIsEditing(false)}
+        onReloadConflict={() => {
+          if (!conflictContent) return;
+          setSelectedContent(conflictContent);
+          setDraftContent(conflictContent.content);
+          setConflictContent(null);
+          setEditError(null);
+        }}
+        onSave={(force) => void saveSelectedFile(force)}
         sandboxId={sandboxId}
         toDisplayPath={toDisplayPath}
         onToggleMaximize={() => setIsPreviewMaximized((current) => !current)}
@@ -937,16 +1053,40 @@ export function FileSidebar({ isOpen, onClose, onResize, onResizeEnd, onResizeSt
 function FilePreviewPanel({
   file,
   content,
+  conflictContent,
+  draftContent,
+  editError,
+  isDirty,
+  isEditing,
   isMaximized,
+  isSaving,
+  requestedLine,
   onClose,
+  onDraftChange,
+  onEdit,
+  onPreview,
+  onReloadConflict,
+  onSave,
   sandboxId,
   toDisplayPath,
   onToggleMaximize,
 }: {
   file: FileNode | null;
   content: FileContent | null;
+  conflictContent: FileContent | null;
+  draftContent: string;
+  editError: string | null;
+  isDirty: boolean;
+  isEditing: boolean;
   isMaximized: boolean;
+  isSaving: boolean;
+  requestedLine?: number;
   onClose: () => void;
+  onDraftChange: (content: string) => void;
+  onEdit: () => void;
+  onPreview: () => void;
+  onReloadConflict: () => void;
+  onSave: (force: boolean) => void;
   sandboxId: string | null;
   toDisplayPath: (virtualPath: string) => string;
   onToggleMaximize: () => void;
@@ -959,8 +1099,30 @@ function FilePreviewPanel({
   const [isDownloading, setIsDownloading] = useState(false);
   const [enabledPreviewers, setEnabledPreviewers] = useState<EnabledPreviewer[]>([]);
   const previewResizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
+  const editorRef = useRef<HTMLTextAreaElement | null>(null);
   const previewKind = file ? getPreviewKind(file.name) : "download";
   const pluginPreviewer = file ? matchEnabledPreviewer(file.name, enabledPreviewers) : null;
+  const editable = file ? isInlineEditable(file.name) : false;
+
+  useEffect(() => {
+    if (!isEditing) return;
+    const handleSaveShortcut = (event: KeyboardEvent) => {
+      if ((event.metaKey || event.ctrlKey) && event.key.toLowerCase() === "s") {
+        event.preventDefault();
+        if (isDirty && !isSaving) onSave(false);
+      }
+    };
+    window.addEventListener("keydown", handleSaveShortcut);
+    return () => window.removeEventListener("keydown", handleSaveShortcut);
+  }, [isDirty, isEditing, isSaving, onSave]);
+
+  useEffect(() => {
+    if (!isEditing || !requestedLine || !editorRef.current) return;
+    const lines = draftContent.split("\n");
+    const offset = lines.slice(0, Math.max(0, requestedLine - 1)).reduce((sum, line) => sum + line.length + 1, 0);
+    editorRef.current.focus();
+    editorRef.current.setSelectionRange(offset, offset);
+  }, [draftContent, isEditing, requestedLine]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1098,6 +1260,35 @@ function FilePreviewPanel({
           <h3>{file.name}</h3>
         </div>
         <div className="file-preview__actions">
+          {editable && content ? (
+            <>
+              <button
+                className={`file-preview__mode ${!isEditing ? "is-active" : ""}`}
+                onClick={onPreview}
+                type="button"
+              >
+                <Eye size={14} />
+                <span>{t("files.editor.preview")}</span>
+              </button>
+              <button
+                className={`file-preview__mode ${isEditing ? "is-active" : ""}`}
+                onClick={onEdit}
+                type="button"
+              >
+                <Pencil size={14} />
+                <span>{t("files.editor.edit")}</span>
+              </button>
+              <button
+                className="file-preview__save"
+                disabled={!isDirty || isSaving}
+                onClick={() => onSave(false)}
+                type="button"
+              >
+                <Save size={14} />
+                <span>{isSaving ? t("files.editor.saving") : t("files.editor.save")}</span>
+              </button>
+            </>
+          ) : null}
           <button className="file-preview__download" disabled={!sandboxId || isDownloading} onClick={() => void downloadFile()} type="button">
             <Download size={14} />
             <span>{isDownloading ? t("files.preview.downloading") : t("files.preview.download")}</span>
@@ -1130,26 +1321,49 @@ function FilePreviewPanel({
         </div>
       </dl>
 
-      {pluginPreviewer && sandboxId ? (
-        <PluginPreviewHost
-          key={`${pluginPreviewer.pluginId}:${pluginPreviewer.pluginVersion}:${file.path}`}
-          previewer={pluginPreviewer}
-          sandboxId={sandboxId}
-          path={file.path}
-          name={file.name}
-          size={file.size}
-        />
-      ) : (
-        <FilePreviewView
-          name={file.name}
-          source={previewSource}
-          renderMarkdown={isMarkdown(file.name)}
-          error={blobError}
-          t={t}
-          onDownload={sandboxId ? () => void downloadFile() : undefined}
-          isDownloading={isDownloading}
-        />
-      )}
+      <div className="file-preview__body">
+        {editError ? <p className="file-editor__error" role="alert">{editError}</p> : null}
+        {conflictContent ? (
+          <div className="file-editor__conflict" role="alert">
+            <p>{t("files.editor.conflict")}</p>
+            <div>
+              <button type="button" onClick={onReloadConflict}>{t("files.editor.reload")}</button>
+              <button type="button" onClick={() => onSave(true)}>{t("files.editor.overwrite")}</button>
+            </div>
+          </div>
+        ) : null}
+
+        {editable && content && isEditing ? (
+          <textarea
+            ref={editorRef}
+            aria-label={t("files.editor.aria", { name: file.name })}
+            className="file-editor__textarea"
+            disabled={isSaving}
+            onChange={(event) => onDraftChange(event.target.value)}
+            spellCheck={false}
+            value={draftContent}
+          />
+        ) : pluginPreviewer && sandboxId ? (
+          <PluginPreviewHost
+            key={`${pluginPreviewer.pluginId}:${pluginPreviewer.pluginVersion}:${file.path}`}
+            previewer={pluginPreviewer}
+            sandboxId={sandboxId}
+            path={file.path}
+            name={file.name}
+            size={file.size}
+          />
+        ) : (
+          <FilePreviewView
+            name={file.name}
+            source={editable && content ? { kind: "text", text: draftContent } : previewSource}
+            renderMarkdown={isMarkdown(file.name)}
+            error={blobError}
+            t={t}
+            onDownload={sandboxId ? () => void downloadFile() : undefined}
+            isDownloading={isDownloading}
+          />
+        )}
+      </div>
     </section>
   );
 }

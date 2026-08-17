@@ -15,6 +15,7 @@ import {
 type SearchDialogProps = {
   isOpen: boolean;
   onClose: () => void;
+  confirmNavigation?: () => boolean;
 };
 
 /**
@@ -22,7 +23,7 @@ type SearchDialogProps = {
  * list + listitem buttons (not listbox/button mismatch), arrow navigation,
  * visible Close, and same-title disambiguation via date + short id.
  */
-export function SearchDialog({ isOpen, onClose }: SearchDialogProps) {
+export function SearchDialog({ isOpen, onClose, confirmNavigation }: SearchDialogProps) {
   const { sessions, selectSession } = useSessions();
   const t = useT();
   const [query, setQuery] = useState("");
@@ -86,6 +87,7 @@ export function SearchDialog({ isOpen, onClose }: SearchDialogProps) {
         const target = filteredSessions[clampActiveIndex(activeIndex, filteredSessions.length)];
         if (target && document.activeElement === inputRef.current) {
           event.preventDefault();
+          if (confirmNavigation && !confirmNavigation()) return;
           selectSession(target.id);
           onClose();
         }
@@ -105,13 +107,14 @@ export function SearchDialog({ isOpen, onClose }: SearchDialogProps) {
         }
       }
     };
-  }, [isOpen, onClose, filteredSessions, activeIndex, selectSession]);
+  }, [isOpen, onClose, filteredSessions, activeIndex, selectSession, confirmNavigation]);
 
   if (!isOpen) {
     return null;
   }
 
   const openSession = (sessionId: string) => {
+    if (confirmNavigation && !confirmNavigation()) return;
     selectSession(sessionId);
     onClose();
   };

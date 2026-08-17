@@ -96,15 +96,24 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const created = await a.request("/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Demo", domainResources: "base" }),
+      body: JSON.stringify({ title: "Demo", domainResources: "base", thinkingLevel: "high" }),
     });
     expect(created.status).toBe(201);
     const { id, session } = (await created.json()) as {
       id: string;
-      session: { domainResources?: string };
+      session: { domainResources?: string; thinkingLevel?: string };
     };
     expect(id).toBeTruthy();
     expect(session.domainResources).toBe("base");
+    expect(session.thinkingLevel).toBe("high");
+
+    const thinking = await a.request(`/sessions/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ thinkingLevel: "low" }),
+    });
+    expect(thinking.status).toBe(200);
+    expect((await thinking.json() as { thinkingLevel: string }).thinkingLevel).toBe("low");
 
     // list
     const list = (await (await a.request("/sessions")).json()) as { sessions: unknown[] };

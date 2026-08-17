@@ -29,6 +29,7 @@ import {
   type Session,
   type SessionStats,
   type SessionTokenUsage,
+  type ThinkingLevel,
   type TokenUsage,
   type TraceGraph,
   type TraceCausalRollbackPreview,
@@ -285,6 +286,8 @@ interface SessionMeta {
   updatedAt?: string;
   lastActivityAt?: number;
   domainResources?: DomainResources;
+  thinkingLevel?: ThinkingLevel;
+  reasoningSupported?: boolean;
   workflowTaskSeqBaseline?: number;
   workflowReminderClaimed?: boolean;
   workflowViolationEmitted?: boolean;
@@ -318,6 +321,10 @@ interface SessionEntry {
   userInputs: UserInputArbiter;
   /** This session's chosen provider/model (resolved against providers.json). */
   providerRef: SessionProviderRef;
+  /** One Pi reasoning effort shared by every main agent and leaf subagent. */
+  thinkingLevel: ThinkingLevel;
+  /** Frozen reasoning capability of the provider/model bound to this session. */
+  reasoningSupported: boolean;
   /** Frozen per-session domain-resource mode; never read from global state. */
   domainResources: DomainResources;
   /** Host-owned state for the current explicit-user delegation epoch. */
@@ -1396,6 +1403,8 @@ export class SessionManager {
       providerId?: string;
       modelId?: string;
       domainResources?: DomainResources;
+      thinkingLevel?: ThinkingLevel;
+      reasoningSupported?: boolean;
       workflowTaskSeqBaseline?: number;
       workflowReminderClaimed?: boolean;
       workflowViolationEmitted?: boolean;
@@ -1441,6 +1450,12 @@ export class SessionManager {
       : this.persist
         ? await this.readProviderRef(id)
         : {};
+    const providerConfig = await resolveSessionProvider(this.dataRoot, providerRef);
+    const reasoningSupported = input.reasoningSupported ?? (providerConfig?.reasoningEnabled !== false);
+    const requestedThinkingLevel = input.thinkingLevel ?? "medium";
+    const thinkingLevel: ThinkingLevel = !reasoningSupported
+      ? "off"
+      : requestedThinkingLevel;
 
     const bus = new EventBus({ persistPath: persistBase ? join(persistBase, "events.jsonl") : undefined });
     const taskLedger = new TaskLedger(id, persistBase ? join(persistBase, "tasks.json") : undefined);
@@ -1523,6 +1538,8 @@ export class SessionManager {
       activeRunId: null,
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
+      thinkingLevel,
+      reasoningSupported,
       domainResources,
       workflowTaskSeqBaseline: input.workflowTaskSeqBaseline ?? 0,
       workflowReminderClaimed: input.workflowReminderClaimed === true,
@@ -1596,15 +1613,27 @@ export class SessionManager {
    * non-string title is ignored (idempotent) so the call can't wipe a title.
    * Returns the updated session, or undefined if the session is unknown.
    */
-  async renameSession(id: string, title?: unknown): Promise<Session | undefined> {
+  async updateSession(
+    id: string,
+    patch: { title?: unknown; thinkingLevel?: ThinkingLevel },
+  ): Promise<Session | undefined> {
     const e = this.sessions.get(id);
     if (!e) return undefined;
-    if (typeof title === "string" && title.trim().length > 0) {
-      e.title = title.trim();
+    if (typeof patch.title === "string" && patch.title.trim().length > 0) {
+      e.title = patch.title.trim();
+    }
+    if (patch.thinkingLevel !== undefined) {
+      e.thinkingLevel = e.reasoningSupported ? patch.thinkingLevel : "off";
+      for (const agent of e.agents.values()) agent.setThinkingLevel(e.thinkingLevel);
+      e.subagents.setThinkingLevel(e.thinkingLevel);
     }
     this.touch(e);
     await this.writeMeta(e);
     return this.toSession(e);
+  }
+
+  async renameSession(id: string, title?: unknown): Promise<Session | undefined> {
+    return this.updateSession(id, { title });
   }
 
   /**
@@ -2379,6 +2408,7 @@ export class SessionManager {
       blockRouterSkills: !isToolEnabled(toolToggles, "skill_search"),
       routerSkillsDir: this.routerSkillsDir,
       providerConfig,
+      thinkingLevel: entry.thinkingLevel,
     });
   }
 
@@ -2526,6 +2556,7 @@ export class SessionManager {
       blockRouterSkills: !skillSearchEnabled,
       routerSkillsDir: this.routerSkillsDir,
       providerConfig,
+      thinkingLevel: entry.thinkingLevel,
       // 意图二 fallback: the trace-reminder extension calls this when an expert
       // was reminded once and still didn't report back, so the principal never
       // dead-waits on a silent expert.
@@ -3465,6 +3496,8 @@ export class SessionManager {
       createdAt: e.createdAt,
       updatedAt: e.updatedAt,
       domainResources: e.domainResources,
+      thinkingLevel: e.thinkingLevel,
+      reasoningSupported: e.reasoningSupported,
     };
   }
 
@@ -3477,6 +3510,8 @@ export class SessionManager {
       updatedAt: entry.updatedAt,
       lastActivityAt: entry.lastActivityAt,
       domainResources: entry.domainResources,
+      thinkingLevel: entry.thinkingLevel,
+      reasoningSupported: entry.reasoningSupported,
       workflowTaskSeqBaseline: entry.workflowTaskSeqBaseline,
       workflowReminderClaimed: entry.workflowReminderClaimed,
       workflowViolationEmitted: entry.workflowViolationEmitted,
@@ -3676,6 +3711,8 @@ export class SessionManager {
           id: sid,
           title: meta.title,
           domainResources: resolveDomainResources(meta.domainResources),
+          thinkingLevel: meta.thinkingLevel ?? "medium",
+          reasoningSupported: meta.reasoningSupported,
           workflowTaskSeqBaseline:
             typeof meta.workflowTaskSeqBaseline === "number" ? meta.workflowTaskSeqBaseline : 0,
           workflowReminderClaimed: meta.workflowReminderClaimed === true,

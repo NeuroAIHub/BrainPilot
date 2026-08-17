@@ -1,16 +1,27 @@
-import { memo } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, type MouseEvent } from "react";
+import ReactMarkdown, { defaultUrlTransform } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import { normalizeMarkdownForRendering } from "./normalizeMarkdown";
+import {
+  buildWorkspaceFileDeepLink,
+  parseWorkspaceFileHref,
+  type WorkspaceFileTarget,
+} from "./workspaceFileLink";
 
 interface MarkdownMessageProps {
   content: string;
+  workspaceFileSessionId?: string;
+  onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 }
 
-function MarkdownMessageImpl({ content }: MarkdownMessageProps) {
+function MarkdownMessageImpl({
+  content,
+  workspaceFileSessionId,
+  onOpenWorkspaceFile,
+}: MarkdownMessageProps) {
   const normalizedContent = normalizeMarkdownForRendering(content);
 
   return (
@@ -18,6 +29,33 @@ function MarkdownMessageImpl({ content }: MarkdownMessageProps) {
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
         rehypePlugins={[rehypeHighlight, rehypeKatex]}
+        urlTransform={(url) => {
+          const target = parseWorkspaceFileHref(url);
+          if (!target) return defaultUrlTransform(url);
+          return workspaceFileSessionId
+            ? buildWorkspaceFileDeepLink(workspaceFileSessionId, target)
+            : url;
+        }}
+        components={{
+          a: ({ href, children, node: _node, ...props }) => {
+            const target = href ? parseWorkspaceFileHref(href) : null;
+            const handleClick = (event: MouseEvent<HTMLAnchorElement>) => {
+              if (!target) return;
+              event.preventDefault();
+              onOpenWorkspaceFile?.(target);
+            };
+            return (
+              <a
+                {...props}
+                href={href}
+                data-workspace-file={target ? target.path : undefined}
+                onClick={handleClick}
+              >
+                {children}
+              </a>
+            );
+          },
+        }}
       >
         {normalizedContent}
       </ReactMarkdown>

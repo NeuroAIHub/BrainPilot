@@ -419,15 +419,16 @@ export const mockBackend = {
       title: title || "New research session",
       createdAt: now(),
       updatedAt: now(),
+      thinkingLevel: "medium" as const,
     };
     mockSessions = [session, ...mockSessions];
     return session;
   },
 
-  async updateSession(sessionId: string, title: string): Promise<Session> {
+  async updateSession(sessionId: string, title: string, thinkingLevel?: Session["thinkingLevel"]): Promise<Session> {
     await wait();
     mockSessions = mockSessions.map((session) =>
-      session.id === sessionId ? { ...session, title, updatedAt: now() } : session,
+      session.id === sessionId ? { ...session, title, ...(thinkingLevel ? { thinkingLevel } : {}), updatedAt: now() } : session,
     );
     return mockSessions.find((session) => session.id === sessionId) as Session;
   },
@@ -578,6 +579,7 @@ export const mockBackend = {
       adapter: data.adapter ?? "auto",
       isShared: false,
       models: data.models || [],
+      reasoningModels: data.reasoningModels ?? data.models ?? [],
       icon: data.icon || "circle",
       iconColor: data.iconColor || "#111111",
       notes: data.notes || "",
@@ -606,6 +608,7 @@ export const mockBackend = {
         ...(data.baseUrl !== undefined ? { baseUrl: data.baseUrl } : {}),
         ...(data.api !== undefined ? { api: data.api } : {}),
         ...(data.models !== undefined ? { models: data.models } : {}),
+        ...(data.reasoningModels !== undefined ? { reasoningModels: data.reasoningModels } : {}),
         ...(data.icon !== undefined ? { icon: data.icon } : {}),
         ...(data.iconColor !== undefined ? { iconColor: data.iconColor } : {}),
         ...(data.notes !== undefined ? { notes: data.notes } : {}),
