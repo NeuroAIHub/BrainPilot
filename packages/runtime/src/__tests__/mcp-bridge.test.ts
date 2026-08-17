@@ -55,6 +55,7 @@ describe("loadMcpServersConfig", () => {
       args: [`${pluginRoot}/server.js`],
       env: expect.objectContaining({ PLUGIN_ROOT: pluginRoot, BRAINPILOT_PLUGIN_DATA: pluginData, CACHE_DIR: `${pluginData}/cache` }),
     }));
+    expect(cfg?.serverOwners).toEqual({ memory: "demo" });
   });
 
   it("rejects MCP server name conflicts between global and plugin configs", async () => {
@@ -112,11 +113,14 @@ describe("McpBridge", () => {
       return fakeClient();
     });
     const bridge = new McpBridge(connect);
-    const tools = await bridge.connectAll({
+    const result = await bridge.connectAllWithStatus({
       mcpServers: { bad: { command: "x" }, good: { command: "y" } },
     });
-    expect(tools).toHaveLength(1);
-    expect(tools[0]!.name).toBe("mcp__good__search");
+    expect(result.tools).toHaveLength(1);
+    expect(result.tools[0]!.name).toBe("mcp__good__search");
+    expect(result.connectedServers).toEqual(["good"]);
+    expect(result.skippedServers).toEqual([]);
+    expect(result.failures).toEqual([{ server: "bad", error: "spawn failed" }]);
   });
 
   it("closes all clients", async () => {

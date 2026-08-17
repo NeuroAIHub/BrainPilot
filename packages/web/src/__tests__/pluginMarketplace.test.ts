@@ -6,6 +6,9 @@ import {
   executesLocalCodeForMarketplaceEntry,
   matchesMarketplaceQuery,
   matchesMarketplaceSource,
+  marketplacePluginRequiresRestart,
+  mcpRuntimeSummaryForPlugin,
+  restartPromptForMcpMutation,
   sourceFormatForMarketplaceEntry,
 } from "../components/plugins/PluginMarketplace";
 
@@ -62,5 +65,35 @@ describe("plugin marketplace catalogue model", () => {
     expect(executesLocalCodeForMarketplaceEntry({ executesLocalCode: false, capabilities: ["hooks"] })).toBe(false);
     expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["mcp"] })).toBe(true);
     expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["skills"] })).toBe(false);
+  });
+
+  it("requires a runtime restart only for MCP-capable marketplace plugins", () => {
+    expect(marketplacePluginRequiresRestart({ ...entry, capabilities: ["mcp"] })).toBe(true);
+    expect(marketplacePluginRequiresRestart({ ...entry, capabilities: ["skills", "hooks"] })).toBe(false);
+  });
+
+  it("keeps restart requirements for mutations of enabled MCP plugins", () => {
+    const mcpEntry = {
+      ...entry,
+      capabilities: ["mcp"],
+    } as Parameters<typeof restartPromptForMcpMutation>[0];
+    expect(restartPromptForMcpMutation(mcpEntry, true, "reload")).toEqual({
+      pluginName: "NIfTI Viewer",
+      enabled: true,
+    });
+    expect(restartPromptForMcpMutation(mcpEntry, true, "remove")).toEqual({
+      pluginName: "NIfTI Viewer",
+      enabled: false,
+    });
+    expect(restartPromptForMcpMutation(mcpEntry, false, "reload")).toBeNull();
+  });
+
+  it("summarizes runtime-observed MCP health per plugin", () => {
+    expect(mcpRuntimeSummaryForPlugin({ state: "degraded", servers: [
+      { name: "browser", pluginId: "plugin-a", state: "ready" },
+      { name: "memory", pluginId: "plugin-a", state: "failed", error: "connection closed" },
+      { name: "global", state: "ready" },
+    ] }, "plugin-a")).toEqual({ state: "degraded", errors: ["memory: connection closed"] });
+    expect(mcpRuntimeSummaryForPlugin({ state: "ready", servers: [{ name: "global", state: "ready" }] }, "plugin-a")).toBeNull();
   });
 });

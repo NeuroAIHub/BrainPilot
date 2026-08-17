@@ -40,6 +40,12 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect(body.memRatio).toBeNull();
   });
 
+  it("GET /mcp/status reports the observed runtime state", async () => {
+    const res = await app().request("/mcp/status");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ state: "unconfigured", servers: [] });
+  });
+
   it("serves checkpoint diff/preview and restores through the trace API", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-checkpoint-api-"));
     try {

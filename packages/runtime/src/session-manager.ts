@@ -70,7 +70,7 @@ import {
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
 import { renderTaskListBlock } from "./extensions/task-context.js";
-import { McpBridge, loadMcpServersConfig } from "./mcp-bridge.js";
+import { McpBridge, loadMcpServersConfig, type McpRuntimeServerStatus, type McpRuntimeStatus } from "./mcp-bridge.js";
 import {
   isSubstantiveScientificExecutionRequest,
   renderPrincipalWorkflowBlock,
@@ -523,6 +523,7 @@ export class SessionManager {
   private mcpBridge: McpBridge | null;
   private mcpTools: SystemTool[] = [];
   private mcpLoaded = false;
+  private mcpStatus: McpRuntimeStatus = { state: "not_loaded", servers: [] };
 
   // Built-in skills directory, loaded through Pi's native skill pipeline
   // (`additionalSkillPaths`). The bundled @brainpilot/skills content is
@@ -752,18 +753,63 @@ export class SessionManager {
    */
   private async ensureMcpTools(): Promise<SystemTool[]> {
     if (this.mcpLoaded) return this.mcpTools;
-    this.mcpLoaded = true;
-    if (isMockMode() && !this.mcpBridge) return this.mcpTools;
+    if (isMockMode() && !this.mcpBridge) {
+      this.mcpLoaded = true;
+      this.mcpStatus = { state: "unconfigured", servers: [] };
+      return this.mcpTools;
+    }
     try {
       const cfg = await loadMcpServersConfig(this.dataRoot);
-      if (!cfg) return this.mcpTools;
+      if (!cfg) {
+        this.mcpLoaded = true;
+        this.mcpStatus = { state: "unconfigured", servers: [] };
+        return this.mcpTools;
+      }
       if (!this.mcpBridge) this.mcpBridge = new McpBridge();
-      this.mcpTools = await this.mcpBridge.connectAll(cfg);
+      const result = await this.mcpBridge.connectAllWithStatus(cfg);
+      this.mcpTools = result.tools;
+      const connected = new Set(result.connectedServers);
+      const failures = new Map(result.failures.map(({ server, error }) => [server, error]));
+      const skipped = new Set(result.skippedServers);
+      const servers: McpRuntimeServerStatus[] = [];
+      for (const name of Object.keys(cfg.mcpServers)) {
+        if (skipped.has(name)) continue;
+        const pluginId = cfg.serverOwners?.[name];
+        if (connected.has(name)) {
+          servers.push({ name, ...(pluginId ? { pluginId } : {}), state: "ready" });
+          continue;
+        }
+        const error = failures.get(name);
+        if (error) servers.push({ name, ...(pluginId ? { pluginId } : {}), state: "failed", error });
+      }
+      this.mcpStatus = {
+        state: result.failures.length > 0
+          ? result.connectedServers.length > 0 ? "degraded" : "failed"
+          : result.connectedServers.length > 0 ? "ready" : "unconfigured",
+        servers,
+      };
+      if (result.connectedServers.length === 0 && result.failures.length > 0) {
+        throw new Error(`Configured MCP services failed to start: ${result.failures.map(({ server, error }) => `${server}: ${error}`).join("; ")}`);
+      }
+      this.mcpLoaded = true;
     } catch (err) {
+      this.mcpLoaded = false;
       // eslint-disable-next-line no-console
       console.error("[mcp] bridge load failed:", (err as Error).message);
+      throw err;
     }
     return this.mcpTools;
+  }
+
+  /** Probe MCP once and expose the runtime-observed server state to the UI. */
+  async getMcpRuntimeStatus(): Promise<McpRuntimeStatus> {
+    if (!this.mcpLoaded && this.mcpStatus.state === "not_loaded") {
+      try { await this.ensureMcpTools(); } catch { /* failure details are retained in mcpStatus */ }
+    }
+    return {
+      state: this.mcpStatus.state,
+      servers: this.mcpStatus.servers.map((server) => ({ ...server })),
+    };
   }
 
   private bpDir(sid: string): string {

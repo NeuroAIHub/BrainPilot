@@ -183,6 +183,23 @@ export function createApp(options: CreateAppOptions): Hono {
     });
   });
 
+  // ---- Runtime restart (backend-owned lifecycle) ----------------------
+  // MCP tools are materialized when the runtime starts. Plugin activation
+  // therefore offers an explicit restart action that intentionally interrupts
+  // all current agents, then waits for the replacement runtime to be healthy.
+  api.post("/runtime/restart", async (c) => {
+    if (orchestrator.runtimeLifecycle === "external") {
+      return c.json({
+        error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+      }, 409);
+    }
+    const userId = resolveUserId(c);
+    await orchestrator.stopRuntime(userId);
+    clients.clear();
+    await orchestrator.ensureRuntime({ userId });
+    return c.json({ status: "ok" as const });
+  });
+
   // ---- Identity (backend-local) ----------------------------------------
   // Trust-front (#21): hosted deployments resolve identity at the upstream
   // gateway, which intercepts /api/auth/me before it reaches us. For
@@ -200,6 +217,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
   api.get("/metrics", forward("metrics"));
+  api.get("/mcp-status", forward("mcpStatus"));
 
   // ---- Sessions (proxied to runtime) -----------------------------------
   api.get("/sessions", forward("listSessions"));

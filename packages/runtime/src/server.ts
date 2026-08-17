@@ -38,6 +38,8 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
 
   app.get("/metrics", (c) => c.json(manager.metrics()));
 
+  app.get("/mcp/status", async (c) => c.json(await manager.getMcpRuntimeStatus()));
+
   app.post("/sessions", async (c) => {
     const body = await safeBody(c);
     const parsed = CreateSessionRequestSchema.safeParse(body);

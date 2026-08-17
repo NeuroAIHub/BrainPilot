@@ -787,6 +787,27 @@ describe("api.plugins marketplace lifecycle", () => {
   });
 });
 
+describe("api.runtime.restart", () => {
+  it("POSTs the backend-owned runtime restart endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { status: "ok" } }));
+
+    await expect(api.runtime.restart()).resolves.toEqual({ status: "ok" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/runtime/restart");
+    expect(init.method).toBe("POST");
+  });
+});
+
+describe("api.mcpRuntime.status", () => {
+  it("reads runtime-observed MCP server health", async () => {
+    const body = { state: "failed", servers: [{ name: "playwright", pluginId: "plugin-a", state: "failed", error: "connection closed" }] };
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: body }));
+
+    await expect(api.mcpRuntime.status()).resolves.toEqual(body);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/mcp-status");
+  });
+});
+
 describe("api.datasets", () => {
   it("loads the dataset catalogue", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: [{ id: "demo" }] }));
