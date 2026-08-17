@@ -10,15 +10,24 @@ interface Props {
 
 export type DatasetCardAction = "download" | "details";
 
-export function datasetCardAction(entry: DatasetCatalogEntry): DatasetCardAction {
+export function canStartDatasetDownload(job?: DatasetDownloadJob): boolean {
+  return job?.status !== "completed";
+}
+
+export function datasetCardAction(
+  entry: DatasetCatalogEntry,
+  job?: DatasetDownloadJob,
+): DatasetCardAction {
+  if (!canStartDatasetDownload(job)) return "details";
   return entry.downloadAvailable && !entry.credentialFields?.length ? "download" : "details";
 }
 
 export function handleDatasetCardAction(
   entry: DatasetCatalogEntry,
   actions: { download: (entry: DatasetCatalogEntry) => void; showDetails: (id: string) => void },
+  job?: DatasetDownloadJob,
 ): DatasetCardAction {
-  const action = datasetCardAction(entry);
+  const action = datasetCardAction(entry, job);
   if (action === "download") actions.download(entry);
   else actions.showDetails(entry.id);
   return action;
@@ -111,7 +120,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
     <div className="plugin-market__grid">
       {visible.map((entry) => {
         const job = jobsByDataset.get(entry.id);
-        const primaryAction = datasetCardAction(entry);
+        const primaryAction = datasetCardAction(entry, job);
         return <article className="plugin-card dataset-card" key={entry.id}>
           <button className="plugin-card__details-trigger" onClick={() => showDetails(entry.id)} title={t("marketplace.details")} type="button"><span className="sr-only">{entry.name}</span></button>
           <div className="plugin-card__head">
@@ -125,7 +134,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
             <span className={`plugin-card__state ${job ? statusClass(job.status) : ""}`}>{job ? t(`datasets.job.${job.status}`) : t(`datasets.access.${entry.access}`)}</span>
           </div>
           <div className="plugin-card__actions">
-            <button className="plugin-card__button" disabled={busy || job?.status === "queued" || job?.status === "downloading"} onClick={() => handleDatasetCardAction(entry, { download: (target) => void start(target), showDetails })} type="button">{primaryAction === "download" ? <><Download size={14} />{t("datasets.download")}</> : t("marketplace.details")}</button>
+            <button className="plugin-card__button" disabled={busy || job?.status === "queued" || job?.status === "downloading"} onClick={() => handleDatasetCardAction(entry, { download: (target) => void start(target), showDetails }, job)} type="button">{primaryAction === "download" ? <><Download size={14} />{t("datasets.download")}</> : t("marketplace.details")}</button>
           </div>
         </article>;
       })}
@@ -161,7 +170,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
           </div>
           <footer className="plugin-detail__actions">
             <a className="plugin-card__button plugin-card__button--ghost" href={selected.homepage} rel="noreferrer" target="_blank">{t("datasets.openProvider")} <ExternalLink size={13} /></a>
-            {canDownload ? <button className="plugin-card__button" disabled={busy || !credentialsComplete || job?.status === "queued" || job?.status === "downloading"} onClick={() => void start(selected)} type="button">{busy || job?.status === "downloading" ? <Loader2 className="is-spinning" size={14} /> : <Download size={14} />}{t("datasets.startDownload")}</button> : null}
+            {canDownload && canStartDatasetDownload(job) ? <button className="plugin-card__button" disabled={busy || !credentialsComplete || job?.status === "queued" || job?.status === "downloading"} onClick={() => void start(selected)} type="button">{busy || job?.status === "downloading" ? <Loader2 className="is-spinning" size={14} /> : <Download size={14} />}{t("datasets.startDownload")}</button> : null}
           </footer>
         </section>
       </div>;
