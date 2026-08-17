@@ -57,6 +57,7 @@ export interface StaticOrchestratorOptions {
 }
 
 export class StaticRuntimeOrchestrator implements Orchestrator {
+  readonly runtimeLifecycle = "external" as const;
   private readonly url: string;
   private readonly healthProbe: (baseUrl: string) => Promise<StaticRuntimeHealth>;
   private readonly healthTimeoutMs: number;

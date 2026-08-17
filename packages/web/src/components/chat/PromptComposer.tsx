@@ -1,6 +1,6 @@
 import { Bot, Paperclip, Square, X } from "lucide-react";
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ProviderProfile } from "../../contracts/backend";
+import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
 import { useTurnTimer } from "../../contexts/useTurnTimer";
@@ -18,6 +18,7 @@ import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
 import { MessageStream } from "./MessageStream";
+import type { WorkspaceFileTarget } from "./workspaceFileLink";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
 import { shouldShowNoProviderBanner } from "./noProviderBanner";
@@ -56,6 +57,20 @@ export function shouldClearQueuedPrompts(runActive: { active: boolean } | null):
   return runActive?.active !== true;
 }
 
+export function resolveComposerReasoningSupport(input: {
+  isDraft: boolean;
+  sessionReasoningSupported?: boolean;
+  selectedModel: string;
+  activeProviderModels: readonly string[];
+  activeProviderReasoningModels?: readonly string[];
+}): boolean {
+  if (!input.isDraft) return input.sessionReasoningSupported === true;
+  return Boolean(
+    input.selectedModel
+    && (input.activeProviderReasoningModels ?? input.activeProviderModels).includes(input.selectedModel),
+  );
+}
+
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
   if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
     URL.revokeObjectURL(attachment.previewUrl);
@@ -67,9 +82,10 @@ type PromptComposerProps = {
    *  no-provider banner's CTA. Optional so the composer still renders standalone
    *  (e.g. in tests). */
   onOpenProviderSettings?: () => void;
+  onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 };
 
-export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps = {}) {
+export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: PromptComposerProps = {}) {
   const t = useT();
   const [suggestedTasks, setSuggestedTasks] = useState<string[]>([]);
   const [activeProvider, setActiveProvider] = useState<ProviderProfile | null>(null);
@@ -77,6 +93,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // active" so the no-provider banner doesn't flash during initial load.
   const [providersLoaded, setProvidersLoaded] = useState(false);
   const [selectedModel, setSelectedModel] = useState("");
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("medium");
   // 可用命令（已通过真实 API 测试 /context ✅ /cost ✅；/compact 由 SDK 内置 ✅）
   // 不可用命令（已移除）：/usage ❌ /clear ❌ /init ❌
   const DEFAULT_SLASH_COMMANDS = ["/compact", "/context", "/cost"];
@@ -109,7 +126,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
       ? agents.flatMap((agent) => agent.activeTools ?? [])
@@ -119,10 +136,22 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // In draft mode there's no session/connection yet — allow composing so the
   // first send can create + connect the session.
   const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
+  const reasoningSupported = resolveComposerReasoningSupport({
+    isDraft,
+    sessionReasoningSupported: currentSession?.reasoningSupported,
+    selectedModel,
+    activeProviderModels: activeProvider?.models ?? [],
+    activeProviderReasoningModels: activeProvider?.reasoningModels,
+  });
 
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+
+  useEffect(() => {
+    if (currentSession?.thinkingLevel) setThinkingLevel(currentSession.thinkingLevel);
+    else if (isDraft) setThinkingLevel("medium");
+  }, [currentSession?.id, currentSession?.thinkingLevel, isDraft]);
 
   useEffect(() => () => {
     uploadAbortRef.current?.abort();
@@ -134,7 +163,6 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
   // so keystroke state stays off this render path; only status flips re-render.
   const [pluginSource, setPluginSource] = useState<SourceStatus<MentionPlugin>>({ state: "loading" });
   const [fileSource, setFileSource] = useState<SourceStatus<MentionFile>>({ state: "idle" });
-
   // No provider configured: after the first load resolves, there's no active
   // provider. Surface a persistent banner + CTA so a first-run user isn't left
   // to discover it only by sending a message and hitting an opaque error. The CTA
@@ -230,17 +258,27 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     };
   }, []);
 
-  // #316: load MCP servers for `@` mention candidates (global, works in draft).
+  // Load runtime-confirmed MCP servers for `@` mention candidates, including
+  // servers contributed by enabled marketplace plugins.
   useEffect(() => {
     let cancelled = false;
     const load = async () => {
       setPluginSource((prev) => (prev.state === "ready" ? prev : { state: "loading" }));
       try {
-        const servers = await api.mcpServers.list();
+        const status = await api.mcpRuntime.status();
         if (cancelled) return;
+        const ready = status.servers.filter((server) => server.state === "ready");
+        const failures = status.servers.filter((server) => server.state === "failed");
+        if (ready.length === 0 && failures.length > 0) {
+          setPluginSource({
+            state: "error",
+            message: failures.map((server) => `${server.name}: ${server.error ?? "failed to start"}`).join("; "),
+          });
+          return;
+        }
         setPluginSource({
           state: "ready",
-          items: servers.map((s) => ({ name: s.name })),
+          items: ready.map((server) => ({ name: server.name })),
         });
       } catch (err) {
         if (cancelled) return;
@@ -254,10 +292,13 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     // Refresh when provider profiles update is a weak proxy; also re-fetch on
     // focus so Settings → Tools changes show up after the dialog closes.
     const onFocus = () => void load();
+    const onRuntimeRestarted = () => void load();
     window.addEventListener("focus", onFocus);
+    window.addEventListener("brainpilot:runtime-restarted", onRuntimeRestarted);
     return () => {
       cancelled = true;
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("brainpilot:runtime-restarted", onRuntimeRestarted);
     };
   }, []);
 
@@ -479,6 +520,7 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
     const result = await sendPrompt(`${notice}${content}`, {
       providerId: activeProvider?.id,
       modelId: selectedModel || undefined,
+      thinkingLevel: reasoningSupported ? thinkingLevel : "off",
     });
     if (result.ok && result.queued && result.messageId) {
       setQueuedPromptsBySession((current) => ({
@@ -669,6 +711,8 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
             runningAgents={runningAgents}
             groupExpertActivity
             onRetryCancel={() => void interruptCurrent()}
+            workspaceFileSessionId={currentSession?.id}
+            onOpenWorkspaceFile={onOpenWorkspaceFile}
           />
         ) : null}
 
@@ -890,6 +934,33 @@ export function PromptComposer({ onOpenProviderSettings }: PromptComposerProps =
                   placeholder={t("chat.modelPlaceholder")}
                   title={activeProvider ? t("chat.providerTitle", { name: activeProvider.name }) : t("chat.noActiveProvider")}
                   value={selectedModel}
+                />
+              }
+              thinkingSelect={
+                <CustomSelect
+                  ariaLabel={t("chat.thinkingLevel")}
+                  className="thinking-select"
+                  disabled={!currentSandbox || !reasoningSupported}
+                  onChange={async (value) => {
+                    const next = value as ThinkingLevel;
+                    setThinkingLevel(next);
+                    setComposerError(null);
+                    if (!currentSession) return;
+                    try {
+                      await updateSessionThinking(currentSession.id, next);
+                    } catch (e) {
+                      setThinkingLevel(currentSession.thinkingLevel ?? "medium");
+                      setComposerError(e instanceof Error ? e.message : String(e));
+                    }
+                  }}
+                  options={[
+                    { value: "off", label: t("chat.thinkingLevel.off") },
+                    { value: "low", label: t("chat.thinkingLevel.low") },
+                    { value: "medium", label: t("chat.thinkingLevel.medium") },
+                    { value: "high", label: t("chat.thinkingLevel.high") },
+                  ]}
+                  title={t("chat.thinkingLevel.title")}
+                  value={reasoningSupported ? thinkingLevel : "off"}
                 />
               }
               sendButton={

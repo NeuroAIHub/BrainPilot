@@ -5,3 +5,10 @@
 export function fileSidebarScopeKey(sessionId: string | null | undefined): string {
   return sessionId ?? "draft";
 }
+
+export function fileRequestForScope<T extends { scopeKey: string }>(
+  request: T | null,
+  sessionId: string | null | undefined,
+): T | null {
+  return request?.scopeKey === fileSidebarScopeKey(sessionId) ? request : null;
+}

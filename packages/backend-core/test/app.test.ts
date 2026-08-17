@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { createApp } from "../src/app.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
+import { StaticRuntimeOrchestrator } from "../src/static-orchestrator.js";
 
 function fakeOrchestrator(baseUrl = "http://runtime.test"): Orchestrator {
   return {
@@ -19,6 +20,57 @@ function fakeOrchestrator(baseUrl = "http://runtime.test"): Orchestrator {
 }
 
 describe("Hono app — REST forwarding", () => {
+  it("stops and recreates the current user's runtime", async () => {
+    const calls: string[] = [];
+    const orchestrator: Orchestrator = {
+      ensureRuntime: vi.fn(async (opts) => {
+        calls.push(`start:${opts?.userId}`);
+        return { baseUrl: "http://runtime-restarted.test" };
+      }),
+      health: async () => true,
+      stopRuntime: vi.fn(async (userId) => { calls.push(`stop:${userId}`); }),
+    };
+    const app = createApp({ orchestrator, serveWeb: false });
+
+    const response = await app.request("/api/runtime/restart", {
+      method: "POST",
+      headers: { "x-bp-user": "researcher-1" },
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual({ status: "ok" });
+    expect(calls).toEqual(["stop:researcher-1", "start:researcher-1"]);
+  });
+
+  it("returns 409 instead of reporting a fake restart for an externally managed runtime", async () => {
+    const orchestrator = new StaticRuntimeOrchestrator({
+      baseUrl: "http://static-runtime.test",
+      healthProbe: async () => true,
+    });
+    const app = createApp({ orchestrator, serveWeb: false });
+
+    const response = await app.request("/api/runtime/restart", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+    });
+  });
+
+  it("forwards runtime-observed MCP status", async () => {
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/mcp/status");
+      return new Response(JSON.stringify({ state: "ready", servers: [{ name: "playwright", pluginId: "org.brainpilot.playwright-mcp", state: "ready" }] }), {
+        headers: { "content-type": "application/json" },
+      });
+    });
+    const app = createApp({ orchestrator: fakeOrchestrator(), fetchFn: fetchFn as never, serveWeb: false });
+
+    const response = await app.request("/api/mcp-status");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toMatchObject({ state: "ready" });
+  });
+
   it("GET /api/sessions forwards to the runtime and returns its body", async () => {
     const fetchFn = vi.fn(async (url: string) => {
       expect(url).toBe("http://runtime.test/sessions");
@@ -559,6 +611,74 @@ describe("Hono app — local config routes", () => {
     const del = await app.request(`/api/provider/profiles/${profile.id}`, { method: "DELETE" });
     expect(del.status).toBe(200);
     expect((await del.json()) as { deleted: boolean }).toEqual({ deleted: true });
+  });
+
+  it("provider profiles persist and return an explicit context window", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-context-"));
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: vi.fn() as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {},
+    });
+
+    const created = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({
+        name: "Long context",
+        base_url: "https://gw.example",
+        api_key: "sk-secret",
+        models: ["model-1m"],
+        context_window: 1_000_000,
+      }),
+    });
+    expect(created.status).toBe(201);
+    const profile = (await created.json()) as { id: string; context_window?: number };
+    expect(profile.context_window).toBe(1_000_000);
+
+    const updated = await app.request(`/api/provider/profiles/${profile.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context_window: 262_144 }),
+    });
+    expect(updated.status).toBe(200);
+    expect(((await updated.json()) as { context_window?: number }).context_window).toBe(262_144);
+
+    const stored = JSON.parse(
+      await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
+    ) as { profiles: Array<{ contextWindow?: number }> };
+    expect(stored.profiles[0]?.contextWindow).toBe(262_144);
+
+    const automatic = await app.request(`/api/provider/profiles/${profile.id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ context_window: null }),
+    });
+    expect(automatic.status).toBe(200);
+    expect((await automatic.json()) as Record<string, unknown>).not.toHaveProperty("context_window");
+    const cleared = JSON.parse(
+      await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
+    ) as { profiles: Array<{ contextWindow?: number }> };
+    expect(cleared.profiles[0]).not.toHaveProperty("contextWindow");
+  });
+
+  it("rejects unsupported provider context windows", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-context-invalid-"));
+    const app = createApp({
+      orchestrator: fakeOrchestrator(),
+      fetchFn: vi.fn() as never,
+      serveWeb: false,
+      dataDir: dir,
+      env: {},
+    });
+    const response = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bad", models: ["m"], context_window: 500_000 }),
+    });
+    expect(response.status).toBe(400);
   });
 
   // #50: malformed provider profiles must 400, not silently create an unusable

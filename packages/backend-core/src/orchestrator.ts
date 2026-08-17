@@ -47,6 +47,8 @@ export interface EnsureRuntimeOptions {
 }
 
 export interface Orchestrator {
+  /** Whether this process owns the runtime lifecycle or only connects to it. */
+  readonly runtimeLifecycle?: "managed" | "external";
   /**
    * Start a runtime (idempotent — repeated calls return the same handle while
    * the runtime is healthy) and resolve once it is reachable.

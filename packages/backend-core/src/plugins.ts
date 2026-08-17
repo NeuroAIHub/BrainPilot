@@ -5,6 +5,7 @@
  * hosts consume enabled, compatible manifests through separate adapters.
  */
 import { promises as fs, type Stats } from "node:fs";
+import { spawn } from "node:child_process";
 import { createHash, randomUUID } from "node:crypto";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -632,6 +633,7 @@ interface ExternalPluginMetadata {
   mcpConfigPath?: string;
   hookConfig?: { dialect: "codex" | "claude-code"; path: string };
   extensionPaths?: string[];
+  preflight?: { command: string; args: string[] };
 }
 
 function externalSkillId(skillPath: string, used: Set<string>): string {
@@ -789,7 +791,12 @@ async function readExternalMetadata(dataDir: string, manifest: PluginManifest): 
     && raw.extensionPaths.every((entry) => typeof entry === "string" && isSafePluginPath(entry))
     ? raw.extensionPaths as string[]
     : undefined;
-  return { format: raw.format, unsupported, ...(mcpConfigPath ? { mcpConfigPath } : {}), ...(hookConfig ? { hookConfig } : {}), ...(extensionPaths?.length ? { extensionPaths } : {}) };
+  const preflight = isObject(raw.preflight)
+    && typeof raw.preflight.command === "string" && raw.preflight.command.trim()
+    && (raw.preflight.args === undefined || Array.isArray(raw.preflight.args) && raw.preflight.args.every((entry) => typeof entry === "string"))
+    ? { command: raw.preflight.command.trim(), args: (raw.preflight.args ?? []) as string[] }
+    : undefined;
+  return { format: raw.format, unsupported, ...(mcpConfigPath ? { mcpConfigPath } : {}), ...(hookConfig ? { hookConfig } : {}), ...(extensionPaths?.length ? { extensionPaths } : {}), ...(preflight ? { preflight } : {}) };
 }
 
 async function runtimeProjectionFor(dataDir: string, manifest: PluginManifest, metadata: ExternalPluginMetadata): Promise<PluginRuntimeProjection> {
@@ -902,6 +909,33 @@ async function runExternalSetup(projection: PluginRuntimeProjection): Promise<vo
   await fs.writeFile(marker, `${new Date().toISOString()}\n`, { mode: 0o600 });
 }
 
+async function runExternalPreflight(projection: PluginRuntimeProjection, preflight: NonNullable<ExternalPluginMetadata["preflight"]>): Promise<void> {
+  const env = {
+    ...process.env,
+    BRAINPILOT_PLUGIN_ROOT: projection.root,
+    BRAINPILOT_PLUGIN_DATA: projection.dataDir,
+    CLAUDE_PLUGIN_ROOT: projection.root,
+    CLAUDE_PLUGIN_DATA: projection.dataDir,
+    CLAUDE_MEM_DATA_DIR: projection.dataDir,
+    PLUGIN_ROOT: projection.root,
+  };
+  await new Promise<void>((resolve, reject) => {
+    const child = spawn(preflight.command, preflight.args, { cwd: projection.root, env, shell: false, stdio: ["ignore", "pipe", "pipe"] });
+    let output = "";
+    const append = (chunk: Buffer) => { output = `${output}${chunk.toString()}`.slice(-8_192); };
+    child.stdout.on("data", append);
+    child.stderr.on("data", append);
+    let timedOut = false;
+    const timer = setTimeout(() => { timedOut = true; child.kill("SIGKILL"); }, 15_000);
+    child.once("error", (error) => { clearTimeout(timer); reject(new Error(`Plugin preflight failed: ${error.message}`)); });
+    child.once("exit", (code, signal) => {
+      clearTimeout(timer);
+      if (code === 0) resolve();
+      else reject(new Error(`Plugin preflight failed${output.trim() ? `: ${output.trim()}` : timedOut ? ": timed out" : signal ? `: terminated by ${signal}` : ` with exit code ${code ?? "unknown"}`}`));
+    });
+  });
+}
+
 async function syncExternalRuntimeProjection(dataDir: string, manifest: PluginManifest, enabled: boolean): Promise<void> {
   const target = path.join(pluginRuntimeDir(dataDir), `${manifest.id}.json`);
   if (!enabled) { await fs.rm(target, { force: true }); return; }
@@ -909,6 +943,7 @@ async function syncExternalRuntimeProjection(dataDir: string, manifest: PluginMa
   if (!metadata) return;
   const projection = await runtimeProjectionFor(dataDir, manifest, metadata);
   await preflightExternalRuntime(dataDir, projection);
+  if (metadata.preflight) await runExternalPreflight(projection, metadata.preflight);
   await runExternalSetup(projection);
   await writeJsonAtomic(target, projection);
 }

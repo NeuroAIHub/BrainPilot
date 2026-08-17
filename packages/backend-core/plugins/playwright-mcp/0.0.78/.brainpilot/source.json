@@ -1,5 +1,9 @@
 {
   "format": "brainpilot",
   "unsupported": [],
-  "mcpConfigPath": ".mcp.json"
+  "mcpConfigPath": ".mcp.json",
+  "preflight": {
+    "command": "node",
+    "args": ["scripts/launch.mjs", "--check"]
+  }
 }
