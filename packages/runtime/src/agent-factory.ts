@@ -16,12 +16,18 @@
  */
 import type { AgentSessionFactory, IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
-import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./pi-provider.js";
+import {
+  resolveCompactionSettings,
+  resolveGatewayModel,
+  resolveSessionModel,
+  type PiProviderSdk,
+} from "./pi-provider.js";
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
+import { makeOpenAiToolSchemaCompatExt } from "./extensions/openai-tool-schema-compat.js";
 import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
 import {
@@ -61,12 +67,14 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // #365: Pi performs retries inside the same LLM turn, before any subsequent
   // tool call can run. Pi increases the fixed 2s base exponentially, yielding
   // bounded waits of 2s, 4s, 8s, 16s, and 32s.
+  const compaction = resolveCompactionSettings(params.providerConfig?.contextWindow);
   settingsManager.applyOverrides({
     retry: {
       enabled: true,
       maxRetries: PROVIDER_MAX_RETRIES,
       baseDelayMs: PROVIDER_RETRY_BASE_DELAY_MS,
     },
+    ...(compaction ? { compaction } : {}),
   });
 
   // Override Pi's built-in bash with the public factory so each invocation
@@ -166,6 +174,10 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
       }),
     );
   }
+  // #452: keep this LAST. Pi has already combined built-in, custom, MCP, and
+  // extension tools when before_provider_request runs, so one final rewrite
+  // fixes every active tool source without changing their canonical schemas.
+  extensionFactories.push(makeOpenAiToolSchemaCompatExt());
   const additionalExtensionPaths = params.compatPluginProjections
     ?.flatMap((projection) => projection.extensionPaths ?? []);
   const resourceLoader = new DefaultResourceLoader({
@@ -191,6 +203,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     resourceLoader,
     settingsManager,
     sessionManager: SessionManager.open(params.historyPath),
+    thinkingLevel: params.thinkingLevel,
     ...(model ? { model } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(authStorage ? { authStorage } : {}),
@@ -318,6 +331,9 @@ class RealAgentSession implements IAgentSession {
   prompt(text: string, opts?: PromptOptions): Promise<void> {
     return this.s.prompt(text, opts);
   }
+  setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void {
+    this.s.setThinkingLevel(level);
+  }
   abort(): Promise<void> {
     return this.s.abort();
   }
@@ -338,6 +354,7 @@ interface PiSession {
   readonly isStreaming: boolean;
   subscribe(listener: (e: unknown) => void): () => void;
   prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
+  setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void;
   abort(): Promise<void>;
   dispose(): void;
 }
@@ -366,6 +383,7 @@ interface PiSdk {
     model?: unknown;
     modelRegistry?: unknown;
     authStorage?: unknown;
+    thinkingLevel?: import("@brainpilot/protocol").ThinkingLevel;
   }): Promise<{ session: PiSession }>;
   defineTool(def: {
     name: string;
@@ -383,6 +401,7 @@ interface PiSdk {
     ): {
       applyOverrides(overrides: {
         retry: { enabled: boolean; maxRetries: number; baseDelayMs: number };
+        compaction?: { enabled: boolean; reserveTokens: number; keepRecentTokens: number };
       }): void;
       getShellCommandPrefix(): string | undefined;
       getShellPath(): string | undefined;
