@@ -107,19 +107,23 @@ export function agUiMessageToChatMessage(msg: AgUiMessage): ChatMessage {
 
 /**
  * Stable identity for a stream-append event so history rehydrate + SSE ring
- * buffer replay can merge idempotently (#314). Requires transport `_ts` (always
- * set by the runtime EventBus envelope). Events without `_ts` (unit tests /
- * legacy) return null and fall back to "always apply while streaming".
+ * buffer replay can merge idempotently (#314, #463). New runtime events carry
+ * `_eventId`, which remains unique even when identical deltas are emitted in
+ * the same millisecond. Legacy events fall back to the old timestamp key;
+ * events without either identity return null and always apply while streaming.
  *
- * Key = type + stream id + _ts + delta. Distinct CONTENT events that happen to
- * carry the same text (intentional model repetition) still differ when `_ts`
- * differs, so they are not collapsed.
+ * The transport ID is persisted in events.jsonl and replayed unchanged over
+ * SSE, so the same event dedupes while distinct repeated deltas survive.
  */
 function streamAppendKey(event: WebSocketEvent, streamId: string, delta: string): string | null {
   const raw = event as Record<string, unknown>;
+  const eventId = raw._eventId;
+  if (typeof eventId === "string" && eventId) {
+    return `${event.type}\0${streamId}\0event:${eventId}`;
+  }
   const ts = raw._ts;
   if (typeof ts !== "string" || !ts) return null;
-  return `${event.type}\0${streamId}\0${ts}\0${delta}`;
+  return `${event.type}\0${streamId}\0legacy:${ts}\0${delta}`;
 }
 
 function withAppliedStreamKey(msg: ChatMessage, key: string | null): ChatMessage {

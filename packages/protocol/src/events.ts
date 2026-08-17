@@ -69,6 +69,8 @@ const envelope = {
   run_id: z.string().optional(),
   thread_id: z.string().optional(),
   agent_name: z.string().optional(),
+  /** Stable identity for persistence + SSE replay deduplication. */
+  _event_id: z.string().optional(),
   /** ISO8601 emit timestamp (legacy `_ts`). */
   _ts: z.string().optional(),
 };
