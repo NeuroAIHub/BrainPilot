@@ -35,6 +35,10 @@ import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
 import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
+import {
+  createBashRepetitionGuard,
+  type BashRepetitionGuard,
+} from "./extensions/bash-repetition-guard.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
 import {
   installBrainPilotRetryClassifier,
@@ -122,7 +126,8 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     commandPrefix: settingsManager.getShellCommandPrefix(),
     shellPath: settingsManager.getShellPath(),
   });
-  const cancellableBash = wrapCancellableBash(officialBash, bashControllers);
+  const bashRepetitionGuard = createBashRepetitionGuard();
+  const cancellableBash = wrapCancellableBash(officialBash, bashControllers, bashRepetitionGuard);
   const customTools = [
     ...params.systemTools.map((t) => adaptTool(defineTool, t)),
     ...(params.allowedToolNames.includes("bash") ? [cancellableBash] : []),
@@ -166,6 +171,9 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // hook recomputes per turn and the rewrite is ephemeral (never persisted).
   const extensionFactories: unknown[] = [];
   extensionFactories.push(...(params.extensionFactories ?? []));
+  if (params.allowedToolNames.includes("bash")) {
+    extensionFactories.push(bashRepetitionGuard.extension);
+  }
   if (params.compatPluginProjections?.length) {
     extensionFactories.push(makeCompatHooksExt(params.compatPluginProjections));
   }
@@ -259,6 +267,7 @@ const MAX_FOREGROUND_BASH_TIMEOUT_SECONDS = 300;
 export function wrapCancellableBash(
   officialBash: BashDefinition,
   controllers: Map<string, AbortController>,
+  repetitionGuard?: BashRepetitionGuard,
 ): BashDefinition {
   const parameters = officialBash.parameters as Record<string, unknown> | undefined;
   const properties = parameters?.properties as Record<string, unknown> | undefined;
@@ -297,6 +306,16 @@ export function wrapCancellableBash(
         || args.timeout > MAX_FOREGROUND_BASH_TIMEOUT_SECONDS
       ) {
         throw new Error("bash timeout must be between 1 and 300 seconds");
+      }
+      const repetition = repetitionGuard?.beforeBash(
+        typeof args.command === "string" ? args.command : "",
+      );
+      if (repetition?.terminate) {
+        return {
+          content: [{ type: "text", text: repetition.message ?? "Repeated Bash execution was blocked." }],
+          details: {},
+          terminate: true,
+        };
       }
       const controller = new AbortController();
       controllers.set(toolCallId, controller);
