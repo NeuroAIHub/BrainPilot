@@ -53,9 +53,20 @@ import type {
   PluginCompatibility,
   PluginUpdateStatus,
 } from "@brainpilot/plugin-sdk";
+import type { ThinkingLevel } from "@brainpilot/protocol";
 
 export type MarketplaceApiEntry = MarketplaceEntry & { compatibility: PluginCompatibility };
 export type InstalledPluginApiEntry = InstalledPlugin & { compatibility: PluginCompatibility };
+export interface McpRuntimeServerStatus {
+  name: string;
+  pluginId?: string;
+  state: "ready" | "failed";
+  error?: string;
+}
+export interface McpRuntimeStatus {
+  state: "not_loaded" | "unconfigured" | "ready" | "degraded" | "failed";
+  servers: McpRuntimeServerStatus[];
+}
 export interface DatasetCatalogEntry {
   id: string;
   name: string;
@@ -440,6 +451,23 @@ export const api = {
     }
   },
 
+  runtime: {
+    async restart(): Promise<{ status: "ok" }> {
+      if (runtimeConfig.useMockBackend) return { status: "ok" };
+      return handleJson(await apiFetch(`${API_BASE}/runtime/restart`, {
+        method: "POST",
+        headers: authHeaders(),
+      }));
+    },
+  },
+
+  mcpRuntime: {
+    async status(): Promise<McpRuntimeStatus> {
+      if (runtimeConfig.useMockBackend) return { state: "unconfigured", servers: [] };
+      return handleJson(await apiFetch(`${API_BASE}/mcp-status`, { headers: authHeaders() }));
+    },
+  },
+
   auth: {
     async me(): Promise<User> {
       if (runtimeConfig.useMockBackend) {
@@ -675,7 +703,7 @@ export const api = {
 
     async create(
       title = "New research session",
-      opts: { providerId?: string; modelId?: string; domainResources?: DomainResources } = {},
+      opts: { providerId?: string; modelId?: string; domainResources?: DomainResources; thinkingLevel?: ThinkingLevel } = {},
     ): Promise<Session> {
       if (runtimeConfig.useMockBackend) {
         return mockBackend.createSession(title);
@@ -690,6 +718,7 @@ export const api = {
             ...(opts.providerId ? { providerId: opts.providerId } : {}),
             ...(opts.modelId ? { modelId: opts.modelId } : {}),
             ...(opts.domainResources ? { domainResources: opts.domainResources } : {}),
+            ...(opts.thinkingLevel ? { thinkingLevel: opts.thinkingLevel } : {}),
           }),
         }),
       );
@@ -714,6 +743,21 @@ export const api = {
           method: "PUT",
           headers: authHeaders(),
           body: JSON.stringify({ title }),
+        }),
+      );
+      return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);
+    },
+
+    async updateThinking(sessionId: string, thinkingLevel: ThinkingLevel): Promise<Session> {
+      if (runtimeConfig.useMockBackend) {
+        const current = await mockBackend.getSession(sessionId);
+        return mockBackend.updateSession(sessionId, current.title, thinkingLevel);
+      }
+      const raw = await handleJson<unknown>(
+        await apiFetch(`${API_BASE}/sessions/${sessionId}`, {
+          method: "PUT",
+          headers: authHeaders(),
+          body: JSON.stringify({ thinkingLevel }),
         }),
       );
       return normalizeSession(raw as Parameters<typeof normalizeSession>[0]);

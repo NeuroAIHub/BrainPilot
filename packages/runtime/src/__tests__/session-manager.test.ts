@@ -10,6 +10,7 @@ import {
 } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
+import type { McpBridge } from "../mcp-bridge.js";
 
 function mgr(): SessionManager {
   // persist:false keeps tests hermetic; mock factory => no Pi SDK / API.
@@ -58,6 +59,49 @@ describe("SessionManager (mock mode)", () => {
     await waitFor(() => m.listAgents(s.id).length > 0);
     const agents = m.listAgents(s.id);
     expect(agents.map((a) => a.name)).toContain("principal");
+  });
+
+  it("shares one thinking level across created agents and applies updates", async () => {
+    const createdLevels: string[] = [];
+    const updatedLevels: string[] = [];
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      createdLevels.push(params.thinkingLevel);
+      const session = await mockAgentFactory(params);
+      session.setThinkingLevel = (level) => { updatedLevels.push(level); };
+      return session;
+    };
+    const manager = new SessionManager({ persist: false, agentFactory: spyFactory });
+    const session = await manager.createSession({ thinkingLevel: "high" });
+    await manager.sendMessage(session.id, "hi");
+    await waitFor(() => createdLevels.length > 0);
+
+    expect(createdLevels[0]).toBe("high");
+    const updated = await manager.updateSession(session.id, { thinkingLevel: "low" });
+    expect(updated?.thinkingLevel).toBe("low");
+    expect(updatedLevels).toContain("low");
+  });
+
+  it("forces thinking off when the selected model is not reasoning-enabled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-thinking-disabled-"));
+    await mkdir(join(root, "bp_template"), { recursive: true });
+    await writeFile(join(root, "bp_template", "providers.json"), JSON.stringify({
+      profiles: [{
+        id: "plain",
+        baseUrl: "https://example.test",
+        apiKey: "test-key",
+        models: ["plain-model"],
+        reasoningModels: [],
+      }],
+      selectedProfileId: "plain",
+    }));
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const session = await manager.createSession({
+      providerId: "plain",
+      modelId: "plain-model",
+      thinkingLevel: "high",
+    });
+    expect(session.thinkingLevel).toBe("off");
+    expect(session.reasoningSupported).toBe(false);
   });
 
   it("persists the user message as a role:user CHUNK with the client uuid (#42)", async () => {
@@ -109,6 +153,51 @@ describe("SessionManager (mock mode)", () => {
     expect(principalTools).toContain("dispatch_task");
     expect(principalTools).toContain("complete_task");
     expect(principalTools).toContain("ask_user");
+  });
+
+  it("surfaces an error when every configured MCP server fails to start", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-startup-failure-"));
+    await mkdir(join(root, "bp_template"), { recursive: true });
+    await writeFile(join(root, "bp_template", "mcp_servers.json"), JSON.stringify({ mcpServers: { playwright: { command: "node" } } }));
+    const mcpBridge = {
+      connectAllWithStatus: async () => ({ tools: [], connectedServers: [], skippedServers: [], failures: [{ server: "playwright", error: "Chrome/Chromium is required" }] }),
+      close: async () => {},
+    } as unknown as McpBridge;
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge });
+    const session = await manager.createSession();
+
+    await expect(manager.sendMessage(session.id, "browse the web")).rejects.toThrow(
+      "Configured MCP services failed to start: playwright: Chrome/Chromium is required",
+    );
+    await expect(manager.getMcpRuntimeStatus()).resolves.toEqual({
+      state: "failed",
+      servers: [{ name: "playwright", state: "failed", error: "Chrome/Chromium is required" }],
+    });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("reports the owning plugin for a ready MCP server", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-plugin-status-"));
+    const pluginRoot = join(root, "plugins", "execution", "plugin-a", "1.0.0");
+    const runtimeDir = join(root, "plugins", "runtime");
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(runtimeDir, { recursive: true });
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { playwright: { command: "node" } } }));
+    await writeFile(join(runtimeDir, "plugin-a.json"), JSON.stringify({
+      schemaVersion: 1, id: "plugin-a", version: "1.0.0", format: "brainpilot", root: pluginRoot, dataDir: join(root, "plugins", "data", "plugin-a"), mcpConfigPath,
+    }));
+    const mcpBridge = {
+      connectAllWithStatus: async () => ({ tools: [], connectedServers: ["playwright"], skippedServers: [], failures: [] }),
+      close: async () => {},
+    } as unknown as McpBridge;
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge });
+
+    await expect(manager.getMcpRuntimeStatus()).resolves.toEqual({
+      state: "ready",
+      servers: [{ name: "playwright", pluginId: "plugin-a", state: "ready" }],
+    });
+    await rm(root, { recursive: true, force: true });
   });
 
   it("injects the built-in persona (not the old placeholder) for the principal", async () => {
@@ -237,7 +326,9 @@ describe("SessionManager (mock mode)", () => {
       const session = await manager.createSession();
       const meta = JSON.parse(await readFile(join(root, ".bp", session.id, "meta.json"), "utf8")) as {
         systemPlugins?: Array<{ id: string; enabled: boolean; reason: string }>;
+        reasoningSupported?: boolean;
       };
+      expect(meta.reasoningSupported).toBe(true);
       expect(meta.systemPlugins).toContainEqual({
         id: "org.brainpilot.auditor",
         enabled: false,

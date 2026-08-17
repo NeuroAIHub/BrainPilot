@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   isPathUnderOrEqual,
+  isInlineEditable,
   isProtectedRoot,
   removeNode,
   type PathTreeNode,
@@ -64,6 +65,15 @@ describe("FileSidebar delete helpers (#307)", () => {
     };
     const next = removeNode(tree, "/workspace/src");
     expect(next.children?.[0]?.children?.map((c) => c.path)).toEqual(["/workspace/README.md"]);
+  });
+});
+
+describe("FileSidebar inline editing (#432)", () => {
+  it("allows Markdown and plain-text files only", () => {
+    expect(isInlineEditable("README.md")).toBe(true);
+    expect(isInlineEditable("NOTES.TXT")).toBe(true);
+    expect(isInlineEditable("config.json")).toBe(false);
+    expect(isInlineEditable("image.png")).toBe(false);
   });
 });
 

@@ -42,6 +42,33 @@ describe("MarkdownMessage", () => {
     expect(html).toContain("<del>removed</del>");
     expect(html).toContain("hljs-keyword");
   });
+
+  it("marks safe file links without changing external links", () => {
+    const html = render("[report](docs/report.md) [web](https://example.com)");
+
+    expect(html).toContain('data-workspace-file="/workspace/docs/report.md"');
+    expect(html).toContain('href="https://example.com"');
+    expect(html).not.toContain('data-workspace-file="https://example.com"');
+  });
+
+  it("renders a copyable session-aware file URL when a session is known", () => {
+    const html = renderToStaticMarkup(
+      <MarkdownMessage
+        content="[report](docs/report.md)"
+        workspaceFileSessionId="session-a"
+      />,
+    );
+
+    expect(html).toContain(
+      'href="/sessions/session-a/files?path=%2Fworkspace%2Fdocs%2Freport.md"',
+    );
+    expect(html).toContain('data-workspace-file="/workspace/docs/report.md"');
+  });
+
+  it("does not render unsafe URL schemes", () => {
+    const html = render("[unsafe](javascript:alert(1))");
+    expect(html).not.toContain("javascript:");
+  });
 });
 
 describe("normalizeMarkdownTables", () => {

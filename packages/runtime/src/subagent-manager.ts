@@ -1,7 +1,7 @@
 import { cp, lstat, mkdir, readFile, readdir, realpath, writeFile } from "node:fs/promises";
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from "node:path";
 import { randomUUID } from "node:crypto";
-import type { SubagentStatus, TokenUsage } from "@brainpilot/protocol";
+import type { SubagentStatus, ThinkingLevel, TokenUsage } from "@brainpilot/protocol";
 import { CUSTOM_EVENT } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import type { IAgentSession, PiAgentEvent, SystemTool } from "./types.js";
@@ -248,6 +248,11 @@ export class SubagentManager {
   }
 
   async flush(): Promise<void> { await this.writeChain; }
+
+  /** Apply a session-level thinking change to every currently active child. */
+  setThinkingLevel(level: ThinkingLevel): void {
+    for (const { session } of this.active.values()) session.setThinkingLevel(level);
+  }
 
   private validateBatch(tasks: SubagentTask[]): void {
     if (!Array.isArray(tasks) || tasks.length < 1 || tasks.length > 4) throw new Error("tasks must contain 1 to 4 items");
