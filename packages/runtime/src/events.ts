@@ -4,8 +4,8 @@
  * `@brainpilot/protocol` exactly. We validate via `parseEvent` in tests.
  *
  * The protocol event envelope carries `session_id`, optional `run_id`,
- * `thread_id`, `agent_name`, and `_ts`. We always inject `session_id` and
- * `agent_name` + `_ts`; `run_id` when known.
+ * `thread_id`, `agent_name`, `_event_id`, and `_ts`. We always inject
+ * `session_id`, a unique `_event_id`, and `_ts`; agent/run fields when known.
  */
 import { randomUUID } from "node:crypto";
 import type {
@@ -33,9 +33,14 @@ function envelope(ctx: Ctx): {
   agent_name?: string;
   run_id?: string;
   thread_id?: string;
+  _event_id: string;
   _ts: string;
 } {
-  const e: ReturnType<typeof envelope> = { session_id: ctx.sessionId, _ts: ts() };
+  const e: ReturnType<typeof envelope> = {
+    session_id: ctx.sessionId,
+    _event_id: randomUUID(),
+    _ts: ts(),
+  };
   if (ctx.agentName !== undefined) e.agent_name = ctx.agentName;
   if (ctx.runId !== undefined) e.run_id = ctx.runId;
   if (ctx.threadId !== undefined) e.thread_id = ctx.threadId;

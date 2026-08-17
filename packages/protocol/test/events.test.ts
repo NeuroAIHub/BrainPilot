@@ -24,8 +24,13 @@ describe("AG-UI event union — NEW events", () => {
       status: "interrupted",
       duration_ms: 4100,
       reason: "user_requested",
+      _event_id: "event-1",
       _ts: "2026-07-27T00:00:00.000Z",
-    })).toMatchObject({ status: "interrupted", duration_ms: 4100 });
+    })).toMatchObject({
+      status: "interrupted",
+      duration_ms: 4100,
+      _event_id: "event-1",
+    });
   });
   it("round-trips system_message (all four levels)", () => {
     for (const level of ["info", "warning", "error", "fatal"] as const) {
