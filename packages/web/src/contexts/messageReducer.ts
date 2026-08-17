@@ -354,6 +354,9 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       if (!id || existing.some((m) => m.id === id)) {
         return existing;
       }
+      const call = existing.find((message) =>
+        message.kind === "tool" && message.id === event.toolCallId,
+      );
       return [
         ...existing,
         {
@@ -363,6 +366,7 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           createdAt: new Date().toISOString(),
           agent,
           kind: "tool",
+          toolName: call?.toolName,
           toolResult: content,
           // #134 — keep the link back to the originating TOOL_CALL_START so the
           // UI can suppress results of internal tools (record_trace) whose name

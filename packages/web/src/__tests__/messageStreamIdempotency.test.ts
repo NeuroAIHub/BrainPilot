@@ -60,6 +60,24 @@ function textTriad(
 }
 
 describe("message stream idempotency (#314)", () => {
+  it("preserves the originating name on a tool result activity (#465)", () => {
+    const messages = fold([
+      {
+        type: "TOOL_CALL_START",
+        toolCallId: "tool-name",
+        toolCallName: "bash",
+      } as WebSocketEvent,
+      {
+        type: "TOOL_CALL_RESULT",
+        toolCallId: "tool-name",
+        messageId: "tool-result",
+        content: "ok",
+      } as WebSocketEvent,
+    ]);
+
+    expect(messages.find((message) => message.id === "tool-result")?.toolName).toBe("bash");
+  });
+
   it("does not re-append CONTENT when the same history stream is folded twice", () => {
     // Reproduces: history rehydrate, then SSE ring-buffer replay of the same
     // START/CONTENT/END events for a completed assistant message.
