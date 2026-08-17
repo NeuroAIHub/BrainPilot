@@ -10,7 +10,7 @@ import type { ChatMessage, WebSocketEvent } from "../contracts/backend";
  * same deltas landed twice in one message bubble.
  *
  * Fix: stream-append events (CONTENT / REASONING_CONTENT / TOOL_CALL_ARGS) are
- * idempotent via stable event identity (_ts + type + id + delta) and by
+ * idempotent via stable transport identity (_eventId) and by
  * ignoring further appends once a message is finalized (streaming:false).
  * Intentionally repeated model text (distinct events) must still survive.
  */
@@ -117,6 +117,61 @@ describe("message stream idempotency (#314)", () => {
     const msgs = fold(stream);
     expect(msgs).toHaveLength(1);
     expect(msgs[0]!.content).toBe("yesyesyes");
+  });
+
+  it("preserves identical deltas emitted in the same millisecond (#463)", () => {
+    const sameTimestamp = "2026-08-17T09:00:00.123Z";
+    const stream = [
+      {
+        type: "TEXT_MESSAGE_START",
+        messageId: "msg_same_ms",
+        role: "assistant",
+        _eventId: "start-1",
+        _ts: sameTimestamp,
+      },
+      ...["content-1", "content-2", "content-3"].map((_eventId) => ({
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "msg_same_ms",
+        delta: "/",
+        _eventId,
+        _ts: sameTimestamp,
+      })),
+    ] as WebSocketEvent[];
+
+    let messages = fold(stream);
+    expect(messages[0]!.content).toBe("///");
+
+    // Replaying those exact persisted events remains idempotent.
+    for (const event of stream.slice(1)) {
+      messages = reduceMessagesForEvent(messages, event);
+    }
+    expect(messages[0]!.content).toBe("///");
+  });
+
+  it("preserves same-millisecond repeats in reasoning and tool arguments (#463)", () => {
+    const sameTimestamp = "2026-08-17T09:00:00.123Z";
+    const events = [
+      { type: "TOOL_CALL_START", toolCallId: "tc_same_ms", toolCallName: "bash" },
+      ...["tool-1", "tool-2"].map((_eventId) => ({
+        type: "TOOL_CALL_ARGS",
+        toolCallId: "tc_same_ms",
+        delta: "{",
+        _eventId,
+        _ts: sameTimestamp,
+      })),
+      { type: "REASONING_MESSAGE_START", messageId: "reason_same_ms" },
+      ...["reason-1", "reason-2"].map((_eventId) => ({
+        type: "REASONING_MESSAGE_CONTENT",
+        messageId: "reason_same_ms",
+        delta: "x",
+        _eventId,
+        _ts: sameTimestamp,
+      })),
+    ] as WebSocketEvent[];
+
+    const messages = fold(events);
+    expect(messages.find((message) => message.id === "tc_same_ms")?.toolInput).toBe("{{");
+    expect(messages.find((message) => message.id === "reason_same_ms")?.content).toBe("xx");
   });
 
   it("still streams live CONTENT without _ts (identity optional)", () => {

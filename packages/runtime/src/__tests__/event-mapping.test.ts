@@ -17,6 +17,23 @@ import type { IAgentSession, PiAgentEvent } from "../types.js";
  * (via parseEvent) and that the expected types appear in order.
  */
 describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
+  it("assigns a unique stable transport identity to each emitted event", () => {
+    const first = ev.textMessageContent(
+      { sessionId: "identity", agentName: "principal" },
+      "message-1",
+      "same",
+    ) as AgUiEvent & { _event_id?: string };
+    const second = ev.textMessageContent(
+      { sessionId: "identity", agentName: "principal" },
+      "message-1",
+      "same",
+    ) as AgUiEvent & { _event_id?: string };
+
+    expect(parseEvent(first)._event_id).toBe(first._event_id);
+    expect(first._event_id).toMatch(/^[0-9a-f-]{36}$/);
+    expect(second._event_id).not.toBe(first._event_id);
+  });
+
   it("keeps each terminal event bound to its originating run", async () => {
     const bus = new EventBus();
     const captured: AgUiEvent[] = [];
