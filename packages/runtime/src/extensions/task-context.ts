@@ -28,6 +28,7 @@ export function renderTaskListBlock(
   const lines = [
     TAG_OPEN,
     "Current pending tasks, oldest first. Use dispatch_task to assign work and complete_task with the exact task ID to return a result.",
+    "Never claim completion while <delegated_by_me> contains reply_received=false. Give only an explicit interim update, then wait for the delegated result before the final answer.",
     "<assigned_to_me>",
   ];
   let includedAssigned = 0;

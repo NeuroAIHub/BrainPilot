@@ -137,7 +137,7 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
   return {
     name: "dispatch_task",
     description:
-      "Create an independent task for another agent. Returns a stable task ID; include all context and relevant workspace file paths.",
+      "Create an independent task for another agent. Returns a stable task ID; include all context and relevant workspace file paths. After dispatching, stop the turn and wait for the result before claiming completion.",
     parameters: {
       type: "object",
       properties: {
@@ -159,7 +159,9 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
         await deps.ensureAgent(to);
         const task = await deps.dispatchTask(to, content);
         deps.wakeAgent(to);
-        return ok(`task ${task.id} dispatched to ${to}`);
+        return ok(
+          `task ${task.id} dispatched to ${to}. Stop this turn now and wait for the task result; do not claim completion while it is pending.`,
+        );
       } catch (err) {
         if (err instanceof TaskQueueFullError) {
           return { ...ok(`cannot dispatch to ${to}: ${err.message}`), isError: true };

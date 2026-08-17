@@ -1,5 +1,9 @@
 import { describe, it, expect, vi } from "vitest";
-import { makeTraceReminderExt, type TraceReminderDeps } from "../extensions/trace-reminder.js";
+import {
+  isReadOnlyShellCommand,
+  makeTraceReminderExt,
+  type TraceReminderDeps,
+} from "../extensions/trace-reminder.js";
 import type { AgentRole } from "../types.js";
 
 interface SentMessage {
@@ -79,6 +83,27 @@ describe("trace-reminder: event-driven trace gating", () => {
 
   it("substantive PI work only needs a trace reminder", () => {
     expect(runOnce("principal", ["bash"]).kinds).toEqual(["trace"]);
+  });
+
+  it("does not trace a conservative read-only shell chain", () => {
+    expect(isReadOnlyShellCommand("ls -la .attachments && find . -name '*safari*'")).toBe(true);
+    expect(runOnce("principal", [{
+      name: "bash",
+      args: { command: "ls -la .attachments && find . -name '*safari*'" },
+    }]).kinds).toEqual([]);
+  });
+
+  it("keeps mutating or ambiguous shell commands trace-worthy", () => {
+    for (const command of [
+      "mkdir results",
+      "cat input > output",
+      "find . -name '*.tmp' -delete",
+      "git status && git commit -am done",
+      "echo $(touch changed)",
+    ]) {
+      expect(isReadOnlyShellCommand(command)).toBe(false);
+      expect(runOnce("principal", [{ name: "bash", args: { command } }]).kinds).toEqual(["trace"]);
+    }
   });
 
   it("recorded substantive PI work needs no reminder", () => {

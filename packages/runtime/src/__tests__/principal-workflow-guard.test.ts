@@ -62,6 +62,17 @@ describe("principal workflow guard", () => {
     expect(isSubstantiveScientificExecutionRequest("Find patterns in this dataset.")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("帮我看看这组数据，找出异常。")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("请分析这个数据集并训练模型")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest(
+      "[Conversation attachments (in the .attachments/ directory): brainpilot-upload-test.txt]\n\n" +
+      "Read the attached synthetic test file and return its marker.",
+    )).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest(
+      "[本次对话附件（位于 .attachments/ 目录）：上传测试文件.txt]\n\n" +
+      "读取附件中的测试文件并返回标记。",
+    )).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("Test the attached dataset for distribution shift.")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("Test data quality in the attached dataset.")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("请测试这个数据集并找出异常。")).toBe(true);
   });
 
   it("injects one fresh ephemeral state block and removes stale copies", () => {
