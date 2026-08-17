@@ -45,6 +45,18 @@ export function marketplacePluginRequiresRestart(entry: Pick<MarketplaceSdkEntry
   return capabilitiesForMarketplaceEntry(entry).includes("mcp");
 }
 
+export function restartPromptForMcpMutation(
+  entry: Pick<MarketplaceSdkEntry, "capabilities" | "manifest">,
+  wasEnabled: boolean,
+  effect: "reload" | "remove",
+): RestartPrompt | null {
+  if (!wasEnabled || !marketplacePluginRequiresRestart(entry)) return null;
+  return {
+    pluginName: entry.manifest.displayName,
+    enabled: effect === "reload",
+  };
+}
+
 export function mcpRuntimeSummaryForPlugin(status: McpRuntimeStatus | null, pluginId: string): PluginMcpRuntimeSummary | null {
   const servers = status?.servers.filter((server) => server.pluginId === pluginId) ?? [];
   if (servers.length === 0) return null;
@@ -163,6 +175,16 @@ export function PluginMarketplace() {
   const selectedUpdate = selectedEntry ? updatesById.get(selectedEntry.manifest.id) : undefined;
   const selectedCompatibility = selectedInstalled?.compatibility ?? selectedEntry?.compatibility;
 
+  const promptForEnabledMcpMutation = (id: string, effect: "reload" | "remove") => {
+    const entry = marketplace.find((candidate) => candidate.manifest.id === id);
+    if (!entry) return;
+    const prompt = restartPromptForMcpMutation(entry, installedById.get(id)?.enabled === true, effect);
+    if (!prompt) return;
+    setSelectedPluginId(null);
+    setRestartError(null);
+    setRestartPrompt(prompt);
+  };
+
   useEffect(() => {
     if (!selectedEntry) return;
     const closeOnEscape = (event: KeyboardEvent) => {
@@ -230,6 +252,7 @@ export function PluginMarketplace() {
     try {
       await api.plugins.update(id);
       await load();
+      promptForEnabledMcpMutation(id, "reload");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -243,6 +266,7 @@ export function PluginMarketplace() {
     try {
       await api.plugins.rollback(id);
       await load();
+      promptForEnabledMcpMutation(id, "reload");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {
@@ -258,6 +282,7 @@ export function PluginMarketplace() {
       await api.plugins.remove(id);
       setSelectedPluginId(null);
       await load();
+      promptForEnabledMcpMutation(id, "remove");
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
     } finally {

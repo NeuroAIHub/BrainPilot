@@ -5,6 +5,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { createApp } from "../src/app.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
+import { StaticRuntimeOrchestrator } from "../src/static-orchestrator.js";
 
 function fakeOrchestrator(baseUrl = "http://runtime.test"): Orchestrator {
   return {
@@ -39,6 +40,21 @@ describe("Hono app — REST forwarding", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(calls).toEqual(["stop:researcher-1", "start:researcher-1"]);
+  });
+
+  it("returns 409 instead of reporting a fake restart for an externally managed runtime", async () => {
+    const orchestrator = new StaticRuntimeOrchestrator({
+      baseUrl: "http://static-runtime.test",
+      healthProbe: async () => true,
+    });
+    const app = createApp({ orchestrator, serveWeb: false });
+
+    const response = await app.request("/api/runtime/restart", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+    });
   });
 
   it("forwards runtime-observed MCP status", async () => {
