@@ -8,7 +8,7 @@
  * real agent factory then wraps with Pi's `defineTool`).
  *
  * Tools are namespaced `mcp__<server>__<tool>` to avoid cross-server collisions.
- * A failing server is logged and skipped — it never aborts the others.
+ * A failing server is recorded and skipped — it never aborts the others.
  *
  * Config shape (standard MCP/Claude format). Three transports are supported,
  * selected by the optional `type` field (defaults to "stdio" for back-compat):
@@ -65,6 +65,32 @@ export interface McpServerSpec {
 
 export interface McpServersConfig {
   mcpServers: Record<string, McpServerSpec>;
+  /** Plugin id for servers contributed by an enabled plugin. */
+  serverOwners?: Record<string, string>;
+}
+
+export interface McpConnectionFailure {
+  server: string;
+  error: string;
+}
+
+export interface McpConnectResult {
+  tools: SystemTool[];
+  connectedServers: string[];
+  skippedServers: string[];
+  failures: McpConnectionFailure[];
+}
+
+export interface McpRuntimeServerStatus {
+  name: string;
+  pluginId?: string;
+  state: "ready" | "failed";
+  error?: string;
+}
+
+export interface McpRuntimeStatus {
+  state: "not_loaded" | "unconfigured" | "ready" | "degraded" | "failed";
+  servers: McpRuntimeServerStatus[];
 }
 
 function inheritedEnvironment(): Record<string, string> {
@@ -129,6 +155,7 @@ export type McpConnectFn = (name: string, spec: McpServerSpec) => Promise<McpCli
  */
 export async function loadMcpServersConfig(dataRoot: string): Promise<McpServersConfig | null> {
   const merged: Record<string, McpServerSpec> = {};
+  const serverOwners: Record<string, string> = {};
   for (const rel of [join("bp_template", "mcp_servers.json"), join(".bp", "mcp_servers.json")]) {
     try {
       const raw = await readFile(join(dataRoot, rel), "utf8");
@@ -161,9 +188,10 @@ export async function loadMcpServersConfig(dataRoot: string): Promise<McpServers
         PLUGIN_ROOT: projection.root,
       };
       merged[name] = spec.command ? materializePluginMcpSpec(spec, env) : spec;
+      serverOwners[name] = projection.id;
     }
   }
-  return Object.keys(merged).length > 0 ? { mcpServers: merged } : null;
+  return Object.keys(merged).length > 0 ? { mcpServers: merged, serverOwners } : null;
 }
 
 /** Real connect: open the transport named by `spec.type` and hand back a thin client. */
@@ -252,25 +280,43 @@ export class McpBridge {
 
   /** Connect every server in the config and collect their tools. */
   async connectAll(cfg: McpServersConfig): Promise<SystemTool[]> {
+    return (await this.connectAllWithStatus(cfg)).tools;
+  }
+
+  /** Connect every server while preserving per-server startup failures. */
+  async connectAllWithStatus(cfg: McpServersConfig): Promise<McpConnectResult> {
+    const connectedServers: string[] = [];
+    const skippedServers: string[] = [];
+    const failures: McpConnectionFailure[] = [];
+    const generationTools: SystemTool[] = [];
     for (const [name, spec] of Object.entries(cfg.mcpServers)) {
       if (isPlaceholderSpec(spec)) {
         // A scaffolded slot whose url/command hasn't been filled in yet — skip
         // quietly so the default config never delays launch or logs an error.
         // eslint-disable-next-line no-console
         console.info(`[mcp] server '${name}' not configured yet — skipping`);
+        skippedServers.push(name);
         continue;
       }
+      let client: McpClientLike | undefined;
       try {
-        const client = await this.connect(name, spec);
-        this.clients.push(client);
+        client = await this.connect(name, spec);
         const { tools } = await client.listTools();
-        for (const t of tools) this._tools.push(this.wrap(name, client, t));
+        this.clients.push(client);
+        connectedServers.push(name);
+        for (const t of tools) generationTools.push(this.wrap(name, client, t));
       } catch (err) {
+        await client?.close().catch(() => {});
+        const error = err instanceof Error ? err.message : String(err);
+        failures.push({ server: name, error });
         // eslint-disable-next-line no-console
-        console.error(`[mcp] server '${name}' failed to connect:`, (err as Error).message);
+        console.error(`[mcp] server '${name}' failed to connect:`, error);
       }
     }
-    return this._tools;
+    // Only newly-created agents receive this generation. Older SystemTool
+    // closures keep referencing their still-open clients until bridge.close().
+    this._tools = generationTools;
+    return { tools: generationTools, connectedServers, skippedServers, failures };
   }
 
   private wrap(server: string, client: McpClientLike, t: McpToolDescriptor): SystemTool {

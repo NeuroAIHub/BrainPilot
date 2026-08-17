@@ -201,13 +201,17 @@ export class SubagentManager {
     if (parentLease !== undefined) {
       for (const id of ids) this.parentPromotions.get(id)?.(parentLease);
     }
-    return Promise.all(ids.map(async (id) => {
+    const results = await Promise.all(ids.map(async (id) => {
       const execution = this.executions.get(id);
       if (execution) return execution;
       const result = this.results.get(id);
       if (result) return result;
       return this.resultFromStatus(this.statuses.get(id)!);
     }));
+    // Waiting for a child is a durability boundary just like runBatch(): once
+    // the result is observable, its terminal status must also be on disk.
+    await this.flush();
+    return results;
   }
 
   async cancelForParent(parentAgent: string, childIds: string[], reason = "Subagent cancelled by parent agent."): Promise<SubagentStatus[]> {

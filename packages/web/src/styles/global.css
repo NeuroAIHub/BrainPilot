@@ -11137,6 +11137,58 @@ button {
   padding: 12px 20px;
 }
 
+.plugin-restart-layer { z-index: 100; }
+
+.plugin-restart-dialog {
+  display: grid;
+  width: min(480px, 100%);
+  overflow: hidden;
+  border: 1px solid var(--color-border-strong);
+  border-radius: 18px;
+  background: var(--color-surface);
+  box-shadow: var(--shadow-xl, 0 24px 70px rgb(0 0 0 / 28%));
+}
+
+.plugin-restart-dialog__header {
+  display: flex;
+  align-items: flex-start;
+  gap: 13px;
+  padding: 22px;
+}
+
+.plugin-restart-dialog__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.plugin-restart-dialog__header h2 { margin: 0 0 8px; font-size: 17px; }
+.plugin-restart-dialog__header p { margin: 0; color: var(--color-text-muted); font-size: 12px; line-height: 1.65; }
+
+.plugin-restart-dialog__error {
+  margin: 0 22px 18px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 35%, var(--color-border));
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--color-surface));
+  color: var(--color-danger);
+  padding: 10px 12px;
+  font-size: 11px;
+}
+
+.plugin-restart-dialog__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  border-top: 1px solid var(--color-border);
+  background: var(--color-surface-soft);
+  padding: 12px 20px;
+}
+
 .is-spinning { animation: plugin-market-spin 0.8s linear infinite; }
 @keyframes plugin-market-spin { to { transform: rotate(360deg); } }
 

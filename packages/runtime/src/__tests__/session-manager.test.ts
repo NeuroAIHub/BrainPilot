@@ -181,9 +181,9 @@ describe("SessionManager (mock mode)", () => {
       callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
       close: async () => { closed(); },
     }));
-    const seen: string[][] = [];
+    const seen = new Map<string, Parameters<typeof mockAgentFactory>[0]["systemTools"]>();
     const spyFactory: typeof mockAgentFactory = async (params) => {
-      if (params.agentName === "principal") seen.push(params.systemTools.map((tool) => tool.name));
+      if (params.agentName === "principal") seen.set(params.sessionId, params.systemTools);
       return mockAgentFactory(params);
     };
     const manager = new SessionManager({
@@ -195,8 +195,8 @@ describe("SessionManager (mock mode)", () => {
 
     const before = await manager.createSession();
     await manager.sendMessage(before.id, "hi");
-    await waitFor(() => seen.length === 1);
-    expect(seen[0]).not.toContain("mcp__browser__navigate");
+    await waitFor(() => seen.has(before.id));
+    expect(seen.get(before.id)?.map((tool) => tool.name)).not.toContain("mcp__browser__navigate");
 
     await writeFile(projectionPath, JSON.stringify({
       schemaVersion: 1,
@@ -209,16 +209,69 @@ describe("SessionManager (mock mode)", () => {
     }));
     const enabled = await manager.createSession();
     await manager.sendMessage(enabled.id, "hi");
-    await waitFor(() => seen.length === 2);
-    expect(seen[1]).toContain("mcp__browser__navigate");
+    await waitFor(() => seen.has(enabled.id));
+    const enabledTool = seen.get(enabled.id)?.find((tool) => tool.name === "mcp__browser__navigate");
+    expect(enabledTool).toBeDefined();
 
     await rm(projectionPath);
     const disabled = await manager.createSession();
     await manager.sendMessage(disabled.id, "hi");
-    await waitFor(() => seen.length === 3);
-    expect(seen[2]).not.toContain("mcp__browser__navigate");
-    expect(closed).toHaveBeenCalledOnce();
+    await waitFor(() => seen.has(disabled.id));
+    expect(seen.get(disabled.id)?.map((tool) => tool.name)).not.toContain("mcp__browser__navigate");
+
+    // Disabling affects only newly-created agents. The enabled generation's
+    // tool must keep its client alive for the already-running agent.
+    await expect(enabledTool!.execute({ url: "https://example.test" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(closed).not.toHaveBeenCalled();
     await manager.emergencySaveAll();
+    expect(closed).toHaveBeenCalledOnce();
+  });
+
+  it("surfaces an error when every configured MCP server fails to start", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-startup-failure-"));
+    await mkdir(join(root, "bp_template"), { recursive: true });
+    await writeFile(join(root, "bp_template", "mcp_servers.json"), JSON.stringify({ mcpServers: { playwright: { command: "node" } } }));
+    const mcpBridge = {
+      connectAllWithStatus: async () => ({ tools: [], connectedServers: [], skippedServers: [], failures: [{ server: "playwright", error: "Chrome/Chromium is required" }] }),
+      close: async () => {},
+    } as unknown as McpBridge;
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge });
+    const session = await manager.createSession();
+
+    await expect(manager.sendMessage(session.id, "browse the web")).rejects.toThrow(
+      "Configured MCP services failed to start: playwright: Chrome/Chromium is required",
+    );
+    await expect(manager.getMcpRuntimeStatus()).resolves.toEqual({
+      state: "failed",
+      servers: [{ name: "playwright", state: "failed", error: "Chrome/Chromium is required" }],
+    });
+    await rm(root, { recursive: true, force: true });
+  });
+
+  it("reports the owning plugin for a ready MCP server", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-plugin-status-"));
+    const pluginRoot = join(root, "plugins", "execution", "plugin-a", "1.0.0");
+    const runtimeDir = join(root, "plugins", "runtime");
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(runtimeDir, { recursive: true });
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    await writeFile(mcpConfigPath, JSON.stringify({ mcpServers: { playwright: { command: "node" } } }));
+    await writeFile(join(runtimeDir, "plugin-a.json"), JSON.stringify({
+      schemaVersion: 1, id: "plugin-a", version: "1.0.0", format: "brainpilot", root: pluginRoot, dataDir: join(root, "plugins", "data", "plugin-a"), mcpConfigPath,
+    }));
+    const mcpBridge = {
+      connectAllWithStatus: async () => ({ tools: [], connectedServers: ["playwright"], skippedServers: [], failures: [] }),
+      close: async () => {},
+    } as unknown as McpBridge;
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge });
+
+    await expect(manager.getMcpRuntimeStatus()).resolves.toEqual({
+      state: "ready",
+      servers: [{ name: "playwright", pluginId: "plugin-a", state: "ready" }],
+    });
+    await rm(root, { recursive: true, force: true });
   });
 
   it("injects the built-in persona (not the old placeholder) for the principal", async () => {

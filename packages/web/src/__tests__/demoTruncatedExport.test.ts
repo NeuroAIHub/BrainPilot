@@ -82,11 +82,12 @@ describe("demo replay tolerates truncated/orphaned events", () => {
 });
 
 describe("normalizeAgUiEvent preserves transport metadata keys", () => {
-  it("keeps _ts (and _seq) instead of mangling to Ts/Seq", () => {
+  it("keeps transport metadata instead of mangling leading underscores", () => {
     const raw = {
       type: "TEXT_MESSAGE_CONTENT",
       _ts: "2026-06-22T08:43:24.619Z",
       _seq: 42,
+      _event_id: "event-42",
       agent_name: "principal",
       message_id: "m1",
       delta: "hi",
@@ -95,6 +96,7 @@ describe("normalizeAgUiEvent preserves transport metadata keys", () => {
     // The timestamp the demo timeline sorts on must survive normalization.
     expect(norm._ts).toBe("2026-06-22T08:43:24.619Z");
     expect(norm._seq).toBe(42);
+    expect(norm._eventId).toBe("event-42");
     expect(norm).not.toHaveProperty("Ts");
     expect(norm).not.toHaveProperty("Seq");
     // Internal snake_case still camelizes.

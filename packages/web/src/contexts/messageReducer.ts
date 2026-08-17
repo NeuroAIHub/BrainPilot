@@ -107,19 +107,23 @@ export function agUiMessageToChatMessage(msg: AgUiMessage): ChatMessage {
 
 /**
  * Stable identity for a stream-append event so history rehydrate + SSE ring
- * buffer replay can merge idempotently (#314). Requires transport `_ts` (always
- * set by the runtime EventBus envelope). Events without `_ts` (unit tests /
- * legacy) return null and fall back to "always apply while streaming".
+ * buffer replay can merge idempotently (#314, #463). New runtime events carry
+ * `_eventId`, which remains unique even when identical deltas are emitted in
+ * the same millisecond. Legacy events fall back to the old timestamp key;
+ * events without either identity return null and always apply while streaming.
  *
- * Key = type + stream id + _ts + delta. Distinct CONTENT events that happen to
- * carry the same text (intentional model repetition) still differ when `_ts`
- * differs, so they are not collapsed.
+ * The transport ID is persisted in events.jsonl and replayed unchanged over
+ * SSE, so the same event dedupes while distinct repeated deltas survive.
  */
 function streamAppendKey(event: WebSocketEvent, streamId: string, delta: string): string | null {
   const raw = event as Record<string, unknown>;
+  const eventId = raw._eventId;
+  if (typeof eventId === "string" && eventId) {
+    return `${event.type}\0${streamId}\0event:${eventId}`;
+  }
   const ts = raw._ts;
   if (typeof ts !== "string" || !ts) return null;
-  return `${event.type}\0${streamId}\0${ts}\0${delta}`;
+  return `${event.type}\0${streamId}\0legacy:${ts}\0${delta}`;
 }
 
 function withAppliedStreamKey(msg: ChatMessage, key: string | null): ChatMessage {
@@ -159,6 +163,12 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
   switch (event.type) {
     case "MESSAGES_SNAPSHOT": {
       const messages = Array.isArray(event.messages) ? event.messages : [];
+      const toolNames = new Map<string, string>();
+      for (const message of messages) {
+        for (const toolCall of message.toolCalls ?? []) {
+          if (toolCall.id && toolCall.name) toolNames.set(toolCall.id, toolCall.name);
+        }
+      }
       // Each AG-UI message may carry `tool_calls[]` nested on an assistant
       // message (fold.py groups them so `last_assistant_message`'s tool_calls
       // list grows). Flatten them out as standalone `kind: "tool"` ChatMessages
@@ -167,7 +177,11 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // standalone entries.
       const out: ChatMessage[] = [];
       for (const m of messages) {
-        out.push(agUiMessageToChatMessage(m));
+        const chatMessage = agUiMessageToChatMessage(m);
+        if (m.role === "tool" && m.toolCallId) {
+          chatMessage.toolName = toolNames.get(m.toolCallId);
+        }
+        out.push(chatMessage);
         if (Array.isArray(m.toolCalls)) {
           for (const tc of m.toolCalls) {
             out.push({

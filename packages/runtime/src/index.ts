@@ -53,6 +53,7 @@ export { createServer, startServer } from "./server.js";
 export type { StartServerOptions } from "./server.js";
 
 export { McpBridge, loadMcpServersConfig, defaultMcpConnect } from "./mcp-bridge.js";
+export type { McpConnectionFailure, McpConnectResult, McpRuntimeServerStatus, McpRuntimeStatus } from "./mcp-bridge.js";
 export {
   loadCompatPluginProjections,
   makeCompatHooksExt,

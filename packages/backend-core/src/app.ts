@@ -32,6 +32,7 @@ import {
   readLocalSettings,
   writeLocalSettings,
   resolveProvider,
+  resolveProfileApiKey,
   readProviders,
   createProfile,
   updateProfile,
@@ -183,6 +184,23 @@ export function createApp(options: CreateAppOptions): Hono {
     });
   });
 
+  // ---- Runtime restart (backend-owned lifecycle) ----------------------
+  // MCP tools are materialized when the runtime starts. Plugin activation
+  // therefore offers an explicit restart action that intentionally interrupts
+  // all current agents, then waits for the replacement runtime to be healthy.
+  api.post("/runtime/restart", async (c) => {
+    if (orchestrator.runtimeLifecycle === "external") {
+      return c.json({
+        error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+      }, 409);
+    }
+    const userId = resolveUserId(c);
+    await orchestrator.stopRuntime(userId);
+    clients.clear();
+    await orchestrator.ensureRuntime({ userId });
+    return c.json({ status: "ok" as const });
+  });
+
   // ---- Identity (backend-local) ----------------------------------------
   // Trust-front (#21): hosted deployments resolve identity at the upstream
   // gateway, which intercepts /api/auth/me before it reaches us. For
@@ -200,6 +218,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
   api.get("/metrics", forward("metrics"));
+  api.get("/mcp-status", forward("mcpStatus"));
 
   // ---- Sessions (proxied to runtime) -----------------------------------
   api.get("/sessions", forward("listSessions"));
@@ -374,15 +393,21 @@ export function createApp(options: CreateAppOptions): Hono {
     const { profiles, selectedProfileId } = await readProviders(dataDir);
     const p = profiles.find((x) => x.id === c.req.param("id"));
     if (!p) return c.json({ error: "not found" }, 404);
-    const result = await probeProvider(
-      {
-        baseUrl: p.baseUrl,
-        apiKey: p.apiKey,
-        model: p.models[0],
-        api: p.api ?? deriveProviderApi(p.adapter) ?? "anthropic-messages",
-      },
-      { fetchFn: options.fetchFn, timeoutMs: options.providerProbeTimeoutMs },
-    );
+    const apiKey = await resolveProfileApiKey(p, { dataDir, env });
+    const result = p.apiKeyEnv && !apiKey
+      ? {
+          status: "error" as const,
+          message: `Environment variable $${p.apiKeyEnv} is not set.`,
+        }
+      : await probeProvider(
+          {
+            baseUrl: p.baseUrl,
+            apiKey,
+            model: p.models[0],
+            api: p.api ?? deriveProviderApi(p.adapter) ?? "anthropic-messages",
+          },
+          { fetchFn: options.fetchFn, timeoutMs: options.providerProbeTimeoutMs },
+        );
     // #69/#364: persist both the provider outcome and the model actually used
     // by the protocol-aware probe. Other configured models remain explicitly
     // unknown rather than inheriting a result from a model we did not call.

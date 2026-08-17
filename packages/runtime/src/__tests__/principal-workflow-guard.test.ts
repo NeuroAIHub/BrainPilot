@@ -73,6 +73,7 @@ describe("principal workflow guard", () => {
     expect(isSubstantiveScientificExecutionRequest("Test the attached dataset for distribution shift.")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("Test data quality in the attached dataset.")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("请测试这个数据集并找出异常。")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest("请测试附件中的数据集")).toBe(true);
   });
 
   it("injects one fresh ephemeral state block and removes stale copies", () => {
