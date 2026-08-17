@@ -47,6 +47,8 @@ export interface RouteDef {
 
 export const HealthResponseSchema = z.object({
   status: z.enum(["ok", "degraded", "error"]).or(z.string()),
+  /** Stable for one Runtime process; changes whenever that process restarts. */
+  instanceId: z.string().min(1).optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 

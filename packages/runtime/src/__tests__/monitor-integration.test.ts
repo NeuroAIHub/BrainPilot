@@ -1,4 +1,7 @@
 import { describe, expect, it } from "vitest";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { mockAgentFactory } from "../agent-factory.js";
 import { SessionManager } from "../session-manager.js";
 import type { AgentSessionFactory } from "../types.js";
@@ -85,5 +88,44 @@ describe("Monitor runtime integration", () => {
       && event.name === "monitor_state"
       && ["stopping", "completed", "failed"].includes((event.value as { status?: string }).status ?? ""))).toBe(true);
     manager.shutdown();
+  });
+
+  it("restores Monitor tools for an existing session when capabilities sync after restart", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-monitor-restart-"));
+    let restarted: SessionManager | undefined;
+    try {
+      const original = new SessionManager({
+        dataRoot,
+        persist: true,
+        agentFactory: mockAgentFactory,
+        runtimeCapabilities: ["builtin.monitor"],
+      });
+      await original.createSession({ id: "existing-monitor-session" });
+      await original.shutdownAndSave();
+
+      const toolNames: string[][] = [];
+      const factory: AgentSessionFactory = async (params) => {
+        toolNames.push(params.systemTools.map((tool) => tool.name));
+        return mockAgentFactory(params);
+      };
+      restarted = new SessionManager({ dataRoot, persist: true, agentFactory: factory });
+
+      // startServer restores persisted entries before it accepts Backend HTTP;
+      // the first Backend handshake must still upgrade those restored entries
+      // before an agent is recreated from the existing session.
+      await restarted.restoreFromDisk();
+      await restarted.setRuntimeCapabilities(["builtin.monitor"]);
+      await restarted.sendMessage("existing-monitor-session", "resume after restart");
+      await waitFor(() => toolNames.length > 0);
+
+      expect(toolNames[0]).toEqual(expect.arrayContaining([
+        "start_monitor",
+        "list_monitors",
+        "stop_monitor",
+      ]));
+    } finally {
+      if (restarted) await restarted.shutdownAndSave();
+      await rm(dataRoot, { recursive: true, force: true });
+    }
   });
 });

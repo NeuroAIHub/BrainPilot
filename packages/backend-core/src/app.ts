@@ -123,19 +123,37 @@ export function createApp(options: CreateAppOptions): Hono {
   const orchestrator = options.orchestrator;
   const env = options.env;
 
-  // Runtime clients cached per runtime baseUrl. In single-instance modes
-  // (local/static/single-user-docker) this Map holds exactly one entry; in
-  // dynamic (per-user) docker mode it holds one client per user's sandbox.
-  const clients = new Map<string, RuntimeClient>();
+  // Runtime clients cached per runtime baseUrl. Capability sync is scoped to a
+  // Runtime instance identity, not just its URL: a restarted Runtime commonly
+  // comes back on the same port with a fresh SessionManager.
+  interface RuntimeConnection {
+    client: RuntimeClient;
+    currentInstanceId?: string;
+    syncedInstanceId?: string;
+    syncedCapabilityVersion?: number;
+    syncPromise?: Promise<void>;
+  }
+  const clients = new Map<string, RuntimeConnection>();
+  let runtimeCapabilityVersion = 0;
+
   async function getClient(c?: import("hono").Context): Promise<RuntimeClient> {
     const userId = c ? resolveUserId(c) : undefined;
     const handle = await orchestrator.ensureRuntime(userId ? { userId } : undefined);
-    let client = clients.get(handle.baseUrl);
-    if (!client) {
-      client = new RuntimeClient({ baseUrl: handle.baseUrl, fetchFn: options.fetchFn });
-      clients.set(handle.baseUrl, client);
+    let connection = clients.get(handle.baseUrl);
+    if (!connection) {
+      connection = {
+        client: new RuntimeClient({ baseUrl: handle.baseUrl, fetchFn: options.fetchFn }),
+        ...(handle.instanceId ? { currentInstanceId: handle.instanceId } : {}),
+      };
+      clients.set(handle.baseUrl, connection);
+    } else if (handle.instanceId) {
+      connection.currentInstanceId = handle.instanceId;
     }
-    return client;
+    // A legacy/third-party orchestrator without instance identity keeps the
+    // pre-handshake proxy behavior. Official orchestrators always identify new
+    // Runtime instances, including restarts on the same URL.
+    if (connection.currentInstanceId) await ensureRuntimeCapabilities(connection);
+    return connection.client;
   }
 
   async function syncRuntimeCapabilities(client: RuntimeClient): Promise<void> {
@@ -147,8 +165,44 @@ export function createApp(options: CreateAppOptions): Hono {
     if (!response.ok) throw new Error(`runtime capability sync failed (${response.status})`);
   }
 
+  /** Single-flight capability handshake for the latest observed Runtime instance. */
+  async function ensureRuntimeCapabilities(connection: RuntimeConnection): Promise<void> {
+    for (;;) {
+      const targetInstanceId = connection.currentInstanceId;
+      if (!targetInstanceId) return;
+      const targetCapabilityVersion = runtimeCapabilityVersion;
+      if (
+        connection.syncedInstanceId === targetInstanceId
+        && connection.syncedCapabilityVersion === targetCapabilityVersion
+      ) return;
+
+      if (!connection.syncPromise) {
+        const pending = (async () => {
+          await syncRuntimeCapabilities(connection.client);
+          connection.syncedInstanceId = targetInstanceId;
+          connection.syncedCapabilityVersion = targetCapabilityVersion;
+        })();
+        connection.syncPromise = pending;
+      }
+
+      const pending = connection.syncPromise;
+      try {
+        await pending;
+      } finally {
+        if (connection.syncPromise === pending) connection.syncPromise = undefined;
+      }
+      // A plugin mutation or Runtime restart may have landed while the prior
+      // sync was in flight. Loop once more and converge on the newest pair.
+    }
+  }
+
   async function syncKnownRuntimes(): Promise<void> {
-    await Promise.all([...clients.values()].map((client) => syncRuntimeCapabilities(client)));
+    runtimeCapabilityVersion += 1;
+    await Promise.all([...clients.values()].map((connection) =>
+      connection.currentInstanceId
+        ? ensureRuntimeCapabilities(connection)
+        : syncRuntimeCapabilities(connection.client)
+    ));
   }
 
   const app = new Hono();
@@ -219,7 +273,6 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/sessions", forward("listSessions"));
   api.post("/sessions", async (c) => {
     const rc = await getClient(c);
-    await syncRuntimeCapabilities(rc);
     const body = await c.req.text();
     return relay(c, await rc.forward("createSession", {
       body: body || undefined,

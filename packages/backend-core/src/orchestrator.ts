@@ -16,6 +16,12 @@
 export interface RuntimeHandle {
   /** Base URL of the runtime, e.g. `http://127.0.0.1:8081`. No trailing slash. */
   readonly baseUrl: string;
+  /**
+   * Stable identity for one live Runtime instance. Official orchestrators set
+   * this so callers can detect a restart even when `baseUrl` is unchanged.
+   * Optional for backward compatibility with third-party orchestrators.
+   */
+  readonly instanceId?: string;
 }
 
 export interface EnsureRuntimeOptions {

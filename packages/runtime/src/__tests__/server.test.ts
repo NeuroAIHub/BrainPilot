@@ -19,9 +19,10 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
   }
 
   it("GET /health", async () => {
-    const res = await app().request("/health");
+    const manager = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
+    const res = await createServer({ manager, instanceId: "runtime-test-1" }).app.request("/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "ok" });
+    expect(await res.json()).toEqual({ status: "ok", instanceId: "runtime-test-1" });
   });
 
   it("GET /metrics", async () => {
@@ -58,8 +59,9 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
 
   it("serves checkpoint diff/preview and restores through the trace API", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-checkpoint-api-"));
+    let manager: SessionManager | undefined;
     try {
-      const manager = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+      manager = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
       await manager.createSession({ id: "checkpoint-api" });
       const workspace = join(dataRoot, "workspaces", "checkpoint-api");
       const store = new WorkspaceCheckpointStore("checkpoint-api", workspace, join(dataRoot, ".bp", "checkpoint-api"));
@@ -79,6 +81,7 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
       expect(restored.status).toBe(200);
       expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("old\n");
     } finally {
+      if (manager) await manager.shutdownAndSave();
       await rm(dataRoot, { recursive: true, force: true });
     }
   });

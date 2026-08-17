@@ -19,7 +19,10 @@ import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
 
 function orchestrator(): Orchestrator {
   return {
-    ensureRuntime: async (): Promise<RuntimeHandle> => ({ baseUrl: "http://runtime.test" }),
+    ensureRuntime: async (): Promise<RuntimeHandle> => ({
+      baseUrl: "http://runtime.test",
+      instanceId: "runtime-test-1",
+    }),
     health: async () => true,
     stopRuntime: async () => {},
   };
@@ -374,5 +377,119 @@ describe("plugin marketplace control plane", () => {
       body: JSON.stringify({ enabled: true }),
     });
     expect(calls.at(-1)?.body).toBe('{"capabilities":["builtin.monitor"]}');
+  });
+
+  it("resyncs capabilities before an existing session is restored after Runtime restart", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-restart-"));
+    const id = "org.brainpilot.monitor";
+    await installPlugin(dataDir, id);
+    await setPluginEnabled(dataDir, id, true);
+
+    let instanceId = "runtime-1";
+    const calls: Array<{ url: string; body?: string }> = [];
+    const restartAwareOrchestrator: Orchestrator = {
+      ensureRuntime: async () => ({ baseUrl: "http://runtime.test", instanceId }),
+      health: async () => true,
+      stopRuntime: async () => {},
+    };
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      calls.push({ url, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+      if (url.endsWith("/runtime/capabilities")) return Response.json({ ok: true });
+      return Response.json({ id: "existing-session" });
+    };
+    const app = createApp({
+      orchestrator: restartAwareOrchestrator,
+      dataDir,
+      serveWeb: false,
+      fetchFn: fetchFn as typeof fetch,
+    });
+
+    expect((await app.request("/api/sessions/existing-session")).status).toBe(200);
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/runtime/capabilities",
+      "/sessions/existing-session",
+    ]);
+    expect(calls[0]?.body).toBe('{"capabilities":["builtin.monitor"]}');
+
+    calls.length = 0;
+    expect((await app.request("/api/sessions/existing-session")).status).toBe(200);
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/sessions/existing-session",
+    ]);
+
+    instanceId = "runtime-2";
+    calls.length = 0;
+    expect((await app.request("/api/sessions/existing-session")).status).toBe(200);
+    expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/runtime/capabilities",
+      "/sessions/existing-session",
+    ]);
+    expect(calls[0]?.body).toBe('{"capabilities":["builtin.monitor"]}');
+  });
+
+  it("single-flights concurrent capability sync for one Runtime instance", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-single-flight-"));
+    let releaseSync!: () => void;
+    const syncGate = new Promise<void>((resolve) => { releaseSync = resolve; });
+    let markSyncStarted!: () => void;
+    const syncStarted = new Promise<void>((resolve) => { markSyncStarted = resolve; });
+    let syncCalls = 0;
+    const fetchFn = async (url: string) => {
+      if (url.endsWith("/runtime/capabilities")) {
+        syncCalls += 1;
+        markSyncStarted();
+        await syncGate;
+        return Response.json({ ok: true });
+      }
+      if (url.endsWith("/metrics")) return Response.json({ activeSessions: 0 });
+      return Response.json({ sessions: [] });
+    };
+    const app = createApp({
+      orchestrator: {
+        ensureRuntime: async () => ({ baseUrl: "http://runtime.test", instanceId: "runtime-1" }),
+        health: async () => true,
+        stopRuntime: async () => {},
+      },
+      dataDir,
+      serveWeb: false,
+      fetchFn: fetchFn as typeof fetch,
+    });
+
+    const list = app.request("/api/sessions");
+    const metrics = app.request("/api/metrics");
+    await syncStarted;
+    expect(syncCalls).toBe(1);
+    releaseSync();
+    const responses = await Promise.all([list, metrics]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(syncCalls).toBe(1);
+  });
+
+  it("retries capability sync after a transient failure", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-sync-retry-"));
+    let syncCalls = 0;
+    const fetchFn = async (url: string) => {
+      if (url.endsWith("/runtime/capabilities")) {
+        syncCalls += 1;
+        return syncCalls === 1
+          ? Response.json({ error: "not ready" }, { status: 503 })
+          : Response.json({ ok: true });
+      }
+      return Response.json({ sessions: [] });
+    };
+    const app = createApp({
+      orchestrator: {
+        ensureRuntime: async () => ({ baseUrl: "http://runtime.test", instanceId: "runtime-1" }),
+        health: async () => true,
+        stopRuntime: async () => {},
+      },
+      dataDir,
+      serveWeb: false,
+      fetchFn: fetchFn as typeof fetch,
+    });
+
+    expect((await app.request("/api/sessions")).status).toBe(500);
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    expect(syncCalls).toBe(2);
   });
 });

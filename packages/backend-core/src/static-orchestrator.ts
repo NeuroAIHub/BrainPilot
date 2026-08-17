@@ -15,13 +15,29 @@ import type {
   RuntimeHandle,
 } from "./orchestrator.js";
 
-async function defaultHealthProbe(baseUrl: string): Promise<boolean> {
+export type StaticRuntimeHealth = boolean | {
+  healthy: boolean;
+  instanceId?: string;
+};
+
+async function defaultHealthProbe(baseUrl: string): Promise<StaticRuntimeHealth> {
   try {
     const res = await fetch(`${baseUrl}/health`);
-    return res.ok;
+    if (!res.ok) return false;
+    const body = await res.json().catch(() => ({})) as { instanceId?: unknown };
+    return {
+      healthy: true,
+      ...(typeof body.instanceId === "string" && body.instanceId
+        ? { instanceId: body.instanceId }
+        : {}),
+    };
   } catch {
     return false;
   }
+}
+
+function healthResult(value: StaticRuntimeHealth): { healthy: boolean; instanceId?: string } {
+  return typeof value === "boolean" ? { healthy: value } : value;
 }
 
 const sleepDefault = (ms: number): Promise<void> =>
@@ -31,7 +47,7 @@ export interface StaticOrchestratorOptions {
   /** Pre-provisioned runtime URL (BP_RUNTIME_URL). Trailing slash is stripped. */
   baseUrl: string;
   /** Injectable health probe (for tests). Defaults to fetch GET /health. */
-  healthProbe?: (baseUrl: string) => Promise<boolean>;
+  healthProbe?: (baseUrl: string) => Promise<StaticRuntimeHealth>;
   /** Max ms to wait for the runtime to become healthy. Default 30_000. */
   healthTimeoutMs?: number;
   /** Poll interval in ms. Default 250. */
@@ -42,7 +58,7 @@ export interface StaticOrchestratorOptions {
 
 export class StaticRuntimeOrchestrator implements Orchestrator {
   private readonly url: string;
-  private readonly healthProbe: (baseUrl: string) => Promise<boolean>;
+  private readonly healthProbe: (baseUrl: string) => Promise<StaticRuntimeHealth>;
   private readonly healthTimeoutMs: number;
   private readonly pollMs: number;
   private readonly sleep: (ms: number) => Promise<void>;
@@ -65,7 +81,13 @@ export class StaticRuntimeOrchestrator implements Orchestrator {
   async ensureRuntime(_opts?: EnsureRuntimeOptions): Promise<RuntimeHandle> {
     const deadline = Date.now() + this.healthTimeoutMs;
     for (;;) {
-      if (await this.healthProbe(this.url)) return { baseUrl: this.url };
+      const result = healthResult(await this.healthProbe(this.url));
+      if (result.healthy) {
+        return {
+          baseUrl: this.url,
+          ...(result.instanceId ? { instanceId: result.instanceId } : {}),
+        };
+      }
       if (Date.now() >= deadline) {
         throw new Error(
           `static runtime did not become healthy at ${this.url} within ` +
@@ -84,7 +106,7 @@ export class StaticRuntimeOrchestrator implements Orchestrator {
   }
 
   async health(): Promise<boolean> {
-    return this.healthProbe(this.url);
+    return healthResult(await this.healthProbe(this.url)).healthy;
   }
 
   async stopRuntime(): Promise<void> {

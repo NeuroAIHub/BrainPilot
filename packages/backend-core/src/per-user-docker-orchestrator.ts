@@ -76,6 +76,7 @@ export interface PerUserDockerOrchestratorOptions
 interface UserEntry {
   orch: Orchestrator;
   baseUrl: string;
+  instanceId?: string;
   hostPort: number;
   lastEnsuredAt: number;
 }
@@ -161,7 +162,10 @@ export class PerUserDockerOrchestrator implements Orchestrator {
       const healthy = orch.health ? await orch.health() : true;
       if (healthy) {
         existing.lastEnsuredAt = this.now();
-        return { baseUrl: existing.baseUrl };
+        return {
+          baseUrl: existing.baseUrl,
+          ...(existing.instanceId ? { instanceId: existing.instanceId } : {}),
+        };
       }
       // Container died — drop it so we recreate below (also frees the port).
       await this.disposeUser(userId);
@@ -208,6 +212,7 @@ export class PerUserDockerOrchestrator implements Orchestrator {
     this.users.set(userId, {
       orch,
       baseUrl: handle.baseUrl,
+      ...(handle.instanceId ? { instanceId: handle.instanceId } : {}),
       hostPort,
       lastEnsuredAt: this.now(),
     });
