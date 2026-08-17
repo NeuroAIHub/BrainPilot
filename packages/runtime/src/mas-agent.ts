@@ -6,13 +6,16 @@
  *  - Translate Pi events → AG-UI events (§6) onto the session EventBus.
  *  - Per-agent error isolation (§7 L2): a thrown prompt never escapes; it is
  *    converted to RUN_ERROR + system_message and the agent goes to `error`.
+ *  - Recover one output-token-limit stop inside the same run before surfacing
+ *    a structured OUTPUT_LIMIT_EXCEEDED terminal error.
  *  - Map Pi `auto_retry_start/end` → agent_status_update + system_message;
  *    suppress internal events (turn_*, compaction_*).
  *
  * Behavioural hooks (remind/trace/reply/delegate) used to live here as per-turn
  * TurnTrackers (#79). They now live in the Pi-native `trace-reminder` extension
  * (`extensions/trace-reminder.ts`), registered per AgentSession by the real
- * factory. MasAgent is back to a pure Pi→AG-UI translator.
+ * factory. Output-limit recovery remains here because it determines whether
+ * the enclosing BrainPilot run succeeded or failed.
  */
 import {
   CUSTOM_EVENT,
@@ -52,6 +55,14 @@ export type ToolInterruptResult = {
 };
 
 const TOOL_INTERRUPT_TIMEOUT_MS = 10_000;
+const OUTPUT_LIMIT_ERROR_CODE = "OUTPUT_LIMIT_EXCEEDED";
+const OUTPUT_LIMIT_ERROR_MESSAGE =
+  "Model reached the maximum output token limit after one recovery attempt.";
+const OUTPUT_LIMIT_RECOVERY_PROMPT =
+  "[SYSTEM-MESSAGE:output_limit_recovery] The previous response hit the output token limit. " +
+  "Any final tool call truncated by that limit did not execute. Do not repeat operations that already have " +
+  "successful tool results. Continue the same task, split write/edit content into smaller chunks, and verify " +
+  "the target files. [/SYSTEM-MESSAGE]";
 
 /** Zeroed token counters — the identity element for accumulation. */
 export function emptyTokenUsage(): TokenUsage {
@@ -125,6 +136,8 @@ export class MasAgent {
   private currentRetry: AgentRetryState | undefined;
   /** Provider errors are held until Pi either retries successfully or exhausts. */
   private pendingProviderError: string | undefined;
+  /** True when the latest assistant turn stopped because it exhausted output tokens. */
+  private outputLimitReached = false;
   /** True while an explicit BrainPilot interrupt is unwinding the active run. */
   private abortRequested = false;
   private currentRunId: string | undefined;
@@ -457,22 +470,49 @@ export class MasAgent {
     });
   }
 
+  /**
+   * Inject an internal notification into the current Pi run and wait until that
+   * run has drained it. `session.prompt(..., { streamingBehavior: "followUp" })`
+   * may resolve as soon as the item is queued, so callers must also fence the
+   * prompt that was active when the injection began before acknowledging a
+   * durable notification. If the run drains between the streaming check and
+   * `followUp`, its normal-prompt fallback is awaited by `followUp` itself.
+   */
+  async followUpAndWait(text: string): Promise<void> {
+    const activePrompt = this.currentPrompt;
+    await this.followUp(text);
+    await activePrompt;
+  }
+
   private async runPrompt(text: string): Promise<void> {
-    this.currentRunId = newRunId();
-    this.runStartedAt = Date.now();
+    const runId = newRunId();
+    const runStartedAt = Date.now();
+    const runStartSnapshot = cloneAgentStats(this.cumulativeStats);
+    this.currentRunId = runId;
+    this.runStartedAt = runStartedAt;
     this.abortRequested = false;
     this._lastRunOutcome = undefined;
     this.currentRetry = undefined;
     this.pendingProviderError = undefined;
+    this.outputLimitReached = false;
     // Snapshot cumulative stats BEFORE any events flow so the eventual delta
     // (`cumulative_after - snapshot`) captures exactly this run's contribution.
-    this.runStartSnapshot = cloneAgentStats(this.cumulativeStats);
+    this.runStartSnapshot = runStartSnapshot;
     this.setStatus("running");
-    this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }));
+    this.bus.emit(ev.runStarted({ sessionId: this.sessionId, agentName: this.name, runId }));
     let runOutcome: RunStatsStatus = "ok";
     try {
       await this.session.prompt(text);
       this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
+      if (!this.abortRequested && this.outputLimitReached) {
+        // A length stop is a completed provider response, so Pi intentionally
+        // does not auto-retry it. Continue the same agent history once with an
+        // explicit, side-effect-aware instruction instead of replaying the
+        // original prompt (which could duplicate already successful tools).
+        this.outputLimitReached = false;
+        await this.session.prompt(OUTPUT_LIMIT_RECOVERY_PROMPT);
+        this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
+      }
       if (this.abortRequested) {
         // Pi reports an interrupted retry sleep as auto_retry_end(false,
         // "Retry cancelled"). An explicit Stop is a lifecycle outcome, not a
@@ -480,23 +520,36 @@ export class MasAgent {
         // out of the error/escalation path.
         this.currentRetry = undefined;
         this.pendingProviderError = undefined;
+        this.outputLimitReached = false;
         runOutcome = "aborted";
         this.bus.emit(
-          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
+      } else if (this.outputLimitReached) {
+        this.outputLimitReached = false;
+        this.recordError(OUTPUT_LIMIT_ERROR_MESSAGE, undefined, "output_limit_exceeded");
+        this.bus.emit(
+          ev.runError(
+            { sessionId: this.sessionId, agentName: this.name, runId },
+            OUTPUT_LIMIT_ERROR_MESSAGE,
+            OUTPUT_LIMIT_ERROR_CODE,
+          ),
+        );
+        this.setStatus("error");
+        runOutcome = "error";
       } else if (this.pendingProviderError) {
         const raw = this.pendingProviderError;
         this.pendingProviderError = undefined;
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
         this.bus.emit(
-          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId }, message),
         );
         this.setStatus("error");
         runOutcome = "error";
       } else {
         this.bus.emit(
-          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
       }
       // A run that reached here without an exhausted provider error completed
@@ -510,11 +563,12 @@ export class MasAgent {
       this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
       this.currentRetry = undefined;
       this.pendingProviderError = undefined;
+      this.outputLimitReached = false;
       if (this.abortRequested) {
         // Some session implementations reject prompt() on abort rather than
         // resolving it. Normalize both forms to the same non-error lifecycle.
         this.bus.emit(
-          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }),
+          ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
         this._lastErrorKind = undefined;
         this.setStatus("idle");
@@ -527,7 +581,7 @@ export class MasAgent {
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
         this.bus.emit(
-          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId }, message),
         );
         this.setStatus("error");
         runOutcome = "error";
@@ -538,30 +592,36 @@ export class MasAgent {
       // consumers see a stable `runId`. Aborted-mid-run is caught by
       // `abort()`'s own cleanup path (see abort()); if we reach here with a
       // clean or error path, either way we have a well-formed snapshot.
-      this.emitRunStats(runOutcome);
-      // Pi drains accepted follow-ups before the run terminates. Anything left
-      // here was cancelled or never injected and must not leak into a later run.
-      this.pendingFollowUps = [];
-      this.currentRunId = undefined;
-      this.currentMessageId = undefined;
-      this.runStartSnapshot = undefined;
-      this.runStartedAt = undefined;
+      this.emitRunStats(runOutcome, runId, runStartedAt, runStartSnapshot);
+      if (this.currentRunId === runId) {
+        // Pi drains accepted follow-ups before the run terminates. Anything left
+        // here was cancelled or never injected and must not leak into a later run.
+        this.pendingFollowUps = [];
+        this.currentRunId = undefined;
+        this.currentMessageId = undefined;
+        this.runStartSnapshot = undefined;
+        this.runStartedAt = undefined;
+      }
     }
   }
 
   /**
    * Fire the `onRunStats` callback with the run's delta. Called from
-   * `runPrompt`'s finally block for ok/error/aborted paths. Idempotent: if no
-   * snapshot exists (e.g. abort called with no run in flight), this is a no-op.
+   * `runPrompt`'s finally block for ok/error/aborted paths. Run identity and
+   * baseline are captured locally so overlapping cleanup cannot corrupt them.
    */
-  private emitRunStats(status: RunStatsStatus): void {
-    if (!this.runStartSnapshot || !this.currentRunId || this.runStartedAt === undefined) return;
+  private emitRunStats(
+    status: RunStatsStatus,
+    runId: string,
+    startedAt: number,
+    startSnapshot: AgentStats,
+  ): void {
     const cumulative = cloneAgentStats(this.cumulativeStats);
-    const delta = subtractAgentStats(this.cumulativeStats, this.runStartSnapshot);
+    const delta = subtractAgentStats(this.cumulativeStats, startSnapshot);
     this.opts.onRunStats?.({
       name: this.name,
-      runId: this.currentRunId,
-      startedAt: this.runStartedAt,
+      runId,
+      startedAt,
       finishedAt: Date.now(),
       status,
       delta,
@@ -749,9 +809,14 @@ export class MasAgent {
           // error until session.prompt settles so transient attempts do not
           // produce red bubbles or briefly flip the agent out of "running".
           this.pendingProviderError = msg.errorMessage || "provider request failed";
+          this.outputLimitReached = false;
+        } else if (msg?.role === "assistant" && msg.stopReason === "length") {
+          this.pendingProviderError = undefined;
+          this.outputLimitReached = true;
         } else if (msg?.role === "assistant") {
           // A successful retry supersedes every earlier failed attempt.
           this.pendingProviderError = undefined;
+          this.outputLimitReached = false;
         }
         // Accumulate real provider token usage for this assistant turn. Pi
         // attaches `usage` to the finalized assistant message; user/tool

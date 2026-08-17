@@ -9,10 +9,26 @@ afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recur
 
 describe("subagent profile overrides", () => {
   it("ships the common research, code exploration, API, and review profiles", () => {
-    expect(builtinSubagentProfiles().map((profile) => profile.name).sort()).toEqual([
+    const profiles = builtinSubagentProfiles();
+    expect(profiles.map((profile) => profile.name).sort()).toEqual([
       "api-librarian", "code-reviewer", "code-runner", "evidence-extractor",
       "literature-scout", "method-reviewer", "repo-scout",
     ]);
+    expect(profiles
+      .filter((profile) => profile.allowedParents.includes("auditor"))
+      .map((profile) => profile.name)
+      .sort()).toEqual([
+      "code-reviewer", "evidence-extractor", "method-reviewer", "repo-scout",
+    ]);
+    for (const name of ["literature-scout", "evidence-extractor", "api-librarian"]) {
+      expect(profiles.find((profile) => profile.name === name)?.builtinTools).toEqual(
+        expect.arrayContaining(["write", "edit"]),
+      );
+    }
+    expect(profiles.find((profile) => profile.name === "code-reviewer")?.builtinTools)
+      .toEqual(expect.arrayContaining(["write", "bash"]));
+    expect(profiles.find((profile) => profile.name === "code-reviewer")?.prompt)
+      .toContain("asymmetric dimensions and index-distinct values");
   });
 
   it("loads prompt and validated config overrides while stripping forbidden tools", async () => {
@@ -76,4 +92,3 @@ describe("subagent profile overrides", () => {
     await expect(loadSubagentProfile(root, "../escape")).rejects.toThrow("invalid subagent profile name");
   });
 });
-

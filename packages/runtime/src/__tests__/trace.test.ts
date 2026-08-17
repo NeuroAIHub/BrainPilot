@@ -63,9 +63,9 @@ describe("GraphOfTrace onChange (#79)", () => {
     expect(g.addRelation("survey", "synthesis", "synthesis builds on the survey")).toBe(true);
     // synthesis depends_on survey: survey recorded as synthesis's parent.
     expect(g.getNodeV2("synthesis")!.parents).toContainEqual(
-      expect.objectContaining({ nodeId: "survey", conclusion: "candidate" }),
+      expect.objectContaining({ nodeId: "survey", conclusion: "confirmed" }),
     );
-    expect(g.getNode("synthesis")!.parentIds).not.toContain("survey");
+    expect(g.getNode("synthesis")!.parentIds).toContain("survey");
   });
 
   it("auto-corrects a reversed depends_on edge to follow chronology (#110)", () => {
@@ -86,16 +86,16 @@ describe("GraphOfTrace onChange (#79)", () => {
     });
 
     // Reversed args: caller says from=synthesis (later) -> to=survey (earlier).
-    // V2 preserves the caller-declared direction and requires Auditor review.
+    // V2 preserves the caller-declared direction and confirms valid Trace edges.
     expect(g.addRelation("synthesis", "survey", "synthesis depends on survey")).toBe(true);
     expect(g.getNodeV2("survey")!.parents).toContainEqual(
-      expect.objectContaining({ nodeId: "synthesis", conclusion: "candidate" }),
+      expect.objectContaining({ nodeId: "synthesis", conclusion: "confirmed" }),
     );
 
     // Reversed again remains audit -> synthesis as declared.
     expect(g.addRelation("audit", "synthesis", "audit depends on synthesis")).toBe(true);
     expect(g.getNodeV2("synthesis")!.parents).toContainEqual(
-      expect.objectContaining({ nodeId: "audit", conclusion: "candidate" }),
+      expect.objectContaining({ nodeId: "audit", conclusion: "confirmed" }),
     );
   });
 

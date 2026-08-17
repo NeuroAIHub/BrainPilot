@@ -134,7 +134,7 @@ export function AgentsPanel() {
 export function TracePanel() {
   // #79: trace is now live — seeded + kept current by SessionContext via SSE
   // (CUSTOM:trace_node), so this panel reads it instead of polling.
-  const { currentSession, currentTrace, refreshTrace, runActive } = useSessions();
+  const { currentSession, currentTrace, refreshTrace, workActive } = useSessions();
   const t = useT();
   const trace = currentTrace;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -473,7 +473,7 @@ export function TracePanel() {
                   formatKind={formatNodeKind}
                   t={t}
                   sessionId={currentSession?.id}
-                  restoreDisabled={runActive?.active === true}
+                  restoreDisabled={workActive?.active === true}
                   onRestored={() => currentSession ? refreshTrace(currentSession.id) : undefined}
                   onDependencyDecision={async (dependencyId, decision) => {
                     if (!currentSession) return;

@@ -21,13 +21,17 @@ export interface SubagentTask {
   profile: string;
   task: string;
   inputs?: SubagentInput[];
+  workspaceMode?: "isolated" | "shared";
 }
 
 export interface SubmittedSubagentResult {
+  outcome: "completed" | "blocked";
   summary: string;
   findings: string[];
   artifacts: Array<{ path: string; description?: string }>;
   caveats: string[];
+  inspectedPaths: string[];
+  commandsRun: string[];
 }
 
 export interface SubagentResult extends SubmittedSubagentResult {
@@ -48,6 +52,14 @@ interface PreparedSubagentRun {
   task: SubagentTask;
   profile: SubagentProfile;
   borrowParent: boolean;
+  allowNestedBorrow: boolean;
+  parentPromotion?: Promise<object>;
+}
+
+interface ProviderCapacityOptions {
+  borrowParent: boolean;
+  allowNestedBorrow: boolean;
+  parentPromotion?: Promise<object>;
 }
 
 interface PersistedState { version: 1; runs: SubagentStatus[] }
@@ -68,7 +80,7 @@ interface SubagentManagerOptions {
     historyPath: string;
     submitTool: SystemTool;
   }) => Promise<IAgentSession>;
-  runWithProviderCapacity: <T>(fn: () => Promise<T>, borrowParent: boolean) => Promise<T>;
+  runWithProviderCapacity: <T>(fn: () => Promise<T>, options: ProviderCapacityOptions) => Promise<T>;
   onUsage: (childId: string, usage: TokenUsage) => void;
   onRunFinished: (info: { childId: string; status: "ok" | "error" | "aborted"; usage: TokenUsage; startedAt: number; finishedAt: number }) => void;
   onChanged: () => void;
@@ -118,6 +130,7 @@ export class SubagentManager {
   private readonly active = new Map<string, { parentAgent: string; session: IAgentSession }>();
   private readonly executions = new Map<string, Promise<SubagentResult>>();
   private readonly results = new Map<string, SubagentResult>();
+  private readonly parentPromotions = new Map<string, (parentLease: object) => void>();
   private readonly semaphore: Semaphore;
   private writeChain: Promise<void> = Promise.resolve();
   private readonly timeoutMs: number;
@@ -125,7 +138,7 @@ export class SubagentManager {
 
   constructor(private readonly opts: SubagentManagerOptions) {
     this.semaphore = new Semaphore(opts.maxConcurrency ?? positiveEnv("BP_SUBAGENT_MAX_CONCURRENCY", 4));
-    this.timeoutMs = opts.timeoutMs ?? positiveEnv("BP_SUBAGENT_TIMEOUT_MS", 600_000);
+    this.timeoutMs = opts.timeoutMs ?? positiveEnv("BP_SUBAGENT_TIMEOUT_MS", 1_200_000);
     this.maxCopyBytes = opts.maxCopyBytes ?? positiveEnv("BP_SUBAGENT_COPY_MAX_BYTES", 256 * 1024 * 1024);
   }
 
@@ -134,7 +147,7 @@ export class SubagentManager {
     try {
       const parsed = JSON.parse(await readFile(this.statePath(), "utf8")) as PersistedState;
       for (const status of parsed.runs ?? []) {
-        if (status.status === "queued" || status.status === "running") {
+        if (status.status === "queued" || status.status === "waiting_for_capacity" || status.status === "running") {
           status.status = "interrupted";
           status.finishedAt = new Date().toISOString();
           status.error = "Runtime stopped before the subagent completed.";
@@ -146,6 +159,8 @@ export class SubagentManager {
   }
 
   list(): SubagentStatus[] { return [...this.statuses.values()]; }
+
+  hasActiveExecutions(): boolean { return this.executions.size > 0; }
 
   listForParent(parentAgent: string, childIds?: string[]): SubagentStatus[] {
     const runs = childIds
@@ -160,7 +175,7 @@ export class SubagentManager {
     context?: string;
     tasks: SubagentTask[];
   }): Promise<SubagentResult[]> {
-    const prepared = await this.prepareBatch(args);
+    const prepared = await this.prepareBatch(args, true);
     const results = await Promise.all(prepared.map((run) => this.launch(run)));
     // A completed batch is a natural durability boundary. Waiting here avoids
     // a late status write racing session teardown/restore and makes callers
@@ -176,13 +191,16 @@ export class SubagentManager {
     context?: string;
     tasks: SubagentTask[];
   }): Promise<SubagentStatus[]> {
-    const prepared = await this.prepareBatch(args);
+    const prepared = await this.prepareBatch(args, false, true);
     for (const run of prepared) void this.launch(run);
     return prepared.map((run) => ({ ...run.status }));
   }
 
-  async waitFor(parentAgent: string, childIds: string[]): Promise<SubagentResult[]> {
+  async waitFor(parentAgent: string, childIds: string[], parentLease?: object): Promise<SubagentResult[]> {
     const ids = this.validateOwnedIds(parentAgent, childIds);
+    if (parentLease !== undefined) {
+      for (const id of ids) this.parentPromotions.get(id)?.(parentLease);
+    }
     return Promise.all(ids.map(async (id) => {
       const execution = this.executions.get(id);
       if (execution) return execution;
@@ -200,7 +218,7 @@ export class SubagentManager {
 
   async cancelParent(parentAgent: string): Promise<number> {
     const ids = this.list()
-      .filter((run) => run.parentAgent === parentAgent && (run.status === "queued" || run.status === "running"))
+      .filter((run) => run.parentAgent === parentAgent && this.isActive(run.status))
       .map((run) => run.id);
     for (const id of ids) this.update(id, { status: "cancelled", error: "Cancelled with parent agent." });
     await Promise.all(ids.map((id) => this.active.get(id)?.session.abort().catch(() => {})));
@@ -209,14 +227,14 @@ export class SubagentManager {
 
   async cancel(childId: string, reason = "Subagent cancelled."): Promise<boolean> {
     const status = this.statuses.get(childId);
-    if (!status || (status.status !== "queued" && status.status !== "running")) return false;
+    if (!status || !this.isActive(status.status)) return false;
     this.update(childId, { status: "cancelled", error: reason });
     await this.active.get(childId)?.session.abort().catch(() => {});
     return true;
   }
 
   async cancelAll(): Promise<number> {
-    const ids = this.list().filter((run) => run.status === "queued" || run.status === "running").map((run) => run.id);
+    const ids = this.list().filter((run) => this.isActive(run.status)).map((run) => run.id);
     for (const id of ids) this.update(id, { status: "cancelled", error: "Session interrupted." });
     await Promise.all(ids.map((id) => this.active.get(id)?.session.abort().catch(() => {})));
     return ids.length;
@@ -239,6 +257,9 @@ export class SubagentManager {
       if (task.task.length > 16_000) throw new Error("subagent task exceeds 16000 characters");
       if (!task.profile?.trim()) throw new Error("each subagent task requires a profile");
       if ((task.inputs?.length ?? 0) > 32) throw new Error("a subagent task may have at most 32 inputs");
+      if (task.workspaceMode && task.workspaceMode !== "isolated" && task.workspaceMode !== "shared") {
+        throw new Error(`invalid subagent workspace mode: ${task.workspaceMode}`);
+      }
       if (task.name?.trim()) {
         const key = task.name.trim().toLowerCase();
         if (names.has(key)) throw new Error(`duplicate subagent task name: ${task.name}`);
@@ -263,7 +284,7 @@ export class SubagentManager {
 
   private async prepareBatch(args: {
     parentAgent: string; rootRunId: string | null; context?: string; tasks: SubagentTask[];
-  }): Promise<PreparedSubagentRun[]> {
+  }, allowParentBorrow: boolean, allowParentPromotion = false): Promise<PreparedSubagentRun[]> {
     if ((args.context?.length ?? 0) > 32_000) throw new Error("subagent context exceeds 32000 characters");
     this.validateBatch(args.tasks);
     const profiles = await Promise.all(args.tasks.map(async (task) => {
@@ -284,10 +305,18 @@ export class SubagentManager {
       };
       this.statuses.set(childId, status);
       this.emit(status);
+      let parentPromotion: Promise<object> | undefined;
+      if (allowParentPromotion) {
+        parentPromotion = new Promise<object>((resolvePromotion) => {
+          this.parentPromotions.set(childId, resolvePromotion);
+        });
+      }
       return {
         childId, status, parentAgent: args.parentAgent,
         rootRunId: args.rootRunId, context: args.context, task, profile,
-        borrowParent: index === 0,
+        borrowParent: allowParentBorrow && index === 0,
+        allowNestedBorrow: allowParentBorrow,
+        parentPromotion,
       };
     });
   }
@@ -298,6 +327,11 @@ export class SubagentManager {
     const execution = this.runOne(run).then((result) => {
       this.results.set(run.childId, result);
       return result;
+    }).finally(() => {
+      this.parentPromotions.delete(run.childId);
+      if (this.executions.get(run.childId) === execution) {
+        this.executions.delete(run.childId);
+      }
     });
     this.executions.set(run.childId, execution);
     return execution;
@@ -306,7 +340,12 @@ export class SubagentManager {
   private async runOne(args: PreparedSubagentRun): Promise<SubagentResult> {
     const childId = args.childId;
     const base = join(this.opts.stateDir, "subagents", childId);
-    const cwd = join(base, "workspace");
+    const workspaceMode = args.task.workspaceMode ?? "shared";
+    const sharedWorkspace = workspaceMode === "shared";
+    const scratchDir = sharedWorkspace
+      ? join(this.opts.workspaceDir, ".subagent-scratch", childId)
+      : join(base, "workspace");
+    const cwd = sharedWorkspace ? this.opts.workspaceDir : scratchDir;
     const historyPath = join(base, "history.jsonl");
     const started = Date.now();
     let session: IAgentSession | undefined;
@@ -318,9 +357,12 @@ export class SubagentManager {
     try {
       release = await this.semaphore.acquire();
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled before start");
-      this.update(childId, { status: "running", startedAt: new Date(started).toISOString() });
-      await mkdir(cwd, { recursive: true });
-      const inputs = await this.materializeInputs(cwd, args.task.inputs ?? []);
+      await Promise.all([mkdir(cwd, { recursive: true }), mkdir(scratchDir, { recursive: true })]);
+      const inputs = await this.materializeInputs(
+        sharedWorkspace ? scratchDir : cwd,
+        args.task.inputs ?? [],
+        cwd,
+      );
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled before session creation");
       const submitTool = this.submitTool(cwd, (value) => { submitted = value; });
       session = await this.opts.createChildSession({ childId, parentAgent: args.parentAgent, profile: args.profile, cwd, historyPath, submitTool });
@@ -330,7 +372,13 @@ export class SubagentManager {
         const u = this.usageFromEvent(event);
         if (u) addUsage(usage, u);
       });
-      const prompt = this.renderPrompt(args.task.task, args.context, inputs);
+      const prompt = this.renderPrompt(
+        args.task.task,
+        args.context,
+        inputs,
+        workspaceMode,
+        relative(cwd, scratchDir).split(sep).join("/") || ".",
+      );
       const timeout = args.profile.timeoutMs ?? this.timeoutMs;
       const run = async () => {
         await session!.prompt(prompt);
@@ -338,25 +386,35 @@ export class SubagentManager {
           await session!.prompt("You have not submitted a result. Call submit_result now with the best complete result available.");
         }
       };
-      let timer: ReturnType<typeof setTimeout> | undefined;
-      try {
-        await Promise.race([
-          this.opts.runWithProviderCapacity(run, args.borrowParent),
-          new Promise<never>((_, reject) => {
-            timer = setTimeout(() => { timedOut = true; reject(new Error(`subagent timed out after ${timeout}ms`)); }, timeout);
-          }),
-        ]);
-      } finally {
-        if (timer) clearTimeout(timer);
-      }
+      this.update(childId, { status: "waiting_for_capacity" });
+      await this.opts.runWithProviderCapacity(async () => {
+        if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled before execution");
+        this.update(childId, { status: "running", startedAt: new Date().toISOString() });
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([
+            run(),
+            new Promise<never>((_, reject) => {
+              timer = setTimeout(() => { timedOut = true; reject(new Error(`subagent timed out after ${timeout}ms`)); }, timeout);
+            }),
+          ]);
+        } finally {
+          if (timer) clearTimeout(timer);
+        }
+      }, {
+        borrowParent: args.borrowParent,
+        allowNestedBorrow: args.allowNestedBorrow,
+        parentPromotion: args.parentPromotion,
+      });
       if (!submitted) throw new Error("subagent exited without calling submit_result");
       if (this.statuses.get(childId)?.status === "cancelled") throw new Error("subagent was cancelled");
-      const published = await this.publishArtifacts(childId, cwd, submitted.artifacts);
+      const published = await this.publishArtifacts(childId, cwd, submitted.artifacts, sharedWorkspace);
       const finished = Date.now();
-      const result: SubagentResult = { ...submitted, artifacts: published, childId, profile: args.profile.name, status: "succeeded", durationMs: finished - started, usage };
-      this.update(childId, { status: "succeeded", finishedAt: new Date(finished).toISOString(), durationMs: result.durationMs, resultSummary: submitted.summary, artifacts: published.map((item) => item.path) });
+      const finalStatus = submitted.outcome === "blocked" ? "blocked" : "succeeded";
+      const result: SubagentResult = { ...submitted, artifacts: published, childId, profile: args.profile.name, status: finalStatus, durationMs: finished - started, usage };
+      this.update(childId, { status: finalStatus, finishedAt: new Date(finished).toISOString(), durationMs: result.durationMs, resultSummary: submitted.summary, artifacts: published.map((item) => item.path) });
       this.opts.onUsage(childId, usage);
-      this.opts.onRunFinished({ childId, status: "ok", usage, startedAt: started, finishedAt: finished });
+      this.opts.onRunFinished({ childId, status: finalStatus === "succeeded" ? "ok" : "error", usage, startedAt: started, finishedAt: finished });
       return result;
     } catch (error) {
       const finished = Date.now();
@@ -373,7 +431,7 @@ export class SubagentManager {
         startedAt: started,
         finishedAt: finished,
       });
-      return { childId, profile: args.profile.name, status: finalStatus, summary: "", findings: [], artifacts: [], caveats: [], error: message, durationMs: finished - started, usage };
+      return { childId, profile: args.profile.name, status: finalStatus, outcome: "blocked", summary: "", findings: [], artifacts: [], caveats: [], inspectedPaths: [], commandsRun: [], error: message, durationMs: finished - started, usage };
     } finally {
       unsubscribe?.();
       if (session) session.dispose();
@@ -387,10 +445,13 @@ export class SubagentManager {
       childId: status.id,
       profile: status.profile,
       status: status.status,
+      outcome: status.status === "succeeded" ? "completed" : "blocked",
       summary: status.resultSummary ?? "",
       findings: [],
       artifacts: (status.artifacts ?? []).map((path) => ({ path })),
       caveats: status.status === "interrupted" ? ["The runtime restarted before this subagent completed."] : [],
+      inspectedPaths: [],
+      commandsRun: [],
       ...(status.error ? { error: status.error } : {}),
       durationMs: status.durationMs ?? 0,
       usage: emptyTokenUsage(),
@@ -405,17 +466,22 @@ export class SubagentManager {
       parameters: {
         type: "object",
         properties: {
+          outcome: { type: "string", enum: ["completed", "blocked"], description: "Use blocked when required inputs or checks were unavailable." },
           summary: { type: "string" },
           findings: { type: "array", items: { type: "string" } },
           artifacts: { type: "array", items: { type: "object", properties: { path: { type: "string" }, description: { type: "string" } }, required: ["path"] } },
           caveats: { type: "array", items: { type: "string" } },
+          inspected_paths: { type: "array", items: { type: "string" }, description: "Workspace or input paths actually inspected." },
+          commands_run: { type: "array", items: { type: "string" }, description: "Exact validation commands actually run." },
         },
-        required: ["summary"],
+        required: ["outcome", "summary"],
       },
       execute: async (params) => {
         if (called) return { content: [{ type: "text", text: "submit_result was already called" }], isError: true };
         const summary = String(params.summary ?? "").trim();
         if (!summary) return { content: [{ type: "text", text: "summary is required" }], isError: true };
+        const outcome = params.outcome === "completed" || params.outcome === "blocked" ? params.outcome : undefined;
+        if (!outcome) return { content: [{ type: "text", text: "outcome must be completed or blocked" }], isError: true };
         const artifactPaths = new Set<string>();
         const artifacts = Array.isArray(params.artifacts) ? params.artifacts.slice(0, 50).map((item) => {
           const record = item as Record<string, unknown>;
@@ -428,17 +494,24 @@ export class SubagentManager {
         }) : [];
         called = true;
         accept({
+          outcome,
           summary: summary.slice(0, 16_000),
           findings: Array.isArray(params.findings) ? params.findings.slice(0, 50).map((value) => String(value).slice(0, 4_000)) : [],
           artifacts,
           caveats: Array.isArray(params.caveats) ? params.caveats.slice(0, 20).map((value) => String(value).slice(0, 4_000)) : [],
+          inspectedPaths: Array.isArray(params.inspected_paths) ? params.inspected_paths.slice(0, 100).map((value) => String(value).slice(0, 2_000)) : [],
+          commandsRun: Array.isArray(params.commands_run) ? params.commands_run.slice(0, 100).map((value) => String(value).slice(0, 4_000)) : [],
         });
         return { content: [{ type: "text", text: "result submitted" }] };
       },
     };
   }
 
-  private async materializeInputs(cwd: string, inputs: SubagentInput[]): Promise<Array<{ alias: string; path: string; mode: string; source: string }>> {
+  private async materializeInputs(
+    materializeDir: string,
+    inputs: SubagentInput[],
+    childCwd = materializeDir,
+  ): Promise<Array<{ alias: string; path: string; mode: string; source: string }>> {
     const out: Array<{ alias: string; path: string; mode: string; source: string }> = [];
     const aliases = new Set<string>();
     for (const [index, input] of inputs.entries()) {
@@ -460,10 +533,13 @@ export class SubagentManager {
       if (mode === "copy") {
         const size = await this.treeSize(source, this.maxCopyBytes, actualRoot);
         if (size > this.maxCopyBytes) throw new Error(`input exceeds copy limit (${this.maxCopyBytes} bytes): ${input.path}`);
-        const dest = join(cwd, "inputs", alias);
-        await mkdir(join(cwd, "inputs"), { recursive: true });
+        const dest = join(materializeDir, "inputs", alias);
+        await mkdir(join(materializeDir, "inputs"), { recursive: true });
         await cp(source, dest, { recursive: true, dereference: false, errorOnExist: true });
-        out.push({ alias, path: relative(cwd, dest).split(sep).join("/"), mode, source: `${input.scope}:${input.path}` });
+        const path = isWithin(dest, childCwd)
+          ? relative(childCwd, dest).split(sep).join("/")
+          : await realpath(dest);
+        out.push({ alias, path, mode, source: `${input.scope}:${input.path}` });
       } else {
         out.push({ alias, path: await realpath(source), mode, source: `${input.scope}:${input.path}` });
       }
@@ -487,7 +563,12 @@ export class SubagentManager {
     return total;
   }
 
-  private async publishArtifacts(childId: string, cwd: string, artifacts: Array<{ path: string; description?: string }>): Promise<Array<{ path: string; description?: string }>> {
+  private async publishArtifacts(
+    childId: string,
+    cwd: string,
+    artifacts: Array<{ path: string; description?: string }>,
+    sharedWorkspace: boolean,
+  ): Promise<Array<{ path: string; description?: string }>> {
     const published: Array<{ path: string; description?: string }> = [];
     for (const artifact of artifacts) {
       const source = resolve(cwd, artifact.path);
@@ -497,6 +578,11 @@ export class SubagentManager {
       if (!isWithin(actualSource, actualCwd)) throw new Error(`artifact symlink escapes child workspace: ${artifact.path}`);
       await this.assertTreeConfined(source, actualCwd);
       const rel = artifact.path.split(/[\\/]+/).filter((part) => part && part !== ".").join("/");
+      if (sharedWorkspace) {
+        const workspaceRel = relative(actualCwd, actualSource).split(sep).join("/");
+        published.push({ path: workspaceRel, ...(artifact.description ? { description: artifact.description } : {}) });
+        continue;
+      }
       const destRel = `subagent-results/${childId}/${rel}`;
       const dest = join(this.opts.workspaceDir, ...destRel.split("/"));
       await mkdir(dirname(dest), { recursive: true });
@@ -516,13 +602,25 @@ export class SubagentManager {
     for (const entry of await readdir(path)) await this.assertTreeConfined(join(path, entry), allowedRoot);
   }
 
-  private renderPrompt(task: string, context: string | undefined, inputs: Array<{ alias: string; path: string; mode: string; source: string }>): string {
+  private renderPrompt(
+    task: string,
+    context: string | undefined,
+    inputs: Array<{ alias: string; path: string; mode: string; source: string }>,
+    workspaceMode: "isolated" | "shared",
+    scratchDir: string,
+  ): string {
     return [
       "<subagent_task>", task.trim(), "</subagent_task>",
+      `<workspace_mode>${workspaceMode}</workspace_mode>`,
+      `<scratch_dir>${scratchDir}</scratch_dir>`,
       context?.trim() ? `<context>\n${context.trim()}\n</context>` : "",
       `<inputs>\n${inputs.length ? JSON.stringify(inputs, null, 2) : "No file inputs were provided."}\n</inputs>`,
       "Complete only this task, then call submit_result.",
     ].filter(Boolean).join("\n\n");
+  }
+
+  private isActive(status: SubagentStatus["status"]): boolean {
+    return status === "queued" || status === "waiting_for_capacity" || status === "running";
   }
 
   private usageFromEvent(event: PiAgentEvent): Partial<TokenUsage> | undefined {
@@ -556,4 +654,3 @@ export class SubagentManager {
     return this.writeChain;
   }
 }
-

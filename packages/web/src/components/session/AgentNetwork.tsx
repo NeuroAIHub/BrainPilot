@@ -526,7 +526,7 @@ export function AgentNetwork({
                   <span>{child.parentAgent} → {child.profile}</span>
                   <span>{child.status}{child.durationMs !== undefined ? ` · ${(child.durationMs / 1000).toFixed(1)}s` : ""}</span>
                   {child.artifacts?.length ? <span>{t("network.subagents.artifacts", { count: child.artifacts.length })}</span> : null}
-                  {child.status === "queued" || child.status === "running" ? (
+                  {child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running" ? (
                     <button
                       type="button"
                       className="agent-network__subagent-stop"

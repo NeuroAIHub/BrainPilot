@@ -6,6 +6,7 @@ import {
   lstat,
   mkdir,
   mkdtemp,
+  readdir,
   readFile,
   readlink,
   rename,
@@ -26,11 +27,24 @@ import type {
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
 const MAX_SNAPSHOT_BYTES = 200 * 1024 * 1024;
+const MAX_SNAPSHOT_FILES = 10_000;
 const MAX_DIFF_BYTES = 1024 * 1024;
 const DEFAULT_GIT_TIMEOUT_MS = 30_000;
 const DEFAULT_MAX_REPOSITORY_BYTES = 2 * 1024 * 1024 * 1024;
+const DEFAULT_MAX_PROVENANCE_FILES = 1_000;
 const EMPTY_TREE = "4b825dc642cb6eb9a060e54bf8d69288fbee4904";
-const HARD_EXCLUDED_ROOTS = new Set([".attachments", ".truncated"]);
+const HARD_EXCLUDED_ROOTS = new Set([
+  ".attachments",
+  ".truncated",
+  ".subagent-scratch",
+  ".venv",
+  "venv",
+  "node_modules",
+  "__pycache__",
+  ".pytest_cache",
+  ".mypy_cache",
+  ".cache",
+]);
 
 type Skipped = TraceCheckpointSkippedFile;
 
@@ -263,9 +277,10 @@ export class WorkspaceCheckpointStore {
     return ((values.get("size") ?? 0) + (values.get("size-pack") ?? 0) + (values.get("size-garbage") ?? 0)) * 1024;
   }
 
-  private hardExcluded(path: string): boolean {
+  private hardExcludedPrefix(path: string): string | undefined {
     const parts = path.replace(/\/$/, "").split("/");
-    return parts.includes(".git") || HARD_EXCLUDED_ROOTS.has(parts[0] ?? "");
+    const index = parts.findIndex((part) => part === ".git" || HARD_EXCLUDED_ROOTS.has(part));
+    return index >= 0 ? `${parts.slice(0, index + 1).join("/")}/` : undefined;
   }
 
   private workspacePath(rawPath: string): string {
@@ -295,10 +310,15 @@ export class WorkspaceCheckpointStore {
     const eligible = eligibleOutput.stdout.toString("utf8").split("\0").filter(Boolean).sort();
     const ignored = ignoredOutput.stdout.toString("utf8").split("\0").filter(Boolean).sort();
     const skipped: Skipped[] = ignored.map((path) => ({ path, reason: "ignored" }));
+    const hardExcluded = new Set<string>();
     const candidates: Array<{ path: string; size: number }> = [];
     for (const path of eligible) {
-      if (this.hardExcluded(path)) {
-        skipped.push({ path, reason: "internal" });
+      const excludedPrefix = this.hardExcludedPrefix(path);
+      if (excludedPrefix) {
+        if (!hardExcluded.has(excludedPrefix)) {
+          hardExcluded.add(excludedPrefix);
+          skipped.push({ path: excludedPrefix, reason: "internal" });
+        }
         continue;
       }
       try {
@@ -333,6 +353,8 @@ export class WorkspaceCheckpointStore {
     for (const item of candidates) {
       if (item.size > MAX_FILE_BYTES) {
         skipped.push({ path: item.path, reason: "too_large", size: item.size });
+      } else if (selected.length >= MAX_SNAPSHOT_FILES) {
+        skipped.push({ path: item.path, reason: "total_limit", size: item.size });
       } else if (total + item.size > MAX_SNAPSHOT_BYTES) {
         skipped.push({ path: item.path, reason: "total_limit", size: item.size });
       } else {
@@ -414,15 +436,20 @@ export class WorkspaceCheckpointStore {
   }
 
   /** File-level Git evidence for binding one checkpoint to its GoT node. */
-  async provenance(id: string): Promise<CheckpointFileProvenance[] | undefined> {
+  async provenance(
+    id: string,
+    maxFiles = DEFAULT_MAX_PROVENANCE_FILES,
+  ): Promise<CheckpointFileProvenance[] | undefined> {
     const index = await this.index();
     const record = index.checkpoints[id];
     if (!record?.ref.commitId) return undefined;
     const base = record.ref.baseCheckpointId
       ? index.checkpoints[record.ref.baseCheckpointId]?.ref.commitId ?? EMPTY_TREE
       : EMPTY_TREE;
+    const limit = Math.max(0, Math.trunc(maxFiles));
     const changes = (await this.changesBetween(base, record.ref.commitId))
-      .filter((item) => !this.isSkipped(item.path, record.skipped));
+      .filter((item) => !this.isSkipped(item.path, record.skipped))
+      .slice(0, limit);
     return Promise.all(changes.map(async (change) => {
       const basePath = change.previousPath ?? change.path;
       const [baseBlobId, resultBlobId] = await Promise.all([
@@ -517,6 +544,30 @@ export class WorkspaceCheckpointStore {
 
   capture(sourceAgent?: string, kind: "trace" | "recovery" = "trace"): Promise<TraceCheckpointRef> {
     return this.exclusive(() => this.captureUnlocked(sourceAgent, kind));
+  }
+
+  /**
+   * Establish the initial workspace tree before an agent can mutate it. The
+   * first trace checkpoint then describes agent changes relative to this tree
+   * instead of attributing pre-existing inputs to the first trace event.
+   * Idempotent and serialized with ordinary captures.
+   */
+  ensureBaseline(sourceAgent = "system"): Promise<TraceCheckpointRef | undefined> {
+    return this.exclusive(async () => {
+      const index = await this.index();
+      if (index.headCheckpointId) return undefined;
+      // An empty workspace already has the empty Git tree as its correct
+      // implicit baseline. Avoid initializing a repository for the common
+      // chat-only case; files created later by the agent should be attributed
+      // to its first trace event.
+      try {
+        const entries = await readdir(this.workspaceDir);
+        if (!entries.some((path) => !this.hardExcludedPrefix(path))) return undefined;
+      } catch {
+        return undefined;
+      }
+      return this.captureUnlocked(sourceAgent, "baseline");
+    });
   }
 
   async refs(ids: string[]): Promise<TraceCheckpointRef[]> {

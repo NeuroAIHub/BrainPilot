@@ -20,10 +20,10 @@ import { resolveGatewayModel, resolveSessionModel, type PiProviderSdk } from "./
 import { makeTraceReminderExt } from "./extensions/trace-reminder.js";
 import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeTaskContextExt } from "./extensions/task-context.js";
-import { makeGoTContextExt } from "./extensions/got-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
 import { makeOpenAiToolSchemaCompatExt } from "./extensions/openai-tool-schema-compat.js";
+import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
 import {
   installBrainPilotRetryClassifier,
@@ -139,8 +139,8 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   if (params.renderTaskContext) {
     extensionFactories.push(makeTaskContextExt({ renderTasks: params.renderTaskContext }));
   }
-  if (params.renderGoTContext) {
-    extensionFactories.push(makeGoTContextExt({ renderContext: params.renderGoTContext }));
+  if (params.principalWorkflowGuard) {
+    extensionFactories.push(makePrincipalWorkflowGuardExt(params.principalWorkflowGuard));
   }
   // #346: rewrite logical /workspace (and /data, …) onto durable volume roots
   // BEFORE other path guards run, so subsequent handlers see post-rewrite paths.
@@ -209,14 +209,33 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
 };
 
 type BashDefinition = ReturnType<PiSdk["createBashToolDefinition"]>;
+const MAX_FOREGROUND_BASH_TIMEOUT_SECONDS = 300;
 
-/** Preserve Pi's official Bash behavior while adding tool-local cancellation. */
+/** Preserve Pi's official Bash behavior while requiring a bounded foreground command. */
 export function wrapCancellableBash(
   officialBash: BashDefinition,
   controllers: Map<string, AbortController>,
 ): BashDefinition {
+  const parameters = officialBash.parameters as Record<string, unknown> | undefined;
+  const properties = parameters?.properties as Record<string, unknown> | undefined;
+  const required = Array.isArray(parameters?.required)
+    ? parameters.required.filter((name): name is string => typeof name === "string")
+    : ["command"];
   return {
     ...officialBash,
+    parameters: {
+      ...(parameters ?? { type: "object" }),
+      properties: {
+        ...(properties ?? { command: { type: "string" } }),
+        timeout: {
+          type: "number",
+          minimum: 1,
+          maximum: MAX_FOREGROUND_BASH_TIMEOUT_SECONDS,
+          description: "Required foreground command deadline in seconds (maximum 300).",
+        },
+      },
+      required: [...new Set([...required, "timeout"])],
+    },
     async execute(
       toolCallId: string,
       args: Record<string, unknown>,
@@ -224,6 +243,17 @@ export function wrapCancellableBash(
       onUpdate?: (update: unknown) => void,
       context?: unknown,
     ): Promise<unknown> {
+      if (args.timeout === undefined) {
+        throw new Error("bash timeout is required; provide a deadline between 1 and 300 seconds");
+      }
+      if (
+        typeof args.timeout !== "number"
+        || !Number.isFinite(args.timeout)
+        || args.timeout < 1
+        || args.timeout > MAX_FOREGROUND_BASH_TIMEOUT_SECONDS
+      ) {
+        throw new Error("bash timeout must be between 1 and 300 seconds");
+      }
       const controller = new AbortController();
       controllers.set(toolCallId, controller);
       try {

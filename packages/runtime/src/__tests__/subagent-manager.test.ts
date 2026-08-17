@@ -9,7 +9,7 @@ import type { IAgentSession, PiAgentEvent, SystemTool } from "../types.js";
 const roots: string[] = [];
 afterEach(async () => Promise.all(roots.splice(0).map((root) => rm(root, { recursive: true, force: true }))));
 
-async function fixture(opts: { submit?: boolean; gate?: () => Promise<void>; timeoutMs?: number; maxConcurrency?: number; maxCopyBytes?: number; artifactPath?: string } = {}) {
+async function fixture(opts: { submit?: boolean; outcome?: "completed" | "blocked"; gate?: () => Promise<void>; capacityGate?: () => Promise<void>; timeoutMs?: number; maxConcurrency?: number; maxCopyBytes?: number; artifactPath?: string } = {}) {
   const root = await mkdtemp(join(tmpdir(), "bp-subagent-"));
   roots.push(root);
   const workspace = join(root, "workspaces", "s1");
@@ -17,6 +17,7 @@ async function fixture(opts: { submit?: boolean; gate?: () => Promise<void>; tim
   const data = join(root, "data");
   await Promise.all([mkdir(workspace, { recursive: true }), mkdir(state, { recursive: true }), mkdir(data, { recursive: true })]);
   const seen: Array<{ id: string; cwd: string; historyPath: string; prompt: string }> = [];
+  const providerBorrowRequests: boolean[] = [];
   let active = 0;
   let maxActive = 0;
   const manager = new SubagentManager({
@@ -40,7 +41,7 @@ async function fixture(opts: { submit?: boolean; gate?: () => Promise<void>; tim
           if (opts.submit !== false && !prompt.startsWith("You have not")) {
             const artifactPath = opts.artifactPath ?? `${childId}.txt`;
             if (!artifactPath.startsWith("..")) await writeFile(join(cwd, artifactPath), childId, "utf8");
-            await submitTool.execute({ summary: `done ${childId}`, findings: ["ok"], artifacts: [{ path: artifactPath }] });
+            await submitTool.execute({ outcome: opts.outcome ?? "completed", summary: `done ${childId}`, findings: ["ok"], artifacts: [{ path: artifactPath }], inspected_paths: [artifactPath], commands_run: [] });
             listeners.forEach((listener) => listener({ type: "message_end", message: { role: "assistant", usage: { input: 3, output: 2 } } }));
           }
           active--;
@@ -50,7 +51,11 @@ async function fixture(opts: { submit?: boolean; gate?: () => Promise<void>; tim
       };
       return session;
     },
-    runWithProviderCapacity: (fn) => fn(),
+    runWithProviderCapacity: async (fn, capacity) => {
+      providerBorrowRequests.push(capacity.borrowParent);
+      await opts.capacityGate?.();
+      return fn();
+    },
     onUsage: () => {},
     onRunFinished: () => {},
     onChanged: () => {},
@@ -58,10 +63,22 @@ async function fixture(opts: { submit?: boolean; gate?: () => Promise<void>; tim
     timeoutMs: opts.timeoutMs ?? 2_000,
     maxCopyBytes: opts.maxCopyBytes,
   });
-  return { root, workspace, state, data, manager, seen, maxActive: () => maxActive };
+  return { root, workspace, state, data, manager, seen, providerBorrowRequests, maxActive: () => maxActive };
 }
 
 describe("SubagentManager", () => {
+  it("releases a settled execution while preserving its completed result", async () => {
+    const f = await fixture();
+    const [result] = await f.manager.runBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-cleanup",
+      tasks: [{ name: "cleanup", profile: "literature-scout", task: "finish once" }],
+    });
+
+    expect((f.manager as unknown as { executions: Map<string, Promise<unknown>> }).executions.size).toBe(0);
+    await expect(f.manager.waitFor("librarian", [result.childId])).resolves.toEqual([result]);
+  });
+
   it("starts a background batch, exposes live status, and waits by child id", async () => {
     let release!: () => void;
     const gate = new Promise<void>((resolve) => { release = resolve; });
@@ -72,7 +89,7 @@ describe("SubagentManager", () => {
       tasks: [{ name: "background", profile: "literature-scout", task: "search later" }],
     });
     expect(started).toHaveLength(1);
-    expect(["queued", "running"]).toContain(started[0]!.status);
+    expect(["queued", "waiting_for_capacity", "running"]).toContain(started[0]!.status);
     expect(f.manager.listForParent("librarian", [started[0]!.id])).toHaveLength(1);
 
     const waiting = f.manager.waitFor("librarian", [started[0]!.id]);
@@ -83,6 +100,23 @@ describe("SubagentManager", () => {
     await expect(f.manager.waitFor("engineer", [started[0]!.id])).rejects.toThrow("not owned");
   });
 
+  it("borrows parent provider capacity only for a synchronous batch", async () => {
+    const f = await fixture();
+    await f.manager.runBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-sync-capacity",
+      tasks: [{ name: "sync", profile: "literature-scout", task: "run synchronously" }],
+    });
+    const [background] = await f.manager.startBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-background-capacity",
+      tasks: [{ name: "background", profile: "literature-scout", task: "run in background" }],
+    });
+    await f.manager.waitFor("librarian", [background!.id]);
+
+    expect(f.providerBorrowRequests).toEqual([true, false]);
+  });
+
   it("runs same-profile children with isolated histories/workspaces and stable result order", async () => {
     const f = await fixture({ gate: () => new Promise((resolve) => setTimeout(resolve, 10)) });
     const results = await f.manager.runBatch({
@@ -90,8 +124,8 @@ describe("SubagentManager", () => {
       rootRunId: "run-1",
       context: "shared-only",
       tasks: [
-        { name: "a", profile: "literature-scout", task: "first" },
-        { name: "b", profile: "literature-scout", task: "second" },
+        { name: "a", profile: "literature-scout", task: "first", workspaceMode: "isolated" },
+        { name: "b", profile: "literature-scout", task: "second", workspaceMode: "isolated" },
       ],
     });
     expect(results.map((result) => result.childId.split("-")[0])).toEqual(["a", "b"]);
@@ -107,13 +141,35 @@ describe("SubagentManager", () => {
     }
   });
 
+  it("defaults children to the shared workspace with a private scratch directory", async () => {
+    const f = await fixture({ artifactPath: "shared-report.md" });
+    const [result] = await f.manager.runBatch({
+      parentAgent: "librarian",
+      rootRunId: "run-shared",
+      tasks: [{
+        name: "shared-report",
+        profile: "literature-scout",
+        task: "write the report",
+      }],
+    });
+
+    expect(f.seen[0]!.cwd).toBe(f.workspace);
+    expect(f.seen[0]!.prompt).toContain("<workspace_mode>shared</workspace_mode>");
+    expect(f.seen[0]!.prompt).toMatch(/<scratch_dir>\.subagent-scratch\/shared-report-[^/]+<\/scratch_dir>/);
+    expect(result).toMatchObject({
+      status: "succeeded",
+      artifacts: [{ path: "shared-report.md" }],
+    });
+    expect(await readFile(join(f.workspace, "shared-report.md"), "utf8")).toBe(result.childId);
+  });
+
   it("copies explicit workspace inputs and rejects traversal before session creation", async () => {
     const f = await fixture();
     await writeFile(join(f.workspace, "paper.txt"), "evidence", "utf8");
     await f.manager.runBatch({
       parentAgent: "librarian",
       rootRunId: null,
-      tasks: [{ profile: "evidence-extractor", task: "extract", inputs: [{ scope: "workspace", path: "paper.txt" }] }],
+      tasks: [{ profile: "evidence-extractor", task: "extract", workspaceMode: "isolated", inputs: [{ scope: "workspace", path: "paper.txt" }] }],
     });
     expect(await readFile(join(f.seen[0]!.cwd, "inputs", "paper.txt"), "utf8")).toBe("evidence");
     await expect(f.manager.runBatch({
@@ -186,6 +242,25 @@ describe("SubagentManager", () => {
     expect(result).toMatchObject({ status: "timed_out", error: expect.stringContaining("timed out") });
   });
 
+  it("starts the execution timeout after provider capacity is acquired", async () => {
+    const f = await fixture({ capacityGate: () => new Promise((resolve) => setTimeout(resolve, 40)), timeoutMs: 20 });
+    const [result] = await f.manager.runBatch({
+      parentAgent: "engineer", rootRunId: null,
+      tasks: [{ profile: "code-runner", task: "wait then finish" }],
+    });
+    expect(result).toMatchObject({ status: "succeeded", outcome: "completed" });
+  });
+
+  it("preserves a submitted blocked outcome as a non-success terminal state", async () => {
+    const f = await fixture({ outcome: "blocked" });
+    const [result] = await f.manager.runBatch({
+      parentAgent: "auditor", rootRunId: null,
+      tasks: [{ profile: "code-reviewer", task: "inspect missing evidence" }],
+    });
+    expect(result).toMatchObject({ status: "blocked", outcome: "blocked" });
+    expect(f.manager.list()[0]).toMatchObject({ status: "blocked", resultSummary: expect.stringContaining("done") });
+  });
+
   it("restores unfinished persisted runs as interrupted without rerunning them", async () => {
     const f = await fixture();
     const runsDir = join(f.state, "subagents");
@@ -240,4 +315,3 @@ describe("SubagentManager", () => {
     expect(results.map((result) => result.status)).toEqual(["succeeded", "cancelled"]);
   });
 });
-

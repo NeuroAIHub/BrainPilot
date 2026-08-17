@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create Data Inventory"
+  short_description: "Create a canonical inventory of research data"
+  default_prompt: "Use $create-data-inventory to inspect the available research data and write the canonical inventory."

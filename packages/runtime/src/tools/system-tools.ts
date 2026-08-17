@@ -12,7 +12,6 @@ import type { SubagentResult, SubagentTask } from "../subagent-manager.js";
 import type {
   GraphOfTrace,
   TraceArtifactInput,
-  TraceAuditTarget,
   TraceCausalParentCandidate,
 } from "../trace.js";
 import type { WorkspaceCheckpointStore } from "../workspace-checkpoints.js";
@@ -66,8 +65,6 @@ export interface ToolDeps {
   listSubagentProfiles?: () => Promise<Array<{ name: string; description: string; builtinTools: string[]; systemTools: string[]; mcp: boolean; modelId?: string; timeoutMs?: number }>>;
   /** Current host-owned record while the Trace Agent processes one trace event. */
   currentTraceRecord?: () => TraceNodeRecord | undefined;
-  /** Host-bound immutable target for one asynchronous Auditor turn. */
-  currentTraceAuditTarget?: () => TraceAuditTarget | undefined;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -76,6 +73,8 @@ function ok(text: string): { content: [{ type: "text"; text: string }] } {
 
 /** Detail/read tools are deliberately bounded so one graph query cannot eat a turn. */
 const TRACE_DETAIL_MAX_TOKENS = 1500;
+/** File samples sent to the Trace model; complete evidence stays in the checkpoint store. */
+const TRACE_PROMPT_PROVENANCE_FILES = 25;
 
 function cappedJson(value: unknown, maxTokens = TRACE_DETAIL_MAX_TOKENS): string {
   const text = JSON.stringify(value, null, 2);
@@ -153,9 +152,6 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       if (!to || !content) return { ...ok("to and content are required"), isError: true };
       if (to === deps.fromAgent) return { ...ok("cannot dispatch a task to yourself"), isError: true };
       if (to === "trace") return { ...ok("cannot dispatch user tasks to the trace agent"), isError: true };
-      if (deps.fromAgent === "auditor" && deps.currentTraceAuditTarget?.()) {
-        return { ...ok("A bound GoT audit is a single-turn review and cannot delegate tasks"), isError: true };
-      }
       if (deps.fromAgent === "auditor" && to === "principal") {
         return { ...ok("Auditor reports are user-gated and cannot be sent directly to PI"), isError: true };
       }
@@ -194,7 +190,7 @@ export function createCompleteTaskTool(deps: ToolDeps): SystemTool {
       try {
         const task = await deps.completeTask(taskId, reply);
         deps.wakeAgent(task.created_by);
-        return ok(`task ${task.id} completed for ${task.created_by}`);
+        return ok(`task ${task.id} replied to ${task.created_by}`);
       } catch (err) {
         return { ...ok(`cannot complete task: ${(err as Error).message}`), isError: true };
       }
@@ -302,7 +298,7 @@ export function createSpawnSubagentTool(deps: ToolDeps): SystemTool {
   return {
     name: "spawn_subagent",
     description:
-      "Run 1-4 context-isolated leaf subagents in parallel. By default this waits for structured results; " +
+      "Run 1-4 context-isolated leaf subagents in parallel in the shared session workspace. By default this waits for structured results; " +
       "set wait=false to receive child ids immediately, continue other work, then use wait_subagent or get_subagent. " +
       "Pass all required background explicitly; children do not inherit your conversation.",
     parameters: {
@@ -318,6 +314,11 @@ export function createSpawnSubagentTool(deps: ToolDeps): SystemTool {
               name: { type: "string" },
               profile: { type: "string", description: "Profile name from list_subagent_profiles." },
               task: { type: "string" },
+              workspaceMode: {
+                type: "string",
+                enum: ["isolated", "shared"],
+                description: "Run directly in the shared session workspace or in isolated scratch space. Defaults to shared.",
+              },
               inputs: {
                 type: "array",
                 items: {
@@ -451,7 +452,10 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       const outputs = artifactInputs(params.artifact_outputs);
       const checkpoint = await deps.checkpoints?.capture(deps.fromAgent);
       const gitEvidence = checkpoint
-        ? await deps.checkpoints?.provenance(checkpoint.id).catch(() => undefined)
+        ? await deps.checkpoints?.provenance(
+            checkpoint.id,
+            TRACE_PROMPT_PROVENANCE_FILES,
+          ).catch(() => undefined)
         : undefined;
       const record: TraceNodeRecord = {
         sourceAgent: deps.fromAgent,
@@ -465,7 +469,16 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       if (checkpoint) lines.push(`Checkpoint-ID: ${checkpoint.id}`);
       if (inputs.length) lines.push(`Artifact-Inputs: ${JSON.stringify(inputs)}`);
       if (outputs.length) lines.push(`Artifact-Outputs: ${JSON.stringify(outputs)}`);
-      if (gitEvidence?.length) lines.push(`Git-Evidence: ${JSON.stringify(gitEvidence)}`);
+      if (checkpoint) {
+        const totalFiles = checkpoint.stats?.files ?? gitEvidence?.length ?? 0;
+        lines.push(`Git-Evidence-Summary: ${cappedJson({
+          checkpointId: checkpoint.id,
+          stats: checkpoint.stats,
+          skippedCount: checkpoint.skippedCount,
+          sample: gitEvidence ?? [],
+          truncated: totalFiles > (gitEvidence?.length ?? 0),
+        }, 1_000)}`);
+      }
       lines.push("", "Artifacts:");
       if (artifacts.length === 0) {
         lines.push("(none)");
@@ -515,7 +528,7 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
         parent_candidates: {
           type: "array",
           items: { type: "object", properties: { node_id: { type: "string" }, reason: { type: "string" } }, required: ["node_id", "reason"] },
-          description: "Direct epistemic or computational prerequisites actually consumed by this node. Chronology, delegation, and topic similarity are insufficient. Trace proposes; Auditor confirms.",
+          description: "Direct epistemic or computational prerequisites actually consumed by this node. Structurally valid Trace relations are recorded immediately; chronology, delegation, and topic similarity are insufficient.",
         },
         artifact_inputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, producer_node_id: { type: "string" } }, required: ["path"] } },
         artifact_outputs: { type: "array", items: { type: "object", properties: { path: { type: "string" }, type: { type: "string" }, blob_hash: { type: "string" } }, required: ["path"] } },
@@ -551,7 +564,7 @@ export function createTraceNodeTool(deps: ToolDeps): SystemTool {
         records: record ? [record] : [],
         causalParents: parsedParents.candidates.map((candidate) => ({
           nodeId: candidate.nodeId,
-          conclusion: "candidate",
+          conclusion: "confirmed",
           origin: "trace",
           reason: candidate.reason,
         })),
@@ -748,103 +761,12 @@ export function createGetTraceDiffTool(deps: ToolDeps): SystemTool {
   };
 }
 
-/** Auditor-only discovery surface for outstanding node and parent reviews. */
-export function createListPendingTraceReviewsTool(deps: ToolDeps): SystemTool {
-  return {
-    name: "list_pending_trace_reviews",
-    description:
-      "List active Trace nodes whose node review is unreviewed and causal parent candidates that still need a conclusion. " +
-      "This is read-only and does not bind or change the current audit target.",
-    parameters: {
-      type: "object",
-      properties: {
-        limit: { type: "number", minimum: 1, maximum: 100, description: "Maximum combined pending targets to return." },
-      },
-    },
-    execute: async (params) => {
-      const limit = typeof params.limit === "number"
-        ? Math.max(1, Math.min(100, Math.trunc(params.limit)))
-        : 50;
-      const targets = deps.trace.listPendingAuditTargets();
-      const selected = targets.slice(0, limit);
-      const nodes: Array<Record<string, unknown>> = [];
-      const parentRelations: Array<Record<string, unknown>> = [];
-      for (const target of selected) {
-        const node = deps.trace.getNodeV2(target.nodeId);
-        if (!node) continue;
-        if (!target.parentNodeId) {
-          nodes.push({
-            nodeId: node.id,
-            title: node.title,
-            updatedAt: node.updatedAt,
-            reviewConclusion: node.reviewConclusion,
-            ...(node.confidence ? { confidence: node.confidence } : {}),
-          });
-          continue;
-        }
-        const parent = deps.trace.getNodeV2(target.parentNodeId);
-        const relation = node.parents.find((item) => item.nodeId === target.parentNodeId);
-        parentRelations.push({
-          nodeId: node.id,
-          title: node.title,
-          parentNodeId: target.parentNodeId,
-          ...(parent ? { parentTitle: parent.title } : {}),
-          conclusion: relation?.conclusion ?? "candidate",
-          ...(relation?.reason ? { reason: relation.reason } : {}),
-        });
-      }
-      return ok(cappedJson({
-        nodes,
-        parentRelations,
-        total: targets.length,
-        returned: selected.length,
-        truncated: targets.length > selected.length,
-      }));
-    },
-  };
-}
-
 export function createSearchTraceTool(deps: ToolDeps): SystemTool {
   return {
     name: "search_trace",
     description: "Search concise agent reports and node metadata in Trace; returns a bounded set of matching details.",
     parameters: { type: "object", properties: { query: { type: "string" }, limit: { type: "number", minimum: 1, maximum: 100 } }, required: ["query"] },
     execute: async (params) => ok(cappedJson(deps.trace.search(String(params.query ?? ""), typeof params.limit === "number" ? params.limit : 12))),
-  };
-}
-
-/** Auditor-only mutation surface: append one bounded node/parent conclusion. */
-export function createEditTraceReviewTool(deps: ToolDeps): SystemTool {
-  return {
-    name: "edit_trace_review",
-    description: "Review one Trace node or one proposed causal parent. Only conclusion and reason may be changed.",
-    parameters: {
-      type: "object",
-      properties: {
-        conclusion: { type: "string", enum: ["approve", "reject", "uncertain"] },
-        reason: { type: "string" },
-      },
-      required: ["conclusion", "reason"],
-    },
-    execute: async (params) => {
-      const conclusion = params.conclusion;
-      if (conclusion !== "approve" && conclusion !== "reject" && conclusion !== "uncertain") {
-        return { ...ok("invalid review conclusion"), isError: true };
-      }
-      const reason = String(params.reason ?? "").trim();
-      if (!reason) return { ...ok("a non-empty review reason is required"), isError: true };
-      const target = deps.currentTraceAuditTarget?.();
-      if (!target) return { ...ok("no host-bound trace audit target for this turn"), isError: true };
-      const success = deps.trace.review(
-        target.nodeId,
-        conclusion,
-        reason,
-        { type: "agent", name: deps.fromAgent },
-        target.parentNodeId,
-        target.fingerprint,
-      );
-      return success ? ok("trace review recorded") : { ...ok("review rejected: target changed, missing, revoked, or cyclic; it will be re-queued"), isError: true };
-    },
   };
 }
 
@@ -868,10 +790,8 @@ export function createSubmitAuditReportTool(deps: ToolDeps): SystemTool {
       const summary = String(params.summary ?? "").trim();
       const reportBody = String(params.report ?? "").trim();
       if (!summary || !reportBody) return { ...ok("summary and report are required"), isError: true };
-      const target = deps.currentTraceAuditTarget?.();
       const report = deps.trace.submitAuditReport({
-        kind: target ? "trace" : "deliverable",
-        ...(target ? { target: { nodeId: target.nodeId, ...(target.parentNodeId ? { parentNodeId: target.parentNodeId } : {}) } } : {}),
+        kind: "deliverable",
         risk: params.risk,
         summary,
         report: reportBody,
@@ -912,12 +832,10 @@ export function allSystemTools(
     createGetTraceNodeTool(deps),
     createGetTraceNeighborhoodTool(deps),
     createGetTraceDiffTool(deps),
-    createListPendingTraceReviewsTool(deps),
     // Temporarily disabled: the current substring matcher is not reliable
     // enough to expose as an Agent tool. Keep the implementation above so it
     // can be re-enabled after tokenized/ranked search is implemented.
     // createSearchTraceTool(deps),
-    createEditTraceReviewTool(deps),
     createSubmitAuditReportTool(deps),
   ];
   if (deps.spawnSubagents) {
@@ -991,8 +909,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
-  // Auditor gets bounded Trace readers, review-only mutation tools, and
-  // isolated leaf workers. It cannot mutate ordinary Trace nodes.
+  // Auditor reviews scientific deliverables and has no GoT responsibilities.
   auditor: [
     "complete_task",
     "spawn_subagent",
@@ -1000,12 +917,6 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_subagent",
     "cancel_subagent",
     "list_subagent_profiles",
-    "list_pending_trace_reviews",
-    "get_trace_node",
-    "get_trace_neighborhood",
-    "get_trace_diff",
-    // "search_trace", // temporarily disabled; see allSystemTools above
-    "edit_trace_review",
     "skill_search",
     "get_domain_knowledge_local",
     "search_papers_local",
@@ -1063,12 +974,10 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
   librarian: ["read", "write", "grep", "find", "glob"],
-  // Auditor: read-only inspection. Deliverable audit findings return to PI
-  // through complete_task; no separate report tool or workspace write access.
-  // `bash` is included for
-  // grep/awk/jq/diff style filesystem inspection — its read-only discipline is
-  // enforced by the auditor persona, not by the tool whitelist.
-  auditor: ["read", "grep", "find", "glob", "bash"],
+  // Auditor evidence inspection remains read-only. `write` is limited by the
+  // plugin contract to creating versioned reports under docs/audits/; there is
+  // no general edit permission or separate report-submission tool.
+  auditor: ["read", "write", "grep", "find", "glob", "bash"],
 };
 
 export function systemToolNamesForRole(role: AgentRole, agentName: string): string[] {

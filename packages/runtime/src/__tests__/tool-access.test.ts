@@ -32,7 +32,7 @@ function deps(name: string): ToolDeps {
     }),
     completeTask: async (taskId, reply) => ({
       id: taskId, seq: 1, created_by: "principal", assigned_to: name, content: "work",
-      status: "completed", reply, created_at: 1, completed_at: 2,
+      status: "replied", reply, created_at: 1, completed_at: 2,
     }),
     dispatchTrace: async () => {},
     ensureAgent: async () => {},
@@ -209,16 +209,11 @@ describe("tool access control (§9)", () => {
     );
   });
 
-  it("auditor gets bounded Trace readers and review-only mutation access", () => {
+  it("auditor reviews deliverables without GoT access", () => {
     const names = systemToolNamesForRole("expert", "auditor");
     expect(names.sort()).toEqual(
       [
         "complete_task",
-        "list_pending_trace_reviews",
-        "get_trace_node",
-        "get_trace_neighborhood",
-        "get_trace_diff",
-        "edit_trace_review",
         "skill_search",
         "get_domain_knowledge_local",
         "search_papers_local",
@@ -231,48 +226,19 @@ describe("tool access control (§9)", () => {
     );
     expect(names).not.toContain("record_trace");
     expect(names).not.toContain("get_trace_graph");
+    expect(names).not.toContain("get_trace_node");
+    expect(names).not.toContain("get_trace_diff");
+    expect(names).not.toContain("edit_trace_review");
     expect(names).not.toContain("create_trace_node");
     expect(names).not.toContain("create_agent");
     expect(names).not.toContain("destroy_agent");
   });
 
-  it("auditor builtins are read-only and separate report submission is disabled", () => {
+  it("auditor can create reports but cannot edit evidence or use a report tool", () => {
     const a = builtinToolNamesForRole("expert", "auditor");
-    expect(a).toEqual(expect.arrayContaining(["read", "grep", "find", "glob", "bash"]));
-    expect(a).not.toContain("write");
+    expect(a).toEqual(expect.arrayContaining(["read", "write", "grep", "find", "glob", "bash"]));
     expect(a).not.toContain("edit");
     expect(systemToolNamesForRole("expert", "auditor")).not.toContain("submit_audit_report");
-  });
-
-  it("lets Auditor list pending node and parent reviews without rebinding", async () => {
-    const d = deps("auditor");
-    const parent = d.trace.createNode({ title: "Evidence" });
-    const child = d.trace.createNode({ title: "Conclusion" });
-    d.trace.review(parent.id, "approve", "supported", { type: "agent", name: "auditor" });
-    d.trace.proposeCausalParent(child.id, parent.id, "Conclusion consumes the evidence.", { type: "agent", name: "trace" });
-
-    const tool = systemToolsForRole("expert", "auditor", d)
-      .find((item) => item.name === "list_pending_trace_reviews")!;
-    const text = (await tool.execute({})).content.map((item) => item.text).join("");
-    expect(text).toContain('"title": "Conclusion"');
-    expect(text).toContain('"parentTitle": "Evidence"');
-    expect(text).toContain('"conclusion": "candidate"');
-    expect(d.currentTraceAuditTarget).toBeUndefined();
-  });
-
-  it("binds Auditor targets in the Host without exposing report submission", async () => {
-    const d = deps("auditor");
-    const node = d.trace.createNode({ title: "Conclusion", confidence: "medium", confidenceReason: "One result file." });
-    const target = d.trace.listPendingAuditTargets()[0]!;
-    d.currentTraceAuditTarget = () => target;
-    const tools = new Map(systemToolsForRole("expert", "auditor", d).map((tool) => [tool.name, tool]));
-
-    expect((await tools.get("edit_trace_review")!.execute({ conclusion: "approve", reason: "The bound evidence supports this node." })).isError)
-      .not.toBe(true);
-    expect(d.trace.getNodeV2(node.id)?.reviewConclusion).toBe("approved");
-    expect(tools.has("submit_audit_report")).toBe(false);
-    expect(d.trace.getAuditReports()).toEqual([]);
-    expect(tools.has("dispatch_task")).toBe(false);
   });
 
   it("requires confidence and returns only a compact active graph to Trace", async () => {
@@ -373,7 +339,7 @@ describe("tool access control (§9)", () => {
     expect(graph.nodes.find((node) => node.id === parentId)?.primaryEpisodeId)
       .toBe(graph.nodes.find((node) => node.id === childId)?.primaryEpisodeId);
     expect(graph.nodes.find((node) => node.id === childId)?.parents).toEqual([
-      expect.objectContaining({ nodeId: parentId, conclusion: "candidate", origin: "trace" }),
+      expect.objectContaining({ nodeId: parentId, conclusion: "confirmed", origin: "trace" }),
     ]);
 
     const beforeNodes = graph.nodes.length;

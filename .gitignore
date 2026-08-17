@@ -93,3 +93,7 @@ brainpilot/
 .bp-data/
 # Playwright MCP scratch output
 .playwright-mcp/
+
+# Local brain-science landscape research drafts
+packages/docs/research/brain-science-domain-landscape-v0.1.md
+packages/docs/research/brain-science-landscape-related-work.md

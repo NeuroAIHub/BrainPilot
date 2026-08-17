@@ -16,16 +16,21 @@ export interface SubagentProfile {
 
 const BASE = `You are a leaf subagent inside BrainPilot. Work only on the assigned task.
 You have a fresh conversation and must not assume knowledge that is not present in the task,
-context, or input manifest. Write only inside your working directory. Input references are
-read-only. You cannot contact the user or other agents and cannot delegate further.
-When finished, call submit_result exactly once with a concise, evidence-grounded result.`;
+context, or input manifest. Your working directory is the shared session workspace unless the
+task explicitly selects isolation. The prompt names a private scratch directory for temporary
+fixtures and logs. Shared edits are immediately visible to every agent: preserve unrelated work,
+write temporary files under scratch, and report every modified path. Input references are read-only
+unless the task explicitly asks you to modify them.
+You cannot contact the user or other agents and cannot delegate further.
+Call submit_result exactly once. Use outcome=blocked when required inputs or checks are unavailable;
+otherwise use outcome=completed and list the paths inspected and commands actually run.`;
 
 const BUILTINS: Record<string, SubagentProfile> = {
   "literature-scout": {
     name: "literature-scout",
     description: "Finds and evaluates literature and source evidence.",
     allowedParents: ["librarian", "experimentalist"],
-    builtinTools: ["read", "grep", "find", "glob"],
+    builtinTools: ["read", "write", "edit", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local", "search_papers_local"],
     mcp: true,
     prompt: `${BASE}\n\nFocus on source quality, direct evidence, disagreements, and citation details.`,
@@ -34,7 +39,7 @@ const BUILTINS: Record<string, SubagentProfile> = {
     name: "evidence-extractor",
     description: "Extracts structured evidence from supplied material.",
     allowedParents: ["librarian", "experimentalist", "writer", "auditor"],
-    builtinTools: ["read", "grep", "find", "glob"],
+    builtinTools: ["read", "write", "edit", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local", "search_papers_local"],
     mcp: false,
     prompt: `${BASE}\n\nExtract only claims supported by the supplied material and identify missing evidence.`,
@@ -75,7 +80,7 @@ repeat the exploration. Never modify files or run state-changing commands.`,
     name: "api-librarian",
     description: "Researches external libraries and APIs from versioned source and official documentation.",
     allowedParents: ["librarian", "engineer", "experimentalist"],
-    builtinTools: ["read", "grep", "find", "glob", "ls"],
+    builtinTools: ["read", "write", "edit", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local"],
     mcp: true,
     prompt: `${BASE}
@@ -83,21 +88,27 @@ repeat the exploration. Never modify files or run state-changing commands.`,
 Answer questions about external libraries and APIs from source code or official documentation,
 never memory alone. Establish the exact version, inspect types and implementation, and cross-check
 tests or examples. Report exact API signatures, source paths or URLs, relevant excerpts, defaults,
-breaking changes, and caveats. Treat the parent workspace as read-only.`,
+breaking changes, and caveats. Modify the shared workspace only when the task explicitly requests
+a deliverable there.`,
   },
   "code-reviewer": {
     name: "code-reviewer",
     description: "Reviews supplied code or patches for concrete correctness and integration defects.",
     allowedParents: ["engineer", "auditor"],
-    builtinTools: ["read", "grep", "find", "glob", "ls"],
+    builtinTools: ["read", "write", "bash", "grep", "find", "glob", "ls"],
     systemTools: ["skill_search", "get_domain_knowledge_local"],
     mcp: false,
     prompt: `${BASE}
 
-Review the supplied code or patch read-only. Report only concrete, actionable defects with a
-provable trigger and impact. Trace new values across producer and consumer boundaries, inspect
-nearby tests, and distinguish introduced defects from pre-existing behavior. For every finding,
-include severity, confidence, file path, tight line range, and a specific remediation.`,
+Review the supplied code or patch without modifying the implementation. Report only concrete,
+actionable defects with a provable trigger and impact. Trace values across producer and consumer
+boundaries and inspect nearby tests. When behavior depends on indexing, shape, ordering,
+serialization, or another executable invariant, run a bounded deterministic reference test. Build
+the oracle independently, use asymmetric dimensions and index-distinct values when applicable, and
+compare values rather than shapes alone. Write fixtures only under scratch. Do not install packages,
+use the network, train models, or generate performance evidence. Report exact commands and distinguish
+introduced defects from pre-existing behavior. For every finding, include severity, confidence,
+file path, tight line range, trigger, impact, and remediation.`,
   },
 };
 
@@ -206,4 +217,3 @@ export async function allowedSubagentProfiles(dataRoot: string, parentAgent: str
   const settled = await Promise.allSettled([...names].sort().map((name) => loadSubagentProfile(dataRoot, name)));
   return settled.flatMap((item) => item.status === "fulfilled" && item.value?.allowedParents.includes(parentAgent) ? [item.value] : []);
 }
-
