@@ -5,14 +5,23 @@ import remarkMath from "remark-math";
 import rehypeHighlight from "rehype-highlight";
 import rehypeKatex from "rehype-katex";
 import { normalizeMarkdownForRendering } from "./normalizeMarkdown";
-import { parseWorkspaceFileHref, type WorkspaceFileTarget } from "./workspaceFileLink";
+import {
+  buildWorkspaceFileDeepLink,
+  parseWorkspaceFileHref,
+  type WorkspaceFileTarget,
+} from "./workspaceFileLink";
 
 interface MarkdownMessageProps {
   content: string;
+  workspaceFileSessionId?: string;
   onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 }
 
-function MarkdownMessageImpl({ content, onOpenWorkspaceFile }: MarkdownMessageProps) {
+function MarkdownMessageImpl({
+  content,
+  workspaceFileSessionId,
+  onOpenWorkspaceFile,
+}: MarkdownMessageProps) {
   const normalizedContent = normalizeMarkdownForRendering(content);
 
   return (
@@ -20,7 +29,13 @@ function MarkdownMessageImpl({ content, onOpenWorkspaceFile }: MarkdownMessagePr
       <ReactMarkdown
         remarkPlugins={[remarkGfm, [remarkMath, { singleDollarTextMath: true }]]}
         rehypePlugins={[rehypeHighlight, rehypeKatex]}
-        urlTransform={(url) => parseWorkspaceFileHref(url) ? url : defaultUrlTransform(url)}
+        urlTransform={(url) => {
+          const target = parseWorkspaceFileHref(url);
+          if (!target) return defaultUrlTransform(url);
+          return workspaceFileSessionId
+            ? buildWorkspaceFileDeepLink(workspaceFileSessionId, target)
+            : url;
+        }}
         components={{
           a: ({ href, children, node: _node, ...props }) => {
             const target = href ? parseWorkspaceFileHref(href) : null;
