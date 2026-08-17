@@ -24,6 +24,49 @@ describe("resolveSessionProvider", () => {
     const root = await dataRootWith(file);
     const cfg = await resolveSessionProvider(root, { providerId: "a", modelId: "a2" });
     expect(cfg).toMatchObject({ providerId: "a", apiKey: "ka", baseUrl: "https://a", modelId: "a2" });
+    expect(cfg?.reasoningEnabled).toBe(true);
+  });
+
+  it("carries the provider context window into the session config", async () => {
+    const root = await dataRootWith({
+      profiles: [
+        { id: "long", apiKey: "key", models: ["m"], contextWindow: 1_000_000 },
+      ],
+    });
+    expect(await resolveSessionProvider(root, {})).toMatchObject({ contextWindow: 1_000_000 });
+  });
+
+  it("keeps context and reasoning metadata for an environment-backed profile", async () => {
+    const previous = process.env.BP_TEST_PROVIDER_KEY;
+    process.env.BP_TEST_PROVIDER_KEY = "env-key";
+    try {
+      const root = await dataRootWith({
+        profiles: [{
+          id: "environment",
+          apiKey: "",
+          apiKeyEnv: "BP_TEST_PROVIDER_KEY",
+          models: ["plain", "think"],
+          contextWindow: 1_000_000,
+          reasoningModels: ["think"],
+        }],
+      });
+      expect(await resolveSessionProvider(root, { modelId: "think" })).toMatchObject({
+        apiKey: "env-key",
+        contextWindow: 1_000_000,
+        reasoningEnabled: true,
+      });
+    } finally {
+      if (previous === undefined) delete process.env.BP_TEST_PROVIDER_KEY;
+      else process.env.BP_TEST_PROVIDER_KEY = previous;
+    }
+  });
+
+  it("honours an explicit per-model reasoning allowlist", async () => {
+    const root = await dataRootWith({
+      profiles: [{ id: "a", apiKey: "ka", models: ["plain", "think"], reasoningModels: ["think"] }],
+    });
+    expect((await resolveSessionProvider(root, { modelId: "plain" }))?.reasoningEnabled).toBe(false);
+    expect((await resolveSessionProvider(root, { modelId: "think" }))?.reasoningEnabled).toBe(true);
   });
 
   it("falls back to the profile's first model when the ref's model is gone", async () => {

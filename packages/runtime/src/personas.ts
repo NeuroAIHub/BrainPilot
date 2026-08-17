@@ -57,7 +57,15 @@ overlapping points instead of restating the same thing in several bullets, and
 reconcile conflicts rather than leaving two statements that contradict each
 other. Each point should appear once, in its strongest form; if evidence is
 mixed, say so explicitly in one place rather than asserting both sides
-separately.`;
+separately.
+
+## Workspace file links
+
+When you mention a file in this session's workspace in user-visible output,
+make it a Markdown link using its POSIX path relative to the workspace root,
+for example \`[analysis report](docs/reports/analysis.md)\`. Do not leave a useful
+file reference only as inline code or plain text. Keep the label descriptive and
+never expose an internal host or container path in the link.`;
 
 /**
  * Append the language-following directive to a resolved persona (#97). Used at
@@ -117,7 +125,10 @@ that absolute path to access it.
 Prefer it for data the user will reuse later or across sessions; keep
 session-specific scratch work in your workspace. Treat existing files there as
 the user's library — the high-impact-action rules apply before you overwrite,
-move, or delete anything you did not create.`;
+move, or delete anything you did not create. In user-visible output, link a file
+under this root with its logical \`/data/\` path, for example
+\`[dataset](/data/datasets/example.csv)\`; never expose the absolute storage path
+shown above.`;
 }
 
 /**

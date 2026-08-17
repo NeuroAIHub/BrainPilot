@@ -184,6 +184,23 @@ export function createApp(options: CreateAppOptions): Hono {
     });
   });
 
+  // ---- Runtime restart (backend-owned lifecycle) ----------------------
+  // MCP tools are materialized when the runtime starts. Plugin activation
+  // therefore offers an explicit restart action that intentionally interrupts
+  // all current agents, then waits for the replacement runtime to be healthy.
+  api.post("/runtime/restart", async (c) => {
+    if (orchestrator.runtimeLifecycle === "external") {
+      return c.json({
+        error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+      }, 409);
+    }
+    const userId = resolveUserId(c);
+    await orchestrator.stopRuntime(userId);
+    clients.clear();
+    await orchestrator.ensureRuntime({ userId });
+    return c.json({ status: "ok" as const });
+  });
+
   // ---- Identity (backend-local) ----------------------------------------
   // Trust-front (#21): hosted deployments resolve identity at the upstream
   // gateway, which intercepts /api/auth/me before it reaches us. For
@@ -201,6 +218,7 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---- Metrics (proxied to runtime; idle-reclaim source, §15.4 修正2) --
   api.get("/metrics", forward("metrics"));
+  api.get("/mcp-status", forward("mcpStatus"));
 
   // ---- Sessions (proxied to runtime) -----------------------------------
   api.get("/sessions", forward("listSessions"));
@@ -1074,6 +1092,8 @@ function toHttpProfile(
     adapter: p.adapter ?? "auto",
     is_shared: false,
     models: p.models,
+    context_window: p.contextWindow ?? undefined,
+    reasoning_models: p.reasoningModels ?? p.models,
     icon: p.icon ?? "circle",
     icon_color: p.iconColor ?? "#111111",
     notes: p.notes ?? "",
@@ -1111,6 +1131,9 @@ function toHttpProfile(
 /** SPA create/update body (snake_case) → stored-profile patch. */
 function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProfile> {
   const str = (v: unknown): string | undefined => (typeof v === "string" ? v : undefined);
+  const contextWindow = body.context_window !== undefined
+    ? body.context_window
+    : body.contextWindow;
   return {
     name: str(body.name),
     baseUrl: str(body.base_url) ?? str(body.baseUrl),
@@ -1118,6 +1141,14 @@ function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProf
     adapter: str(body.adapter) as StoredProviderProfile["adapter"] | undefined,
     apiKey: str(body.api_key) ?? str(body.apiKey),
     models: Array.isArray(body.models) ? (body.models as string[]) : undefined,
+    contextWindow: contextWindow === null
+      ? null
+      : typeof contextWindow === "number"
+        ? contextWindow as StoredProviderProfile["contextWindow"]
+        : undefined,
+    reasoningModels: Array.isArray(body.reasoning_models)
+      ? (body.reasoning_models as string[])
+      : Array.isArray(body.reasoningModels) ? (body.reasoningModels as string[]) : undefined,
     icon: str(body.icon),
     iconColor: str(body.icon_color) ?? str(body.iconColor),
     notes: str(body.notes),

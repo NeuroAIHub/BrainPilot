@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { api } from "../utils/api";
+import {
+  normalizeProviderProfile,
+  serializeProviderCreate,
+  serializeProviderUpdate,
+} from "../contracts/backend";
 
 // These exercise the real-fetch path (runtimeConfig.useMockBackend is false in
 // tests — VITE_USE_MOCK_BACKEND is unset). We stub globalThis.fetch and a
@@ -47,6 +52,28 @@ beforeEach(() => {
 
 afterEach(() => {
   vi.unstubAllGlobals();
+});
+
+describe("provider context-window contract", () => {
+  it("serializes presets and uses null to restore automatic mode", () => {
+    expect(serializeProviderCreate({
+      name: "Long",
+      baseUrl: "https://gw.example",
+      apiKey: "key",
+      contextWindow: 1_000_000,
+    })).toMatchObject({ context_window: 1_000_000 });
+    expect(serializeProviderUpdate({ contextWindow: null })).toEqual({ context_window: null });
+  });
+
+  it("normalizes the provider context window from snake_case", () => {
+    const profile = normalizeProviderProfile({
+      id: "p",
+      name: "Long",
+      models: ["m"],
+      context_window: 262_144,
+    });
+    expect(profile.contextWindow).toBe(262_144);
+  });
 });
 
 describe("api.sessions.list — unwraps { sessions } and tolerates shape", () => {
@@ -116,6 +143,34 @@ describe("api.sessions.create — unwraps the { id, session } envelope (#96)", (
     const out = await api.sessions.create("bare title");
     expect(out.id).toBe("abc");
     expect(out.title).toBe("bare title");
+  });
+
+  it("sends the selected session-wide thinking level", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { id: "think", session: { id: "think", title: "t", thinkingLevel: "high", reasoningSupported: true } },
+      }),
+    );
+    await expect(api.sessions.create("t", { thinkingLevel: "high" })).resolves.toMatchObject({
+      reasoningSupported: true,
+    });
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toMatchObject({
+      thinkingLevel: "high",
+    });
+  });
+
+  it("updates the shared thinking level on an existing session", async () => {
+    fetchMock.mockResolvedValueOnce(
+      makeResponse({
+        contentType: "application/json",
+        json: { id: "think", title: "t", thinkingLevel: "low" },
+      }),
+    );
+    await expect(api.sessions.updateThinking("think", "low")).resolves.toMatchObject({ thinkingLevel: "low" });
+    expect(JSON.parse(String((fetchMock.mock.calls[0][1] as RequestInit).body))).toEqual({
+      thinkingLevel: "low",
+    });
   });
 });
 
@@ -729,6 +784,27 @@ describe("api.plugins marketplace lifecycle", () => {
     const [url, init] = fetchMock.mock.calls[0];
     expect(String(url)).toContain("/api/plugins/org.example%2Fweird/enabled");
     expect(init.method).toBe("PUT");
+  });
+});
+
+describe("api.runtime.restart", () => {
+  it("POSTs the backend-owned runtime restart endpoint", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { status: "ok" } }));
+
+    await expect(api.runtime.restart()).resolves.toEqual({ status: "ok" });
+    const [url, init] = fetchMock.mock.calls[0];
+    expect(String(url)).toContain("/api/runtime/restart");
+    expect(init.method).toBe("POST");
+  });
+});
+
+describe("api.mcpRuntime.status", () => {
+  it("reads runtime-observed MCP server health", async () => {
+    const body = { state: "failed", servers: [{ name: "playwright", pluginId: "plugin-a", state: "failed", error: "connection closed" }] };
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: body }));
+
+    await expect(api.mcpRuntime.status()).resolves.toEqual(body);
+    expect(String(fetchMock.mock.calls[0][0])).toContain("/api/mcp-status");
   });
 });
 

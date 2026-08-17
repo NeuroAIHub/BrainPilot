@@ -40,6 +40,12 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect(body.memRatio).toBeNull();
   });
 
+  it("GET /mcp/status reports the observed runtime state", async () => {
+    const res = await app().request("/mcp/status");
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ state: "unconfigured", servers: [] });
+  });
+
   it("serves checkpoint diff/preview and restores through the trace API", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-checkpoint-api-"));
     try {
@@ -90,15 +96,24 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     const created = await a.request("/sessions", {
       method: "POST",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ title: "Demo", domainResources: "base" }),
+      body: JSON.stringify({ title: "Demo", domainResources: "base", thinkingLevel: "high" }),
     });
     expect(created.status).toBe(201);
     const { id, session } = (await created.json()) as {
       id: string;
-      session: { domainResources?: string };
+      session: { domainResources?: string; thinkingLevel?: string };
     };
     expect(id).toBeTruthy();
     expect(session.domainResources).toBe("base");
+    expect(session.thinkingLevel).toBe("high");
+
+    const thinking = await a.request(`/sessions/${id}`, {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ thinkingLevel: "low" }),
+    });
+    expect(thinking.status).toBe(200);
+    expect((await thinking.json() as { thinkingLevel: string }).thinkingLevel).toBe("low");
 
     // list
     const list = (await (await a.request("/sessions")).json()) as { sessions: unknown[] };

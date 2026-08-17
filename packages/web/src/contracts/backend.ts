@@ -13,6 +13,7 @@
 import type {
   Session,
   DomainResources,
+  ThinkingLevel,
   AgentStatus,
   SubagentStatus,
   SessionStateSnapshot,
@@ -25,6 +26,7 @@ import type {
   ProviderProfile,
   ProviderApi,
   ProviderAdapter,
+  ProviderContextWindow,
   FileEntry,
   FileContent,
   TraceNode,
@@ -56,6 +58,7 @@ import type {
 export type {
   Session,
   DomainResources,
+  ThinkingLevel,
   AgentStatus,
   SubagentStatus,
   SessionStateSnapshot,
@@ -68,6 +71,7 @@ export type {
   ProviderProfile,
   ProviderApi,
   ProviderAdapter,
+  ProviderContextWindow,
   FileEntry,
   FileContent,
   TraceNode,
@@ -297,6 +301,8 @@ export interface ProviderCreate {
   adapter?: ProviderAdapter;
   apiKey: string;
   models?: string[];
+  contextWindow?: ProviderContextWindow;
+  reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -309,6 +315,9 @@ export interface ProviderUpdate {
   adapter?: ProviderAdapter;
   apiKey?: string;
   models?: string[];
+  /** null clears an explicit preset and restores automatic resolution. */
+  contextWindow?: ProviderContextWindow | null;
+  reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -471,6 +480,10 @@ interface RawSession {
   updatedAt?: string;
   domain_resources?: unknown;
   domainResources?: unknown;
+  thinking_level?: unknown;
+  thinkingLevel?: unknown;
+  reasoning_supported?: unknown;
+  reasoningSupported?: unknown;
 }
 
 interface RawFileEntry {
@@ -507,6 +520,10 @@ interface RawProviderProfile {
   api?: string;
   adapter?: string;
   models?: string[];
+  context_window?: number;
+  contextWindow?: number;
+  reasoning_models?: string[];
+  reasoningModels?: string[];
   icon?: string;
   icon_color?: string;
   iconColor?: string;
@@ -696,6 +713,12 @@ export function normalizeSession(raw: RawSession): Session {
     updatedAt: isoValue(raw.updatedAt ?? raw.updated_at ?? raw.createdAt ?? raw.created_at),
     domainResources:
       (raw.domainResources ?? raw.domain_resources) === "base" ? "base" : "full",
+    thinkingLevel: ["off", "low", "medium", "high"].includes(String(raw.thinkingLevel ?? raw.thinking_level))
+      ? (raw.thinkingLevel ?? raw.thinking_level) as Session["thinkingLevel"]
+      : "medium",
+    reasoningSupported: typeof (raw.reasoningSupported ?? raw.reasoning_supported) === "boolean"
+      ? (raw.reasoningSupported ?? raw.reasoning_supported) as boolean
+      : undefined,
   };
 }
 
@@ -806,6 +829,10 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     adapter: (raw.adapter ?? "auto") as ProviderAdapter,
     isShared: Boolean(raw.isShared ?? raw.is_shared),
     models: Array.isArray(raw.models) ? raw.models : [],
+    contextWindow: (raw.contextWindow ?? raw.context_window) as ProviderContextWindow | undefined,
+    reasoningModels: Array.isArray(raw.reasoningModels)
+      ? raw.reasoningModels
+      : Array.isArray(raw.reasoning_models) ? raw.reasoning_models : (Array.isArray(raw.models) ? raw.models : []),
     icon: stringValue(raw.icon, "circle"),
     iconColor: stringValue(raw.iconColor ?? raw.icon_color, "#111111"),
     notes: stringValue(raw.notes),
@@ -827,6 +854,8 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
     adapter: data.adapter,
     api_key: data.apiKey,
     models: data.models,
+    context_window: data.contextWindow,
+    reasoning_models: data.reasoningModels,
     icon: data.icon,
     icon_color: data.iconColor,
     notes: data.notes,
@@ -841,6 +870,8 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
     ...(data.adapter !== undefined ? { adapter: data.adapter } : {}),
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
+    ...(data.contextWindow !== undefined ? { context_window: data.contextWindow } : {}),
+    ...(data.reasoningModels !== undefined ? { reasoning_models: data.reasoningModels } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),
     ...(data.iconColor !== undefined ? { icon_color: data.iconColor } : {}),
     ...(data.notes !== undefined ? { notes: data.notes } : {}),

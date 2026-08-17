@@ -28,6 +28,7 @@ import { AgUiEventSchema } from "./events.js";
 import {
   AgentStatusSchema,
   SessionSchema,
+  ThinkingLevelSchema,
   SessionStateSnapshotSchema,
   SessionStatsSchema,
   TraceDependencySchema,
@@ -86,6 +87,8 @@ export const CreateSessionRequestSchema = z.object({
   modelId: z.string().optional(),
   /** Per-session domain resources; omitted means full for backward compatibility. */
   domainResources: z.enum(["full", "base"]).optional(),
+  /** One reasoning effort shared by every agent in this session. */
+  thinkingLevel: ThinkingLevelSchema.optional(),
 });
 export type CreateSessionRequest = z.infer<typeof CreateSessionRequestSchema>;
 
@@ -94,6 +97,12 @@ export const CreateSessionResponseSchema = z.object({
   session: SessionSchema.optional(),
 });
 export type CreateSessionResponse = z.infer<typeof CreateSessionResponseSchema>;
+
+export const UpdateSessionRequestSchema = z.object({
+  title: z.string().optional(),
+  thinkingLevel: ThinkingLevelSchema.optional(),
+});
+export type UpdateSessionRequest = z.infer<typeof UpdateSessionRequestSchema>;
 
 /* ------------------------------------------------------------------ *
  * GET /sessions  (list)  +  GET /sessions/:id  +  DELETE /sessions/:id
@@ -286,6 +295,7 @@ export type EvictSessionResponse = z.infer<typeof EvictSessionResponseSchema>;
 export const RUNTIME_ROUTES = {
   health: { method: "GET", path: "/health" },
   metrics: { method: "GET", path: "/metrics" },
+  mcpStatus: { method: "GET", path: "/mcp/status" },
   createSession: { method: "POST", path: "/sessions" },
   listSessions: { method: "GET", path: "/sessions" },
   getSession: { method: "GET", path: "/sessions/:id" },

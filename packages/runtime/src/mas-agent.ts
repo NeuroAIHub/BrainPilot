@@ -26,6 +26,7 @@ import {
   type AgentStats,
   type RunStatsStatus,
   type TokenUsage,
+  type ThinkingLevel,
 } from "@brainpilot/protocol";
 import type { EventBus } from "./event-bus.js";
 import { ev, newMessageId, newRunId } from "./events.js";
@@ -242,6 +243,10 @@ export class MasAgent {
    */
   seedUsage(u: TokenUsage | undefined): void {
     if (u) this.cumulativeUsage = { ...u };
+  }
+
+  setThinkingLevel(level: ThinkingLevel): void {
+    this.session.setThinkingLevel(level);
   }
 
   /**
