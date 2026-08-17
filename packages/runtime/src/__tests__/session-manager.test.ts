@@ -60,6 +60,49 @@ describe("SessionManager (mock mode)", () => {
     expect(agents.map((a) => a.name)).toContain("principal");
   });
 
+  it("shares one thinking level across created agents and applies updates", async () => {
+    const createdLevels: string[] = [];
+    const updatedLevels: string[] = [];
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      createdLevels.push(params.thinkingLevel);
+      const session = await mockAgentFactory(params);
+      session.setThinkingLevel = (level) => { updatedLevels.push(level); };
+      return session;
+    };
+    const manager = new SessionManager({ persist: false, agentFactory: spyFactory });
+    const session = await manager.createSession({ thinkingLevel: "high" });
+    await manager.sendMessage(session.id, "hi");
+    await waitFor(() => createdLevels.length > 0);
+
+    expect(createdLevels[0]).toBe("high");
+    const updated = await manager.updateSession(session.id, { thinkingLevel: "low" });
+    expect(updated?.thinkingLevel).toBe("low");
+    expect(updatedLevels).toContain("low");
+  });
+
+  it("forces thinking off when the selected model is not reasoning-enabled", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-thinking-disabled-"));
+    await mkdir(join(root, "bp_template"), { recursive: true });
+    await writeFile(join(root, "bp_template", "providers.json"), JSON.stringify({
+      profiles: [{
+        id: "plain",
+        baseUrl: "https://example.test",
+        apiKey: "test-key",
+        models: ["plain-model"],
+        reasoningModels: [],
+      }],
+      selectedProfileId: "plain",
+    }));
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory });
+    const session = await manager.createSession({
+      providerId: "plain",
+      modelId: "plain-model",
+      thinkingLevel: "high",
+    });
+    expect(session.thinkingLevel).toBe("off");
+    expect(session.reasoningSupported).toBe(false);
+  });
+
   it("persists the user message as a role:user CHUNK with the client uuid (#42)", async () => {
     const s = await m.createSession();
     const events: AgUiEvent[] = [];
@@ -237,7 +280,9 @@ describe("SessionManager (mock mode)", () => {
       const session = await manager.createSession();
       const meta = JSON.parse(await readFile(join(root, ".bp", session.id, "meta.json"), "utf8")) as {
         systemPlugins?: Array<{ id: string; enabled: boolean; reason: string }>;
+        reasoningSupported?: boolean;
       };
+      expect(meta.reasoningSupported).toBe(true);
       expect(meta.systemPlugins).toContainEqual({
         id: "org.brainpilot.auditor",
         enabled: false,

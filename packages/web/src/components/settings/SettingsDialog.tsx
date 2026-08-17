@@ -1,7 +1,13 @@
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, Database, Eye, EyeOff, Loader2, Package, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
-import type { McpByokStatus, McpServerEntry, ProviderProfile, ProviderApi } from "../../contracts/backend";
+import type {
+  McpByokStatus,
+  McpServerEntry,
+  ProviderProfile,
+  ProviderApi,
+  ProviderContextWindow,
+} from "../../contracts/backend";
 import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
@@ -72,6 +78,7 @@ const DEFAULT_PROVIDER_FORM = {
   apiKey: "",
   apiKeyMasked: "",
   models: [EXAMPLE_MODEL],
+  contextWindow: undefined as ProviderContextWindow | undefined,
   iconColor: "#111111",
   notes: "",
 };
@@ -389,6 +396,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
             api: providerForm.api,
             ...(providerForm.apiKey ? { apiKey: providerForm.apiKey } : {}),
             models,
+            contextWindow: providerForm.contextWindow ?? null,
             iconColor: providerForm.iconColor,
             notes: providerForm.notes,
           })
@@ -398,6 +406,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
             api: providerForm.api,
             apiKey: providerForm.apiKey,
             models,
+            contextWindow: providerForm.contextWindow,
             iconColor: providerForm.iconColor,
             notes: providerForm.notes,
           });
@@ -422,6 +431,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
       apiKey: "",
       apiKeyMasked: provider.apiKeyMasked || "",
       models: provider.models.length ? provider.models : [""],
+      contextWindow: provider.contextWindow,
       iconColor: provider.iconColor || "#111111",
       notes: provider.notes,
     });
@@ -629,7 +639,11 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                           />
                         </strong>
                         <span>{provider.baseUrl}</span>
-                        <small>{provider.models.join(", ") || t("settings.providers.noModelList")} · {provider.apiKeyMasked}</small>
+                        <small>
+                          {provider.models.join(", ") || t("settings.providers.noModelList")} · {provider.apiKeyMasked} · {provider.contextWindow === 1_000_000
+                            ? "1M"
+                            : provider.contextWindow === 262_144 ? "256K" : t("settings.providerForm.contextAuto")}
+                        </small>
                         <div className="provider-model-health-row">
                           {provider.modelHealth.map((mh) => (
                             <span
@@ -994,6 +1008,23 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                   ]}
                   value={providerForm.api}
                 />
+              </div>
+              <div className="provider-form__field">
+                <span>{t("settings.providerForm.contextWindow")}</span>
+                <CustomSelect
+                  ariaLabel={t("settings.providerForm.contextWindowAria")}
+                  onChange={(value) => setProviderForm({
+                    ...providerForm,
+                    contextWindow: value ? Number(value) as ProviderContextWindow : undefined,
+                  })}
+                  options={[
+                    { label: t("settings.providerForm.contextAuto"), value: "" },
+                    { label: "256K", value: "262144" },
+                    { label: "1M", value: "1000000" },
+                  ]}
+                  value={providerForm.contextWindow?.toString() ?? ""}
+                />
+                <small>{t("settings.providerForm.contextWindowHint")}</small>
               </div>
               <label className="provider-form__key">
                 <span>
