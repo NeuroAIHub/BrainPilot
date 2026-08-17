@@ -6,7 +6,7 @@ import {
   executesLocalCodeForMarketplaceEntry,
   matchesMarketplaceQuery,
   matchesMarketplaceSource,
-  marketplacePluginRequiresRestart,
+  marketplacePluginOffersRuntimeRefresh,
   mcpRuntimeSummaryForPlugin,
   restartPromptForMcpMutation,
   sourceFormatForMarketplaceEntry,
@@ -67,12 +67,12 @@ describe("plugin marketplace catalogue model", () => {
     expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["skills"] })).toBe(false);
   });
 
-  it("requires a runtime restart only for MCP-capable marketplace plugins", () => {
-    expect(marketplacePluginRequiresRestart({ ...entry, capabilities: ["mcp"] })).toBe(true);
-    expect(marketplacePluginRequiresRestart({ ...entry, capabilities: ["skills", "hooks"] })).toBe(false);
+  it("offers an optional runtime refresh only for MCP-capable marketplace plugins", () => {
+    expect(marketplacePluginOffersRuntimeRefresh({ ...entry, capabilities: ["mcp"] })).toBe(true);
+    expect(marketplacePluginOffersRuntimeRefresh({ ...entry, capabilities: ["skills", "hooks"] })).toBe(false);
   });
 
-  it("keeps restart requirements for mutations of enabled MCP plugins", () => {
+  it("offers an optional refresh for mutations of enabled MCP plugins", () => {
     const mcpEntry = {
       ...entry,
       capabilities: ["mcp"],

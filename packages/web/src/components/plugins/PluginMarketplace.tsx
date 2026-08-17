@@ -41,7 +41,7 @@ export function capabilitiesForMarketplaceEntry(entry: Pick<MarketplaceSdkEntry,
   return entry.manifest.contributes?.skills?.length ? ["skills"] : [];
 }
 
-export function marketplacePluginRequiresRestart(entry: Pick<MarketplaceSdkEntry, "capabilities" | "manifest">): boolean {
+export function marketplacePluginOffersRuntimeRefresh(entry: Pick<MarketplaceSdkEntry, "capabilities" | "manifest">): boolean {
   return capabilitiesForMarketplaceEntry(entry).includes("mcp");
 }
 
@@ -50,7 +50,7 @@ export function restartPromptForMcpMutation(
   wasEnabled: boolean,
   effect: "reload" | "remove",
 ): RestartPrompt | null {
-  if (!wasEnabled || !marketplacePluginRequiresRestart(entry)) return null;
+  if (!wasEnabled || !marketplacePluginOffersRuntimeRefresh(entry)) return null;
   return {
     pluginName: entry.manifest.displayName,
     enabled: effect === "reload",
@@ -214,7 +214,7 @@ export function PluginMarketplace() {
       await api.plugins.setEnabled(id, enabled);
       await load();
       const entry = marketplace.find((candidate) => candidate.manifest.id === id);
-      if (entry && marketplacePluginRequiresRestart(entry)) {
+      if (entry && marketplacePluginOffersRuntimeRefresh(entry)) {
         setSelectedPluginId(null);
         setRestartError(null);
         setRestartPrompt({ pluginName: entry.manifest.displayName, enabled });
