@@ -573,8 +573,8 @@ function normalizeStringArray(value: unknown): string[] {
 }
 
 function camelizeKey(key: string): string {
-  // Preserve a leading-underscore prefix: `_ts` / `_seq` are AG-UI transport
-  // metadata whose underscore is significant. Without this guard the regex
+  // Preserve a leading-underscore prefix: `_ts` / `_seq` / `_event_id` are
+  // AG-UI transport metadata whose underscore is significant. Without this guard the regex
   // turns `_ts` into `Ts`, so `normalizeAgUiEvent` strips the timestamp and the
   // demo replay's timeline collapses (every event lands at ms=0). Only internal
   // snake_case boundaries (e.g. `agent_name` → `agentName`) are camelized.
@@ -1170,10 +1170,8 @@ export function normalizeTraceGraph(rawValue: unknown): TraceGraph {
 
 /**
  * Normalize a raw AG-UI event JSON from the wire (snake_case) to the
- * camelCase TypeScript shape. Fields are passed through 1:1; `_seq` is
- * intentionally dropped — the new contract relies on AG-UI's
- * messageId/toolCallId for state aggregation rather than transport-level
- * sequence numbers.
+ * camelCase TypeScript shape. Fields are passed through 1:1, including
+ * leading-underscore transport metadata (`_ts`, `_seq`, `_eventId`).
  */
 export function normalizeAgUiEvent(rawValue: unknown): AgUiEvent {
   const raw = asDict(rawValue);
