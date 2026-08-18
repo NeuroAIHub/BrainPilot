@@ -253,8 +253,9 @@ describe("delivery error path (#97)", () => {
     await waitFor(() => observe.prompts.some((p) => p.agent === "principal" && p.text.includes("failed while task")));
   });
 
-  it("escalates to the exact task creator, not the principal, in a chain", async () => {
-    // auditor created the engineer task; a fatal error must route by task identity.
+  it("notifies the exact task creator and also escalates a nested failure to the principal", async () => {
+    // auditor created the engineer task; the direct notification must preserve
+    // task identity while the principal receives a bounded chain-level alert.
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = factoryWith(
       { engineer: { outcome: () => "401 invalid api key" } },
@@ -281,14 +282,24 @@ describe("delivery error path (#97)", () => {
     const error = sys.find((x) => x.level === "error" && x.text.includes("已通知任务派遣者"));
     expect(error!.text).toContain("任务派遣者");
 
-    // The auditor (not the principal) received the error note.
+    // The auditor receives the task-specific error note.
     await waitFor(() => observe.prompts.some((p) => p.agent === "auditor" && p.text.includes("failed while task")));
-    expect(observe.prompts.some((p) => p.agent === "principal")).toBe(false);
+    // The principal is independently told that the nested chain is blocked.
+    await waitFor(() => observe.prompts.some(
+      (p) => p.agent === "principal" && p.text.includes("Nested task failure"),
+    ));
+    const principalEscalations = observe.prompts.filter(
+      (p) => p.agent === "principal" && p.text.includes("Nested task failure"),
+    );
+    expect(principalEscalations).toHaveLength(1);
+    expect(principalEscalations[0]!.text).toContain("task_000001");
+    expect(principalEscalations[0]!.text).toContain("engineer");
+    expect(principalEscalations[0]!.text).toContain("auditor");
   });
 
-  it("retains the task creator identity even when the creator is not live", async () => {
-    // engineer was delegated by a transient auditor that no longer exists; the
-    // escalation must fall back to the principal rather than resurrect it.
+  it("retains the task creator identity and informs the principal when the creator was not live", async () => {
+    // The durable creator identity remains the direct recipient, while the
+    // principal independently receives the bounded nested-failure alert.
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = factoryWith(
       { engineer: { outcome: () => "401 invalid api key" } },
@@ -310,7 +321,12 @@ describe("delivery error path (#97)", () => {
 
     await waitFor(() => sys.some((x) => x.level === "error" && x.text.includes("已通知任务派遣者")));
     await waitFor(() => observe.prompts.some((p) => p.agent === "ghost" && p.text.includes("failed while task")));
-    expect(observe.prompts.some((p) => p.agent === "principal")).toBe(false);
+    await waitFor(() => observe.prompts.some(
+      (p) => p.agent === "principal" && p.text.includes("Nested task failure"),
+    ));
+    expect(observe.prompts.filter(
+      (p) => p.agent === "principal" && p.text.includes("Nested task failure"),
+    )).toHaveLength(1);
   });
 
   it("recovers and does NOT escalate when a retry succeeds", async () => {
