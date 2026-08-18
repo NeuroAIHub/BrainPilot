@@ -2574,6 +2574,7 @@ export class SessionManager {
       destroyAgent: async (target) => {
         await this.destroyAgent(sessionId, target);
       },
+      isTaskDeliveryPaused: (target) => entry.taskLedger.isPaused(target),
       wakeAgent: (target) => this.wakeAgent(sessionId, target),
       requestUserInput: (req) => this.requestUserInput(
         entry,
@@ -3205,11 +3206,13 @@ export class SessionManager {
 
   private async writeErrorToTaskCreators(entry: SessionEntry, expert: string, headline: string): Promise<void> {
     const creators = new Set<string>();
-    for (const task of entry.taskLedger.pendingAssignedTo(expert)) {
+    const affectedTasks = entry.taskLedger.pendingAssignedTo(expert);
+    const compactHeadline = headline.replace(/\s+/g, " ").trim().slice(0, 500) || "unknown error";
+    for (const task of affectedTasks) {
       try {
         await entry.taskLedger.enqueueSystem(
           task.created_by,
-          `Agent "${expert}" failed while task ${task.id} remains pending. Error: ${headline}`,
+          `Agent "${expert}" failed while task ${task.id} remains pending. Error: ${compactHeadline}`,
           task.id,
         );
         creators.add(task.created_by);
@@ -3217,6 +3220,23 @@ export class SessionManager {
         // The user-facing system_message already records the terminal delivery
         // error. A full creator queue must not make the failed assignee retry
         // forever; the pending task remains visible in the creator's task list.
+      }
+    }
+    const nestedTasks = affectedTasks.filter((task) => task.created_by !== "principal");
+    if (nestedTasks.length > 0) {
+      const taskSummary = nestedTasks
+        .map((task) => `${task.id} (creator: ${task.created_by})`)
+        .join(", ");
+      try {
+        await entry.taskLedger.enqueueSystem(
+          "principal",
+          `Nested task failure: Agent "${expert}" failed; ${taskSummary} remain pending. ` +
+            `The direct task creators were notified. Error: ${compactHeadline}`,
+        );
+        creators.add("principal");
+      } catch {
+        // The user-facing system message still exposes the failure. Preserve
+        // the pending tasks so a later user turn can recover them explicitly.
       }
     }
     for (const creator of creators) this.wakeAgent(entry.id, creator);

@@ -36,6 +36,8 @@ export interface ToolDeps {
   ensureAgent: (name: string) => Promise<void>;
   /** Destroy an agent (memory only; history kept). */
   destroyAgent: (name: string) => Promise<void>;
+  /** Whether host-owned task delivery is currently paused for this target. */
+  isTaskDeliveryPaused?: (name: string) => boolean;
   /**
    * Wake a target agent to consume task notifications. Fire-and-forget: kicks a
    * serial delivery loop on the target so a committed task actually starts
@@ -188,6 +190,12 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       try {
         await deps.ensureAgent(to);
         const task = await deps.dispatchTask(to, content);
+        if (deps.isTaskDeliveryPaused?.(to)) {
+          return ok(
+            `task ${task.id} queued for paused agent "${to}" (delivery=queued_paused); ` +
+              "it will be delivered when the agent resumes",
+          );
+        }
         deps.wakeAgent(to);
         return ok(`task ${task.id} dispatched to ${to}`);
       } catch (err) {

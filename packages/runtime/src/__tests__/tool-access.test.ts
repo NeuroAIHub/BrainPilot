@@ -109,6 +109,24 @@ describe("tool access control (§9)", () => {
     expect((await complete.execute({ task_id: "task_000001", reply: "done" })).isError).toBeUndefined();
   });
 
+  it("queues work for a paused agent without claiming that delivery started", async () => {
+    const d = deps("principal");
+    let wakeCount = 0;
+    d.isTaskDeliveryPaused = (agent) => agent === "engineer";
+    d.wakeAgent = () => { wakeCount += 1; };
+
+    const result = await createDispatchTaskTool(d).execute({
+      to: "engineer",
+      content: "validate the candidate",
+    });
+
+    expect(result.isError).toBeUndefined();
+    expect(result.content[0]?.text).toContain('queued for paused agent "engineer"');
+    expect(result.content[0]?.text).toContain("delivery=queued_paused");
+    expect(result.content[0]?.text).toContain("delivered when the agent resumes");
+    expect(wakeCount).toBe(0);
+  });
+
   it("ask_user validates choices and defaults free text to enabled", async () => {
     const seen: Array<Record<string, unknown>> = [];
     const d = deps("principal");
