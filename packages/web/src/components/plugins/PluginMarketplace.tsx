@@ -64,7 +64,7 @@ export function findMcpRestartReturnFocus(
   pluginId: string,
   candidates: HTMLElement[],
 ): HTMLElement | null {
-  if (target?.isConnected) return target;
+  if (target?.isConnected && target.tabIndex >= 0) return target;
   return candidates.find((candidate) => candidate.dataset.pluginToggleId === pluginId) ?? null;
 }
 

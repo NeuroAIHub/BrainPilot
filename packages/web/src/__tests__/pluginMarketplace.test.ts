@@ -110,10 +110,12 @@ describe("plugin marketplace catalogue model", () => {
   });
 
   it("returns focus to a replacement plugin toggle after async rerender", () => {
-    const connected = { isConnected: true, dataset: {} } as unknown as HTMLElement;
-    const removed = { isConnected: false, dataset: {} } as unknown as HTMLElement;
-    const replacement = { isConnected: true, dataset: { pluginToggleId: "plugin-a" } } as unknown as HTMLElement;
+    const connected = { isConnected: true, tabIndex: 0, dataset: {} } as unknown as HTMLElement;
+    const pageRoot = { isConnected: true, tabIndex: -1, dataset: {} } as unknown as HTMLElement;
+    const removed = { isConnected: false, tabIndex: 0, dataset: {} } as unknown as HTMLElement;
+    const replacement = { isConnected: true, tabIndex: 0, dataset: { pluginToggleId: "plugin-a" } } as unknown as HTMLElement;
     expect(findMcpRestartReturnFocus(connected, "plugin-a", [replacement])).toBe(connected);
+    expect(findMcpRestartReturnFocus(pageRoot, "plugin-a", [replacement])).toBe(replacement);
     expect(findMcpRestartReturnFocus(removed, "plugin-a", [replacement])).toBe(replacement);
     expect(findMcpRestartReturnFocus(removed, "plugin-b", [replacement])).toBeNull();
   });
