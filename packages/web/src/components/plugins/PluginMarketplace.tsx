@@ -26,7 +26,7 @@ export type MarketplaceCategory = "skills" | "knowledge" | "plugins" | "datasets
 type MarketplaceEntry = Awaited<ReturnType<typeof api.plugins.marketplace>>[number];
 type InstalledEntry = Awaited<ReturnType<typeof api.plugins.installed>>[number];
 type PluginUpdate = Awaited<ReturnType<typeof api.plugins.updates>>[number];
-type RestartPrompt = { pluginName: string; enabled: boolean };
+type RestartPrompt = { pluginId: string; pluginName: string; enabled: boolean };
 export type PluginMcpRuntimeSummary = { state: "ready" | "degraded" | "failed"; errors: string[] };
 
 const CATEGORIES: MarketplaceCategory[] = ["skills", "knowledge", "datasets", "plugins"];
@@ -53,9 +53,19 @@ export function restartPromptForMcpMutation(
 ): RestartPrompt | null {
   if (!wasEnabled || !marketplacePluginOffersRuntimeRefresh(entry)) return null;
   return {
+    pluginId: entry.manifest.id,
     pluginName: entry.manifest.displayName,
     enabled: effect === "reload",
   };
+}
+
+export function findMcpRestartReturnFocus(
+  target: HTMLElement | null,
+  pluginId: string,
+  candidates: HTMLElement[],
+): HTMLElement | null {
+  if (target?.isConnected) return target;
+  return candidates.find((candidate) => candidate.dataset.pluginToggleId === pluginId) ?? null;
 }
 
 export function shouldDismissMcpRestartPrompt(key: string, restarting: boolean): boolean {
@@ -202,8 +212,13 @@ export function PluginMarketplace() {
       window.clearTimeout(focusTimer);
       window.removeEventListener("keydown", handleKeyDown, true);
       const target = restartReturnFocusRef.current;
+      const pluginId = restartPrompt.pluginId;
       window.setTimeout(() => {
-        if (target?.isConnected) target.focus();
+        findMcpRestartReturnFocus(
+          target,
+          pluginId,
+          Array.from(document.querySelectorAll<HTMLElement>("[data-plugin-toggle-id]")),
+        )?.focus();
       }, 0);
     };
   }, [closeRestartPrompt, restartPrompt]);
@@ -267,7 +282,7 @@ export function PluginMarketplace() {
       if (entry && marketplacePluginOffersRuntimeRefresh(entry)) {
         setSelectedPluginId(null);
         setRestartError(null);
-        setRestartPrompt({ pluginName: entry.manifest.displayName, enabled });
+        setRestartPrompt({ pluginId: id, pluginName: entry.manifest.displayName, enabled });
       }
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : String(reason));
@@ -424,7 +439,7 @@ export function PluginMarketplace() {
                 <div className="plugin-card__actions">
                   {pluginUpdate?.updateAvailable ? <button className="plugin-card__button" disabled={busy} onClick={() => void update(entry.manifest.id)} type="button">{busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.update")}</button> : null}
                   {installedEntry ? (
-                    <button className={`plugin-card__button ${pluginUpdate?.updateAvailable ? "plugin-card__button--ghost" : ""}`} disabled={busy || (incompatible && !installedEntry.enabled)} onClick={() => void toggle(entry.manifest.id, !installedEntry.enabled)} type="button">
+                    <button className={`plugin-card__button ${pluginUpdate?.updateAvailable ? "plugin-card__button--ghost" : ""}`} data-plugin-toggle-id={entry.manifest.id} disabled={busy || (incompatible && !installedEntry.enabled)} onClick={() => void toggle(entry.manifest.id, !installedEntry.enabled)} type="button">
                       {busy ? <Loader2 className="is-spinning" size={14} /> : null}{t(installedEntry.enabled ? "marketplace.disable" : "marketplace.enable")}
                     </button>
                   ) : (
@@ -500,7 +515,7 @@ export function PluginMarketplace() {
               <footer className="plugin-detail__actions">
                 {selectedInstalled ? <button className="plugin-card__button plugin-card__button--danger" disabled={busy} onClick={() => void uninstall(selectedEntry.manifest.id)} type="button">{t("marketplace.uninstall")}</button> : null}
                 {selectedUpdate?.previousVersion ? <button className="plugin-card__button plugin-card__button--ghost" disabled={busy} onClick={() => void rollback(selectedEntry.manifest.id)} type="button">{t("marketplace.rollback")} · v{selectedUpdate.previousVersion}</button> : null}
-                {selectedInstalled ? <button className="plugin-card__button plugin-card__button--ghost" disabled={busy || (selectedCompatibility?.compatible === false && !selectedInstalled.enabled)} onClick={() => void toggle(selectedEntry.manifest.id, !selectedInstalled.enabled)} type="button">{t(selectedInstalled.enabled ? "marketplace.disable" : "marketplace.enable")}</button> : null}
+                {selectedInstalled ? <button className="plugin-card__button plugin-card__button--ghost" data-plugin-toggle-id={selectedEntry.manifest.id} disabled={busy || (selectedCompatibility?.compatible === false && !selectedInstalled.enabled)} onClick={() => void toggle(selectedEntry.manifest.id, !selectedInstalled.enabled)} type="button">{t(selectedInstalled.enabled ? "marketplace.disable" : "marketplace.enable")}</button> : null}
                 {selectedUpdate?.updateAvailable ? <button className="plugin-card__button" disabled={busy} onClick={() => void update(selectedEntry.manifest.id)} type="button">{busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.update")} · v{selectedUpdate.latestVersion}</button> : !selectedInstalled ? <button className="plugin-card__button" disabled={busy || !selectedEntry.latestCompatibleVersion} onClick={() => void install(selectedEntry.manifest.id)} type="button">{busy ? <Loader2 className="is-spinning" size={14} /> : null}{t("marketplace.install")}</button> : null}
               </footer>
             </section>
