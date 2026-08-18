@@ -43,7 +43,7 @@ export function isTransientInvalidRequest400(raw: string): boolean {
  * message, abortable exponential backoff, and continuing the same LLM turn,
  * which avoids duplicate user bubbles and side-effectful tool calls.
  *
- * Pi 0.80.x does not expose a public classifier hook, so this compatibility
+ * Pi 0.84.x does not expose a public classifier hook, so this compatibility
  * shim wraps its instance method. The dependency is exact-pinned; fail loudly
  * on API drift instead of silently dropping the P0 recovery path.
  */

@@ -97,12 +97,23 @@ function patchFile(file) {
 	);
 
 	// 2) Tool-call item id: omit the fc_ server id for azure too (store:false).
-	const fcNeedle = 'if (isDifferentModel && itemId?.startsWith("fc_")) {';
-	const fcRepl =
-		'if ((isDifferentModel || model.api === "azure-openai-responses") && itemId?.startsWith("fc_")) {';
-	if (!out.includes(fcNeedle)) {
+	const fcNeedles = [
+		'if (isDifferentModel && itemId?.startsWith("fc_")) {',
+		[
+			'if ((isDifferentModel && itemId?.startsWith("fc_")) ||',
+			'                        (customInputProperty === undefined && !itemId?.startsWith("fc_"))) {',
+		].join("\n"),
+	];
+	const fcNeedle = fcNeedles.find((needle) => out.includes(needle));
+	if (!fcNeedle) {
 		throw new Error(`[patch-pi-ai] tool-call-id pattern not found in ${file} (pi-ai changed?)`);
 	}
+	const fcRepl = fcNeedle.includes("customInputProperty")
+		? [
+				'if (((isDifferentModel || model.api === "azure-openai-responses") && itemId?.startsWith("fc_")) ||',
+				'                        (customInputProperty === undefined && !itemId?.startsWith("fc_"))) {',
+			].join("\n")
+		: 'if ((isDifferentModel || model.api === "azure-openai-responses") && itemId?.startsWith("fc_")) {';
 	out = out.replace(fcNeedle, fcRepl);
 
 	if (out === original || !out.includes(MARKER)) {
