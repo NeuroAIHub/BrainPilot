@@ -25,7 +25,7 @@ ENV APT_MIRROR=${APT_MIRROR} \
     PIP_EXTRA_INDEX_URL=${PIP_EXTRA_INDEX_URL} \
     TORCH_WHEEL_BASE=${TORCH_WHEEL_BASE}
 
-# python3 + pip + curl + 镜像源（与 cpu sandbox 共享同一段，curl 供 HEALTHCHECK 用）
+# Python + network/file tools（与 cpu sandbox 共享同一段，curl 供 HEALTHCHECK 用）
 COPY docker/sandbox/_python-base.sh /tmp/_python-base.sh
 RUN bash /tmp/_python-base.sh
 
