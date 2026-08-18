@@ -352,6 +352,7 @@ export function DesktopShell() {
       <SearchDialog
         isOpen={isSearchOpen}
         onClose={() => setIsSearchOpen(false)}
+        onOpenWorkspace={() => setActivePage("workspace")}
         confirmNavigation={confirmFileNavigation}
       />
       <SettingsDialog

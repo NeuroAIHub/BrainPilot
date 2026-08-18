@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   BookOpen,
@@ -19,6 +19,7 @@ import {
 import type { MarketplaceEntry as MarketplaceSdkEntry, PluginMarketCapability, PluginSourceFormat } from "@brainpilot/plugin-sdk";
 import { useT } from "../../i18n/useT";
 import { api, type McpRuntimeStatus } from "../../utils/api";
+import { trapFocusKeyDown } from "../settings/settingsModalStack";
 import { DatasetMarketplace } from "./DatasetMarketplace";
 
 export type MarketplaceCategory = "skills" | "knowledge" | "plugins" | "datasets";
@@ -55,6 +56,10 @@ export function restartPromptForMcpMutation(
     pluginName: entry.manifest.displayName,
     enabled: effect === "reload",
   };
+}
+
+export function shouldDismissMcpRestartPrompt(key: string, restarting: boolean): boolean {
+  return !restarting && (key === "Escape" || key === "Esc");
 }
 
 export function mcpRuntimeSummaryForPlugin(status: McpRuntimeStatus | null, pluginId: string): PluginMcpRuntimeSummary | null {
@@ -136,6 +141,11 @@ export function PluginMarketplace() {
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
   const [mcpStatus, setMcpStatus] = useState<McpRuntimeStatus | null>(null);
+  const restartDialogRef = useRef<HTMLElement>(null);
+  const restartDismissRef = useRef<HTMLButtonElement>(null);
+  const restartReturnFocusRef = useRef<HTMLElement | null>(null);
+  const marketplaceSurfaceRef = useRef<HTMLDivElement>(null);
+  const restartingRef = useRef(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -164,6 +174,46 @@ export function PluginMarketplace() {
     window.addEventListener("brainpilot:plugins-changed", refresh);
     return () => window.removeEventListener("brainpilot:plugins-changed", refresh);
   }, [load]);
+
+  useEffect(() => {
+    restartingRef.current = restarting;
+  }, [restarting]);
+
+  const closeRestartPrompt = useCallback(() => {
+    if (!restartingRef.current) setRestartPrompt(null);
+  }, []);
+
+  useEffect(() => {
+    if (!restartPrompt) return;
+    restartReturnFocusRef.current = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : null;
+    const focusTimer = window.setTimeout(() => restartDismissRef.current?.focus(), 0);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      const dialog = restartDialogRef.current;
+      if (dialog && trapFocusKeyDown(dialog, event)) return;
+      if (shouldDismissMcpRestartPrompt(event.key, restartingRef.current)) {
+        event.preventDefault();
+        closeRestartPrompt();
+      }
+    };
+    window.addEventListener("keydown", handleKeyDown, true);
+    return () => {
+      window.clearTimeout(focusTimer);
+      window.removeEventListener("keydown", handleKeyDown, true);
+      const target = restartReturnFocusRef.current;
+      window.setTimeout(() => {
+        if (target?.isConnected) target.focus();
+      }, 0);
+    };
+  }, [closeRestartPrompt, restartPrompt]);
+
+  useEffect(() => {
+    const surface = marketplaceSurfaceRef.current;
+    if (!surface) return;
+    if (restartPrompt) surface.setAttribute("inert", "");
+    else surface.removeAttribute("inert");
+  }, [restartPrompt]);
 
   const installedById = useMemo(() => new Map(installed.map((entry) => [entry.manifest.id, entry])), [installed]);
   const updatesById = useMemo(() => new Map(updates.map((entry) => [entry.pluginId, entry])), [updates]);
@@ -287,6 +337,11 @@ export function PluginMarketplace() {
 
   return (
     <main className="plugin-market" aria-labelledby="plugin-market-title">
+      <div
+        ref={marketplaceSurfaceRef}
+        className="plugin-market__surface"
+        aria-hidden={restartPrompt ? true : undefined}
+      >
       <header className="plugin-market__hero">
         <div>
           <span className="plugin-market__eyebrow">{t("marketplace.eyebrow")}</span>
@@ -452,10 +507,11 @@ export function PluginMarketplace() {
           </div>
         );
       })() : null}
+      </div>
 
       {restartPrompt ? (
         <div className="plugin-detail-layer plugin-restart-layer">
-          <section aria-labelledby="plugin-restart-title" aria-modal="true" className="plugin-restart-dialog" role="dialog">
+          <section ref={restartDialogRef} aria-labelledby="plugin-restart-title" aria-modal="true" className="plugin-restart-dialog" role="dialog">
             <div className="plugin-restart-dialog__header">
               <span className="plugin-restart-dialog__icon"><RefreshCw className={restarting ? "is-spinning" : ""} size={19} /></span>
               <div>
@@ -465,7 +521,7 @@ export function PluginMarketplace() {
             </div>
             {restartError ? <div className="plugin-restart-dialog__error">{restartError}</div> : null}
             <div className="plugin-restart-dialog__actions">
-              <button className="plugin-card__button plugin-card__button--ghost" disabled={restarting} onClick={() => setRestartPrompt(null)} type="button">{t("marketplace.restart.later")}</button>
+              <button ref={restartDismissRef} className="plugin-card__button plugin-card__button--ghost" disabled={restarting} onClick={closeRestartPrompt} type="button">{t("marketplace.restart.later")}</button>
               <button className="plugin-card__button" disabled={restarting} onClick={() => void restartRuntime()} type="button">
                 {restarting ? <Loader2 className="is-spinning" size={14} /> : null}{t(restarting ? "marketplace.restart.restarting" : "marketplace.restart.now")}
               </button>

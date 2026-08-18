@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   capabilitiesForMarketplaceEntry,
   categoryForMarketplaceEntry,
@@ -9,6 +10,7 @@ import {
   marketplacePluginOffersRuntimeRefresh,
   mcpRuntimeSummaryForPlugin,
   restartPromptForMcpMutation,
+  shouldDismissMcpRestartPrompt,
   sourceFormatForMarketplaceEntry,
 } from "../components/plugins/PluginMarketplace";
 
@@ -95,5 +97,21 @@ describe("plugin marketplace catalogue model", () => {
       { name: "global", state: "ready" },
     ] }, "plugin-a")).toEqual({ state: "degraded", errors: ["memory: connection closed"] });
     expect(mcpRuntimeSummaryForPlugin({ state: "ready", servers: [{ name: "global", state: "ready" }] }, "plugin-a")).toBeNull();
+  });
+
+  it("dismisses the runtime prompt with Escape only while idle", () => {
+    expect(shouldDismissMcpRestartPrompt("Escape", false)).toBe(true);
+    expect(shouldDismissMcpRestartPrompt("Esc", false)).toBe(true);
+    expect(shouldDismissMcpRestartPrompt("Escape", true)).toBe(false);
+    expect(shouldDismissMcpRestartPrompt("Enter", false)).toBe(false);
+  });
+
+  it("keeps the marketplace background inert while the runtime prompt is open", () => {
+    const source = readFileSync(new URL("../components/plugins/PluginMarketplace.tsx", import.meta.url), "utf8");
+    expect(source).toContain('surface.setAttribute("inert", "")');
+    expect(source).toContain('surface.removeAttribute("inert")');
+    expect(source).toContain("aria-hidden={restartPrompt ? true : undefined}");
+    expect(source).toContain("trapFocusKeyDown(dialog, event)");
+    expect(source).toContain("ref={restartDismissRef}");
   });
 });
