@@ -63,6 +63,8 @@ describe("bundled system plugins", () => {
     expect(principalInstructions).toContain("one final audit");
     expect(principalInstructions).toContain("Do not dispatch Auditor for intermediate");
     expect(principalInstructions).toContain("Any change to an audited claim, evidence file, or artifact after PASS invalidates that PASS");
+    expect(principalInstructions).toContain("latest corrected candidate comparison");
+    expect(principalInstructions).toMatch(/Experimentalist\s+selection\s+decision/);
     expect(principalInstructions).not.toContain("Raw Expert output is a valid intermediate audit target");
     const auditorInstructions = (await systemPluginInstructions(plugins, snapshot, "auditor")).join("\n");
     expect(auditorInstructions).toContain("Begin every completed audit reply");
@@ -87,7 +89,7 @@ describe("bundled system plugins", () => {
     expect(piOrchestration).toContain("Start one final audit");
     expect(piOrchestration).toContain("Do not audit intermediate rounds");
     const methodSkill = auditorSkills.find((path) => path.endsWith("audit-model-validation"))!;
-    const methodReview = await readFile(join(methodSkill, "SKILL.md"), "utf8");
+    const methodReview = (await readFile(join(methodSkill, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
     expect(methodReview).toContain("Audit Method Validation");
     expect(methodReview).toContain("substantively different alternatives");
     expect(methodReview).toContain("operational correctness and feasibility");
@@ -97,6 +99,20 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("does not validate cross-session transfer");
     expect(methodReview).toContain("sample counts across sampling");
     expect(methodReview).toContain("rates is not protocol fidelity");
+    expect(methodReview).toContain("fixed-method work from comparative selection");
+    expect(methodReview).toContain("user, task specification, or external scientific constraint");
+    expect(methodReview).toContain("select, compare, recommend, or replace");
+    expect(methodReview).toContain("unconditional winner");
+    expect(methodReview).toContain("eligibility guards from ranking evidence");
+    expect(methodReview).toContain("observable outcome that could change the decision");
+    expect(methodReview).toContain("latest valid, comparable results");
+    expect(methodReview).toContain("every correction affecting eligibility, ranking, or comparability");
+    expect(methodReview).toContain("Do not choose a replacement method");
+    expect(methodReview).toContain("method-specific budgets or stopping rules");
+    const requestTemplate = await readFile(join(auditorSkill, "references", "audit-request-template.md"), "utf8");
+    expect(requestTemplate).toContain("Selection mode and rule");
+    expect(requestTemplate).toContain("Latest corrected candidate comparison");
+    expect(requestTemplate).toContain("Experimentalist selection decision");
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
     expect(responseTemplate).toContain("## Compact completion reply");
     expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");

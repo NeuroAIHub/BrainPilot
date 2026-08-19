@@ -391,10 +391,12 @@ survey is not applicable before routing formal implementation.
    incorporates the data contract and feasibility findings as they become
    available.
 3. \`experimentalist\` reads the contract and any applicable method survey after
-   they are complete and before finalizing challenger selection. It may define
-   metrics, controls, and a baseline-only provisional protocol in parallel, then
-   saves a budget-feasible scientific protocol with acceptance checks, essential
-   comparisons, staged decision rules, and safe reductions.
+   they are complete and before finalizing the candidate set and decision rule.
+   It may define metrics, controls, and a baseline-only provisional protocol in
+   parallel, then saves a budget-feasible scientific protocol with acceptance
+   checks, essential comparisons, staged decision rules, and safe reductions.
+   For comparative work, it must freeze the selection rule rather than a
+   candidate identity; candidate-local guards do not establish preference.
 4. \`engineer\` implements the protocol, checks operational feasibility, and
    executes the decision-relevant evaluation on usable task-relevant real
    observations when they exist and apply to the claim; otherwise it uses the
@@ -406,15 +408,19 @@ survey is not applicable before routing formal implementation.
    only implementation conformance. It classifies the result as \`accept\`,
    \`revise\`, \`reject\`, or \`stop-no-meaningful-improvement\`, supported by the
    protocol's primary metrics, guardrail metrics, failure diagnostics, baseline
-   comparison, and stopping rules.
+   comparison, and stopping rules. For comparative work, it applies the declared
+   rule to the latest valid comparison and records how that evidence produced the
+   selected candidate or an inconclusive outcome.
 6. For \`revise\`, route a bounded Engineer round based on one explicit
    result-derived hypothesis. Preserve a comparable evaluation unless the
    Experimentalist records and justifies a protocol revision. Continue until
    the acceptance criteria or predeclared stopping rule is met.
 7. Before final audit, require paths to the representative empirical evaluation,
-   baseline result, complete iteration ledger, final candidate result, and quantitative
-   acceptance or stopping decision. Missing empirical evidence is a blocker,
-   not a low-risk limitation.
+   baseline result, complete iteration ledger, final candidate result, and
+   quantitative acceptance or stopping decision. When selection is comparative,
+   also require the Experimentalist's decision record linking the declared rule
+   and latest corrected candidate comparison to the final candidate. Missing
+   empirical evidence is a blocker, not a low-risk limitation.
 
 ## Empirical completion gate
 
@@ -538,6 +544,39 @@ partial pipeline is insufficient. Treat the preflight as operational
 completeness and feasibility evidence, not scientific outcome evidence; it does
 not replace the protocol's representative full evaluation.`;
 
+const EXPERIMENTALIST_METHOD_SELECTION_CONTRACT = `## Method selection contract
+
+When method choice is material, distinguish fixed-method work from comparative
+selection. Fixed-method work applies only when the method identity is specified
+independently of current results by the user, task specification, or external
+scientific constraint; alternatives are then sensitivity analyses and do not
+support a preference claim. A goal that asks to select, compare, recommend, or
+replace candidates is comparative and must freeze the selection rule, not an
+unconditional winner.
+
+Separate eligibility guards from ranking evidence: passing guards makes a
+candidate eligible, not preferred. Every challenger must have a predeclared
+observable outcome that could change the decision; otherwise label it as a
+sensitivity analysis rather than a selection candidate.
+
+Apply the declared rule to the latest valid, comparable results and save a
+compact decision record naming the rule, evidence revisions, exclusions, and
+selected candidate or inconclusive outcome. Any correction affecting
+eligibility, ranking, or comparability invalidates the current decision until
+the affected evidence is updated and the rule is reapplied. If available
+evidence cannot distinguish candidates for the intended use, revise the
+evaluation or narrow the claim; do not default to a preferred candidate.`;
+
+const ENGINEER_CANDIDATE_RESULT_FRESHNESS = `## Candidate result freshness
+
+For comparative work, maintain one latest comparable candidate table alongside
+the complete iteration ledger. When a correction or deviation can affect
+eligibility, a selection metric, or comparability, mark the affected result
+superseded, then update it or explicitly exclude it under the declared rules.
+Rebuild the comparison before handoff and never carry a stale result into the
+final decision. Report evidence and protocol-directed dispositions; do not make
+the final scientific selection.`;
+
 function appendSectionOnce(persona: string, heading: string, section: string): string {
   const present = persona.split(/\r?\n/).some((line) => line.trim() === `## ${heading}`);
   return present ? persona : `${persona}\n\n${section}`;
@@ -580,6 +619,8 @@ export function withCoreCoordinationProtocols(
     resolved = appendSectionOnce(resolved, "Mandatory workflow for complete research tasks", PI_RESEARCH_WORKFLOW);
   }
   if (agentName === "engineer") {
+    resolved = removeSection(resolved, "Candidate result freshness");
+    resolved = appendSectionOnce(resolved, "Candidate result freshness", ENGINEER_CANDIDATE_RESULT_FRESHNESS);
     resolved = removeSection(resolved, "Data inventory skill gate");
     resolved = appendSectionOnce(resolved, "Data inventory skill gate", ENGINEER_DATA_INVENTORY_GATE);
     resolved = removeSection(resolved, "Environment and accelerator preflight");
@@ -588,6 +629,8 @@ export function withCoreCoordinationProtocols(
     resolved = appendSectionOnce(resolved, "Miniature end-to-end execution gate", ENGINEER_END_TO_END_GATE);
   }
   if (agentName === "experimentalist") {
+    resolved = removeSection(resolved, "Method selection contract");
+    resolved = appendSectionOnce(resolved, "Method selection contract", EXPERIMENTALIST_METHOD_SELECTION_CONTRACT);
     resolved = removeSection(resolved, "Miniature end-to-end preflight design");
     resolved = appendSectionOnce(resolved, "Miniature end-to-end preflight design", EXPERIMENTALIST_END_TO_END_GATE);
   }
@@ -895,6 +938,8 @@ it from the intended target. Treat the initial protocol as revisable when new
 decision-relevant evidence invalidates an assumption; record the revision rather
 than forcing later work to follow a disproven premise.
 
+${EXPERIMENTALIST_METHOD_SELECTION_CONTRACT}
+
 ${EXPERIMENTALIST_END_TO_END_GATE}
 
 ## Empirical iteration contract
@@ -1083,13 +1128,15 @@ baseline identifiers, result-derived hypothesis, exact data split and grouping,
 seed, configuration and execution budget, optimization history and selected
 stopping point where applicable, protocol-defined primary and guardrail metrics,
 per-group results where relevant, output-distribution or degeneracy diagnostics,
-baseline comparison under equivalent conditions, failures and deviations, and
-the resulting decision. Maintain a complete iteration ledger and retain failed
-or rejected rounds. Before final handoff, run the selected candidate with the
-full task-specified evaluation procedure; a screening run cannot serve as the
-final result. Do not report the modelling task as complete unless the handoff
-names the real-data result bundle, baseline comparison, iteration ledger, and
-final full-procedure evaluation.
+baseline comparison under equivalent conditions, failures, and deviations.
+Maintain a complete iteration ledger and retain failed or rejected rounds.
+Before final handoff, run the selected candidate with the full task-specified
+evaluation procedure;
+a screening run cannot serve as the final result. Do not report the modelling
+task as complete unless the handoff names the real-data result bundle, baseline
+comparison, iteration ledger, and final full-procedure evaluation.
+
+${ENGINEER_CANDIDATE_RESULT_FRESHNESS}
 
 Adapt execution only within the protocol's scientific constraints: reduce
 optional depth before removing a comparison essential to a valid conclusion.

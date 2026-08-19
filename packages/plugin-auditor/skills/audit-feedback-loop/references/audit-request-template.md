@@ -29,13 +29,16 @@ Target type: <expert-result | pi-draft | synthesis>
 - Environment and dependency record: <path>
 - Method survey: <path>
 - Scientific protocol and decision rules: <path>
+- Selection mode and rule: <fixed-method or comparative; path>
 - Parameter configuration and provenance: <paths>
 - Implementation or procedure: <paths>
 - Implementation checkpoint or diff: <path and revision/time evidence>
 - Operational or synthetic checks: <paths>
 - Representative real-data validation: <paths, or exact reason unavailable>
 - Validation run and code/config revision: <run metadata and revision identifier>
-- Baseline and candidate comparison: <path>
+- Baseline comparison: <path>
+- Latest corrected candidate comparison: <path and result revisions>
+- Experimentalist selection decision: <path>
 - Per-group training curves and selected epochs: <paths>
 - Prediction diagnostics (counts, class coverage, entropy, confusion matrices): <paths>
 - Artifact equivalence and usability checks: <paths>
