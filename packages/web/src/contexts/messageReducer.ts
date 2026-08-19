@@ -77,6 +77,14 @@ function sweepStreaming(messages: ChatMessage[], agentName?: string): ChatMessag
   return changed ? next : messages;
 }
 
+/** Remove ephemeral retry activity for one agent once retrying has ended. */
+function clearAutoRetry(messages: ChatMessage[], agentName?: string): ChatMessage[] {
+  const next = messages.filter(
+    (message) => message.kind !== "auto_retry" || (agentName && message.agent !== agentName),
+  );
+  return next.length === messages.length ? messages : next;
+}
+
 /**
  * Convert an AG-UI message (from MESSAGES_SNAPSHOT) into a UI ChatMessage.
  */
@@ -107,19 +115,23 @@ export function agUiMessageToChatMessage(msg: AgUiMessage): ChatMessage {
 
 /**
  * Stable identity for a stream-append event so history rehydrate + SSE ring
- * buffer replay can merge idempotently (#314). Requires transport `_ts` (always
- * set by the runtime EventBus envelope). Events without `_ts` (unit tests /
- * legacy) return null and fall back to "always apply while streaming".
+ * buffer replay can merge idempotently (#314, #463). New runtime events carry
+ * `_eventId`, which remains unique even when identical deltas are emitted in
+ * the same millisecond. Legacy events fall back to the old timestamp key;
+ * events without either identity return null and always apply while streaming.
  *
- * Key = type + stream id + _ts + delta. Distinct CONTENT events that happen to
- * carry the same text (intentional model repetition) still differ when `_ts`
- * differs, so they are not collapsed.
+ * The transport ID is persisted in events.jsonl and replayed unchanged over
+ * SSE, so the same event dedupes while distinct repeated deltas survive.
  */
 function streamAppendKey(event: WebSocketEvent, streamId: string, delta: string): string | null {
   const raw = event as Record<string, unknown>;
+  const eventId = raw._eventId;
+  if (typeof eventId === "string" && eventId) {
+    return `${event.type}\0${streamId}\0event:${eventId}`;
+  }
   const ts = raw._ts;
   if (typeof ts !== "string" || !ts) return null;
-  return `${event.type}\0${streamId}\0${ts}\0${delta}`;
+  return `${event.type}\0${streamId}\0legacy:${ts}\0${delta}`;
 }
 
 function withAppliedStreamKey(msg: ChatMessage, key: string | null): ChatMessage {
@@ -159,6 +171,12 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
   switch (event.type) {
     case "MESSAGES_SNAPSHOT": {
       const messages = Array.isArray(event.messages) ? event.messages : [];
+      const toolNames = new Map<string, string>();
+      for (const message of messages) {
+        for (const toolCall of message.toolCalls ?? []) {
+          if (toolCall.id && toolCall.name) toolNames.set(toolCall.id, toolCall.name);
+        }
+      }
       // Each AG-UI message may carry `tool_calls[]` nested on an assistant
       // message (fold.py groups them so `last_assistant_message`'s tool_calls
       // list grows). Flatten them out as standalone `kind: "tool"` ChatMessages
@@ -167,7 +185,11 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // standalone entries.
       const out: ChatMessage[] = [];
       for (const m of messages) {
-        out.push(agUiMessageToChatMessage(m));
+        const chatMessage = agUiMessageToChatMessage(m);
+        if (m.role === "tool" && m.toolCallId) {
+          chatMessage.toolName = toolNames.get(m.toolCallId);
+        }
+        out.push(chatMessage);
         if (Array.isArray(m.toolCalls)) {
           for (const tc of m.toolCalls) {
             out.push({
@@ -354,6 +376,9 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       if (!id || existing.some((m) => m.id === id)) {
         return existing;
       }
+      const call = existing.find((message) =>
+        message.kind === "tool" && message.id === event.toolCallId,
+      );
       return [
         ...existing,
         {
@@ -363,6 +388,7 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           createdAt: new Date().toISOString(),
           agent,
           kind: "tool",
+          toolName: call?.toolName,
           toolResult: content,
           // #134 — keep the link back to the originating TOOL_CALL_START so the
           // UI can suppress results of internal tools (record_trace) whose name
@@ -418,8 +444,8 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
 
     case "RUN_ERROR": {
       const message = event.message ?? "Run error";
-      // Run is over → sweep any dangling streaming flag before appending error.
-      const swept = sweepStreaming(existing, event.agentName);
+      // Run is over → clear transient retry UI and sweep dangling streams.
+      const swept = sweepStreaming(clearAutoRetry(existing, event.agentName), event.agentName);
       return [
         ...swept,
         {
@@ -505,16 +531,19 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
     // agent_status_update (status retrying) carrying attempt/maxAttempts/delayMs.
     case "agent_status_update": {
       if (isAutoRetryStatus(event)) {
-        return [...existing, autoRetryToChatMessage(event)];
+        // One live card per agent: a later retry attempt replaces the earlier
+        // countdown instead of stacking another permanent history item.
+        return [...clearAutoRetry(existing, event.agentName), autoRetryToChatMessage(event)];
       }
-      return existing;
+      // Runtime emits a normal status snapshot as soon as retry sleep ends.
+      return clearAutoRetry(existing, event.agentName);
     }
 
     // RUN_FINISHED is the authoritative end of a run: sweep any message left
     // streaming because its END never arrived (interrupt / dropped END), so the
     // "thinking" spinner reliably clears.
     case "RUN_FINISHED":
-      return sweepStreaming(existing, event.agentName);
+      return sweepStreaming(clearAutoRetry(existing, event.agentName), event.agentName);
 
     // Lifecycle / brackets / extensions — no message-list change
     case "RUN_STARTED":

@@ -43,7 +43,7 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # (protocol ← runtime), not the whole monorepo (web/cli/backend-core).
 RUN npx tsc -b packages/runtime
 
-# ---- python-baseline: node + python3 + pip + curl + Git + 镜像源 ----
+# ---- python-baseline: node + python3 + pip + curl + Git + rg/file + 镜像源 ----
 #   cpu 链的根，也是 gpu-base 的父（共享运行时依赖只构建一次，被两条链复用）。
 FROM node:22-slim AS python-baseline
 ARG APT_MIRROR=""
@@ -75,8 +75,14 @@ CMD ["node", "packages/runtime/dist/server.js"]
 #   不在此安装 → monorepo 代码变更只重建下面的业务层，base 层完全复用。
 #   ⚠️ base tag 写死（经典构建器不支持 FROM ${ARG}）；升级须同步三处（见文件头）。
 FROM ghcr.io/neuroaihub/brainpilot-gpu-base:cu124-torch2.6.0 AS gpu
-# Older published GPU base tags may predate workspace checkpoints.
-RUN command -v git >/dev/null 2>&1 || (apt-get update && apt-get install -y --no-install-recommends git && rm -rf /var/lib/apt/lists/*)
+# Older published GPU base tags may predate workspace checkpoints and the
+# agent's code/file inspection tools, so the thin image guarantees all three.
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends git ripgrep file \
+    && rm -rf /var/lib/apt/lists/* \
+    && git --version >/dev/null \
+    && rg --version >/dev/null \
+    && file --version >/dev/null
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/packages ./packages

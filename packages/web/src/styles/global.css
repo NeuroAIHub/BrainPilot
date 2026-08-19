@@ -10581,6 +10581,12 @@ button {
   color: var(--color-text);
 }
 
+/* Preserve the marketplace layout while allowing the whole background to be
+   made inert when the runtime-refresh dialog is open. */
+.plugin-market__surface {
+  display: contents;
+}
+
 .plugin-market__hero,
 .plugin-market__summary,
 .plugin-market__catalog {

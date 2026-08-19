@@ -4,7 +4,9 @@ import { tmpdir } from "node:os";
 import { createRequire } from "node:module";
 import path from "node:path";
 import { createApp } from "../src/app.js";
+import { bootstrapEnvProvider } from "../src/config.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
+import { StaticRuntimeOrchestrator } from "../src/static-orchestrator.js";
 
 function fakeOrchestrator(baseUrl = "http://runtime.test"): Orchestrator {
   return {
@@ -39,6 +41,21 @@ describe("Hono app — REST forwarding", () => {
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ status: "ok" });
     expect(calls).toEqual(["stop:researcher-1", "start:researcher-1"]);
+  });
+
+  it("returns 409 instead of reporting a fake restart for an externally managed runtime", async () => {
+    const orchestrator = new StaticRuntimeOrchestrator({
+      baseUrl: "http://static-runtime.test",
+      healthProbe: async () => true,
+    });
+    const app = createApp({ orchestrator, serveWeb: false });
+
+    const response = await app.request("/api/runtime/restart", { method: "POST" });
+
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      error: "This runtime is externally managed. Restart its container or process manually, then retry.",
+    });
   });
 
   it("forwards runtime-observed MCP status", async () => {
@@ -903,6 +920,27 @@ describe("Hono app — local config routes", () => {
       return { app, id };
     }
 
+    async function makeEnvProfile(
+      fetchFn: unknown,
+      appEnv: Record<string, string | undefined>,
+    ) {
+      const dir = await mkdtemp(path.join(tmpdir(), "bp-prov-env-"));
+      const profile = await bootstrapEnvProvider(dir, {
+        ANTHROPIC_API_KEY: "bootstrap-only-secret",
+        ANTHROPIC_BASE_URL: "https://gw.example.com/api",
+        ANTHROPIC_MODEL: "env-model",
+      });
+      const app = createApp({
+        orchestrator: fakeOrchestrator(),
+        fetchFn: fetchFn as never,
+        serveWeb: false,
+        dataDir: dir,
+        env: appEnv,
+        providerProbeTimeoutMs: 50,
+      });
+      return { app, id: profile!.id };
+    }
+
     it("reports unavailable for an unreachable gateway", async () => {
       const fetchFn = vi.fn(async () => {
         throw new TypeError("fetch failed");
@@ -927,6 +965,33 @@ describe("Hono app — local config routes", () => {
       expect(body.model_health[0]).toMatchObject({ model: "m", status: "healthy" });
       expect(body.model_health[0]!.latency_ms).toBeGreaterThanOrEqual(0);
       expect(body.model_health[0]!.checked_at).toBeGreaterThan(0);
+    });
+
+    it("resolves an env-backed profile key when probing (#461)", async () => {
+      const fetchFn = vi.fn(async (_url: string, init: RequestInit) => {
+        expect((init.headers as Record<string, string>)["x-api-key"]).toBe("live-env-secret");
+        return new Response("{}", { status: 200 });
+      });
+      const { app, id } = await makeEnvProfile(fetchFn, {
+        ANTHROPIC_API_KEY: "live-env-secret",
+      });
+
+      const response = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      expect((await response.json()) as { health_status: string }).toMatchObject({
+        health_status: "healthy",
+      });
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+    });
+
+    it("reports a configuration error when an env-backed key is missing (#461)", async () => {
+      const fetchFn = vi.fn();
+      const { app, id } = await makeEnvProfile(fetchFn, {});
+
+      const response = await app.request(`/api/provider/profiles/${id}/test`, { method: "POST" });
+      const body = (await response.json()) as { health_status: string; health_message: string };
+      expect(body.health_status).toBe("unavailable");
+      expect(body.health_message).toContain("$ANTHROPIC_API_KEY");
+      expect(fetchFn).not.toHaveBeenCalled();
     });
 
     it("marks only the model used by the probe and leaves untested models unknown", async () => {

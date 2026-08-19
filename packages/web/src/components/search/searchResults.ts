@@ -78,3 +78,22 @@ export function filterSessionsByQuery(
   if (!q) return sessions;
   return sessions.filter((s) => s.title.toLowerCase().includes(q));
 }
+
+export type SearchNavigationActions = {
+  confirmNavigation?: () => boolean;
+  openWorkspace: () => void;
+  selectSession: (sessionId: string) => void;
+  close: () => void;
+};
+
+/** Apply the same guarded workspace navigation for mouse and keyboard results. */
+export function navigateToSearchResult(
+  sessionId: string,
+  actions: SearchNavigationActions,
+): boolean {
+  if (actions.confirmNavigation && !actions.confirmNavigation()) return false;
+  actions.openWorkspace();
+  actions.selectSession(sessionId);
+  actions.close();
+  return true;
+}

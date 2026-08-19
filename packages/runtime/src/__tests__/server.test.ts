@@ -90,8 +90,9 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
 
   it("serves checkpoint diff/preview and restores through the trace API", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-checkpoint-api-"));
+    let manager: SessionManager | undefined;
     try {
-      const manager = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+      manager = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
       await manager.createSession({ id: "checkpoint-api" });
       const workspace = join(dataRoot, "workspaces", "checkpoint-api");
       const store = new WorkspaceCheckpointStore("checkpoint-api", workspace, join(dataRoot, ".bp", "checkpoint-api"));
@@ -111,6 +112,10 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
       expect(restored.status).toBe(200);
       expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("old\n");
     } finally {
+      // Restore emits durable trace/task state asynchronously. Settle those
+      // writes before deleting the fixture root so cleanup cannot race a late
+      // mkdir/write and fail with ENOTEMPTY.
+      await manager?.emergencySaveAll();
       await rm(dataRoot, { recursive: true, force: true });
     }
   });

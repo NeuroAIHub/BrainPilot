@@ -80,6 +80,10 @@ describe("SubagentManager", () => {
     await expect(waiting).resolves.toEqual([
       expect.objectContaining({ childId: started[0]!.id, status: "succeeded" }),
     ]);
+    const persisted = JSON.parse(await readFile(join(f.state, "subagents", "runs.json"), "utf8")) as {
+      runs: Array<{ id: string; status: string }>;
+    };
+    expect(persisted.runs.find((run) => run.id === started[0]!.id)?.status).toBe("succeeded");
     await expect(f.manager.waitFor("engineer", [started[0]!.id])).rejects.toThrow("not owned");
   });
 

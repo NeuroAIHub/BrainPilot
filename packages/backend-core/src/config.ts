@@ -391,6 +391,27 @@ export async function resolveProvider(
   return { apiKey, baseUrl, model, source };
 }
 
+/**
+ * Resolve the secret referenced by one stored profile without ever copying it
+ * into providers.json. Environment variables take precedence over the local
+ * .env file, matching resolveProvider's existing fallback order.
+ */
+export async function resolveProfileApiKey(
+  profile: Pick<StoredProviderProfile, "apiKey" | "apiKeyEnv">,
+  options: ResolveProviderOptions,
+): Promise<string> {
+  if (profile.apiKey) return profile.apiKey;
+  const name = profile.apiKeyEnv?.trim();
+  if (!name) return "";
+
+  const env = options.env ?? process.env;
+  const envValue = env[name];
+  if (envValue) return envValue;
+
+  const dotenv = await parseDotenv(configPaths(options.dataDir).dotenv);
+  return dotenv[name] ?? "";
+}
+
 /** Masked, frontend-facing settings (never leak the raw key). */
 export interface LocalSettings {
   model: string;

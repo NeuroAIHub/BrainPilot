@@ -1,13 +1,17 @@
 import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
 import {
   capabilitiesForMarketplaceEntry,
   categoryForMarketplaceEntry,
   categoryForPluginKind,
   executesLocalCodeForMarketplaceEntry,
+  findMcpRestartReturnFocus,
   matchesMarketplaceQuery,
   matchesMarketplaceSource,
-  marketplacePluginRequiresRestart,
+  marketplacePluginOffersRuntimeRefresh,
   mcpRuntimeSummaryForPlugin,
+  restartPromptForMcpMutation,
+  shouldDismissMcpRestartPrompt,
   sourceFormatForMarketplaceEntry,
 } from "../components/plugins/PluginMarketplace";
 
@@ -66,9 +70,27 @@ describe("plugin marketplace catalogue model", () => {
     expect(executesLocalCodeForMarketplaceEntry({ capabilities: ["skills"] })).toBe(false);
   });
 
-  it("requires a runtime restart only for MCP-capable marketplace plugins", () => {
-    expect(marketplacePluginRequiresRestart({ ...entry, capabilities: ["mcp"] })).toBe(true);
-    expect(marketplacePluginRequiresRestart({ ...entry, capabilities: ["skills", "hooks"] })).toBe(false);
+  it("offers an optional runtime refresh only for MCP-capable marketplace plugins", () => {
+    expect(marketplacePluginOffersRuntimeRefresh({ ...entry, capabilities: ["mcp"] })).toBe(true);
+    expect(marketplacePluginOffersRuntimeRefresh({ ...entry, capabilities: ["skills", "hooks"] })).toBe(false);
+  });
+
+  it("offers an optional refresh for mutations of enabled MCP plugins", () => {
+    const mcpEntry = {
+      ...entry,
+      capabilities: ["mcp"],
+    } as Parameters<typeof restartPromptForMcpMutation>[0];
+    expect(restartPromptForMcpMutation(mcpEntry, true, "reload")).toEqual({
+      pluginId: "org.brainpilot.nifti-viewer",
+      pluginName: "NIfTI Viewer",
+      enabled: true,
+    });
+    expect(restartPromptForMcpMutation(mcpEntry, true, "remove")).toEqual({
+      pluginId: "org.brainpilot.nifti-viewer",
+      pluginName: "NIfTI Viewer",
+      enabled: false,
+    });
+    expect(restartPromptForMcpMutation(mcpEntry, false, "reload")).toBeNull();
   });
 
   it("summarizes runtime-observed MCP health per plugin", () => {
@@ -78,5 +100,33 @@ describe("plugin marketplace catalogue model", () => {
       { name: "global", state: "ready" },
     ] }, "plugin-a")).toEqual({ state: "degraded", errors: ["memory: connection closed"] });
     expect(mcpRuntimeSummaryForPlugin({ state: "ready", servers: [{ name: "global", state: "ready" }] }, "plugin-a")).toBeNull();
+  });
+
+  it("dismisses the runtime prompt with Escape only while idle", () => {
+    expect(shouldDismissMcpRestartPrompt("Escape", false)).toBe(true);
+    expect(shouldDismissMcpRestartPrompt("Esc", false)).toBe(true);
+    expect(shouldDismissMcpRestartPrompt("Escape", true)).toBe(false);
+    expect(shouldDismissMcpRestartPrompt("Enter", false)).toBe(false);
+  });
+
+  it("returns focus to a replacement plugin toggle after async rerender", () => {
+    const connected = { isConnected: true, tabIndex: 0, dataset: {} } as unknown as HTMLElement;
+    const pageRoot = { isConnected: true, tabIndex: -1, dataset: {} } as unknown as HTMLElement;
+    const removed = { isConnected: false, tabIndex: 0, dataset: {} } as unknown as HTMLElement;
+    const replacement = { isConnected: true, tabIndex: 0, dataset: { pluginToggleId: "plugin-a" } } as unknown as HTMLElement;
+    expect(findMcpRestartReturnFocus(connected, "plugin-a", [replacement])).toBe(connected);
+    expect(findMcpRestartReturnFocus(pageRoot, "plugin-a", [replacement])).toBe(replacement);
+    expect(findMcpRestartReturnFocus(removed, "plugin-a", [replacement])).toBe(replacement);
+    expect(findMcpRestartReturnFocus(removed, "plugin-b", [replacement])).toBeNull();
+  });
+
+  it("keeps the marketplace background inert while the runtime prompt is open", () => {
+    const source = readFileSync(new URL("../components/plugins/PluginMarketplace.tsx", import.meta.url), "utf8");
+    expect(source).toContain('surface.setAttribute("inert", "")');
+    expect(source).toContain('surface.removeAttribute("inert")');
+    expect(source).toContain("aria-hidden={restartPrompt ? true : undefined}");
+    expect(source).toContain("trapFocusKeyDown(dialog, event)");
+    expect(source).toContain("ref={restartDismissRef}");
+    expect(source).toContain("data-plugin-toggle-id={entry.manifest.id}");
   });
 });

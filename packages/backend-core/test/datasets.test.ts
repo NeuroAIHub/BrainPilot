@@ -1,4 +1,5 @@
 import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -16,6 +17,24 @@ function orchestrator(): Orchestrator {
 }
 
 describe("dataset marketplace", () => {
+  it("ships every downloader used by automatic recipes in the main image (#466)", () => {
+    const dockerfile = readFileSync(
+      new URL("../../../docker/main/Dockerfile", import.meta.url),
+      "utf8",
+    );
+    for (const token of [
+      "git-annex",
+      "wget",
+      "datalad==1.6.0",
+      "dandi==0.76.7",
+      "datalad --version",
+      "dandi --version",
+      "wget --version",
+    ]) {
+      expect(dockerfile).toContain(token);
+    }
+  });
+
   it("publishes metadata without exposing executable recipes", async () => {
     const entries = listDatasets();
     expect(entries.length).toBeGreaterThanOrEqual(10);

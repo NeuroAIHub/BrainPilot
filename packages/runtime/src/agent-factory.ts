@@ -34,6 +34,7 @@ import { makeAgentStatusExt } from "./extensions/agent-status.js";
 import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
+import { makeOpenAiToolSchemaCompatExt } from "./extensions/openai-tool-schema-compat.js";
 import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
 import {
   createBashRepetitionGuard,
@@ -136,10 +137,10 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // Target a custom Anthropic-compatible gateway. A per-session providerConfig
   // (from providers.json) wins and isolates its key via setRuntimeApiKey;
   // otherwise fall back to the env-based gateway (Docker/static compat).
-  const resolved = params.providerConfig
+  const resolved = await (params.providerConfig
     ? resolveSessionModel(sdk as unknown as PiProviderSdk, agentDir, params.providerConfig)
-    : resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir);
-  const { model, modelRegistry, authStorage } = resolved;
+    : resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir));
+  const { model, modelRegistry, modelRuntime, authStorage } = resolved;
 
   // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
   // per-role persona is injected through a DefaultResourceLoader. We use
@@ -221,6 +222,10 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
       }),
     );
   }
+  // #452: keep this LAST. Pi has already combined built-in, custom, MCP, and
+  // extension tools when before_provider_request runs, so one final rewrite
+  // fixes every active tool source without changing their canonical schemas.
+  extensionFactories.push(makeOpenAiToolSchemaCompatExt());
   const additionalExtensionPaths = params.compatPluginProjections
     ?.flatMap((projection) => projection.extensionPaths ?? []);
   const resourceLoader = new DefaultResourceLoader({
@@ -249,6 +254,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     sessionManager: SessionManager.open(params.historyPath),
     thinkingLevel: params.thinkingLevel,
     ...(model ? { model } : {}),
+    ...(modelRuntime ? { modelRuntime } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(authStorage ? { authStorage } : {}),
   });
@@ -448,6 +454,7 @@ interface PiSdk {
     sessionManager?: unknown;
     model?: unknown;
     modelRegistry?: unknown;
+    modelRuntime?: unknown;
     authStorage?: unknown;
     thinkingLevel?: import("@brainpilot/protocol").ThinkingLevel;
   }): Promise<{ session: PiSession }>;
@@ -496,15 +503,22 @@ interface PiSdk {
     getExtensions(): { extensions: Array<{ tools: Map<string, unknown> }> };
   };
   getAgentDir(): string;
-  AuthStorage: {
+  AuthStorage?: {
     create(path: string): unknown;
     inMemory?(): { setRuntimeApiKey?(provider: string, key: string): void };
   };
-  ModelRegistry: {
+  ModelRegistry?: {
     create(authStorage: unknown, modelsJsonPath?: string): {
       refresh(): void;
       getError(): string | undefined;
       find(provider: string, modelId: string): unknown;
     };
+  };
+  ModelRuntime?: {
+    create(options: { modelsPath: string; refreshOnCreate?: boolean }): Promise<{
+      getError(): string | undefined;
+      getModel(provider: string, modelId: string): unknown;
+      setRuntimeApiKey(provider: string, key: string): Promise<void>;
+    }>;
   };
 }

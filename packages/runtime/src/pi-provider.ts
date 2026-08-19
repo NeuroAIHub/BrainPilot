@@ -55,17 +55,26 @@ const DEFAULT_MAX_TOKENS = 32_768;
 
 /** Minimal structural surface of the Pi SDK bits this module needs. */
 export interface PiProviderSdk {
-  AuthStorage: {
+  AuthStorage?: {
     create(path: string): PiAuthStorage;
     inMemory?(): PiAuthStorage;
   };
-  ModelRegistry: {
+  ModelRegistry?: {
     create(authStorage: unknown, modelsJsonPath?: string): {
       refresh(): void;
       getError(): string | undefined;
       find(provider: string, modelId: string): unknown;
     };
   };
+  ModelRuntime?: {
+    create(options: { modelsPath: string; refreshOnCreate?: boolean }): Promise<PiModelRuntime>;
+  };
+}
+
+interface PiModelRuntime {
+  getError(): string | undefined;
+  getModel(provider: string, modelId: string): unknown;
+  setRuntimeApiKey(provider: string, key: string): Promise<void>;
 }
 
 export interface PiAuthStorage {
@@ -110,6 +119,7 @@ export function resolveCompactionSettings(
 export interface ResolvedProvider {
   model?: unknown;
   modelRegistry?: unknown;
+  modelRuntime?: unknown;
   /** Per-session AuthStorage holding the runtime key (when provider-configured). */
   authStorage?: unknown;
 }
@@ -126,7 +136,10 @@ function intEnv(name: string): number | undefined {
  * Resolve a custom model from env, or return `{}` when none is configured.
  * `agentDir` is Pi's global config dir (getAgentDir()).
  */
-export function resolveGatewayModel(sdk: PiProviderSdk, agentDir: string): ResolvedProvider {
+export function resolveGatewayModel(
+  sdk: PiProviderSdk,
+  agentDir: string,
+): ResolvedProvider | Promise<ResolvedProvider> {
   const modelId = process.env.ANTHROPIC_MODEL?.trim();
 
   // Tier 3 — advanced: user supplies their own models.json verbatim.
@@ -213,7 +226,9 @@ function select(
   modelsJsonPath: string,
   provider: string,
   modelId: string,
-): ResolvedProvider {
+): ResolvedProvider | Promise<ResolvedProvider> {
+  if (sdk.ModelRuntime) return selectWithModelRuntime(sdk.ModelRuntime, modelsJsonPath, provider, modelId);
+  if (!sdk.AuthStorage || !sdk.ModelRegistry) throw new Error("Pi SDK has no supported model runtime");
   const authStorage = sdk.AuthStorage.create(join(agentDir, "auth.json"));
   const modelRegistry = sdk.ModelRegistry.create(authStorage, modelsJsonPath);
   modelRegistry.refresh();
@@ -226,22 +241,37 @@ function select(
   return { model, modelRegistry };
 }
 
+async function selectWithModelRuntime(
+  factory: NonNullable<PiProviderSdk["ModelRuntime"]>,
+  modelsJsonPath: string,
+  provider: string,
+  modelId: string,
+  apiKey?: string,
+): Promise<ResolvedProvider> {
+  const modelRuntime = await factory.create({ modelsPath: modelsJsonPath, refreshOnCreate: false });
+  if (apiKey) await modelRuntime.setRuntimeApiKey(provider, apiKey);
+  const err = modelRuntime.getError();
+  if (err) throw new Error(`Pi models.json load error (${modelsJsonPath}): ${err}`);
+  const model = modelRuntime.getModel(provider, modelId);
+  if (!model) throw new Error(`model not found in ${modelsJsonPath}: ${provider}/${modelId}`);
+  return { model, modelRuntime };
+}
+
 /**
  * Resolve a model for a PER-SESSION provider config (from providers.json),
  * isolated from process env so concurrent sessions can use different keys.
  *
- * Strategy (per the Pi SDK): build a dedicated models.json + ModelRegistry +
- * AuthStorage for this provider, then push the key via
- * `authStorage.setRuntimeApiKey` — an in-memory, non-persisted, top-priority
- * override. The models.json `apiKey` is a harmless placeholder; the runtime
- * override wins at request time. Returns `{}` when no usable config is given,
- * so the caller falls back to {@link resolveGatewayModel} (env-based).
+ * Strategy: build a dedicated models.json and model runtime for this provider,
+ * then push the key through the runtime's in-memory override. The legacy
+ * ModelRegistry/AuthStorage path remains for older compatible SDKs. Returns
+ * `{}` when no usable config is given, so the caller falls back to
+ * {@link resolveGatewayModel} (env-based).
  */
 export function resolveSessionModel(
   sdk: PiProviderSdk,
   agentDir: string,
   cfg: SessionProviderConfig,
-): ResolvedProvider {
+): ResolvedProvider | Promise<ResolvedProvider> {
   if (!cfg.apiKey || !cfg.baseUrl || !cfg.modelId) return {};
 
   mkdirSync(agentDir, { recursive: true });
@@ -288,6 +318,11 @@ export function resolveSessionModel(
   }
   if (current !== desired) writeFileSync(modelsJsonPath, desired);
 
+  if (sdk.ModelRuntime) {
+    return selectWithModelRuntime(sdk.ModelRuntime, modelsJsonPath, cfg.providerId, cfg.modelId, cfg.apiKey);
+  }
+
+  if (!sdk.AuthStorage || !sdk.ModelRegistry) throw new Error("Pi SDK has no supported model runtime");
   // A per-session AuthStorage isolates the runtime key. Prefer inMemory()
   // (never touches disk); fall back to a file-backed instance if unavailable.
   const authStorage: PiAuthStorage = sdk.AuthStorage.inMemory
