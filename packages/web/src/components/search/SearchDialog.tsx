@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageCircle, X } from "lucide-react";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
@@ -8,6 +8,7 @@ import {
   clampActiveIndex,
   filterSessionsByQuery,
   moveActiveIndex,
+  navigateToSearchResult,
   searchResultMeta,
   titleCollisionIds,
 } from "./searchResults";
@@ -15,6 +16,7 @@ import {
 type SearchDialogProps = {
   isOpen: boolean;
   onClose: () => void;
+  onOpenWorkspace: () => void;
   confirmNavigation?: () => boolean;
 };
 
@@ -23,7 +25,7 @@ type SearchDialogProps = {
  * list + listitem buttons (not listbox/button mismatch), arrow navigation,
  * visible Close, and same-title disambiguation via date + short id.
  */
-export function SearchDialog({ isOpen, onClose, confirmNavigation }: SearchDialogProps) {
+export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigation }: SearchDialogProps) {
   const { sessions, selectSession } = useSessions();
   const t = useT();
   const [query, setQuery] = useState("");
@@ -41,6 +43,13 @@ export function SearchDialog({ isOpen, onClose, confirmNavigation }: SearchDialo
     () => titleCollisionIds(filteredSessions),
     [filteredSessions],
   );
+
+  const openSession = useCallback((sessionId: string) => navigateToSearchResult(sessionId, {
+    confirmNavigation,
+    openWorkspace: onOpenWorkspace,
+    selectSession,
+    close: onClose,
+  }), [confirmNavigation, onClose, onOpenWorkspace, selectSession]);
 
   // Keep highlight in range when the filtered list changes.
   useEffect(() => {
@@ -87,9 +96,7 @@ export function SearchDialog({ isOpen, onClose, confirmNavigation }: SearchDialo
         const target = filteredSessions[clampActiveIndex(activeIndex, filteredSessions.length)];
         if (target && document.activeElement === inputRef.current) {
           event.preventDefault();
-          if (confirmNavigation && !confirmNavigation()) return;
-          selectSession(target.id);
-          onClose();
+          openSession(target.id);
         }
       }
     };
@@ -107,17 +114,11 @@ export function SearchDialog({ isOpen, onClose, confirmNavigation }: SearchDialo
         }
       }
     };
-  }, [isOpen, onClose, filteredSessions, activeIndex, selectSession, confirmNavigation]);
+  }, [isOpen, onClose, filteredSessions, activeIndex, openSession]);
 
   if (!isOpen) {
     return null;
   }
-
-  const openSession = (sessionId: string) => {
-    if (confirmNavigation && !confirmNavigation()) return;
-    selectSession(sessionId);
-    onClose();
-  };
 
   const formatWhen = (iso: string) => {
     try {

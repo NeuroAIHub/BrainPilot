@@ -65,7 +65,11 @@ describe("tool access control (§9)", () => {
     };
     const dispatch = createDispatchTaskTool(d);
     expect((dispatch.parameters.required as string[])).toEqual(["content", "to"]);
-    expect((await dispatch.execute({ to: "writer", content: "polish docs/report.md" })).isError).toBeUndefined();
+    const dispatchResult = await dispatch.execute({ to: "writer", content: "polish docs/report.md" });
+    expect(dispatchResult.isError).toBeUndefined();
+    const dispatchText = (dispatchResult.content as Array<{ text?: string }>)[0]?.text ?? "";
+    expect(dispatchText).toContain("Stop this turn now");
+    expect(dispatchText).toContain("do not claim completion");
     expect(dispatched).toEqual([["writer", "polish docs/report.md"]]);
     await expect(dispatch.execute({ to: "engineer", content: "self" })).resolves.toMatchObject({ isError: true });
     await expect(dispatch.execute({ to: "trace", content: "wrong" })).resolves.toMatchObject({ isError: true });

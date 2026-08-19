@@ -66,6 +66,43 @@ const NON_TRACE_TOOLS = new Set([
   "get_trace_diff",
 ]);
 
+const READ_ONLY_SHELL_COMMANDS = new Set([
+  "cat",
+  "file",
+  "find",
+  "grep",
+  "head",
+  "ls",
+  "pwd",
+  "rg",
+  "stat",
+  "tail",
+  "wc",
+]);
+
+/** True only for a conservative chain of inspection-only shell commands. */
+export function isReadOnlyShellCommand(command: unknown): boolean {
+  if (typeof command !== "string" || !command.trim()) return false;
+  // Redirections, substitutions, and line breaks make a command too ambiguous
+  // to classify as inspection-only. Keep the default trace-worthy behavior.
+  if (/[>\n\r]|\$\(|\x60/.test(command)) return false;
+  const segments = command.split(/&&|\|\||[;|]/).map((part) => part.trim()).filter(Boolean);
+  if (segments.length === 0) return false;
+  return segments.every((segment) => {
+    const words = segment.split(/\s+/);
+    while (words[0] && /^[A-Z_][A-Z0-9_]*=/.test(words[0])) words.shift();
+    const executable = words[0]?.replace(/^.*\//, "").toLowerCase();
+    if (!executable) return false;
+    if (executable === "find") {
+      return !words.some((word) => ["-delete", "-exec", "-execdir", "-ok", "-okdir"].includes(word));
+    }
+    if (executable === "git") {
+      return ["diff", "log", "show", "status", "ls-files"].includes(words[1]?.toLowerCase() ?? "");
+    }
+    return READ_ONLY_SHELL_COMMANDS.has(executable);
+  });
+}
+
 const SYS = (kind: string, body: string): string =>
   `[SYSTEM-MESSAGE:${kind}] ${body} [/SYSTEM-MESSAGE]`;
 
@@ -147,6 +184,10 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
       if (tool === "dispatch_task") {
         state.dispatched = true;
         state.traceWorthy = true;
+        return;
+      }
+
+      if (tool === "bash" && isReadOnlyShellCommand(start?.args?.command)) {
         return;
       }
 

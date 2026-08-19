@@ -288,6 +288,7 @@ export class McpBridge {
     const connectedServers: string[] = [];
     const skippedServers: string[] = [];
     const failures: McpConnectionFailure[] = [];
+    const generationTools: SystemTool[] = [];
     for (const [name, spec] of Object.entries(cfg.mcpServers)) {
       if (isPlaceholderSpec(spec)) {
         // A scaffolded slot whose url/command hasn't been filled in yet — skip
@@ -303,7 +304,7 @@ export class McpBridge {
         const { tools } = await client.listTools();
         this.clients.push(client);
         connectedServers.push(name);
-        for (const t of tools) this._tools.push(this.wrap(name, client, t));
+        for (const t of tools) generationTools.push(this.wrap(name, client, t));
       } catch (err) {
         await client?.close().catch(() => {});
         const error = err instanceof Error ? err.message : String(err);
@@ -312,7 +313,10 @@ export class McpBridge {
         console.error(`[mcp] server '${name}' failed to connect:`, error);
       }
     }
-    return { tools: this._tools, connectedServers, skippedServers, failures };
+    // Only newly-created agents receive this generation. Older SystemTool
+    // closures keep referencing their still-open clients until bridge.close().
+    this._tools = generationTools;
+    return { tools: generationTools, connectedServers, skippedServers, failures };
   }
 
   private wrap(server: string, client: McpClientLike, t: McpToolDescriptor): SystemTool {

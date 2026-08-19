@@ -30,8 +30,8 @@ RUN if [ -n "$NPM_REGISTRY" ]; then npm config set registry "$NPM_REGISTRY"; fi 
 # `npm run build` runs `--workspaces`, which already builds @brainpilot/web (tsc -b && vite build).
 RUN npm run build
 
-# ---- runtime: backend server + built web dist ----
-FROM node:22-slim AS runtime
+# ---- runtime-deps: backend OS/Python download tools (independently testable) ----
+FROM node:22-slim AS runtime-deps
 
 ARG APT_MIRROR=""
 
@@ -39,8 +39,15 @@ RUN if [ -n "$APT_MIRROR" ]; then \
       sed -i "s|http://deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git \
-    && rm -rf /var/lib/apt/lists/*
+    && apt-get install -y --no-install-recommends curl ca-certificates git git-annex wget python3 python3-pip \
+    && rm -rf /var/lib/apt/lists/* \
+    && pip3 install --no-cache-dir --break-system-packages datalad==1.6.0 dandi==0.76.7 \
+    && datalad --version \
+    && dandi --version \
+    && wget --version >/dev/null
+
+# ---- runtime: backend server + built web dist ----
+FROM runtime-deps AS runtime
 
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules

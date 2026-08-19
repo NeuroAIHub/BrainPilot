@@ -87,6 +87,9 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
       expect(restored.status).toBe(200);
       expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("old\n");
     } finally {
+      // Restore emits durable trace/task state asynchronously. Settle those
+      // writes and stop Monitor/background work before deleting the fixture
+      // root so cleanup cannot race a late mkdir/write and fail with ENOTEMPTY.
       if (manager) await manager.shutdownAndSave();
       await rm(dataRoot, { recursive: true, force: true });
     }
