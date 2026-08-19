@@ -44,6 +44,7 @@ function makeOrch(
     portMin: 8100,
     portMax: 8102,
     createOrchestrator: (o) => new FakeOrchestrator(o),
+    reclaimProbe: async () => true,
     ...overrides,
   });
   return orch;
@@ -158,6 +159,7 @@ describe("PerUserDockerOrchestrator", () => {
       let clock = 1_000_000;
       const metricsProbe = vi.fn(async () => ({
         runningAgents: 0,
+        reclaimable: true,
         lastActivityAt: new Date(clock - 10 * 60_000).toISOString(),
       }));
       const orch = makeOrch({
@@ -168,6 +170,7 @@ describe("PerUserDockerOrchestrator", () => {
         clearIntervalFn: () => {},
       });
       await orch.ensureRuntime({ userId: "alice" });
+      clock += 10 * 60_000;
       await orch.reapIdle();
       expect(orch.activeUsers).toEqual([]);
       expect(FakeOrchestrator.instances[0]!.stopped).toBe(true);
@@ -177,7 +180,7 @@ describe("PerUserDockerOrchestrator", () => {
       let clock = 1_000_000;
       const orch = makeOrch({
         idleMs: 1,
-        metricsProbe: async () => ({ runningAgents: 2, lastActivityAt: null }),
+        metricsProbe: async () => ({ runningAgents: 2, reclaimable: false, lastActivityAt: null }),
         now: () => clock,
         setIntervalFn: () => 0 as unknown as ReturnType<typeof setInterval>,
         clearIntervalFn: () => {},
@@ -185,6 +188,64 @@ describe("PerUserDockerOrchestrator", () => {
       await orch.ensureRuntime({ userId: "alice" });
       await orch.reapIdle();
       expect(orch.activeUsers).toEqual(["alice"]);
+    });
+
+    it("does NOT infer reclaimability from legacy runningAgents", async () => {
+      const orch = makeOrch({
+        idleMs: 1,
+        metricsProbe: async () => ({ runningAgents: 0, lastActivityAt: null }),
+        setIntervalFn: () => 0 as unknown as ReturnType<typeof setInterval>,
+        clearIntervalFn: () => {},
+      });
+      await orch.ensureRuntime({ userId: "alice" });
+      await orch.reapIdle();
+      expect(orch.activeUsers).toEqual(["alice"]);
+    });
+
+    it("does NOT reap when the Runtime rejects the atomic reclaim", async () => {
+      const orch = makeOrch({
+        idleMs: 1,
+        metricsProbe: async () => ({ reclaimable: true, lastActivityAt: null }),
+        reclaimProbe: async () => false,
+        setIntervalFn: () => 0 as unknown as ReturnType<typeof setInterval>,
+        clearIntervalFn: () => {},
+      });
+      await orch.ensureRuntime({ userId: "alice" });
+      await orch.reapIdle();
+      expect(orch.activeUsers).toEqual(["alice"]);
+    });
+
+    it("makes a concurrent ensure wait for reclaim and receive a fresh container", async () => {
+      let release!: () => void;
+      let clock = 0;
+      const gate = new Promise<void>((resolve) => { release = resolve; });
+      const entered = vi.fn();
+      const orch = makeOrch({
+        idleMs: 1,
+        metricsProbe: async () => ({
+          reclaimable: true,
+          lastActivityAt: new Date(0).toISOString(),
+        }),
+        reclaimProbe: async () => {
+          entered();
+          await gate;
+          return true;
+        },
+        now: () => clock,
+        setIntervalFn: () => 0 as unknown as ReturnType<typeof setInterval>,
+        clearIntervalFn: () => {},
+      });
+      await orch.ensureRuntime({ userId: "alice" });
+      clock = 10_000;
+      const reap = orch.reapIdle();
+      await vi.waitFor(() => expect(entered).toHaveBeenCalledOnce());
+      const ensured = orch.ensureRuntime({ userId: "alice" });
+      release();
+      await reap;
+
+      expect((await ensured).baseUrl).toBe("http://127.0.0.1:8100");
+      expect(FakeOrchestrator.instances).toHaveLength(2);
+      expect(FakeOrchestrator.instances[0]!.stopped).toBe(true);
     });
 
     it("does NOT reap when metrics are unreadable (transient probe failure)", async () => {

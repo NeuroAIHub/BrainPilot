@@ -16,6 +16,7 @@ describe("state authority (§10)", () => {
     const before = m.metrics();
     expect(before.activeSessions).toBe(1);
     expect(before.runningAgents).toBe(0);
+    expect(before.reclaimable).toBe(true);
 
     await m.sendMessage(s.id, "hello");
 
@@ -23,7 +24,10 @@ describe("state authority (§10)", () => {
     await waitFor(() => {
       const agents = m.listAgents(s.id);
       const state = m.getSessionState(s.id);
-      return agents.length > 0 && agents[0]!.status === "idle" && state?.runState.active === false;
+      return agents.length > 0
+        && agents[0]!.status === "idle"
+        && state?.runState.active === false
+        && state.workState.status === "idle";
     });
 
     // We observed a running->idle transition.
@@ -38,9 +42,15 @@ describe("state authority (§10)", () => {
     const state = m.getSessionState(s.id);
     expect(state).toBeDefined();
     expect(state!.runState.active).toBe(false);
+    expect(state!.workState).toMatchObject({
+      active: false,
+      status: "idle",
+      epoch: 1,
+    });
 
     const after = m.metrics();
     expect(after.runningAgents).toBe(0);
+    expect(after.reclaimable).toBe(true);
     expect(after.lastActivityAt).not.toBeNull();
     expect(after.memRss).toBeGreaterThan(0);
   });
@@ -54,7 +64,7 @@ describe("state authority (§10)", () => {
 
     type Snap = {
       runState: { active: boolean; runId: string | null };
-      workState: { active: boolean };
+      workState: { active: boolean; status: string; epoch: number };
       agents: Array<{ name: string; status: string }>;
     };
     const snapshots: Snap[] = [];
@@ -67,7 +77,9 @@ describe("state authority (§10)", () => {
     await m.sendMessage(s.id, "hello");
     await waitFor(() => {
       const agents = m.listAgents(s.id);
-      return agents.length > 0 && agents[0]!.status === "idle";
+      return agents.length > 0
+        && agents[0]!.status === "idle"
+        && m.getSessionState(s.id)?.workState.status === "idle";
     });
 
     // At least: initial frame (active) + running + idle.
@@ -78,6 +90,8 @@ describe("state authority (§10)", () => {
     const first = snapshots[0]!;
     expect(first.runState.active).toBe(true);
     expect(first.workState.active).toBe(true);
+    expect(first.workState.status).toBe("active");
+    expect(first.workState.epoch).toBe(1);
     expect(first.agents.some((a) => a.name === "principal")).toBe(true);
 
     // Somewhere we saw principal running, and the final snapshot is idle.
@@ -87,6 +101,7 @@ describe("state authority (§10)", () => {
     const last = snapshots[snapshots.length - 1]!;
     expect(last.agents.find((a) => a.name === "principal")?.status).toBe("idle");
     expect(last.workState.active).toBe(false);
+    expect(last.workState.status).toBe("idle");
 
     // Reconnect snapshot: the ring buffer replay ends on the latest
     // session_state, so a re-subscribing client recovers the idle state.
@@ -109,6 +124,7 @@ describe("state authority (§10)", () => {
     expect(m.getSession(s.id)).toBeUndefined();
     expect(m.metrics().activeSessions).toBe(0);
   });
+
 });
 
 async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {

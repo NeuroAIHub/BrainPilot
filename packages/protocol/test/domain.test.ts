@@ -52,6 +52,34 @@ describe("domain schemas", () => {
     ).toBeNull();
   });
 
+  it("validates the two-state workflow lifecycle while accepting legacy workState", () => {
+    const parsed = SessionStateSnapshotSchema.parse({
+      runState: { active: false, runId: null },
+      workState: { active: false, status: "idle", epoch: 3 },
+      agents: [],
+      lastActivityTs: "",
+    });
+    expect(parsed.workState).toMatchObject({ status: "idle", epoch: 3 });
+    expect(SessionStateSnapshotSchema.safeParse({
+      runState: { active: false, runId: null },
+      workState: { active: false, status: "quiescent", epoch: 3 },
+      agents: [],
+      lastActivityTs: "",
+    }).success).toBe(false);
+    expect(SessionStateSnapshotSchema.safeParse({
+      runState: { active: false, runId: null },
+      workState: { active: false, status: "blocked", epoch: 3 },
+      agents: [],
+      lastActivityTs: "",
+    }).success).toBe(false);
+    expect(SessionStateSnapshotSchema.safeParse({
+      runState: { active: false, runId: null },
+      workState: { active: true, status: "idle", epoch: 3 },
+      agents: [],
+      lastActivityTs: "",
+    }).success).toBe(false);
+  });
+
   it("SessionStateSnapshot carries optional tokenUsage", () => {
     const parsed = SessionStateSnapshotSchema.parse({
       runState: { active: false, runId: null },

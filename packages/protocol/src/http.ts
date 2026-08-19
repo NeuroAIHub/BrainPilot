@@ -58,6 +58,8 @@ export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 export const MetricsResponseSchema = z.object({
   activeSessions: z.number(),
   runningAgents: z.number(),
+  /** Runtime-owned aggregate decision; absent only on legacy runtimes. */
+  reclaimable: z.boolean().optional(),
   /** ISO8601 of last activity across all sessions; null if never active. */
   lastActivityAt: z.string().nullable(),
   /** Resident set size in bytes. */
@@ -71,6 +73,11 @@ export const MetricsResponseSchema = z.object({
   memRatio: z.number().nullable(),
 });
 export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
+
+export const ShutdownIfReclaimableResponseSchema = z.object({
+  reclaimable: z.boolean(),
+});
+export type ShutdownIfReclaimableResponse = z.infer<typeof ShutdownIfReclaimableResponseSchema>;
 
 /* ------------------------------------------------------------------ *
  * PUT /runtime/capabilities  (backend-managed plugin capability sync)
@@ -314,6 +321,7 @@ export type EvictSessionResponse = z.infer<typeof EvictSessionResponseSchema>;
 export const RUNTIME_ROUTES = {
   health: { method: "GET", path: "/health" },
   metrics: { method: "GET", path: "/metrics" },
+  shutdownIfReclaimable: { method: "POST", path: "/runtime/shutdown-if-reclaimable" },
   setRuntimeCapabilities: { method: "PUT", path: "/runtime/capabilities" },
   mcpStatus: { method: "GET", path: "/mcp/status" },
   createSession: { method: "POST", path: "/sessions" },

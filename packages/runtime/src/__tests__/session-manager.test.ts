@@ -330,6 +330,7 @@ describe("SessionManager (mock mode)", () => {
 
   it("ignores the removed workflow policy in legacy session metadata", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-legacy-workflow-policy-"));
+    let restored: SessionManager | undefined;
     try {
       const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: mockAgentFactory });
       const session = await manager.createSession();
@@ -341,7 +342,7 @@ describe("SessionManager (mock mode)", () => {
       await writeFile(metaPath, JSON.stringify(meta));
 
       const seen: Parameters<typeof mockAgentFactory>[0][] = [];
-      const restored = new SessionManager({
+      restored = new SessionManager({
         dataRoot: root,
         persist: true,
         agentFactory: async (params) => {
@@ -356,6 +357,7 @@ describe("SessionManager (mock mode)", () => {
         .toBeDefined();
       await waitFor(() => restored.getSessionState(session.id)?.workState.active === false);
     } finally {
+      await restored?.shutdownAndSave();
       await rm(root, { recursive: true, force: true });
     }
   });

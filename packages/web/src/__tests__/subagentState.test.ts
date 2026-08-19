@@ -45,4 +45,18 @@ describe("subagent session state", () => {
     expect(state.runState.active).toBe(false);
     expect(state.workState.active).toBe(true);
   });
+
+  it("normalizes the two-state workflow status and epoch", () => {
+    const state = normalizeSessionState({
+      run_state: { active: false, run_id: null },
+      work_state: { active: false, status: "idle", epoch: 2 },
+      agents: [],
+      last_activity_ts: "2026-08-19T00:00:00.000Z",
+    });
+    expect(state.workState).toEqual({
+      active: false,
+      status: "idle",
+      epoch: 2,
+    });
+  });
 });

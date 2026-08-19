@@ -8,6 +8,13 @@ export const RUNTIME_NAME = "@brainpilot/runtime";
 
 export { SessionManager } from "./session-manager.js";
 export type { SessionManagerOptions } from "./session-manager.js";
+export { SessionStateAuthority } from "./session-state-authority.js";
+export type {
+  WorkState,
+  SessionWorkFacts,
+  PersistedWorkflowState,
+  SessionStateAuthorityOptions,
+} from "./session-state-authority.js";
 
 export { MasAgent } from "./mas-agent.js";
 export type { AgentStatus, MasAgentOpts } from "./mas-agent.js";

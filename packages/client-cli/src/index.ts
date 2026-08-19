@@ -6,6 +6,9 @@ export {
   parseSseStream,
   fillPath,
   isTerminalEvent,
+  hasWorkflowStatus,
+  sessionTerminalStatus,
+  sessionWorkflowState,
   DEFAULT_BASE_URL,
 } from "./client.js";
 export type { BrainPilotClientOptions } from "./client.js";

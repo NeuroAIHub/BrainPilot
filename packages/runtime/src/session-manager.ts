@@ -108,6 +108,12 @@ import {
 } from "./system-plugins.js";
 import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
 import { BackgroundJobManager, type BackgroundJobCompletion } from "./background-job-manager.js";
+import {
+  SessionStateAuthority,
+  type PersistedWorkflowState,
+  type SessionWorkFacts,
+  type WorkState,
+} from "./session-state-authority.js";
 import { withExecutionToolContract } from "./execution-contract.js";
 import { loadRuntimePluginExtension } from "./runtime-plugins.js";
 import { makeWorkspaceLeaseGuardExt } from "./extensions/workspace-lease-guard.js";
@@ -298,6 +304,7 @@ interface SessionMeta {
   workflowTaskSeqBaseline?: number;
   workflowReminderClaimed?: boolean;
   workflowViolationEmitted?: boolean;
+  workflowState?: PersistedWorkflowState;
   systemPlugins?: SystemPluginSnapshot[];
 }
 
@@ -343,6 +350,8 @@ interface SessionEntry {
   monitorEvents: Map<string, MonitorEventBatch[]>;
   backgroundJobManager: BackgroundJobManager;
   backgroundJobEvents: Map<string, BackgroundJobCompletion[]>;
+  stateAuthority: SessionStateAuthority;
+  metaWrites: Promise<void>;
   /**
    * Cumulative real token usage for this session: whole-session `total` plus a
    * per-agent breakdown (keyed by agent name). Fed by each MasAgent's `onUsage`
@@ -1479,6 +1488,7 @@ export class SessionManager {
       workflowTaskSeqBaseline?: number;
       workflowReminderClaimed?: boolean;
       workflowViolationEmitted?: boolean;
+      workflowState?: PersistedWorkflowState;
       systemPlugins?: SystemPluginSnapshot[];
     } = {},
     /**
@@ -1489,6 +1499,7 @@ export class SessionManager {
      */
     _restore?: { createdAt: string; updatedAt: string; lastActivityAt: number },
   ): Promise<Session> {
+    if (this.shuttingDown) throw new Error("runtime is shutting down");
     if (this.memWatchdog?.isOverSoftLimit()) {
       throw new Error("memory budget exceeded: refusing new session");
     }
@@ -1564,12 +1575,16 @@ export class SessionManager {
         if (queued + batch.lines.length > MAX_MONITOR_EVENT_LINES) return false;
         queue.push(batch);
         monitorEvents.set(batch.ownerAgent, queue);
-        if (entry) this.wakeAgent(id, batch.ownerAgent);
+        if (entry) {
+          this.stateChanged(entry);
+          this.wakeAgent(id, batch.ownerAgent);
+        }
         return true;
       },
       onState: (info) => {
         if (!entry) return;
         entry.bus.emit(ev.custom({ sessionId: id, agentName: info.ownerAgent }, CUSTOM_EVENT.MONITOR_STATE, info));
+        this.stateChanged(entry);
       },
     });
     const backgroundJobEvents = new Map<string, BackgroundJobCompletion[]>();
@@ -1582,12 +1597,16 @@ export class SessionManager {
         const queue = backgroundJobEvents.get(completion.ownerAgent) ?? [];
         queue.push(completion);
         backgroundJobEvents.set(completion.ownerAgent, queue);
-        if (entry) this.wakeAgent(id, completion.ownerAgent);
+        if (entry) {
+          this.stateChanged(entry);
+          this.wakeAgent(id, completion.ownerAgent);
+        }
         return true;
       },
       onState: (info) => {
         if (!entry) return;
         entry.bus.emit(ev.custom({ sessionId: id, agentName: info.ownerAgent }, CUSTOM_EVENT.BACKGROUND_JOB_STATE, info));
+        this.stateChanged(entry);
       },
     });
     const subagents = new SubagentManager({
@@ -1620,7 +1639,18 @@ export class SessionManager {
       onChanged: () => {
         if (!entry) return;
         this.touch(entry);
-        this.emitSessionState(entry);
+        this.stateChanged(entry);
+      },
+    });
+
+    const stateAuthority = new SessionStateAuthority({
+      restored: input.workflowState,
+      inspect: () => this.inspectSessionWork(entry),
+      publish: () => {
+        if (entry) this.publishSessionState(entry);
+      },
+      persist: (state) => {
+        if (entry) return this.writeMeta(entry, state, true);
       },
     });
 
@@ -1654,6 +1684,8 @@ export class SessionManager {
       monitorEvents,
       backgroundJobManager,
       backgroundJobEvents,
+      stateAuthority,
+      metaWrites: Promise.resolve(),
       tokenUsage: { total: emptyTokenUsage(), byAgent: {} },
       stats: emptySessionStats(id),
     };
@@ -1691,6 +1723,10 @@ export class SessionManager {
         this.sessions.delete(id);
         throw err;
       }
+      if (_restore) {
+        await taskLedger.cancelAllPending("Sandbox restarted before task completion.");
+        await taskLedger.resumeDelivery();
+      }
       await this.loadTrace(entry);
       // Rehydrate cumulative token usage so the running total survives restarts.
       await this.loadUsage(entry);
@@ -1704,10 +1740,8 @@ export class SessionManager {
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
     await subagents.restore();
+    if (_restore) await entry.stateAuthority.recoverAfterRestart(false);
     this.emitTaskSnapshot(entry);
-    if (_restore) {
-      for (const target of taskLedger.notificationTargets()) this.wakeAgent(id, target);
-    }
     return this.toSession(entry);
   }
 
@@ -1811,6 +1845,7 @@ export class SessionManager {
     await e.backgroundJobManager.stopAll();
     for (const a of e.agents.values()) a.stop();
     await e.subagents.dispose();
+    await e.metaWrites;
     e.bus.clear();
     this.sessions.delete(id);
     this.providerSlots.delete(id);
@@ -1841,6 +1876,7 @@ export class SessionManager {
     await e.bus.flush();
     await e.taskLedger.flush();
     await e.trace.flush();
+    await e.metaWrites;
     e.bus.clear();
     this.sessions.delete(id);
     this.providerSlots.delete(id);
@@ -1914,6 +1950,7 @@ export class SessionManager {
     // exhausted principal/trace notification run. Other targets may resume
     // immediately; this target waits until its direct turn settles so prompts
     // never overlap.
+    const resumesPausedEpoch = entry.taskLedger.hasPausedDelivery();
     const resumeTargetAfterRun = await this.resumeTaskDelivery(entry, agentName);
 
     // Concurrent send: the target agent is still streaming its previous run.
@@ -1935,10 +1972,10 @@ export class SessionManager {
     // Start a fresh host-owned delegation epoch only for a new, idle Principal
     // user turn. Task-result deliveries and queued follow-ups remain in the
     // existing epoch, so a completed delegation continues to satisfy the guard.
-    if (
-      agentName === "principal"
-      && !this.deriveWorkActive(entry)
-    ) {
+    const currentWork = entry.stateAuthority.snapshot();
+    const startsEpoch = currentWork.status === "idle"
+      && (currentWork.epoch === 0 || !resumesPausedEpoch);
+    if (startsEpoch) {
       entry.workflowTaskSeqBaseline = entry.taskLedger.list().reduce(
         (highest, task) => Math.max(highest, task.seq),
         0,
@@ -1959,7 +1996,8 @@ export class SessionManager {
     // emitting, so without this the panel stays empty until the first
     // setStatus("running"). This first frame carries the appropriate PI and
     // aggregate lifecycle values plus the freshly-ensured agent.
-    this.emitSessionState(entry);
+    if (startsEpoch) entry.stateAuthority.beginEpoch();
+    else this.stateChanged(entry);
     // issue #42: persist + broadcast the user's own prompt as a role:"user"
     // CHUNK *before* the agent runs, so SSE replay reconstructs the full
     // transcript (user + assistant). The web composer's optimistic bubble uses
@@ -1984,7 +2022,7 @@ export class SessionManager {
         // correlation is cleared. For a direct reply this yields the terminal
         // active=false frame; for a delegation a pending delivery loop keeps it
         // true (the loop emits its own terminal frame when it drains).
-        this.emitSessionState(entry);
+        this.stateChanged(entry);
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
         }
@@ -1995,6 +2033,7 @@ export class SessionManager {
   private async resumeTaskDelivery(entry: SessionEntry, deferAgent: string): Promise<boolean> {
     if (!entry.taskLedger.hasPausedDelivery()) return false;
     await entry.taskLedger.resumeDelivery();
+    this.stateChanged(entry);
     for (const target of entry.taskLedger.notificationTargets()) {
       if (target !== deferAgent) this.wakeAgent(entry.id, target);
     }
@@ -2027,6 +2066,7 @@ export class SessionManager {
         return;
       }
       entry.userInputs.queue.push(input);
+      this.stateChanged(entry);
       await this.promoteNextUserInputLocked(entry);
     }).catch((err) => deferred.reject(err instanceof Error ? err : new Error(String(err))));
     return deferred.promise;
@@ -2071,6 +2111,7 @@ export class SessionManager {
       input.activatedAt = Date.now();
       input.deadlineAt = input.activatedAt + this.userInputTimeoutMs;
       this.armUserInputTimer(entry, input);
+      this.stateChanged(entry);
       return;
     }
   }
@@ -2122,6 +2163,7 @@ export class SessionManager {
       input.deferred.resolve(normalizedAnswer);
       this.touch(entry);
       await this.promoteNextUserInputLocked(entry);
+      this.stateChanged(entry);
       return "ok";
     });
   }
@@ -2176,6 +2218,7 @@ export class SessionManager {
     entry.userInputs.active = undefined;
     input.deferred.reject(this.userInputError(reason));
     if (promote) await this.promoteNextUserInputLocked(entry);
+    this.stateChanged(entry);
   }
 
   /** Cancel matching active/queued inputs. Queued items were never user-visible. */
@@ -2195,6 +2238,7 @@ export class SessionManager {
       const activeMatches = entry.userInputs.active && predicate(entry.userInputs.active);
       if (activeMatches) await this.cancelActiveUserInputLocked(entry, reason, false);
       if (promote && !entry.userInputs.active) await this.promoteNextUserInputLocked(entry);
+      this.stateChanged(entry);
     });
   }
 
@@ -2339,7 +2383,7 @@ export class SessionManager {
         }),
       );
       this.touch(entry);
-      this.emitSessionState(entry);
+      this.stateChanged(entry);
     }
     await entry.bus.flush();
     return targets.length > 0 || childrenCancelled > 0 || monitorsStopped > 0 || backgroundJobsStopped > 0;
@@ -2554,7 +2598,7 @@ export class SessionManager {
         const task = await entry.taskLedger.dispatch(name, target, content);
         entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "created", task }));
         this.touch(entry);
-        this.emitSessionState(entry);
+        this.stateChanged(entry);
         return task;
       },
       completeTask: async (taskId, reply) => {
@@ -2563,11 +2607,14 @@ export class SessionManager {
         if (before?.status !== "replied") {
           entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "replied", task }));
           this.touch(entry);
-          this.emitSessionState(entry);
+          this.stateChanged(entry);
         }
         return task;
       },
-      dispatchTrace: async (content) => entry.taskLedger.enqueueTrace(name, content),
+      dispatchTrace: async (content) => {
+        await entry.taskLedger.enqueueTrace(name, content);
+        this.stateChanged(entry);
+      },
       ensureAgent: async (target) => {
         await this.ensureAgent(sessionId, target);
       },
@@ -2676,9 +2723,15 @@ export class SessionManager {
         dataRoot: this.dataRoot, descriptor, sessionId, agentName: name, cwd: sessionCwd, checkpoints: entry.checkpoints,
         acquireLease: (owner) => {
           if (entry.workspaceLease && entry.workspaceLease.owner !== owner) return false;
-          entry.workspaceLease = { owner, agentName: name }; return true;
+          entry.workspaceLease = { owner, agentName: name };
+          this.stateChanged(entry);
+          return true;
         },
-        releaseLease: (owner) => { if (entry.workspaceLease?.owner === owner) entry.workspaceLease = undefined; },
+        releaseLease: (owner) => {
+          if (entry.workspaceLease?.owner !== owner) return;
+          entry.workspaceLease = undefined;
+          this.stateChanged(entry);
+        },
         ownsLease: (owner) => entry.workspaceLease?.owner === owner,
         emit: (eventName, value) => entry.bus.emit(ev.custom({ sessionId, agentName: name }, eventName, value)),
       }));
@@ -2754,7 +2807,7 @@ export class SessionManager {
       // setStatus early-returns on no-op transitions, so this never storms.
       onStatusChange: (_agentName, status) => {
         this.touch(entry);
-        this.emitSessionState(entry);
+        this.stateChanged(entry);
         if (status === "idle" && (entry.taskLedger.count(name) > 0 || this.hasBackgroundJobEvents(entry, name) || this.hasMonitorEvents(entry, name))) {
           this.wakeAgent(sessionId, name);
         }
@@ -2766,7 +2819,7 @@ export class SessionManager {
         entry.tokenUsage.byAgent[agentName] = cumulative;
         entry.tokenUsage.total = sumAgentUsage(entry.tokenUsage.byAgent);
         this.touch(entry);
-        this.emitSessionState(entry);
+        this.publishSessionState(entry);
         void this.writeUsage(entry);
       },
       // Per-run stats: append a RunStats entry, refresh the per-agent
@@ -2876,6 +2929,7 @@ export class SessionManager {
       { agent: "principal", recoverable: true },
     ));
     await this.writeMeta(entry);
+    this.stateChanged(entry);
   }
 
   async destroyAgent(sessionId: string, name: string): Promise<void> {
@@ -2893,6 +2947,7 @@ export class SessionManager {
       entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "cancelled", task }));
       this.wakeAgent(sessionId, task.created_by);
     }
+    this.stateChanged(entry);
   }
 
   /**
@@ -2949,6 +3004,7 @@ export class SessionManager {
     const key = `${sessionId}:${name}`;
     if (this.deliveryLoops.has(key)) return;
     this.deliveryLoops.add(key);
+    this.stateChanged(current);
     void this.runDeliveryLoop(sessionId, name).finally(() => {
       this.deliveryLoops.delete(key);
       // Emit a final frame AFTER the key is gone: the agent's own running→idle
@@ -2956,7 +3012,7 @@ export class SessionManager {
       // that frame still read active via the pending-delivery check). Without
       // this trailing frame the derived run-active flag would stay stuck true.
       const entry = this.sessions.get(sessionId);
-      if (entry) this.emitSessionState(entry);
+      if (entry) this.stateChanged(entry);
       // Re-check after releasing the guard: a notification could have been written
       // between the loop's final empty read and this delete, and that writer's
       // wakeAgent would have bailed (key still present) — leaving the notification
@@ -2995,7 +3051,7 @@ export class SessionManager {
       if (agent.status === "stopped") return;
       this.touch(entry);
       // Surface the delegated run immediately (derived active flag, agent list).
-      this.emitSessionState(entry);
+      this.stateChanged(entry);
       const traceRecord = name === "trace"
         ? this.parseInternalEnvelope<TraceNodeRecord>(notifications[0]?.content, "Trace-Record")
         : undefined;
@@ -3286,21 +3342,31 @@ export class SessionManager {
     return false;
   }
 
-  /**
-   * Aggregate lifecycle for every execution owned by the session. Unlike
-   * runState this includes experts, Trace, subagents, delivery-loop handoffs,
-   * monitors, and background jobs so external harnesses can await quiescence.
-   */
-  private deriveWorkActive(entry: SessionEntry): boolean {
-    if (this.deriveRunActive(entry)) return true;
-    // Covers the acceptance→agent-running gap for a direct expert prompt.
-    if (entry.activeRunId !== null) return true;
-    if (entry.monitorManager.hasBlocking() || entry.backgroundJobManager.hasRunning()) return true;
-    if (entry.subagents.list().some((child) => child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running")) return true;
-    for (const agent of entry.agents.values()) {
-      if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return true;
+  private inspectSessionWork(entry: SessionEntry): SessionWorkFacts {
+    if (entry.workspaceOperationActive || entry.workspaceLease) return { active: true };
+    if (entry.activeRunId !== null || entry.userInputs.active || entry.userInputs.queue.length > 0) {
+      return { active: true };
     }
-    return [...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`));
+    if (entry.monitorManager.hasBlocking() || entry.backgroundJobManager.hasRunning()) {
+      return { active: true };
+    }
+    if (entry.subagents.list().some((child) =>
+      child.status === "queued" || child.status === "waiting_for_capacity" || child.status === "running"
+    )) return { active: true };
+
+    for (const agent of entry.agents.values()) {
+      if (agent.status === "running" || agent.isStreaming || agent.hasActiveTools()) return { active: true };
+    }
+
+    if ([...this.deliveryLoops].some((key) => key.startsWith(`${entry.id}:`))) return { active: true };
+
+    const runnableTarget = new Set<string>([
+      ...entry.taskLedger.notificationTargets(),
+      ...entry.backgroundJobEvents.keys(),
+      ...entry.monitorEvents.keys(),
+    ]);
+    if ([...runnableTarget].some((target) => !entry.taskLedger.isPaused(target))) return { active: true };
+    return { active: false };
   }
 
   /** Restore gate blocks live execution; durable queued work is cancelled after restore. */
@@ -3325,10 +3391,12 @@ export class SessionManager {
       (error as Error & { code?: string }).code = "SESSION_ACTIVE";
       throw error;
     }
+    this.stateChanged(entry);
   }
 
   private endWorkspaceOperation(entry: SessionEntry): void {
     entry.workspaceOperationActive = false;
+    this.stateChanged(entry);
     for (const agent of entry.taskLedger.notificationTargets()) this.wakeAgent(entry.id, agent);
   }
 
@@ -3337,16 +3405,20 @@ export class SessionManager {
    * event. This is the wholesale source the web Agents panel replaces its
    * agents list from; it is pushed on every agent status transition
    * (`onStatusChange`), an initial frame in `sendMessage`, and on delivery-loop
-   * entry/exit. `runState.active` is PI-only; `workState.active` is the
+   * entry/exit. `runState.active` is PI-only; the two-state `workState` is the
    * aggregate completion authority for the whole session. The
    * ring buffer replays the last frame on reconnect, so a re-subscribing client
    * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
    */
-  private emitSessionState(entry: SessionEntry): void {
+  private stateChanged(entry: SessionEntry): void {
+    entry.stateAuthority.changed();
+  }
+
+  private publishSessionState(entry: SessionEntry): void {
     entry.bus.emit(
       ev.custom({ sessionId: entry.id }, "session_state", {
         runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
-        workState: { active: this.deriveWorkActive(entry) },
+        workState: entry.stateAuthority.snapshot(),
         agents: this.listAgents(entry.id),
         subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3371,7 +3443,7 @@ export class SessionManager {
 
   getSessionState(sessionId: string): {
     runState: { active: boolean; runId: string | null };
-    workState: { active: boolean };
+    workState: WorkState;
     agents: AgentStatus[];
     subagents?: import("@brainpilot/protocol").SubagentStatus[];
     lastActivityTs: string;
@@ -3382,7 +3454,7 @@ export class SessionManager {
     if (!entry) return undefined;
     return {
       runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
-      workState: { active: this.deriveWorkActive(entry) },
+      workState: entry.stateAuthority.snapshot(),
       agents: this.listAgents(sessionId),
       subagents: entry.subagents.list(),
       lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3581,6 +3653,7 @@ export class SessionManager {
   metrics(): {
     activeSessions: number;
     runningAgents: number;
+    reclaimable: boolean;
     lastActivityAt: string | null;
     memRss: number;
     memLimitBytes: number | null;
@@ -3594,12 +3667,35 @@ export class SessionManager {
     return {
       activeSessions: this.sessions.size,
       runningAgents,
+      reclaimable: this.isReclaimable(),
       lastActivityAt: this.lastActivityAt ? new Date(this.lastActivityAt).toISOString() : null,
       memRss: process.memoryUsage().rss,
       // null when the opt-in budget is unset (single-user) — keeps the metric meaningful.
       memLimitBytes: snap ? snap.limitBytes : null,
       memRatio: snap ? snap.ratio : null,
     };
+  }
+
+  isReclaimable(): boolean {
+    for (const entry of this.sessions.values()) {
+      if (entry.stateAuthority.snapshot().status !== "idle") return false;
+      if (this.inspectSessionWork(entry).active) return false;
+    }
+    return true;
+  }
+
+  async shutdownIfReclaimable(): Promise<boolean> {
+    if (this.shuttingDown || !this.isReclaimable()) return false;
+    // Admission is fenced synchronously before any await; a concurrent message
+    // or session creation cannot enter between the decision and final save.
+    this.shuttingDown = true;
+    if (!this.isReclaimable()) {
+      this.shuttingDown = false;
+      return false;
+    }
+    this.memWatchdog?.stop();
+    await this.emergencySaveAll();
+    return true;
   }
 
   /**
@@ -3732,7 +3828,21 @@ export class SessionManager {
     };
   }
 
-  private async writeMeta(entry: SessionEntry): Promise<void> {
+  private writeMeta(
+    entry: SessionEntry,
+    workflowState = entry.stateAuthority.persisted(),
+    strict = false,
+  ): Promise<void> {
+    const operation = entry.metaWrites.then(() => this.writeMetaNow(entry, workflowState, strict));
+    entry.metaWrites = operation.catch(() => undefined);
+    return operation;
+  }
+
+  private async writeMetaNow(
+    entry: SessionEntry,
+    workflowState: PersistedWorkflowState,
+    strict: boolean,
+  ): Promise<void> {
     if (!this.persist) return;
     const meta = {
       id: entry.id,
@@ -3745,10 +3855,23 @@ export class SessionManager {
       workflowTaskSeqBaseline: entry.workflowTaskSeqBaseline,
       workflowReminderClaimed: entry.workflowReminderClaimed,
       workflowViolationEmitted: entry.workflowViolationEmitted,
+      workflowState,
       systemPlugins: entry.systemPlugins,
     };
-    await mkdir(this.bpDir(entry.id), { recursive: true }).catch(() => {});
-    await writeFile(join(this.bpDir(entry.id), "meta.json"), JSON.stringify(meta, null, 2), "utf8").catch(() => {});
+    const directory = this.bpDir(entry.id);
+    const target = join(directory, "meta.json");
+    const temporary = `${target}.${process.pid}.${randomUUID()}.tmp`;
+    const persist = async () => {
+      await mkdir(directory, { recursive: true });
+      await writeFile(temporary, JSON.stringify(meta, null, 2), "utf8");
+      await rename(temporary, target);
+    };
+    try {
+      await persist();
+    } catch (error) {
+      await rm(temporary, { force: true }).catch(() => undefined);
+      if (strict) throw error;
+    }
   }
 
   private providerRefPath(sid: string): string {
@@ -3946,6 +4069,7 @@ export class SessionManager {
             typeof meta.workflowTaskSeqBaseline === "number" ? meta.workflowTaskSeqBaseline : 0,
           workflowReminderClaimed: meta.workflowReminderClaimed === true,
           workflowViolationEmitted: meta.workflowViolationEmitted === true,
+          workflowState: meta.workflowState,
           systemPlugins: meta.systemPlugins,
         },
         {

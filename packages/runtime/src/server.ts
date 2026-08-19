@@ -4,7 +4,7 @@
  * streams AG-UI events for a session.
  *
  * Routes (from `@brainpilot/protocol` RUNTIME_ROUTES):
- *   GET  /health, GET /metrics
+ *   GET  /health, GET /metrics, POST /runtime/shutdown-if-reclaimable
  *   POST /sessions, GET /sessions, GET /sessions/:id, DELETE /sessions/:id
  *   GET  /sessions/:id/state, POST /sessions/:id/messages
  *   GET  /sse/:id  (+ alias GET /sessions/:id/events)
@@ -38,6 +38,11 @@ export function createServer(opts: SessionManagerOptions & { manager?: SessionMa
   app.get("/health", (c) => c.json({ status: "ok" }));
 
   app.get("/metrics", (c) => c.json(manager.metrics()));
+
+  app.post("/runtime/shutdown-if-reclaimable", async (c) => {
+    const reclaimable = await manager.shutdownIfReclaimable();
+    return c.json({ reclaimable }, reclaimable ? 200 : 409);
+  });
 
   app.put("/runtime/capabilities", async (c) => {
     const parsed = SetRuntimeCapabilitiesRequestSchema.safeParse(await safeBody(c));

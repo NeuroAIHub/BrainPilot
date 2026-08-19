@@ -23,6 +23,7 @@ describe("Runtime HTTP contract", () => {
       MetricsResponseSchema.parse({
         activeSessions: 2,
         runningAgents: 1,
+        reclaimable: false,
         lastActivityAt: "2026-06-12T00:00:00Z",
         memRss: 12345,
         memLimitBytes: 1048576,
@@ -101,6 +102,10 @@ describe("Runtime HTTP contract", () => {
   it("route catalog has the §15.4 endpoints with correct methods", () => {
     expect(RUNTIME_ROUTES.health).toEqual({ method: "GET", path: "/health" });
     expect(RUNTIME_ROUTES.metrics).toEqual({ method: "GET", path: "/metrics" });
+    expect(RUNTIME_ROUTES.shutdownIfReclaimable).toEqual({
+      method: "POST",
+      path: "/runtime/shutdown-if-reclaimable",
+    });
     expect(RUNTIME_ROUTES.createSession).toEqual({ method: "POST", path: "/sessions" });
     expect(RUNTIME_ROUTES.sendMessage.path).toBe("/sessions/:id/messages");
     expect(RUNTIME_ROUTES.sessionEvents).toEqual({ method: "GET", path: "/sse/:id" });

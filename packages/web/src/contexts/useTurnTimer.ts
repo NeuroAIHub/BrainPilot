@@ -2,7 +2,7 @@
  * useTurnTimer — React host for the whole-turn timer reducer (#99).
  *
  * Consumes the authoritative whole-session activity signal from SessionContext
- * (session_state.workState.active + backend timestamp) and produces:
+ * (session_state.workState.status + backend timestamp, with legacy active fallback) and produces:
  *   - `running`: a turn is in progress (active, or within the settle window);
  *   - `elapsedMs`: live elapsed while running (ticks ~every second), or the
  *     last settled whole-turn duration once finished;
@@ -31,7 +31,11 @@ export interface TurnTiming {
 
 interface UseTurnTimerOptions {
   /** Backend run-active snapshot; null until the first session_state arrives. */
-  runActive: { active: boolean; atMs: number } | null;
+  runActive: {
+    active: boolean;
+    status?: "idle" | "active";
+    atMs: number;
+  } | null;
   /** Key that resets the timer when it changes (e.g. session id). */
   resetKey?: string | null;
   settleMs?: number;
@@ -53,7 +57,10 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
   // Feed authoritative active transitions into the reducer.
   useEffect(() => {
     if (!runActive) return;
-    dispatch({ type: "active", value: runActive.active, atMs: runActive.atMs });
+    const value = runActive.status === undefined
+      ? runActive.active
+      : runActive.status === "active";
+    dispatch({ type: "active", value, atMs: runActive.atMs });
   }, [runActive]);
 
   // Arm/disarm the settle timer based on a pending candidate end.

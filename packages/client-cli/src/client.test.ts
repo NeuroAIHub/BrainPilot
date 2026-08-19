@@ -3,7 +3,10 @@ import {
   BrainPilotClient,
   parseSseStream,
   fillPath,
+  hasWorkflowStatus,
   isTerminalEvent,
+  sessionTerminalStatus,
+  sessionWorkflowState,
   DEFAULT_BASE_URL,
 } from "./client.js";
 import { driveSession } from "./driver.js";
@@ -157,6 +160,21 @@ describe("isTerminalEvent", () => {
   });
 });
 
+describe("session workflow status", () => {
+  const event = (status: unknown) => ({
+    type: "CUSTOM",
+    name: "session_state",
+    value: { workState: { active: status === "active", status, epoch: 1 } },
+  }) as unknown as AgUiEvent;
+
+  it("recognizes authoritative and terminal session states", () => {
+    expect(hasWorkflowStatus(event("active"))).toBe(true);
+    expect(sessionTerminalStatus(event("active"))).toBeNull();
+    expect(sessionTerminalStatus(event("idle"))).toBe("idle");
+    expect(sessionWorkflowState(event("active"))).toEqual({ status: "active", epoch: 1 });
+  });
+});
+
 describe("driveSession", () => {
   it("creates a session, sends a message, and stops on RUN_FINISHED", async () => {
     const calls: string[] = [];
@@ -205,6 +223,33 @@ describe("driveSession", () => {
     expect(
       calls.some((c) => c === "POST http://localhost:9001/api/sessions/sess-1/messages"),
     ).toBe(true);
+  });
+
+  it("ignores agent RUN_FINISHED when authoritative workflow state is present", async () => {
+    const fetchFn = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url);
+      const method = init?.method ?? "GET";
+      if (u.endsWith("/sessions") && method === "POST") {
+        return new Response(JSON.stringify({ id: "s-state" }), { status: 200 });
+      }
+      if (u.endsWith("/messages")) return new Response(JSON.stringify({ accepted: true }), { status: 200 });
+      return new Response(streamFrom([
+        'data: {"type":"CUSTOM","name":"session_state","value":{"workState":{"active":true,"status":"active","epoch":1}}}\n\n',
+        'data: {"type":"RUN_FINISHED","run_id":"expert-1"}\n\n',
+        'data: {"type":"CUSTOM","name":"session_state","value":{"workState":{"active":false,"status":"idle","epoch":0}}}\n\n',
+        'data: {"type":"CUSTOM","name":"session_state","value":{"workState":{"active":true,"status":"active","epoch":1}}}\n\n',
+        'data: {"type":"CUSTOM","name":"session_state","value":{"workState":{"active":false,"status":"idle","epoch":1}}}\n\n',
+      ]), { status: 200 });
+    }) as unknown as typeof fetch;
+
+    const result = await driveSession(
+      { baseUrl: "http://localhost:9001/api", message: "go" },
+      { fetchFn },
+    );
+    expect(result.reason).toBe("terminal");
+    expect(result.events.map((entry) => (entry as { type: string }).type)).toEqual([
+      "CUSTOM", "RUN_FINISHED", "CUSTOM", "CUSTOM", "CUSTOM",
+    ]);
   });
 
   it("respects maxEvents as a safety bound", async () => {

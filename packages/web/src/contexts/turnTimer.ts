@@ -3,8 +3,7 @@
  * ("本轮对话用时"), issue #99.
  *
  * A turn is NOT a single assistant message. It spans from the user's input
- * until all session work has finished — i.e. authoritative `workState.active`
- * goes false and STAYS false.
+ * until the authoritative workflow status becomes `idle`.
  *
  * The subtlety (#99): `workState.active` can briefly flip true→false→true when a
  * turn ends and a hook / system message / queued task event immediately
@@ -14,7 +13,7 @@
  * inside the window, the candidate end is discarded and the same turn continues.
  *
  * This reducer is pure and driven entirely by authoritative backend signals
- * (`workState.active` + the event's ISO timestamp). The host attaches the settle
+ * (`workState.status` with a legacy `active` fallback + the event timestamp). The host attaches the settle
  * timer and a live "ticking" clock for the running display.
  */
 

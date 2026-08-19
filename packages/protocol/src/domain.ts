@@ -269,6 +269,31 @@ export const SessionStatsSchema = z.object({
 });
 export type SessionStats = z.infer<typeof SessionStatsSchema>;
 
+export const WorkStatusSchema = z.enum(["idle", "active"]);
+export type WorkStatus = z.infer<typeof WorkStatusSchema>;
+
+export const WorkStateSchema = z.object({
+  active: z.boolean(),
+  /** Absent only on legacy runtimes. */
+  status: WorkStatusSchema.optional(),
+  epoch: z.number().int().nonnegative().optional(),
+}).superRefine((value, context) => {
+  if (value.status !== undefined && value.active !== (value.status === "active")) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "workState.active must equal (status === 'active')",
+      path: ["active"],
+    });
+  }
+  if (value.status !== undefined && value.epoch === undefined) {
+    context.addIssue({
+      code: z.ZodIssueCode.custom,
+      message: "workState.epoch is required when status is present",
+      path: ["epoch"],
+    });
+  }
+});
+
 /**
  * Authoritative live session state. Identical shape across SSE first frame
  * (`CUSTOM:session_state`), push events, and `GET /sessions/:id/state`.
@@ -280,9 +305,7 @@ export const SessionStateSnapshotSchema = z.object({
     runId: z.string().nullable(),
   }),
   /** Aggregate lifecycle for all work owned by the session. */
-  workState: z.object({
-    active: z.boolean(),
-  }),
+  workState: WorkStateSchema,
   agents: z.array(AgentStatusSchema),
   /** Optional for compatibility with runtimes predating isolated subagents. */
   subagents: z.array(SubagentStatusSchema).optional(),
