@@ -1,8 +1,9 @@
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import {
   clampActiveIndex,
   filterSessionsByQuery,
   moveActiveIndex,
+  navigateToSearchResult,
   searchResultMeta,
   shortSessionId,
   titleCollisionIds,
@@ -58,5 +59,34 @@ describe("keyboard active index", () => {
     expect(moveActiveIndex(0, 3, "down")).toBe(1);
     expect(moveActiveIndex(2, 3, "down")).toBe(0);
     expect(moveActiveIndex(0, 3, "up")).toBe(2);
+  });
+});
+
+describe("search result navigation", () => {
+  it("returns to the workspace before selecting and closing", () => {
+    const calls: string[] = [];
+    const opened = navigateToSearchResult("session-1", {
+      openWorkspace: () => calls.push("workspace"),
+      selectSession: (id) => calls.push(`session:${id}`),
+      close: () => calls.push("close"),
+    });
+
+    expect(opened).toBe(true);
+    expect(calls).toEqual(["workspace", "session:session-1", "close"]);
+  });
+
+  it("honors the navigation guard without changing pages", () => {
+    const openWorkspace = vi.fn();
+    const selectSession = vi.fn();
+    const close = vi.fn();
+    expect(navigateToSearchResult("session-1", {
+      confirmNavigation: () => false,
+      openWorkspace,
+      selectSession,
+      close,
+    })).toBe(false);
+    expect(openWorkspace).not.toHaveBeenCalled();
+    expect(selectSession).not.toHaveBeenCalled();
+    expect(close).not.toHaveBeenCalled();
   });
 });

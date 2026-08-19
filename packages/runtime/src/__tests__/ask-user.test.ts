@@ -311,6 +311,10 @@ describe("ask_user (SessionManager)", () => {
     await waitFor(() => events.some((event) => event.type === "user_input_request"));
     const request = events.find((event) => event.type === "user_input_request") as any;
     const eventPath = join(dataRoot, ".bp", session.id, "events.jsonl");
+    // Settle the async EventBus writer before replacing its file with a
+    // directory. Otherwise an in-flight append can recreate events.jsonl
+    // between rm() and mkdir(), making this fault-injection test flaky.
+    await manager.emergencySaveAll();
     await rm(eventPath, { force: true });
     await mkdir(eventPath);
 
