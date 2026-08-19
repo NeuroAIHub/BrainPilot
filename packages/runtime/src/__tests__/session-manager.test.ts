@@ -1,4 +1,4 @@
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, vi } from "vitest";
 import { mkdtemp, mkdir, writeFile, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,7 +10,7 @@ import {
 } from "../persistent-layout.js";
 import { mockAgentFactory } from "../agent-factory.js";
 import { PERSONAS } from "../personas.js";
-import type { McpBridge } from "../mcp-bridge.js";
+import { McpBridge } from "../mcp-bridge.js";
 
 function mgr(): SessionManager {
   // persist:false keeps tests hermetic; mock factory => no Pi SDK / API.
@@ -153,6 +153,80 @@ describe("SessionManager (mock mode)", () => {
     expect(principalTools).toContain("dispatch_task");
     expect(principalTools).toContain("complete_task");
     expect(principalTools).toContain("ask_user");
+  });
+
+  it("reloads plugin MCP projections for agents created after enable and disable (#469)", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-hot-"));
+    const runtimeDir = join(root, "plugins", "runtime");
+    const pluginRoot = join(root, "plugins", "execution", "browser", "1.0.0");
+    const pluginData = join(root, "plugins", "data", "browser", "1.0.0");
+    const mcpConfigPath = join(pluginRoot, ".mcp.json");
+    const projectionPath = join(runtimeDir, "browser.json");
+    await mkdir(runtimeDir, { recursive: true });
+    await mkdir(pluginRoot, { recursive: true });
+    await mkdir(pluginData, { recursive: true });
+    await writeFile(mcpConfigPath, JSON.stringify({
+      mcpServers: { browser: { command: "fake-browser" } },
+    }));
+
+    const closed = vi.fn();
+    const bridge = new McpBridge(async () => ({
+      listTools: async () => ({
+        tools: [{
+          name: "navigate",
+          description: "Navigate",
+          inputSchema: { type: "object", properties: {} },
+        }],
+      }),
+      callTool: async () => ({ content: [{ type: "text", text: "ok" }] }),
+      close: async () => { closed(); },
+    }));
+    const seen = new Map<string, Parameters<typeof mockAgentFactory>[0]["systemTools"]>();
+    const spyFactory: typeof mockAgentFactory = async (params) => {
+      if (params.agentName === "principal") seen.set(params.sessionId, params.systemTools);
+      return mockAgentFactory(params);
+    };
+    const manager = new SessionManager({
+      dataRoot: root,
+      persist: false,
+      agentFactory: spyFactory,
+      mcpBridge: bridge,
+    });
+
+    const before = await manager.createSession();
+    await manager.sendMessage(before.id, "hi");
+    await waitFor(() => seen.has(before.id));
+    expect(seen.get(before.id)?.map((tool) => tool.name)).not.toContain("mcp__browser__navigate");
+
+    await writeFile(projectionPath, JSON.stringify({
+      schemaVersion: 1,
+      id: "browser",
+      version: "1.0.0",
+      format: "brainpilot",
+      root: pluginRoot,
+      dataDir: pluginData,
+      mcpConfigPath,
+    }));
+    const enabled = await manager.createSession();
+    await manager.sendMessage(enabled.id, "hi");
+    await waitFor(() => seen.has(enabled.id));
+    const enabledTool = seen.get(enabled.id)?.find((tool) => tool.name === "mcp__browser__navigate");
+    expect(enabledTool).toBeDefined();
+
+    await rm(projectionPath);
+    const disabled = await manager.createSession();
+    await manager.sendMessage(disabled.id, "hi");
+    await waitFor(() => seen.has(disabled.id));
+    expect(seen.get(disabled.id)?.map((tool) => tool.name)).not.toContain("mcp__browser__navigate");
+
+    // Disabling affects only newly-created agents. The enabled generation's
+    // tool must keep its client alive for the already-running agent.
+    await expect(enabledTool!.execute({ url: "https://example.test" })).resolves.toMatchObject({
+      content: [{ type: "text", text: "ok" }],
+    });
+    expect(closed).not.toHaveBeenCalled();
+    await manager.emergencySaveAll();
+    expect(closed).toHaveBeenCalledOnce();
   });
 
   it("surfaces an error when every configured MCP server fails to start", async () => {

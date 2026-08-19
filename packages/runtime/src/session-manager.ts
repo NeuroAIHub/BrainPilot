@@ -14,7 +14,7 @@ import { createWriteStream } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { join, resolve, sep, dirname } from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   CUSTOM_EVENT,
@@ -518,11 +518,12 @@ export class SessionManager {
   // never invoked concurrently).
   private readonly deliveryLoops = new Set<string>();
 
-  // External MCP tools (§9 decision 2): loaded once, lazily, shared by all
-  // non-trace agents. Null until first agent is created.
+  // External MCP tools (§9 decision 2): shared by all non-trace agents and
+  // refreshed for newly-created agents when the on-disk config changes.
   private mcpBridge: McpBridge | null;
   private mcpTools: SystemTool[] = [];
-  private mcpLoaded = false;
+  private mcpConfigFingerprint: string | null = null;
+  private mcpRefresh: Promise<SystemTool[]> | null = null;
   private mcpStatus: McpRuntimeStatus = { state: "not_loaded", servers: [] };
 
   // Built-in skills directory, loaded through Pi's native skill pipeline
@@ -748,64 +749,81 @@ export class SessionManager {
   }
 
   /**
-   * Load external MCP tools once. No-op in mock mode (BP_MOCK=1) and when no
-   * `mcp_servers.json` is present, so the default path stays zero-overhead.
+   * Load external MCP tools for a newly-created agent. The small config is
+   * re-read so Settings/plugin enable changes apply without a runtime restart;
+   * existing agents retain the tool array already handed to their Pi session.
    */
   private async ensureMcpTools(): Promise<SystemTool[]> {
-    if (this.mcpLoaded) return this.mcpTools;
     if (isMockMode() && !this.mcpBridge) {
-      this.mcpLoaded = true;
       this.mcpStatus = { state: "unconfigured", servers: [] };
       return this.mcpTools;
     }
-    try {
-      const cfg = await loadMcpServersConfig(this.dataRoot);
-      if (!cfg) {
-        this.mcpLoaded = true;
-        this.mcpStatus = { state: "unconfigured", servers: [] };
-        return this.mcpTools;
-      }
-      if (!this.mcpBridge) this.mcpBridge = new McpBridge();
-      const result = await this.mcpBridge.connectAllWithStatus(cfg);
-      this.mcpTools = result.tools;
-      const connected = new Set(result.connectedServers);
-      const failures = new Map(result.failures.map(({ server, error }) => [server, error]));
-      const skipped = new Set(result.skippedServers);
-      const servers: McpRuntimeServerStatus[] = [];
-      for (const name of Object.keys(cfg.mcpServers)) {
-        if (skipped.has(name)) continue;
-        const pluginId = cfg.serverOwners?.[name];
-        if (connected.has(name)) {
-          servers.push({ name, ...(pluginId ? { pluginId } : {}), state: "ready" });
-          continue;
+    if (this.mcpRefresh) return this.mcpRefresh;
+
+    const refresh = async (): Promise<SystemTool[]> => {
+      try {
+        const cfg = await loadMcpServersConfig(this.dataRoot);
+        const fingerprint = createHash("sha256")
+          .update(JSON.stringify(cfg))
+          .digest("hex");
+        if (fingerprint === this.mcpConfigFingerprint) return this.mcpTools;
+
+        if (!cfg) {
+          // Do not close the previous generation here: existing Pi sessions
+          // retain its tool closures and may still invoke those clients. New
+          // agents receive the empty current generation instead.
+          this.mcpTools = [];
+          this.mcpStatus = { state: "unconfigured", servers: [] };
+          this.mcpConfigFingerprint = fingerprint;
+          return this.mcpTools;
         }
-        const error = failures.get(name);
-        if (error) servers.push({ name, ...(pluginId ? { pluginId } : {}), state: "failed", error });
+
+        if (!this.mcpBridge) this.mcpBridge = new McpBridge();
+        const result = await this.mcpBridge.connectAllWithStatus(cfg);
+        const connected = new Set(result.connectedServers);
+        const failures = new Map(result.failures.map(({ server, error }) => [server, error]));
+        const skipped = new Set(result.skippedServers);
+        const servers: McpRuntimeServerStatus[] = [];
+        for (const name of Object.keys(cfg.mcpServers)) {
+          if (skipped.has(name)) continue;
+          const pluginId = cfg.serverOwners?.[name];
+          if (connected.has(name)) {
+            servers.push({ name, ...(pluginId ? { pluginId } : {}), state: "ready" });
+            continue;
+          }
+          const error = failures.get(name);
+          if (error) servers.push({ name, ...(pluginId ? { pluginId } : {}), state: "failed", error });
+        }
+        this.mcpStatus = {
+          state: result.failures.length > 0
+            ? result.connectedServers.length > 0 ? "degraded" : "failed"
+            : result.connectedServers.length > 0 ? "ready" : "unconfigured",
+          servers,
+        };
+        if (result.connectedServers.length === 0 && result.failures.length > 0) {
+          throw new Error(`Configured MCP services failed to start: ${result.failures.map(({ server, error }) => `${server}: ${error}`).join("; ")}`);
+        }
+        this.mcpTools = result.tools;
+        this.mcpConfigFingerprint = fingerprint;
+        return this.mcpTools;
+      } catch (err) {
+        // A failed refresh is not committed: the next agent/status request
+        // retries it, while tools already handed to older agents stay usable.
+        // eslint-disable-next-line no-console
+        console.error("[mcp] bridge load failed:", (err as Error).message);
+        throw err;
       }
-      this.mcpStatus = {
-        state: result.failures.length > 0
-          ? result.connectedServers.length > 0 ? "degraded" : "failed"
-          : result.connectedServers.length > 0 ? "ready" : "unconfigured",
-        servers,
-      };
-      if (result.connectedServers.length === 0 && result.failures.length > 0) {
-        throw new Error(`Configured MCP services failed to start: ${result.failures.map(({ server, error }) => `${server}: ${error}`).join("; ")}`);
-      }
-      this.mcpLoaded = true;
-    } catch (err) {
-      this.mcpLoaded = false;
-      // eslint-disable-next-line no-console
-      console.error("[mcp] bridge load failed:", (err as Error).message);
-      throw err;
-    }
-    return this.mcpTools;
+    };
+
+    this.mcpRefresh = refresh().finally(() => {
+      this.mcpRefresh = null;
+    });
+    return this.mcpRefresh;
   }
 
-  /** Probe MCP once and expose the runtime-observed server state to the UI. */
+  /** Refresh MCP if its projection changed and expose runtime-observed state. */
   async getMcpRuntimeStatus(): Promise<McpRuntimeStatus> {
-    if (!this.mcpLoaded && this.mcpStatus.state === "not_loaded") {
-      try { await this.ensureMcpTools(); } catch { /* failure details are retained in mcpStatus */ }
-    }
+    try { await this.ensureMcpTools(); } catch { /* failure details are retained in mcpStatus */ }
     return {
       state: this.mcpStatus.state,
       servers: this.mcpStatus.servers.map((server) => ({ ...server })),

@@ -24,6 +24,7 @@ import {
 } from "./messageReducer";
 import { reduceAgentsForEvent } from "./agentsReducer";
 import { reduceTraceForEvent } from "./traceReducer";
+import { deriveSessionTitle } from "./sessionTitle";
 
 export interface AgentMessageFilter {
   hideMessages: boolean;
@@ -703,7 +704,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       setIsSending(true);
       setError(null);
       try {
-        const session = currentSession ?? (await createSession(trimmed.slice(0, 48), opts));
+        const session = currentSession ?? (await createSession(deriveSessionTitle(trimmed), opts));
         if (!session) {
           return { ok: false };
         }

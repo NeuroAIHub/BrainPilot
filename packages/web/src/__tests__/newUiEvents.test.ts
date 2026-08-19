@@ -271,6 +271,30 @@ describe("auto_retry mapping + detection + countdown", () => {
     expect(out).toHaveLength(1);
     expect(out[0].autoRetry).toMatchObject({ attempt: 2, maxAttempts: 4, delayMs: 2500 });
   });
+
+  it("keeps one retry card per agent and clears it when retry state ends", () => {
+    const worker = reduceMessagesForEvent([], {
+      ...retryEvent,
+      agentName: "worker",
+    } as WebSocketEvent);
+    const first = reduceMessagesForEvent(worker, retryEvent);
+    const second = reduceMessagesForEvent(first, {
+      ...retryEvent,
+      attempt: 3,
+    } as WebSocketEvent);
+
+    expect(second.filter((message) => message.kind === "auto_retry" && message.agent === "principal")).toHaveLength(1);
+    expect(second.find((message) => message.agent === "principal")?.autoRetry?.attempt).toBe(3);
+    expect(second.filter((message) => message.kind === "auto_retry" && message.agent === "worker")).toHaveLength(1);
+
+    const cleared = reduceMessagesForEvent(second, {
+      type: "agent_status_update",
+      agentName: "principal",
+      status: "running",
+    } as WebSocketEvent);
+    expect(cleared.some((message) => message.kind === "auto_retry" && message.agent === "principal")).toBe(false);
+    expect(cleared.some((message) => message.kind === "auto_retry" && message.agent === "worker")).toBe(true);
+  });
 });
 
 describe("retry cancel callback wiring", () => {
@@ -326,12 +350,36 @@ describe("run terminators clear dangling streaming flags", () => {
   });
 
   it("RUN_ERROR clears streaming AND appends an error message", () => {
-    const out = reduceMessagesForEvent([open("principal")], {
+    const withRetry = reduceMessagesForEvent([open("principal")], {
+      type: "agent_status_update",
+      agentName: "principal",
+      status: "retrying",
+      attempt: 1,
+      maxAttempts: 5,
+      delayMs: 0,
+    } as WebSocketEvent);
+    const out = reduceMessagesForEvent(withRetry, {
       type: "RUN_ERROR",
       agentName: "principal",
       message: "boom",
     } as WebSocketEvent);
     expect(out[0]!.streaming).toBe(false);
+    expect(out.some((m) => m.kind === "auto_retry")).toBe(false);
     expect(out.some((m) => m.kind === "error" && m.content === "boom")).toBe(true);
+  });
+
+  it("RUN_FINISHED removes only the terminating agent's retry card", () => {
+    const principal = reduceMessagesForEvent([], {
+      type: "agent_status_update", agentName: "principal", status: "retrying", attempt: 1, maxAttempts: 2, delayMs: 1,
+    } as WebSocketEvent);
+    const both = reduceMessagesForEvent(principal, {
+      type: "agent_status_update", agentName: "worker", status: "retrying", attempt: 1, maxAttempts: 2, delayMs: 1,
+    } as WebSocketEvent);
+    const out = reduceMessagesForEvent(both, {
+      type: "RUN_FINISHED", agentName: "principal",
+    } as WebSocketEvent);
+
+    expect(out.some((m) => m.kind === "auto_retry" && m.agent === "principal")).toBe(false);
+    expect(out.some((m) => m.kind === "auto_retry" && m.agent === "worker")).toBe(true);
   });
 });

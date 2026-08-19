@@ -60,6 +60,51 @@ function textTriad(
 }
 
 describe("message stream idempotency (#314)", () => {
+  it("preserves the originating name on a tool result activity (#465)", () => {
+    const messages = fold([
+      {
+        type: "TOOL_CALL_START",
+        toolCallId: "tool-name",
+        toolCallName: "bash",
+      } as WebSocketEvent,
+      {
+        type: "TOOL_CALL_RESULT",
+        toolCallId: "tool-name",
+        messageId: "tool-result",
+        content: "ok",
+      } as WebSocketEvent,
+    ]);
+
+    expect(messages.find((message) => message.id === "tool-result")?.toolName).toBe("bash");
+  });
+
+  it("reconciles snapshot tool results with flattened assistant tool calls (#465)", () => {
+    const messages = fold([{
+      type: "MESSAGES_SNAPSHOT",
+      messages: [
+        {
+          id: "assistant",
+          role: "assistant",
+          content: "",
+          toolCalls: [{ id: "snapshot-call", name: "bash", arguments: "{\"command\":\"pwd\"}" }],
+        },
+        {
+          id: "snapshot-result",
+          role: "tool",
+          content: "ok",
+          toolCallId: "snapshot-call",
+        },
+      ],
+    } as WebSocketEvent]);
+
+    expect(messages.find((message) => message.id === "snapshot-result")).toMatchObject({
+      kind: "tool",
+      toolCallId: "snapshot-call",
+      toolName: "bash",
+      toolResult: "ok",
+    });
+  });
+
   it("does not re-append CONTENT when the same history stream is folded twice", () => {
     // Reproduces: history rehydrate, then SSE ring-buffer replay of the same
     // START/CONTENT/END events for a completed assistant message.

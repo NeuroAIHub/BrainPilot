@@ -41,9 +41,23 @@ const INPUT_BOUND_ACTION = /\b(?:analy[sz]e|evaluate|benchmark|validate|test|com
 const SCIENTIFIC_SCOPE = /\b(?:data|dataset|experiment|study|analysis|model|statistic|inference|training|evaluation|benchmark|simulation|prediction|classification|clustering|forecast|scientific|literature|results?|treatments?)s?\b|(?:数据|数据集|实验|研究|分析|模型|统计|推断|训练|评估|基准|模拟|预测|分类|聚类|科学|文献|结果|处理组)/i;
 const CONCRETE_INPUT = /\b(?:(?:this|that|these|those|the|my|our|attached|uploaded|provided|given|current|existing)\s+(?:[\w-]+\s+){0,3}(?:data|dataset|file|table|results?|predictions?|checkpoint|validation\s+set|test\s+set)|(?:attached|uploaded|provided|trained|saved)\s+(?:[\w-]+\s+){0,2}models?)\b|(?:[\w./-]+\.(?:csv|tsv|json|jsonl|parquet|xlsx?|sav|h5|pt|pth|onnx))\b|(?:(?:这个|这份|这组|这些|上述|当前|现有|我的|我们的|附件中的|上传的|提供的)(?:[^，。,.]{0,12})(?:数据|数据集|文件|表格|结果|预测|检查点|验证集|测试集)|(?:上传的|提供的|训练好的|保存的)(?:[^，。,.]{0,8})模型)/i;
 
+const ATTACHMENT_NOTICE = /^\[(?:Conversation attachments[^\]]*|本次对话附件[^\]]*)\]\s*/iu;
+const TEST_INPUT_NOUN = /\btest\s+(?:file|attachment)\b|测试(?:文件|附件|样本)(?!中|里|内)/giu;
+
+function intentText(content: string): string {
+  // The web prepends a localized transport notice containing attachment names.
+  // Those implementation details must not affect the host's intent classifier.
+  // Also neutralize noun phrases such as “test file”: test describes the
+  // input there, while “test the attached dataset” remains an execution verb.
+  return content
+    .replace(ATTACHMENT_NOTICE, "")
+    .replace(TEST_INPUT_NOUN, (phrase) => phrase.replace(/^(?:test|测试)/iu, ""))
+    .trim();
+}
+
 /** Host-side gate for the bounded delegation reminder; prompt prose alone cannot suppress a follow-up. */
 export function isSubstantiveScientificExecutionRequest(content: string): boolean {
-  const normalized = content.trim();
+  const normalized = intentText(content);
   if (!normalized || INFORMATIONAL_REQUEST.test(normalized)) return false;
   const hasConcreteInput = CONCRETE_INPUT.test(normalized);
   if (CONCEPTUAL_REQUEST.test(normalized) && !hasConcreteInput) return false;
