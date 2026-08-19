@@ -2,7 +2,8 @@
 /**
  * bin.ts — the `bp-client` executable. A headless verification client that
  * drives a BrainPilot session over HTTP+SSE (no web UI), printing AG-UI events
- * until RUN_FINISHED / command_complete (TS_PI_REFACTOR_DESIGN §15.4).
+ * until session_state reports idle (legacy runtimes fall back to
+ * RUN_FINISHED/RUN_ERROR) or command_complete.
  */
 import { Command } from "commander";
 import { run, DEFAULT_BASE_URL } from "./index.js";

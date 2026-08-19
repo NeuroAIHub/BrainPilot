@@ -1,10 +1,15 @@
 /**
  * driver.ts — the high-level "drive one session to completion" flow used by the
  * bin and by integration smoke tests. Creates a session, sends a message,
- * subscribes to the event stream, and resolves when a terminal event arrives
- * (RUN_FINISHED / RUN_ERROR) or `command_complete` is seen.
+ * subscribes to the event stream, and resolves on a session-level terminal
+ * status. Legacy runtimes fall back to RUN_FINISHED/RUN_ERROR.
  */
-import { BrainPilotClient, isTerminalEvent } from "./client.js";
+import {
+  BrainPilotClient,
+  hasWorkflowStatus,
+  isTerminalEvent,
+  sessionWorkflowState,
+} from "./client.js";
 import type { AgUiEvent } from "@brainpilot/protocol";
 
 export interface DriveOptions {
@@ -65,11 +70,23 @@ export async function driveSession(
   await client.sendMessage(sessionId, options.message, options.agent);
 
   let reason: DriveResult["reason"] = "stream_end";
+  let authoritativeWorkflow = false;
+  let workflowEpoch = -1;
   try {
     for await (const evt of stream) {
       events.push(evt);
       onEvent?.(evt);
-      if (isTerminalEvent(evt)) {
+      if (hasWorkflowStatus(evt)) authoritativeWorkflow = true;
+      const workflow = sessionWorkflowState(evt);
+      if (workflow && workflow.epoch >= workflowEpoch) {
+        workflowEpoch = workflow.epoch;
+        if (workflow.status === "idle" && workflow.epoch > 0) {
+          reason = "terminal";
+          break;
+        }
+      }
+      // Compatibility with runtimes predating workState.status.
+      if (!authoritativeWorkflow && isTerminalEvent(evt)) {
         reason = "terminal";
         break;
       }

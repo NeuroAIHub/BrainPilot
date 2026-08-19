@@ -51,6 +51,7 @@ import type {
   TraceNodeRecord,
   TraceCausalParent,
   AuditReport,
+  WorkStatus,
 } from "@brainpilot/protocol";
 
 // Re-export the canonical protocol domain types under their existing names so
@@ -96,6 +97,7 @@ export type {
   TraceNodeRecord,
   TraceCausalParent,
   AuditReport,
+  WorkStatus,
 };
 
 /**
@@ -1053,6 +1055,10 @@ export function normalizeSessionState(rawValue: unknown): SessionStateSnapshot {
     workState: {
       // Compatibility fallback for runtimes where runState was aggregate.
       active: typeof ws.active === "boolean" ? ws.active : rs.active === true,
+      ...(ws.status === "idle" || ws.status === "active"
+        ? { status: ws.status as WorkStatus }
+        : {}),
+      ...(typeof ws.epoch === "number" ? { epoch: ws.epoch } : {}),
     },
     agents,
     subagents,

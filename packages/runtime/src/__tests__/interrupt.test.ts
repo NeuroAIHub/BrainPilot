@@ -133,12 +133,17 @@ describe("whole-session interrupt (#90 / #327)", () => {
 
     // The event remains durable but cannot re-wake librarian while paused.
     expect(m.taskNotificationCount(s.id, "librarian")).toBe(beforeStop);
+    expect(m.getSessionState(s.id)?.workState).toMatchObject({
+      active: false,
+      status: "idle",
+    });
     const beforeResume = observe.prompts.filter((prompt) => prompt.agent === "librarian").length;
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(observe.prompts.filter((prompt) => prompt.agent === "librarian")).toHaveLength(beforeResume);
 
     await m.sendMessage(s.id, "resume");
     await waitFor(() => observe.prompts.filter((prompt) => prompt.agent === "librarian").length > beforeResume);
+    expect(m.getSessionState(s.id)?.workState.epoch).toBe(1);
   });
 
   it("does not prompt the principal after stop; emits one system acknowledgement (#327)", async () => {

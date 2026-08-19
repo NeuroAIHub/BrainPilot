@@ -29,15 +29,41 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     expect(res.status).toBe(200);
     const body = (await res.json()) as {
       activeSessions: number;
+      reclaimable: boolean;
       memRss: number;
       memLimitBytes: number | null;
       memRatio: number | null;
     };
     expect(body.activeSessions).toBe(0);
+    expect(body.reclaimable).toBe(true);
     expect(body.memRss).toBeGreaterThan(0);
     // Opt-in budget unset by default → null (single-user / no throttle).
     expect(body.memLimitBytes).toBeNull();
     expect(body.memRatio).toBeNull();
+  });
+
+  it("atomically rejects reclaim while a workflow is active", async () => {
+    const manager = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
+    const { app } = createServer({ manager });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, 'decide [[tool:ask_user {"question":"Q"}]]');
+    await waitFor(() => manager.getSessionState(session.id)?.workState.status === "active");
+
+    const res = await app.request("/runtime/shutdown-if-reclaimable", { method: "POST" });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ reclaimable: false });
+    await manager.interrupt(session.id);
+  });
+
+  it("fences new work after an idle Runtime accepts reclaim", async () => {
+    const manager = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
+    const { app } = createServer({ manager });
+    await manager.createSession();
+
+    const res = await app.request("/runtime/shutdown-if-reclaimable", { method: "POST" });
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ reclaimable: true });
+    await expect(manager.createSession()).rejects.toThrow("runtime is shutting down");
   });
 
   it("accepts only allowlisted backend-managed runtime capabilities", async () => {

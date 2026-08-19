@@ -182,3 +182,38 @@ export function isTerminalEvent(evt: AgUiEvent): boolean {
   const t = (evt as { type?: string }).type;
   return t === "RUN_FINISHED" || t === "RUN_ERROR";
 }
+
+/** Session-level terminal status carried by authoritative session_state frames. */
+export function sessionTerminalStatus(evt: AgUiEvent): "idle" | null {
+  const raw = evt as unknown as { type?: string; name?: string; value?: { workState?: { status?: unknown } } };
+  if (raw.type !== "CUSTOM" || raw.name !== "session_state") return null;
+  const status = raw.value?.workState?.status;
+  return status === "idle" ? status : null;
+}
+
+export function sessionWorkflowState(evt: AgUiEvent): {
+  status: "idle" | "active";
+  epoch: number;
+} | null {
+  const raw = evt as unknown as {
+    type?: string;
+    name?: string;
+    value?: { workState?: { status?: unknown; epoch?: unknown } };
+  };
+  if (!hasWorkflowStatus(evt)) return null;
+  const status = raw.value?.workState?.status;
+  if (status !== "idle" && status !== "active") {
+    return null;
+  }
+  const epoch = raw.value?.workState?.epoch;
+  return { status, epoch: typeof epoch === "number" && Number.isInteger(epoch) && epoch >= 0 ? epoch : 0 };
+}
+
+/** Whether this runtime exposes the authoritative two-state lifecycle contract. */
+export function hasWorkflowStatus(evt: AgUiEvent): boolean {
+  const raw = evt as unknown as { type?: string; name?: string; value?: { workState?: object } };
+  return raw.type === "CUSTOM"
+    && raw.name === "session_state"
+    && raw.value?.workState !== undefined
+    && Object.prototype.hasOwnProperty.call(raw.value.workState, "status");
+}

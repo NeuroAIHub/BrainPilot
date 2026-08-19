@@ -25,6 +25,14 @@ function enqueueQuestion(
   ) as Promise<string>;
 }
 
+async function waitFor(predicate: () => boolean, timeoutMs = 2_000): Promise<void> {
+  const started = Date.now();
+  while (!predicate()) {
+    if (Date.now() - started > timeoutMs) throw new Error("waitFor timed out");
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+}
+
 describe("ask_user (SessionManager)", () => {
   let m: SessionManager;
   beforeEach(() => {
@@ -134,6 +142,10 @@ describe("ask_user (SessionManager)", () => {
     await m.sendMessage(session.id, 'decide [[tool:ask_user {"question":"Q"}]]');
     await new Promise((r) => setTimeout(r, 20));
     expect(events.find((e) => e.type === "user_input_request")).toBeTruthy();
+    expect(m.getSessionState(session.id)?.workState).toMatchObject({
+      active: true,
+      status: "active",
+    });
 
     await m.interrupt(session.id);
     await new Promise((r) => setTimeout(r, 20));
@@ -296,7 +308,7 @@ describe("ask_user (SessionManager)", () => {
     const events: AgUiEvent[] = [];
     manager.subscribe(session.id, (event) => events.push(event));
     await manager.sendMessage(session.id, 'decide [[tool:ask_user {"question":"Q"}]]');
-    await new Promise((resolve) => setTimeout(resolve, 20));
+    await waitFor(() => events.some((event) => event.type === "user_input_request"));
     const request = events.find((event) => event.type === "user_input_request") as any;
     const eventPath = join(dataRoot, ".bp", session.id, "events.jsonl");
     await rm(eventPath, { force: true });

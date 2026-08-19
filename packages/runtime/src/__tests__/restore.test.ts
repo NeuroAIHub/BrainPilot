@@ -2,8 +2,8 @@
  * Boot-time session restore. `SessionManager.restoreFromDisk` scans
  * `<dataRoot>/.bp/<id>/meta.json` for every persisted session id and rebuilds
  * the in-memory session list with the persisted timestamps intact (the
- * restore path skips `writeMeta` so the canonical file is not clobbered with
- * boot-time values).
+ * completed/legacy-idle sessions keep their canonical metadata, while
+ * in-flight execution is cancelled and restored idle.
  *
  * The `startServer` integration test in server.test.ts asserts the same
  * behavior end-to-end via `GET /sessions` after boot.
@@ -67,7 +67,7 @@ describe("SessionManager.restoreFromDisk", () => {
     expect(b.updatedAt).toBe("2026-05-21T12:30:00.000Z");
   });
 
-  it("does NOT rewrite meta.json on restore", async () => {
+  it("does NOT rewrite meta.json for a legacy idle session on restore", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-"));
     const metaPath = await writeMeta(dataRoot, "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", {
       id: "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
@@ -116,6 +116,53 @@ describe("SessionManager.restoreFromDisk", () => {
     expect(await m.listSessions()).toHaveLength(1);
     // Timestamps still original after the second pass
     expect((await m.listSessions())[0]!.createdAt).toBe("2026-03-01T00:00:00.000Z");
+  });
+
+  it("cancels in-flight work and restores the sandbox idle", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-interrupted-"));
+    const id = "12121212-1212-1212-1212-121212121212";
+    await writeMeta(dataRoot, id, {
+      id,
+      title: "Interrupted",
+      workflowState: { epoch: 3 },
+    });
+    await writeFile(join(dataRoot, ".bp", id, "tasks.json"), JSON.stringify({
+      next_task_seq: 2,
+      next_notification_seq: 2,
+      tasks: [{
+        id: "task_000001",
+        seq: 1,
+        created_by: "principal",
+        assigned_to: "engineer",
+        content: "train model",
+        status: "pending",
+        created_at: 1,
+      }],
+      notifications: [{
+        id: "task_event_000001",
+        seq: 1,
+        kind: "assigned",
+        to_agent: "engineer",
+        from_agent: "principal",
+        task_id: "task_000001",
+        content: "train model",
+        created_at: 1,
+      }],
+      delivery_paused: false,
+      paused_agents: [],
+    }), "utf8");
+
+    const manager = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+    await manager.restoreFromDisk();
+    expect(manager.getSessionState(id)?.workState).toMatchObject({
+      active: false,
+      status: "idle",
+      epoch: 3,
+    });
+    expect(manager.listTasks(id)).toEqual([
+      expect.objectContaining({ id: "task_000001", status: "cancelled" }),
+    ]);
+    expect(manager.taskNotificationCount(id, "engineer")).toBe(0);
   });
 
   it("persists a cancellation for an orphaned ask_user request", async () => {

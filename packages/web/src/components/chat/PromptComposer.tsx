@@ -481,8 +481,8 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : current));
   }, [runActive, sessionId]);
 
-  // #99: whole-turn timer — spans user input → every agent finished (workState
-  // settles false), debounced against hook/system re-wakes.
+  // #99: whole-turn timer — spans user input through blocked handoffs until the
+  // workflow returns to idle; legacy runtimes fall back to active.
   const turnTiming = useTurnTimer({ runActive: workActive, resetKey: currentSession?.id ?? null });
 
   const handleSubmit = async (event: FormEvent) => {

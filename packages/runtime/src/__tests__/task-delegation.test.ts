@@ -79,6 +79,7 @@ describe("flat task delegation", () => {
     const prompts: Array<{ agent: string; text: string }> = [];
     const manager = new SessionManager({
       persist: false,
+      systemPluginEnv: { BP_EXPERIMENT_DISABLE_PLUGINS: "org.brainpilot.auditor" },
       agentFactory: scriptedFactory({
         principal: { onPrompt: (text) => text.includes("DELEGATE") ? { tool: "dispatch_task", args: { to: "librarian", content: "research" } } : undefined },
         librarian: { onPrompt: (text) => {
@@ -96,6 +97,10 @@ describe("flat task delegation", () => {
     await waitFor(() => manager.getSessionState(session.id)?.runState.active === false);
     expect(manager.listTasks(session.id)[0]).toMatchObject({ status: "replied" });
     expect(prompts.filter((prompt) => prompt.agent === "principal")).toHaveLength(2);
+    await waitFor(() => manager.getSessionState(session.id)?.workState.status === "idle");
+    expect(manager.getSessionState(session.id)?.workState).toMatchObject({
+      active: false, status: "idle", epoch: 1,
+    });
   });
 
   it("returns a compact Auditor report pointer to PI for a correction cycle", async () => {
@@ -164,6 +169,8 @@ describe("flat task delegation", () => {
     await manager.sendMessage(session.id, "hello", "librarian");
     await waitFor(() => prompts.length === 1);
     expect(prompts[0]?.text).toBe("hello");
+    await waitFor(() => manager.getSessionState(session.id)?.workState.status === "idle");
+    expect(manager.getSessionState(session.id)?.workState).toMatchObject({ epoch: 1, active: false });
   });
 
   it("keeps Auditor visible without holding the Principal-only foreground active", async () => {

@@ -1,6 +1,6 @@
 import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, useRef, useState } from "react";
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
-import { AgentStatus, SubagentStatus, ChatMessage, DomainResources, MessageFilterConfig, MessageFilterRule, Session, SessionTokenUsage, ThinkingLevel, TraceGraph, normalizeSessionState, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
+import { AgentStatus, SubagentStatus, ChatMessage, DomainResources, MessageFilterConfig, MessageFilterRule, Session, SessionTokenUsage, ThinkingLevel, TraceGraph, WorkStatus, normalizeSessionState, normalizeWebSocketEvent, /* SessionEventEntry, */ SessionMessageEntry } from "../contracts/backend";
 import { api } from "../utils/api";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
@@ -53,7 +53,7 @@ interface SessionContextValue {
   /** PI/Principal foreground lifecycle from session_state.runState. */
   runActive: { active: boolean; atMs: number } | null;
   /** Aggregate session-work signal; use this for completion and workspace safety. */
-  workActive: { active: boolean; atMs: number } | null;
+  workActive: { active: boolean; status?: WorkStatus; epoch?: number; atMs: number } | null;
   /**
    * Cumulative real token usage for the current session (total + per-agent),
    * fed live from `session_state` frames. null until the first frame carrying
@@ -386,7 +386,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // runState is PI-only. workState is the authoritative whole-session signal
   // used for completion/timing and includes delegated/background execution.
   const [runActive, setRunActive] = useState<{ active: boolean; atMs: number } | null>(null);
-  const [workActive, setWorkActive] = useState<{ active: boolean; atMs: number } | null>(null);
+  const [workActive, setWorkActive] = useState<{
+    active: boolean;
+    status?: WorkStatus;
+    epoch?: number;
+    atMs: number;
+  } | null>(null);
   // Cumulative real token usage for the current session, fed from session_state.
   const [tokenUsage, setTokenUsage] = useState<SessionTokenUsage | null>(null);
   const [agentFilters, setAgentFilters] = useState<Record<string, AgentMessageFilter>>({});
@@ -1092,9 +1097,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           active: stateSnapshot.runState.active,
           atMs,
         });
-        setWorkActive({
-          active: stateSnapshot.workState.active,
-          atMs,
+        setWorkActive((current) => {
+          const incomingEpoch = stateSnapshot.workState.epoch;
+          if (incomingEpoch !== undefined && current?.epoch !== undefined && incomingEpoch < current.epoch) {
+            return current;
+          }
+          return {
+            active: stateSnapshot.workState.active,
+            status: stateSnapshot.workState.status,
+            epoch: incomingEpoch,
+            atMs,
+          };
         });
         // Cumulative real token usage rides on the same frame (optional).
         const usage = parseTokenUsageValue(value.tokenUsage);

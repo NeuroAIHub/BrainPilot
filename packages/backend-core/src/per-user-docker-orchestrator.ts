@@ -31,6 +31,7 @@ const DEFAULT_USER = "__default__";
 /** Metrics shape we read off a per-user runtime for idle-reclaim (R-3). */
 interface RuntimeMetrics {
   runningAgents?: number;
+  reclaimable?: boolean;
   lastActivityAt?: string | null;
 }
 
@@ -47,8 +48,8 @@ export interface PerUserDockerOrchestratorOptions
   /** Highest host port to hand out (inclusive). Default 8199. */
   portMax?: number;
   /**
-   * Idle threshold (ms). A user's container with `runningAgents === 0` and no
-   * activity newer than this is stopped by the reaper. `0` disables reclaim.
+   * Idle threshold (ms). A container is considered only when Runtime reports
+   * `reclaimable=true`; the atomic reclaim probe must then also accept it.
    * Default 0 (off) — callers/compose opt in via BP_DYNAMIC_IDLE_MS.
    */
   idleMs?: number;
@@ -65,6 +66,8 @@ export interface PerUserDockerOrchestratorOptions
    * of `${baseUrl}/metrics`. Used only by the idle reaper.
    */
   metricsProbe?: (baseUrl: string) => Promise<RuntimeMetrics | null>;
+  /** Atomically fence and re-check a Runtime before its container is stopped. */
+  reclaimProbe?: (baseUrl: string) => Promise<boolean>;
   /** Injectable clock (ms). Defaults to Date.now. */
   now?: () => number;
   /** Injectable timer setter. Defaults to setInterval. */
@@ -92,6 +95,15 @@ async function defaultMetricsProbe(
   }
 }
 
+async function defaultReclaimProbe(baseUrl: string): Promise<boolean> {
+  try {
+    const res = await fetch(`${baseUrl}/runtime/shutdown-if-reclaimable`, { method: "POST" });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
+
 export class PerUserDockerOrchestrator implements Orchestrator {
   private readonly base: Omit<DockerOrchestratorOptions, "hostPort" | "dataDir">;
   private readonly dataRoot?: string;
@@ -104,6 +116,7 @@ export class PerUserDockerOrchestrator implements Orchestrator {
     opts: DockerOrchestratorOptions,
   ) => Orchestrator;
   private readonly metricsProbe: (baseUrl: string) => Promise<RuntimeMetrics | null>;
+  private readonly reclaimProbe: (baseUrl: string) => Promise<boolean>;
   private readonly now: () => number;
   private readonly setIntervalFn: (
     cb: () => void,
@@ -114,6 +127,7 @@ export class PerUserDockerOrchestrator implements Orchestrator {
   private readonly users = new Map<string, UserEntry>();
   /** Single-flight per user (issue #58 pattern): concurrent first requests share one launch. */
   private readonly starting = new Map<string, Promise<RuntimeHandle>>();
+  private readonly reclaiming = new Map<string, Promise<void>>();
   private readonly usedPorts = new Set<number>();
   private reaper: ReturnType<typeof setInterval> | null = null;
 
@@ -126,6 +140,7 @@ export class PerUserDockerOrchestrator implements Orchestrator {
       reapIntervalMs,
       createOrchestrator,
       metricsProbe,
+      reclaimProbe,
       now,
       setIntervalFn,
       clearIntervalFn,
@@ -141,6 +156,7 @@ export class PerUserDockerOrchestrator implements Orchestrator {
     this.makeOrchestrator =
       createOrchestrator ?? ((opts) => new DockerOrchestrator(opts));
     this.metricsProbe = metricsProbe ?? defaultMetricsProbe;
+    this.reclaimProbe = reclaimProbe ?? defaultReclaimProbe;
     this.now = now ?? (() => Date.now());
     this.setIntervalFn =
       setIntervalFn ?? ((cb, ms) => setInterval(cb, ms));
@@ -154,6 +170,11 @@ export class PerUserDockerOrchestrator implements Orchestrator {
 
   async ensureRuntime(opts?: EnsureRuntimeOptions): Promise<RuntimeHandle> {
     const userId = opts?.userId ?? DEFAULT_USER;
+    const reclaiming = this.reclaiming.get(userId);
+    if (reclaiming) {
+      await reclaiming;
+      return this.ensureRuntime(opts);
+    }
 
     const existing = this.users.get(userId);
     if (existing) {
@@ -281,8 +302,8 @@ export class PerUserDockerOrchestrator implements Orchestrator {
   }
 
   /**
-   * Idle reclaim (#301 req 4 / R-3): stop+remove any user's container that has
-   * no running agents AND whose most recent activity is older than `idleMs`.
+   * Idle reclaim (#301 req 4 / R-3): stop+remove a user's container only after
+   * Runtime reports it reclaimable and atomically accepts the final reclaim.
    * `lastActivityAt` (from the runtime) wins; we fall back to `lastEnsuredAt`.
    */
   async reapIdle(): Promise<void> {
@@ -294,13 +315,22 @@ export class PerUserDockerOrchestrator implements Orchestrator {
       // If metrics are unreadable, don't reap — a transient probe failure must
       // not evict an in-use sandbox.
       if (!metrics) continue;
-      if ((metrics.runningAgents ?? 0) > 0) continue;
-      const lastActivity = metrics.lastActivityAt
+      if (metrics.reclaimable !== true) continue;
+      const runtimeActivity = metrics.lastActivityAt
         ? Date.parse(metrics.lastActivityAt)
         : entry.lastEnsuredAt;
-      const idleFor = now - (Number.isNaN(lastActivity) ? entry.lastEnsuredAt : lastActivity);
+      const lastActivity = Math.max(
+        entry.lastEnsuredAt,
+        Number.isNaN(runtimeActivity) ? entry.lastEnsuredAt : runtimeActivity,
+      );
+      const idleFor = now - lastActivity;
       if (idleFor >= this.idleMs) {
-        await this.disposeUser(userId);
+        const operation = (async () => {
+          if (this.users.get(userId) !== entry) return;
+          if (await this.reclaimProbe(entry.baseUrl)) await this.disposeUser(userId);
+        })().finally(() => this.reclaiming.delete(userId));
+        this.reclaiming.set(userId, operation);
+        await operation;
       }
     }
     if (this.users.size === 0) this.stopReaper();

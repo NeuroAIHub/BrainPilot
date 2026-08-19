@@ -46,6 +46,12 @@ describe("Background Jobs runtime integration", () => {
     expect(toolNames.get("engineer")).toEqual(expect.arrayContaining(["run_in_background", "background_job"]));
     await new Promise((resolve) => setTimeout(resolve, 80));
     expect(prompts.filter((item) => item.text.includes("<background_job_events"))).toHaveLength(0);
+    expect(manager.getSessionState(session.id)?.workState).toMatchObject({
+      active: true,
+      status: "active",
+      epoch: 1,
+    });
+    expect(manager.metrics().reclaimable).toBe(false);
     await waitFor(() => prompts.some((item) => item.text.includes("<background_job_events")));
     const completion = prompts.filter((item) => item.text.includes("<background_job_events"));
     expect(completion).toHaveLength(1);
@@ -54,6 +60,8 @@ describe("Background Jobs runtime integration", () => {
     expect(completion[0]?.text).toContain("log_path=");
     expect(completion[0]?.text).toContain("Inspect the referenced log only when needed");
     expect(completion[0]?.text).toContain("untrusted=\"true\"");
+    await waitFor(() => manager.getSessionState(session.id)?.workState.status === "idle");
+    expect(manager.metrics().reclaimable).toBe(true);
     manager.shutdown();
   });
 
