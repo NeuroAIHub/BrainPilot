@@ -37,6 +37,15 @@ export function hasRequiredDatasetCredentials(entry: DatasetCatalogEntry, creden
   return (entry.credentialFields ?? []).filter((field) => field.required).every((field) => Boolean(credentials[field.id]?.trim()));
 }
 
+/** Index a newest-first download list without letting older retries overwrite it. */
+export function latestDatasetJobsByDataset(jobs: DatasetDownloadJob[]): Map<string, DatasetDownloadJob> {
+  const latest = new Map<string, DatasetDownloadJob>();
+  for (const job of jobs) {
+    if (!latest.has(job.datasetId)) latest.set(job.datasetId, job);
+  }
+  return latest;
+}
+
 function matches(entry: DatasetCatalogEntry, query: string): boolean {
   const normalized = query.trim().toLocaleLowerCase();
   return !normalized || [entry.name, entry.summary, entry.description, entry.provider, entry.license, ...entry.modalities]
@@ -92,7 +101,7 @@ export function DatasetMarketplace({ query, onCount }: Props) {
 
   const visible = useMemo(() => catalog.filter((entry) => matches(entry, query)), [catalog, query]);
   const selected = catalog.find((entry) => entry.id === selectedId) ?? null;
-  const jobsByDataset = useMemo(() => new Map(jobs.map((job) => [job.datasetId, job])), [jobs]);
+  const jobsByDataset = useMemo(() => latestDatasetJobsByDataset(jobs), [jobs]);
 
   const start = async (entry: DatasetCatalogEntry) => {
     setBusy(true);

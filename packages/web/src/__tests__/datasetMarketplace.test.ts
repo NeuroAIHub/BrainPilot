@@ -4,6 +4,7 @@ import {
   datasetCardAction,
   handleDatasetCardAction,
   hasRequiredDatasetCredentials,
+  latestDatasetJobsByDataset,
 } from "../components/plugins/DatasetMarketplace";
 import type { DatasetCatalogEntry, DatasetDownloadJob } from "../utils/api";
 
@@ -72,6 +73,23 @@ describe("dataset marketplace primary action", () => {
     expect(showDetails).toHaveBeenCalledWith(entry.id);
     expect(canStartDatasetDownload(completedJob())).toBe(false);
     expect(canStartDatasetDownload()).toBe(true);
+  });
+
+  it("keeps the newest completed retry ahead of an older failed attempt", () => {
+    const completed = completedJob();
+    const failed: DatasetDownloadJob = {
+      ...completed,
+      id: "job-old-failure",
+      status: "failed",
+      startedAt: "2026-08-16T23:00:00.000Z",
+      finishedAt: "2026-08-16T23:01:00.000Z",
+      error: "network timeout",
+    };
+
+    const latest = latestDatasetJobsByDataset([completed, failed]).get("public-eeg");
+    expect(latest).toBe(completed);
+    expect(datasetCardAction(dataset(), latest)).toBe("details");
+    expect(canStartDatasetDownload(latest)).toBe(false);
   });
 });
 
