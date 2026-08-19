@@ -137,10 +137,10 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // Target a custom Anthropic-compatible gateway. A per-session providerConfig
   // (from providers.json) wins and isolates its key via setRuntimeApiKey;
   // otherwise fall back to the env-based gateway (Docker/static compat).
-  const resolved = params.providerConfig
+  const resolved = await (params.providerConfig
     ? resolveSessionModel(sdk as unknown as PiProviderSdk, agentDir, params.providerConfig)
-    : resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir);
-  const { model, modelRegistry, authStorage } = resolved;
+    : resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir));
+  const { model, modelRegistry, modelRuntime, authStorage } = resolved;
 
   // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
   // per-role persona is injected through a DefaultResourceLoader. We use
@@ -254,6 +254,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     sessionManager: SessionManager.open(params.historyPath),
     thinkingLevel: params.thinkingLevel,
     ...(model ? { model } : {}),
+    ...(modelRuntime ? { modelRuntime } : {}),
     ...(modelRegistry ? { modelRegistry } : {}),
     ...(authStorage ? { authStorage } : {}),
   });
@@ -453,6 +454,7 @@ interface PiSdk {
     sessionManager?: unknown;
     model?: unknown;
     modelRegistry?: unknown;
+    modelRuntime?: unknown;
     authStorage?: unknown;
     thinkingLevel?: import("@brainpilot/protocol").ThinkingLevel;
   }): Promise<{ session: PiSession }>;
@@ -501,15 +503,22 @@ interface PiSdk {
     getExtensions(): { extensions: Array<{ tools: Map<string, unknown> }> };
   };
   getAgentDir(): string;
-  AuthStorage: {
+  AuthStorage?: {
     create(path: string): unknown;
     inMemory?(): { setRuntimeApiKey?(provider: string, key: string): void };
   };
-  ModelRegistry: {
+  ModelRegistry?: {
     create(authStorage: unknown, modelsJsonPath?: string): {
       refresh(): void;
       getError(): string | undefined;
       find(provider: string, modelId: string): unknown;
     };
+  };
+  ModelRuntime?: {
+    create(options: { modelsPath: string; refreshOnCreate?: boolean }): Promise<{
+      getError(): string | undefined;
+      getModel(provider: string, modelId: string): unknown;
+      setRuntimeApiKey(provider: string, key: string): Promise<void>;
+    }>;
   };
 }
