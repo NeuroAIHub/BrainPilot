@@ -2301,7 +2301,7 @@ export class SessionManager {
       // Surface the delegated run immediately (derived active flag, agent list).
       this.emitSessionState(entry);
       // #167: cap concurrent provider calls across experts in this session.
-      await this.withProviderSlot(sessionId, () => agent.prompt(this.renderEnvelopes(msgs, name)));
+      await this.withProviderSlot(sessionId, () => agent.followUp(this.renderEnvelopes(msgs, name)));
 
       // #97 error path. A delegated run that ended in `error` is handled here
       // (the trace-reminder extension bails on an errored run, leaving the host
