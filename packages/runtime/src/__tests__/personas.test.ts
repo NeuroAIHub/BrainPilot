@@ -261,7 +261,7 @@ Stale local routing rule.`;
     const pi = PERSONAS.principal!;
     const librarian = PERSONAS.librarian!;
     const experimentalist = PERSONAS.experimentalist!;
-    const engineer = PERSONAS.engineer!;
+    const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
 
     expect(pi).toContain("minimum valid deliverable");
     expect(pi).toContain("protocol proportional to those needs");
@@ -277,6 +277,54 @@ Stale local routing rule.`;
     expect(engineer).toContain("decision-relevant evaluation");
     expect(engineer).toContain("optional depth before removing a comparison");
     expect(engineer).toMatch(/infer superiority from an\s+incomplete comparison/);
+  });
+
+  it("separates fixed methods, candidate eligibility, and comparative selection", () => {
+    const pi = PERSONAS.principal!.replace(/\s+/g, " ");
+    const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
+    const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
+
+    expect(pi).toContain("freeze the selection rule rather than a candidate identity");
+    expect(pi).toContain("candidate-local guards do not establish preference");
+    expect(pi).toContain("latest valid comparison");
+
+    expect(experimentalist).toContain("fixed-method work from comparative selection");
+    expect(experimentalist).toContain("user, task specification, or external scientific constraint");
+    expect(experimentalist).toContain("select, compare, recommend, or replace");
+    expect(experimentalist).toContain("eligibility guards from ranking evidence");
+    expect(experimentalist).toContain("observable outcome that could change the decision");
+    expect(experimentalist).toContain("latest valid, comparable results");
+    expect(experimentalist).toContain("invalidates the current decision");
+    expect(experimentalist).toContain("do not default to a preferred candidate");
+
+    expect(engineer).toContain("latest comparable candidate table");
+    expect(engineer).toContain("mark the affected result superseded");
+    expect(engineer).toContain("never carry a stale result into the final decision");
+    expect(engineer).toContain("do not make the final scientific selection");
+  });
+
+  it("injects the Experimentalist method-selection contract into old overrides exactly once", () => {
+    const old = "# Old Experimentalist\n\nLocal protocol guidance.";
+    const once = withCoreCoordinationProtocols(old, "experimentalist", "expert");
+    const twice = withCoreCoordinationProtocols(once, "experimentalist", "expert");
+
+    expect(twice.match(/^## Method selection contract$/gm)).toHaveLength(1);
+    const normalized = twice.replace(/\s+/g, " ");
+    expect(normalized).toContain("fixed-method work from comparative selection");
+    expect(normalized).toContain("observable outcome that could change the decision");
+    expect(normalized).toContain("latest valid, comparable results");
+  });
+
+  it("injects candidate-result freshness into old Engineer overrides exactly once", () => {
+    const old = "# Old Engineer\n\nLocal execution guidance.";
+    const once = withCoreCoordinationProtocols(old, "engineer", "expert");
+    const twice = withCoreCoordinationProtocols(once, "engineer", "expert");
+
+    expect(twice.match(/^## Candidate result freshness$/gm)).toHaveLength(1);
+    const normalized = twice.replace(/\s+/g, " ");
+    expect(normalized).toContain("latest comparable candidate table");
+    expect(normalized).toContain("update it or explicitly exclude it under the declared rules");
+    expect(normalized).toContain("do not make the final scientific selection");
   });
 
   it("requires result-driven real-data iteration before empirical completion", () => {

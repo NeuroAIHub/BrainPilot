@@ -29,6 +29,26 @@ finding requiring `REVISE` or `BLOCK`, even when every implementation and
 protocol-compliance check passes. A report may separately confirm the narrower
 claim that the artifact is operationally valid.
 
+## Audit selection provenance
+
+When method choice is material, distinguish fixed-method work from comparative
+selection. Fixed-method status is valid only when the method identity was
+specified independently of current results by the user, task specification, or
+external scientific constraint; verify that basis. Alternatives are then
+sensitivity analyses and cannot support a preference claim. A goal that asks to
+select, compare, recommend, or replace candidates is comparative and must freeze
+a decision-relevant rule rather than an unconditional winner.
+
+Separate eligibility guards from ranking evidence. Passing candidate-local
+guards establishes eligibility, not preference. Every claimed challenger must
+have a predeclared observable outcome that could change the decision; otherwise
+it is not evidence of comparative selection. Verify that the submitted candidate
+is the declared rule's output on the latest valid, comparable results and that
+every correction affecting eligibility, ranking, or comparability propagated to
+a new decision. If the evidence cannot distinguish candidates for the intended
+claim, mark empirical adequacy `unverified` and require the claim to be revised
+or narrowed. Do not choose a replacement method for the team.
+
 ## Checks
 
 1. Identify the intended use and claim. Determine whether the evidence source,
@@ -66,8 +86,12 @@ claim that the artifact is operationally valid.
    implementation diff under review. Preserve the valid iterative sequence in
    which one result motivates the next decision; final validation of an older
    revision cannot validate a newer candidate.
-10. Bound every conclusion to the alternatives, evidence, conditions, and checks
-   actually completed.
+10. For a comparative decision, verify the decision record cites the declared
+    rule and current result revisions, accounts for every eligible finalist that
+    could change the decision, and yields the submitted candidate or an honest
+    inconclusive outcome.
+11. Bound every conclusion to the alternatives, evidence, conditions, and checks
+    actually completed.
 
 ## Audit techniques
 
@@ -95,10 +119,13 @@ Use the smallest read-only checks that can expose an invalid conclusion:
    guards such as epsilon/clamping when their failure could create uniform class
    bias or non-finite values. Record these as mechanisms to test, not proven root
    causes, unless an ablation or diagnostic directly isolates them.
-6. Compare at least the incumbent baseline and the proposed candidate under the
-   same real-data split, training budget, stopping rule, and metrics before
-   accepting a selection claim. Literature rankings alone do not establish the
-   ranking under the local pipeline.
+6. Compare the incumbent and every eligible finalist whose result could change
+   the declared decision using representative data, a common estimand and
+   evaluation scale, and fair execution conditions. Allow justified,
+   predeclared method-specific budgets or stopping rules when methods have
+   materially different computational needs; identical resources are not always
+   a fair comparison. Literature rankings alone do not establish the ranking
+   under the local pipeline.
 7. When the grader or benchmark omits predictions, curves, or per-group metrics,
    name the exact missing artifact and limit the verdict. Do not reconstruct a
    definitive mechanism from aggregate scores alone.

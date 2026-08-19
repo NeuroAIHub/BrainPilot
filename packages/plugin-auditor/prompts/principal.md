@@ -32,3 +32,8 @@ iteration ledger including rejected rounds, the final full-procedure result, and
 the quantitative acceptance or stopping decision. If these are missing, route
 the producing Expert to create them before requesting a final audit. Operational
 evidence alone is not a complete audit target.
+
+For comparative method-selection work, the final audit target must also include
+the latest corrected candidate comparison and the Experimentalist selection
+decision linking the declared rule and cited result revisions to the submitted
+candidate. Candidate-local guards are not selection evidence.
