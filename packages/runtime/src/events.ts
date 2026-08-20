@@ -223,7 +223,7 @@ export const ev = {
     sessionId: string,
     level: "info" | "warning" | "error" | "fatal",
     message: string,
-    opts?: { agent?: string; details?: string; recoverable?: boolean; id?: string },
+    opts?: { agent?: string; details?: string; recoverable?: boolean; terminal?: boolean; id?: string },
   ): AgUiEvent {
     return {
       type: "system_message",
@@ -237,6 +237,7 @@ export const ev = {
       details: opts?.details,
       timestamp: ts(),
       recoverable: opts?.recoverable ?? true,
+      ...(opts?.terminal ? { terminal: true } : {}),
     } as AgUiEvent;
   },
   custom(ctx: Ctx, name: string, value: unknown): AgUiEvent {

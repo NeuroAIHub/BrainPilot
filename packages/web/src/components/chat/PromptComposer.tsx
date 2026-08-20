@@ -177,7 +177,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
       ? agents.flatMap((agent) => agent.activeTools ?? [])
@@ -794,6 +794,52 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     }
   };
 
+  const focusComposerAtEnd = () => {
+    requestAnimationFrame(() => {
+      const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  };
+
+  const editFailedPrompt = (prompt: string) => {
+    if (!sessionId) return;
+    const existing = draftStore.get(sessionId);
+    if (
+      existing.trim()
+      && existing.trim() !== prompt.trim()
+      && !window.confirm(t("chat.errorRecovery.replaceDraft"))
+    ) return;
+    draftStore.set(sessionId, prompt);
+    focusComposerAtEnd();
+  };
+
+  const retryFailedPrompt = async (prompt: string) => {
+    if (!canSend || workActive?.active === true) return;
+    const result = await sendPrompt(prompt, {
+      thinkingLevel: reasoningSupported ? thinkingLevel : "off",
+    });
+    if (!result.ok && sessionId && draftStore.get(sessionId).trim().length === 0) {
+      draftStore.set(sessionId, prompt);
+    }
+  };
+
+  const changeModelForFailedPrompt = (prompt?: string) => {
+    if (prompt) draftStore.set(DRAFT_SESSION_ID, prompt);
+    startDraftSession();
+    // Existing sessions freeze provider/model. Move the failed prompt into a
+    // new draft, then open whichever model control is present (main or #494).
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".provider-model-control__trigger, .model-select .custom-select__trigger",
+      );
+      trigger?.focus();
+      trigger?.click();
+    }));
+  };
+
+  const recoveryBusy = !canSend || workActive?.active === true;
   return (
     <section className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`} aria-labelledby="prompt-heading">
       <div className="prompt-home__inner">
@@ -823,6 +869,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             runningAgents={runningAgents}
             groupExpertActivity
             onRetryCancel={() => void interruptCurrent()}
+            onRetryMessage={(prompt) => void retryFailedPrompt(prompt)}
+            onEditMessage={editFailedPrompt}
+            onChangeModel={changeModelForFailedPrompt}
+            onOpenProviderSettings={onOpenProviderSettings}
+            recoveryBusy={recoveryBusy}
             workspaceFileSessionId={currentSession?.id}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
           />

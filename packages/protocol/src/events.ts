@@ -458,6 +458,8 @@ export const SystemMessageEventSchema = z
     timestamp: z.string(),
     /** fatal = red flashing background; affects frontend styling. */
     recoverable: z.boolean(),
+    /** Terminal run failure; the frontend must keep this recovery card visible. */
+    terminal: z.boolean().optional(),
   })
   .passthrough();
 export type SystemMessageEvent = z.infer<typeof SystemMessageEventSchema>;

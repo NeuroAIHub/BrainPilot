@@ -47,6 +47,43 @@ describe("SystemMessageBubble — 4 levels", () => {
     expect(html).toContain("<details");
     expect(html).toContain("stack-trace-here");
   });
+
+  it("renders localized retry/edit actions for a terminal rate-limit failure", () => {
+    const html = renderToStaticMarkup(
+      <SystemMessageBubble
+        view={{
+          level: "error",
+          message: "provider rejected",
+          details: '429 {"request_id":"req-rate"}',
+          recoverable: true,
+          terminal: true,
+        }}
+        failedPrompt="retry me"
+        onRetry={() => {}}
+        onEdit={() => {}}
+      />,
+    );
+    expect(html).toContain("chat.errorRecovery.rateLimit");
+    expect(html).toContain("chat.errorRecovery.retry");
+    expect(html).toContain("chat.errorRecovery.edit");
+    expect(html).toContain("req-rate");
+    expect(html.indexOf("req-rate")).toBeGreaterThan(html.indexOf("<details"));
+  });
+
+  it("routes authentication failure to Provider settings instead of blind retry", () => {
+    const html = renderToStaticMarkup(
+      <SystemMessageBubble
+        view={{ level: "error", message: "401 unauthorized", recoverable: true, terminal: true }}
+        failedPrompt="retry me"
+        onRetry={() => {}}
+        onEdit={() => {}}
+        onOpenProviderSettings={() => {}}
+      />,
+    );
+    expect(html).toContain("chat.errorRecovery.auth");
+    expect(html).toContain("chat.errorRecovery.providerSettings");
+    expect(html).not.toContain("chat.errorRecovery.retry");
+  });
 });
 
 describe("AskUserCard — structure", () => {

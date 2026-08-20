@@ -705,6 +705,8 @@ export class MasAgent {
         agent: this.name,
         details,
         recoverable: true,
+        terminal: true,
+        id: `run-error:${this.sessionId}:${this.currentRunId ?? "unknown"}:${this.name}`,
       }),
     );
   }
