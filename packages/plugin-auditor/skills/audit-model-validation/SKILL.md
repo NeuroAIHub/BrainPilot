@@ -49,6 +49,11 @@ a new decision. If the evidence cannot distinguish candidates for the intended
 claim, mark empirical adequacy `unverified` and require the claim to be revised
 or narrowed. Do not choose a replacement method for the team.
 
+Verify that every material challenge and contradictory result propagated into
+the latest protocol, evidence, and decision. Protocol conformance cannot pass
+when the protocol still depends on a premise that current evidence has
+invalidated or left unresolved.
+
 ## Checks
 
 1. Identify the intended use and claim. Determine whether the evidence source,

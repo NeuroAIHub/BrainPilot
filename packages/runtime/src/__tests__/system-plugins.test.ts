@@ -107,6 +107,8 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("observable outcome that could change the decision");
     expect(methodReview).toContain("latest valid, comparable results");
     expect(methodReview).toContain("every correction affecting eligibility, ranking, or comparability");
+    expect(methodReview).toContain("every material challenge and contradictory result propagated");
+    expect(methodReview).toContain("current evidence has invalidated or left unresolved");
     expect(methodReview).toContain("Do not choose a replacement method");
     expect(methodReview).toContain("method-specific budgets or stopping rules");
     const requestTemplate = await readFile(join(auditorSkill, "references", "audit-request-template.md"), "utf8");

@@ -46,6 +46,7 @@ import {
   PROVIDER_MAX_RETRIES,
   PROVIDER_RETRY_BASE_DELAY_MS,
 } from "./pi-retry.js";
+import { repairPiManagedToolPermissions } from "./managed-tool-permissions.js";
 
 export function isMockMode(env: Record<string, string | undefined> = process.env): boolean {
   return env.BP_MOCK === "1" || env.BP_MOCK === "true";
@@ -103,6 +104,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   } = sdk;
 
   const agentDir = getAgentDir();
+  await repairPiManagedToolPermissions(agentDir);
   const settingsManager = SettingsManager.create(params.cwd, agentDir, {
     projectTrusted: true,
   });
