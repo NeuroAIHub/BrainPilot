@@ -108,8 +108,8 @@ describe("resolveFocusTrapTarget (#487)", () => {
     expect(resolveFocusTrapTarget(controls, "first", true)).toBe("last");
   });
 
-  it("leaves normal movement between interior controls to the browser", () => {
-    expect(resolveFocusTrapTarget(controls, "middle", false)).toBeNull();
-    expect(resolveFocusTrapTarget(controls, "middle", true)).toBeNull();
+  it("owns forward and backward movement between interior controls", () => {
+    expect(resolveFocusTrapTarget(controls, "middle", false)).toBe("last");
+    expect(resolveFocusTrapTarget(controls, "middle", true)).toBe("first");
   });
 });

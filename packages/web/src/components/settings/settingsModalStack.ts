@@ -27,9 +27,11 @@ export function listFocusable(container: HTMLElement): HTMLElement[] {
 }
 
 /**
- * Resolve the boundary control for a focus trap. Treat focus on the dialog
- * container itself (or any other non-control) as outside the ordered control
- * list so Tab cannot fall through to the inert page behind it.
+ * Resolve the next control for a focus trap. The trap owns every Tab movement
+ * instead of relying on WebKit's native traversal through an inert background;
+ * Safari can otherwise drop focus onto body between two valid dialog controls.
+ * Focus on the dialog container itself (or another non-control) starts at the
+ * appropriate boundary.
  */
 export function resolveFocusTrapTarget<T>(
   focusable: readonly T[],
@@ -38,11 +40,14 @@ export function resolveFocusTrapTarget<T>(
 ): T | null {
   if (focusable.length === 0) return null;
   const activeIndex = active === null ? -1 : focusable.indexOf(active);
-  if (shiftKey && activeIndex <= 0) return focusable[focusable.length - 1]!;
-  if (!shiftKey && (activeIndex < 0 || activeIndex === focusable.length - 1)) {
-    return focusable[0]!;
+  if (shiftKey) {
+    const previousIndex = activeIndex <= 0 ? focusable.length - 1 : activeIndex - 1;
+    return focusable[previousIndex]!;
   }
-  return null;
+  const nextIndex = activeIndex < 0 || activeIndex === focusable.length - 1
+    ? 0
+    : activeIndex + 1;
+  return focusable[nextIndex]!;
 }
 
 /**
@@ -61,10 +66,7 @@ export function trapFocusKeyDown(container: HTMLElement, event: KeyboardEvent): 
     active && container.contains(active) ? active : null,
     event.shiftKey,
   );
-  if (target) {
-    event.preventDefault();
-    target.focus();
-    return true;
-  }
-  return false;
+  event.preventDefault();
+  target?.focus();
+  return true;
 }
