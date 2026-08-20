@@ -12,6 +12,7 @@ import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
+import { attachmentStore, useAttachments } from "./attachmentScopes";
 import { reservePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
@@ -53,6 +54,7 @@ type ComposerAttachment = {
 type QueuedUpload = {
   file: File;
   uploadId: string;
+  scopeId: string;
 };
 
 type QueuedPrompt = { id: string; content: string };
@@ -178,6 +180,9 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const [composerError, setComposerError] = useState<string | null>(null);
   const uploading = uploadState != null || queuedUploadCount > 0;
   const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
+  const persistedAttachmentNames = useAttachments(sessionId);
+  const attachmentScopeRef = useRef<string | null>(sessionId);
   const activeTools = useMemo(
     () => agents.some((agent) => agent.activeTools !== undefined)
       ? agents.flatMap((agent) => agent.activeTools ?? [])
@@ -208,6 +213,18 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   useEffect(() => {
     attachmentsRef.current = attachments;
   }, [attachments]);
+
+  useEffect(() => {
+    attachmentScopeRef.current = sessionId;
+    setAttachments((current) => {
+      const byName = new Map(current.map((attachment) => [attachment.name, attachment]));
+      for (const attachment of current) {
+        if (!persistedAttachmentNames.includes(attachment.name)) revokeAttachmentPreview(attachment);
+      }
+      return persistedAttachmentNames.map((name) => byName.get(name) ?? { name });
+    });
+    for (const name of persistedAttachmentNames) reservedUploadNamesRef.current.add(name);
+  }, [persistedAttachmentNames, sessionId]);
 
   useEffect(() => {
     if (currentSession?.thinkingLevel) setThinkingLevel(currentSession.thinkingLevel);
@@ -528,7 +545,6 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     return () => window.clearInterval(id);
   }, [currentSession?.modelId, currentSession?.providerId, isDraft]);
 
-  const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
   const queuedPrompts = sessionId ? (queuedPromptsBySession[sessionId] ?? []) : [];
 
   useEffect(() => {
@@ -567,7 +583,10 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         ? `${t("chat.upload.notice", { names: attachments.map((item) => item.name).join(", ") })}\n\n`
         : "";
     const sentAttachments = attachments;
-    if (attachments.length > 0) setAttachments([]);
+    if (attachments.length > 0) {
+      attachmentStore.clear(sessionId);
+      setAttachments([]);
+    }
     // Carry the chosen provider/model so a freshly-created session records its
     // per-session selection (no-op for an already-running session).
     const result = await sendPrompt(`${notice}${content}`, {
@@ -589,9 +608,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         draftStore.set(sessionId, content);
       }
       if (sentAttachments.length > 0) {
+        attachmentStore.restoreIfEmpty(sessionId, sentAttachments.map((attachment) => attachment.name));
         setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
       }
     } else {
+      attachmentStore.delete(sessionId);
       sentAttachments.forEach(revokeAttachmentPreview);
       for (const attachment of sentAttachments) reservedUploadNamesRef.current.delete(attachment.name);
     }
@@ -619,7 +640,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         const entry = uploadQueueRef.current.shift();
         setQueuedUploadCount(uploadQueueRef.current.length);
         if (!entry) break;
-        const { file, uploadId } = entry;
+        const { file, uploadId, scopeId } = entry;
         setUploadState({
           filename: file.name,
           fileIndex: processed + 1,
@@ -649,12 +670,17 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             type: file.type || undefined,
             previewUrl,
           };
-          setAttachments((prev) => {
-            const existing = prev.find((item) => item.name === attachment.name);
-            if (!existing) return [...prev, attachment];
-            if (existing.previewUrl !== attachment.previewUrl) revokeAttachmentPreview(existing);
-            return prev.map((item) => item.name === attachment.name ? attachment : item);
-          });
+          attachmentStore.add(scopeId, attachment.name);
+          if (attachmentScopeRef.current === scopeId) {
+            setAttachments((prev) => {
+              const existing = prev.find((item) => item.name === attachment.name);
+              if (!existing) return [...prev, attachment];
+              if (existing.previewUrl !== attachment.previewUrl) revokeAttachmentPreview(existing);
+              return prev.map((item) => item.name === attachment.name ? attachment : item);
+            });
+          } else {
+            revokeAttachmentPreview(attachment);
+          }
         } catch (e) {
           reservedUploadNamesRef.current.delete(file.name);
           if (isUploadAbortError(e)) break;
@@ -681,11 +707,12 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const enqueueFiles = (files: FileList | readonly File[] | null): boolean => {
     if (!files || files.length === 0) return false;
     const uploadId = currentSession?.id ?? currentSandbox?.id;
-    if (!uploadId) return false;
+    const scopeId = sessionId;
+    if (!uploadId || !scopeId) return false;
     const list = Array.from(files);
     for (const file of list) {
       reservedUploadNamesRef.current.add(file.name);
-      uploadQueueRef.current.push({ file, uploadId });
+      uploadQueueRef.current.push({ file, uploadId, scopeId });
     }
     setQueuedUploadCount(uploadQueueRef.current.length);
     setUploadState((current) => current
@@ -716,6 +743,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
 
   const removeAttachment = (name: string) => {
     reservedUploadNamesRef.current.delete(name);
+    if (sessionId) attachmentStore.remove(sessionId, name);
     setAttachments((prev) => {
       const removed = prev.find((item) => item.name === name);
       if (removed) revokeAttachmentPreview(removed);

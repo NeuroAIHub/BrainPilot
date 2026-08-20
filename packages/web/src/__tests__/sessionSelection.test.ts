@@ -68,6 +68,28 @@ describe("resolveSessionSelection (#324)", () => {
     expect(r).toEqual({ sessionId: "c", isDraft: false });
   });
 
+  it("restores a recoverable new-conversation draft before the last session", () => {
+    expect(resolveSessionSelection({
+      listStatus: "ready",
+      sessions: sessions("latest", "older"),
+      preferredId: "latest",
+      currentSessionId: null,
+      isDraft: false,
+      hasRecoverableDraft: true,
+    })).toEqual({ sessionId: null, isDraft: true });
+  });
+
+  it("does not yank an already-selected session back to a stored draft", () => {
+    expect(resolveSessionSelection({
+      listStatus: "ready",
+      sessions: sessions("latest", "older"),
+      preferredId: "older",
+      currentSessionId: "latest",
+      isDraft: false,
+      hasRecoverableDraft: true,
+    })).toEqual({ sessionId: "latest", isDraft: false });
+  });
+
   it("falls back to first session when preferred is unavailable (no transient draft)", () => {
     const r = resolveSessionSelection({
       listStatus: "ready",

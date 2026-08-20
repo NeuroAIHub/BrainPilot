@@ -7,6 +7,7 @@ import { useAuth } from "./AuthContext";
 import { useSandbox } from "./SandboxContext";
 import { useSSE } from "./SSEContext";
 import { draftStore } from "./draftStore";
+import { attachmentStore } from "../components/chat/attachmentScopes";
 import { defaultFilterRules, isNonFatalAgentErrorMessage, HIDE_NON_FATAL_AGENT_ERRORS } from "./messageFilters";
 import {
   clearLastSessionId,
@@ -452,6 +453,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         preferredId: loadLastSessionId(),
         currentSessionId: currentSessionIdRef.current,
         isDraft: isDraftRef.current,
+        hasRecoverableDraft:
+          draftStore.has(DRAFT_SESSION_ID) || attachmentStore.has(DRAFT_SESSION_ID),
       });
       setIsDraft(resolved.isDraft);
       setCurrentSessionId(resolved.sessionId);
@@ -625,6 +628,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Drop any unsent draft so re-creating a session with the same id (rare,
       // but possible) doesn't resurrect stale text.
       draftStore.delete(sessionId);
+      attachmentStore.delete(sessionId);
       hydratedSessionsRef.current.delete(sessionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.deleteFailed"));
@@ -715,6 +719,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           // Migrate any draft text the composer stored under the sentinel id
           // so a tab switch mid-send doesn't lose it.
           draftStore.delete(DRAFT_SESSION_ID);
+          attachmentStore.delete(DRAFT_SESSION_ID);
         }
 
         const timestamp = new Date().toISOString();
