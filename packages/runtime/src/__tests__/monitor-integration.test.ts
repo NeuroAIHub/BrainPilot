@@ -4,7 +4,8 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { mockAgentFactory } from "../agent-factory.js";
 import { SessionManager } from "../session-manager.js";
-import type { AgentSessionFactory } from "../types.js";
+import type { MonitorEventBatch, MonitorManager } from "../monitor-manager.js";
+import type { AgentSessionFactory, IAgentSession, PiAgentEvent } from "../types.js";
 import type { AgUiEvent } from "@brainpilot/protocol";
 
 async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<void> {
@@ -13,6 +14,73 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
     if (Date.now() > deadline) throw new Error("timed out waiting for monitor delivery");
     await new Promise((resolve) => setTimeout(resolve, 10));
   }
+}
+
+function failingFactory(rawError: string, prompts: string[]): AgentSessionFactory {
+  return async ({ sessionId }) => {
+    const listeners = new Set<(event: PiAgentEvent) => void>();
+    let streaming = false;
+    const emit = (event: PiAgentEvent) => {
+      for (const listener of listeners) listener(event);
+    };
+    return {
+      sessionId,
+      get isStreaming() { return streaming; },
+      subscribe(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      async prompt(text: string) {
+        prompts.push(text);
+        streaming = true;
+        emit({ type: "agent_start" });
+        emit({ type: "turn_start" });
+        emit({ type: "message_start", message: { role: "assistant", content: [] } });
+        emit({
+          type: "message_end",
+          message: { role: "assistant", content: [], stopReason: "error", errorMessage: rawError },
+        });
+        emit({ type: "agent_end", messages: [{ role: "assistant", stopReason: "error" }] });
+        streaming = false;
+      },
+      async abort() { streaming = false; },
+      dispose() {},
+    } satisfies IAgentSession;
+  };
+}
+
+type MonitorTestEntry = {
+  monitorManager: MonitorManager;
+  monitorEvents: Map<string, MonitorEventBatch[]>;
+};
+
+async function queuePersistentMonitorEvent(
+  manager: SessionManager,
+  sessionId: string,
+  description: string,
+): Promise<MonitorTestEntry> {
+  const internals = manager as unknown as {
+    sessions: Map<string, MonitorTestEntry>;
+    ensureAgent(sessionId: string, name: string): Promise<unknown>;
+    wakeAgent(sessionId: string, name: string): void;
+  };
+  await internals.ensureAgent(sessionId, "principal");
+  const entry = internals.sessions.get(sessionId)!;
+  const monitor = entry.monitorManager.start({
+    ownerAgent: "principal",
+    description,
+    command: "while :; do sleep 1; done",
+    persistent: true,
+  });
+  entry.monitorEvents.set("principal", [{
+    monitorId: monitor.id,
+    ownerAgent: "principal",
+    description,
+    timestamp: new Date().toISOString(),
+    lines: ["monitor-ready"],
+  }]);
+  internals.wakeAgent(sessionId, "principal");
+  return entry;
 }
 
 describe("Monitor runtime integration", () => {
@@ -126,6 +194,64 @@ describe("Monitor runtime integration", () => {
     } finally {
       if (restarted) await restarted.shutdownAndSave();
       await rm(dataRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("stops a Monitor after three retryable delivery failures instead of re-waking forever", async () => {
+    const prompts: string[] = [];
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: failingFactory("503 provider unavailable", prompts),
+      runtimeCapabilities: ["builtin.monitor"],
+    });
+    const systemMessages: Array<{ level?: string; message?: string }> = [];
+    try {
+      const session = await manager.createSession();
+      manager.subscribe(session.id, (event) => {
+        if (event.type === "system_message") systemMessages.push(event);
+      });
+      const entry = await queuePersistentMonitorEvent(manager, session.id, "retry cap");
+
+      await waitFor(() => systemMessages.some((event) =>
+        event.level === "error" && event.message?.includes("连续 3 次投递失败"),
+      ));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(prompts).toHaveLength(3);
+      expect(systemMessages.filter((event) => event.level === "warning")).toHaveLength(2);
+      expect(entry.monitorEvents.has("principal")).toBe(false);
+      expect(entry.monitorManager.list("principal").every((monitor) => monitor.status !== "running")).toBe(true);
+    } finally {
+      await manager.shutdownAndSave();
+    }
+  });
+
+  it("treats a fatal Monitor delivery failure as terminal on the first attempt", async () => {
+    const prompts: string[] = [];
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: failingFactory("401 invalid api key", prompts),
+      runtimeCapabilities: ["builtin.monitor"],
+    });
+    const systemMessages: Array<{ level?: string; message?: string }> = [];
+    try {
+      const session = await manager.createSession();
+      manager.subscribe(session.id, (event) => {
+        if (event.type === "system_message") systemMessages.push(event);
+      });
+      const entry = await queuePersistentMonitorEvent(manager, session.id, "fatal delivery");
+
+      await waitFor(() => systemMessages.some((event) =>
+        event.level === "error" && event.message?.includes("无法自动恢复"),
+      ));
+      await new Promise((resolve) => setTimeout(resolve, 50));
+
+      expect(prompts).toHaveLength(1);
+      expect(systemMessages.filter((event) => event.level === "warning")).toHaveLength(0);
+      expect(entry.monitorEvents.has("principal")).toBe(false);
+      expect(entry.monitorManager.list("principal").every((monitor) => monitor.status !== "running")).toBe(true);
+    } finally {
+      await manager.shutdownAndSave();
     }
   });
 });
