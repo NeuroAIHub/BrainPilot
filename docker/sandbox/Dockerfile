@@ -76,12 +76,13 @@ CMD ["node", "packages/runtime/dist/server.js"]
 #   ⚠️ base tag 写死（经典构建器不支持 FROM ${ARG}）；升级须同步三处（见文件头）。
 FROM ghcr.io/neuroaihub/brainpilot-gpu-base:cu124-torch2.6.0 AS gpu
 # Older published GPU base tags may predate workspace checkpoints and the
-# agent's code/file inspection tools, so the thin image guarantees all three.
+# agent's code/file inspection tools, so the thin image guarantees them here.
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends git ripgrep file \
+    && apt-get install -y --no-install-recommends git ripgrep fd-find file \
     && rm -rf /var/lib/apt/lists/* \
     && git --version >/dev/null \
     && rg --version >/dev/null \
+    && fdfind --version >/dev/null \
     && file --version >/dev/null
 WORKDIR /app
 COPY --from=builder /app/node_modules ./node_modules

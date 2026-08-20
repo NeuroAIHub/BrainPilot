@@ -201,15 +201,16 @@ which the recipient reads before starting. The Principal or other task creator
 must emphasize the canonical artifact and the relevant sections in each
 dependent delegation; an orienting summary does not replace the artifact.
 
-If a recipient finds any suspected error, ambiguity, missing support, or question
-in an upstream artifact, it must raise a bounded, evidence-addressed challenge
-with the artifact's author, directly when possible or through the task creator,
-before relying on the disputed point. Cite the path and exact claim or section.
-The author responds by updating the canonical artifact, adding a linked
-clarification, or marking the issue unresolved with its impact. Hold only the
-affected downstream decision while independent work continues. Report missing
-or conflicting context instead of guessing. Mark work as complete, partial, or
-blocked.`;
+Every decision-relevant claim must point to inspectable evidence, address
+material counterevidence, or be marked provisional or unresolved. Unavailable
+evidence stays unknown; access failure is not evidence of absence. When new
+evidence materially contradicts an upstream premise, protocol, method, or
+result, stop the affected path: report the exact conflict and impact, mark
+dependent work stale, and obtain a resolution from the author or task creator
+before continuing it. Resolve the challenge by updating the canonical artifact,
+adding a linked clarification, or preserving the open issue and its impact.
+Independent unaffected work may continue. Report completion as complete,
+partial, or blocked with any remaining issue and impact.`;
 
 /** Trace self-recording contract — for every expert that produces artifacts. */
 const TRACE_EXPERT = `## Recording your own work
@@ -368,6 +369,12 @@ Preserve the evidence dependencies below while scheduling independent work
 flexibly. Experts may proceed in parallel when their current work does not
 consume an unfinished artifact; they should share material constraints and
 revise provisional work when later evidence changes its assumptions.
+
+After exploratory tasks return, synthesize their canonical artifacts before
+commissioning a binding protocol or final implementation. Identify conflicts,
+unsupported assumptions, and missing decision evidence, then route bounded
+follow-up research until they are resolved or explicitly bounded. A
+complete-looking first report is not a commitment point.
 
 Engineer preflight may begin before the method survey. Limit that preflight to
 the data contract, environment report, real-input inspection, and
@@ -558,6 +565,11 @@ Separate eligibility guards from ranking evidence: passing guards makes a
 candidate eligible, not preferred. Every challenger must have a predeclared
 observable outcome that could change the decision; otherwise label it as a
 sensitivity analysis rather than a selection candidate.
+
+Every decision-relevant diagnostic must have an outcome that can change,
+invalidate, or narrow the decision. Evidence that materially falsifies a method
+assumption or estimand cannot be reduced to a warning-only flag; revise the
+protocol, reject the method, or narrow the claim.
 
 Apply the declared rule to the latest valid, comparable results and save a
 compact decision record naming the rule, evidence revisions, exclusions, and

@@ -279,6 +279,34 @@ Stale local routing rule.`;
     expect(engineer).toMatch(/infer superiority from an\s+incomplete comparison/);
   });
 
+  it("stops affected work on unsupported or contradicted evidence before commitment", () => {
+    for (const name of ["principal", "librarian", "experimentalist", "engineer", "writer"]) {
+      const persona = PERSONAS[name]!.replace(/\s+/g, " ");
+      expect(persona, name).toContain("Every decision-relevant claim must point to inspectable evidence");
+      expect(persona, name).toContain("address material counterevidence");
+      expect(persona, name).toContain("access failure is not evidence of absence");
+      expect(persona, name).toContain("stop the affected path");
+      expect(persona, name).toContain("mark dependent work stale");
+      expect(persona, name).toContain("Independent unaffected work may continue");
+    }
+
+    const pi = PERSONAS.principal!.replace(/\s+/g, " ");
+    expect(pi).toContain("synthesize their canonical artifacts before commissioning a binding protocol");
+    expect(pi).toContain("route bounded follow-up research");
+    expect(pi).toContain("complete-looking first report is not a commitment point");
+
+    const experimentalist = PERSONAS.experimentalist!.replace(/\s+/g, " ");
+    expect(experimentalist).toContain("Every decision-relevant diagnostic must have an outcome");
+    expect(experimentalist).toContain("cannot be reduced to a warning-only flag");
+
+    const oldLibrarian = withCoreCoordinationProtocols("# Old Librarian", "librarian", "expert").replace(/\s+/g, " ");
+    expect(oldLibrarian).toContain("address material counterevidence");
+    const oldPi = withCoreCoordinationProtocols("# Old PI", "principal", "principal").replace(/\s+/g, " ");
+    expect(oldPi).toContain("synthesize their canonical artifacts before commissioning a binding protocol");
+    const oldExperimentalist = withCoreCoordinationProtocols("# Old Experimentalist", "experimentalist", "expert").replace(/\s+/g, " ");
+    expect(oldExperimentalist).toContain("cannot be reduced to a warning-only flag");
+  });
+
   it("separates fixed methods, candidate eligibility, and comparative selection", () => {
     const pi = PERSONAS.principal!.replace(/\s+/g, " ");
     const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
