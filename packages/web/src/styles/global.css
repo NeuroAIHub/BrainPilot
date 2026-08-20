@@ -5264,6 +5264,7 @@ button {
 }
 
 .file-preview__download,
+.file-preview__use,
 .file-preview__mode,
 .file-preview__save {
   display: inline-flex;
@@ -5289,6 +5290,12 @@ button {
   color: var(--color-accent);
 }
 
+.file-preview__use {
+  border-color: color-mix(in srgb, var(--color-accent) 52%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface));
+  color: var(--color-accent);
+}
+
 .file-preview__actions {
   display: flex;
   align-items: center;
@@ -5302,6 +5309,8 @@ button {
 
 .file-preview__download:hover,
 .file-preview__download:focus-visible,
+.file-preview__use:hover,
+.file-preview__use:focus-visible,
 .file-preview__mode:hover,
 .file-preview__mode:focus-visible,
 .file-preview__save:hover,

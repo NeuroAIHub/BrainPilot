@@ -363,12 +363,14 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     };
   }, []);
 
-  // #316: shallow `/workspace` listing when a sandbox id is available.
-  // Prefer the real session id; fall back to currentSandbox.id (`"local"` in
-  // single-user mode) so draft conversations can still surface files.
+  // #316/#483: shallow listings for both the current session workspace and the
+  // persistent cross-session library. Prefer the real session id; fall back to
+  // currentSandbox.id (`"local"` in single-user mode) so draft conversations
+  // can still surface persistent files.
   const sandboxIdForFiles = currentSession?.id ?? currentSandbox?.id ?? null;
   useEffect(() => {
     let cancelled = false;
+    let loadGeneration = 0;
     if (!sandboxIdForFiles || currentSandbox?.status !== "running") {
       setFileSource({
         state: "unavailable",
@@ -379,35 +381,62 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       };
     }
     const load = async () => {
+      const generation = ++loadGeneration;
       setFileSource({ state: "loading" });
-      try {
-        const entries = await api.sandbox.listFiles(sandboxIdForFiles, "/workspace");
-        if (cancelled) return;
+      const [workspace, persistent] = await Promise.allSettled([
+        api.sandbox.listFiles(sandboxIdForFiles, "/workspace"),
+        api.sandbox.listFiles(sandboxIdForFiles, "/data"),
+      ]);
+      if (cancelled || generation !== loadGeneration) return;
+
+      const items: MentionFile[] = [];
+      if (workspace.status === "fulfilled") {
+        items.push(...workspace.value.map((entry) => ({
+          name: entry.name,
+          path: `/workspace/${entry.name}`,
+          type: entry.type,
+          scope: "session" as const,
+        })));
+      }
+      if (persistent.status === "fulfilled") {
+        items.push(...persistent.value.map((entry) => ({
+          name: entry.name,
+          path: `/data/${entry.name}`,
+          type: entry.type,
+          scope: "persistent" as const,
+        })));
+      }
+
+      if (workspace.status === "fulfilled" || persistent.status === "fulfilled") {
         setFileSource({
           state: "ready",
-          items: entries.map((entry) => ({
-            name: entry.name,
-            path: `/workspace/${entry.name}`,
-            type: entry.type,
-          })),
+          items,
         });
-      } catch (err) {
-        if (cancelled) return;
+      } else {
         // Draft + local staging may not expose a listable workspace yet —
-        // surface a prerequisite rather than a hard error.
+        // surface a prerequisite rather than a hard error if neither root is
+        // addressable. A working `/data` listing above still counts as ready.
         if (isDraft && !currentSession) {
           setFileSource({ state: "unavailable", reason: "no-session" });
         } else {
+          const reasons = [workspace.reason, persistent.reason]
+            .map((reason) => reason instanceof Error ? reason.message : String(reason))
+            .filter((reason, index, all) => all.indexOf(reason) === index)
+            .join("; ");
           setFileSource({
             state: "error",
-            message: err instanceof Error ? err.message : String(err),
+            message: reasons,
           });
         }
       }
     };
     void load();
+    window.addEventListener("brainpilot:files-changed", load);
+    window.addEventListener("focus", load);
     return () => {
       cancelled = true;
+      window.removeEventListener("brainpilot:files-changed", load);
+      window.removeEventListener("focus", load);
     };
   }, [sandboxIdForFiles, currentSandbox?.status, isDraft, currentSession]);
 
