@@ -20,6 +20,7 @@ import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 import { BuiltinToolsSection } from "./BuiltinToolsSection";
 import { McpByokCard } from "./McpByokCard";
 import { resolveMcpEntryView } from "./mcpPresetView";
+import { restoreFocusAfterModalClose } from "./settingsFocusReturn";
 import {
   canSubmitProviderForm,
   providerFieldErrorKey,
@@ -254,14 +255,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     });
     return () => {
       window.cancelAnimationFrame(id);
-      const el = returnFocusRef.current;
-      if (el && typeof el.focus === "function") {
-        try {
-          el.focus();
-        } catch {
-          /* element may be gone */
-        }
-      }
+      restoreFocusAfterModalClose(returnFocusRef.current);
     };
   }, [isOpen]);
 
