@@ -61,6 +61,9 @@ describe("principal workflow guard", () => {
       "Reply exactly: Safari cloud real model test passed. Do not call tools.",
     )).toBe(false);
     expect(isSubstantiveScientificExecutionRequest(
+      "Reply exactly Safari cloud real model test passed. Do not call tools.",
+    )).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest(
       "Please respond only with the phrase model evaluation passed.",
     )).toBe(false);
     expect(isSubstantiveScientificExecutionRequest("只回复一句：模型测试通过。")).toBe(false);

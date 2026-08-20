@@ -41,7 +41,7 @@ const INFORMATIONAL_REQUEST = /^(?:what\s+(?:is|are|does)|why\b|how\s+(?:do|does
 // two assistant messages. Only exempt explicit literal-output forms; a request
 // such as "Reply after you test this dataset" must still be classified by its
 // substantive action.
-const LITERAL_OUTPUT_REQUEST = /^(?:(?:please|kindly)\s+)?(?:reply|respond|answer|say|repeat|echo|return|output)\s+(?:(?:with|using)\s+)?(?:exactly(?=\s*[:："'“]|\s+(?:the\s+)?(?:word|phrase|text|string)\b)|only\s+(?:with\s+)?(?:the\s+)?(?:word|phrase|text|string)\b)|^(?:请)?(?:只|仅)(?:回复|回答|输出|返回)(?:一句|以下)?(?=\s*[:："'“])/i;
+const LITERAL_OUTPUT_REQUEST = /^(?:(?:please|kindly)\s+)?(?:reply|respond|answer|say|repeat|echo|return|output)\s+(?:(?:with|using)\s+)?(?:exactly\b|only\s+(?:with\s+)?(?:the\s+)?(?:word|phrase|text|string)\b)|^(?:请)?(?:只|仅)(?:回复|回答|输出|返回)(?:一句|以下)?(?=\s*[:："'“])/i;
 const CONCEPTUAL_REQUEST = /\b(?:principles?|concepts?|differences?|pros?\s+and\s+cons?|advantages?|disadvantages?|overview|tutorial|meaning|definition|theory)\b|(?:原理|概念|区别|差异|优缺点|优势|劣势|含义|定义|理论|教程)/i;
 const DIRECT_EXECUTION_ACTION = /\b(?:process|clean|transform|train|fit|fine[- ]?tune|optimi[sz]e|simulate|run|execute|implement|build|develop|design|perform|conduct|model|predict|classify|cluster|forecast)\b|(?:处理|清洗|转换|训练|拟合|微调|优化|模拟|运行|执行|实现|构建|开发|设计|建模|预测|分类|聚类)/i;
 const INPUT_BOUND_ACTION = /\b(?:analy[sz]e|evaluate|benchmark|validate|test|compare|interpret|infer|inspect|check|find|detect|identify)\b|(?:分析|评估|基准测试|验证|测试|比较|解读|推断|检查|查看|看看|寻找|找出|识别|检测)/i;
