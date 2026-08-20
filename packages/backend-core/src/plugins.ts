@@ -99,6 +99,21 @@ interface BuiltinPluginRelease {
 // synthesized by rewriting the current bundle.
 const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
   {
+    plugin: "monitor",
+    source: "monitor/0.1.2",
+    version: "0.1.2",
+    publishedAt: "2026-08-07T00:00:00.000Z",
+    releaseNotes: "Initial official command-only Monitor runtime tool.",
+    publisher: "BrainPilot",
+    verified: true,
+    sourceFormat: "brainpilot",
+    repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+    license: "AGPL-3.0-only",
+    capabilities: ["runtime-tools"],
+    requirements: ["Local deployment", "Linux or macOS (Windows experimental)", "Background process permission"],
+    executesLocalCode: true,
+  },
+  {
     plugin: "nifti-viewer",
     source: "nifti-viewer/0.1.0",
     version: "0.1.0",
@@ -506,6 +521,14 @@ export async function listMarketplaceSourceStatuses(dataDir: string): Promise<Ma
 export async function listInstalledPlugins(dataDir: string): Promise<InstalledPlugin[]> {
   const registry = await readRegistry(dataDir);
   return Object.values(registry.plugins).sort((a, b) => a.manifest.displayName.localeCompare(b.manifest.displayName));
+}
+
+export async function listEnabledRuntimeTools(dataDir: string): Promise<string[]> {
+  return [...new Set((await listInstalledPlugins(dataDir)).flatMap((plugin) =>
+    plugin.enabled && plugin.compatibility?.compatible !== false
+      ? (plugin.manifest.contributes?.runtimeTools ?? []).map((tool) => tool.capability)
+      : [],
+  ))];
 }
 
 /** Opt-in gate for sharing the active file/preview context with chat. */

@@ -136,6 +136,7 @@ describe("DockerOrchestrator (stubbed dockerode)", () => {
     });
     const handle = await orch.ensureRuntime();
     expect(handle.baseUrl).toBe("http://127.0.0.1:18081");
+    expect(handle.instanceId).toEqual(expect.any(String));
     expect(container.start).toHaveBeenCalledTimes(1);
     const createArg = (docker as { createContainer: ReturnType<typeof vi.fn> })
       .createContainer.mock.calls[0]![0] as Record<string, unknown>;

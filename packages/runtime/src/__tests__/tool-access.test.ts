@@ -9,6 +9,7 @@ import {
   createAskUserTool,
   createDispatchTaskTool,
   createCompleteTaskTool,
+  createStartMonitorTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
 import { GraphOfTrace } from "../trace.js";
@@ -48,6 +49,13 @@ function deps(name: string): ToolDeps {
 }
 
 describe("tool access control (§9)", () => {
+  it("tells agents to yield instead of sleeping while Monitor is idle", () => {
+    const description = createStartMonitorTool(deps("principal")).description;
+    expect(description).toContain("Do not run sleep commands or poll");
+    expect(description).toContain("end the current turn");
+    expect(description).toContain("wake you automatically");
+  });
+
   it("dispatch_task and complete_task expose stable task-oriented contracts", async () => {
     const d = deps("engineer");
     const dispatched: Array<[string, string]> = [];
@@ -117,6 +125,24 @@ describe("tool access control (§9)", () => {
     expect(systemToolNamesForRole("principal", "principal")).toContain("ask_user");
     expect(systemToolNamesForRole("expert", "librarian")).not.toContain("ask_user");
     expect(systemToolNamesForRole("trace", "trace")).not.toContain("ask_user");
+  });
+
+  it("limits Monitor tools to Principal, Engineer, and Experimentalist", () => {
+    const withMonitor = (name: string): ToolDeps => ({
+      ...deps(name),
+      startMonitor: () => ({ id: "mon_test" }),
+      listMonitors: () => [],
+      stopMonitor: async () => true,
+    });
+    for (const [role, name] of [["principal", "principal"], ["expert", "engineer"], ["expert", "experimentalist"]] as const) {
+      expect(systemToolsForRole(role, name, withMonitor(name)).map((tool) => tool.name)).toEqual(
+        expect.arrayContaining(["start_monitor", "list_monitors", "stop_monitor"]),
+      );
+    }
+    for (const name of ["librarian", "writer", "auditor", "statistician"]) {
+      expect(systemToolsForRole("expert", name, withMonitor(name)).map((tool) => tool.name)).not.toContain("start_monitor");
+    }
+    expect(systemToolsForRole("trace", "trace", withMonitor("trace")).map((tool) => tool.name)).not.toContain("start_monitor");
   });
 
   it("trace agent gets ONLY graph tools", () => {

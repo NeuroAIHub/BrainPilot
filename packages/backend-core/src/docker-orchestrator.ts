@@ -2,6 +2,7 @@
  * DockerOrchestrator — `docker run` the `brainpilot-sandbox` image over the mapped host port.
  * dockerode is loaded lazily via dynamic import (免 Docker install never pulls dockerode + gRPC/protobuf); the public API uses the local DockerLike, not dockerode types.
  */
+import { randomUUID } from "node:crypto";
 import type {
   EnsureRuntimeOptions,
   Orchestrator,
@@ -104,6 +105,7 @@ export class DockerOrchestrator implements Orchestrator {
   private sharedDir?: string;
   private env: Record<string, string>;
   private container: DockerContainerLike | null = null;
+  private handle: RuntimeHandle | null = null;
 
   constructor(options: DockerOrchestratorOptions = {}) {
     this.docker = options.docker ?? null;
@@ -148,7 +150,7 @@ export class DockerOrchestrator implements Orchestrator {
     if (opts?.env) this.env = { ...this.env, ...opts.env };
 
     if (this.container && (await this.health())) {
-      return { baseUrl: this.baseUrl };
+      if (this.handle) return this.handle;
     }
 
     const portKey = `${this.containerPort}/tcp`;
@@ -216,9 +218,10 @@ export class DockerOrchestrator implements Orchestrator {
     }
     await container.start();
     this.container = container;
+    this.handle = { baseUrl: this.baseUrl, instanceId: randomUUID() };
 
     await this.waitForHealth();
-    return { baseUrl: this.baseUrl };
+    return this.handle;
   }
 
   /** Pull `this.image`, resolving once the pull stream finishes. */
@@ -241,6 +244,7 @@ export class DockerOrchestrator implements Orchestrator {
   async stopRuntime(): Promise<void> {
     const container = this.container;
     this.container = null;
+    this.handle = null;
     if (!container) return;
     try {
       await container.stop({ t: 5 });

@@ -13,6 +13,7 @@
  * threshold, give up and mark the runtime dead (caller surfaces a fatal event).
  */
 import { spawn, type ChildProcess } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { createRequire } from "node:module";
 import { openSync, closeSync, writeFileSync, mkdirSync, rmSync } from "node:fs";
 import { dirname } from "node:path";
@@ -112,6 +113,7 @@ export class LocalProcessOrchestrator implements Orchestrator {
 
   private child: SpawnedProcess | null = null;
   private handle: RuntimeHandle | null = null;
+  private runtimeInstanceId: string | null = null;
   private restartTimestamps: number[] = [];
   /** Set when stopRuntime() is invoked — suppresses auto-restart. */
   private stopping = false;
@@ -209,7 +211,8 @@ export class LocalProcessOrchestrator implements Orchestrator {
       this.lastEnv = this.buildEnv(opts?.env);
       this.spawnChild(this.lastEnv);
       await this.waitForHealth();
-      this.handle = { baseUrl: this.baseUrl };
+      if (!this.runtimeInstanceId) throw new Error("runtime exited before becoming ready");
+      this.handle = { baseUrl: this.baseUrl, instanceId: this.runtimeInstanceId };
       return this.handle;
     })();
 
@@ -232,6 +235,7 @@ export class LocalProcessOrchestrator implements Orchestrator {
     const child = this.child;
     this.child = null;
     this.handle = null;
+    this.runtimeInstanceId = null;
     this.removePidFile();
     if (child) {
       let exited = false;
@@ -301,6 +305,10 @@ export class LocalProcessOrchestrator implements Orchestrator {
       stdio ? { env, stdio } : { env },
     );
     this.child = child;
+    this.runtimeInstanceId = randomUUID();
+    if (this.everHealthy) {
+      this.handle = { baseUrl: this.baseUrl, instanceId: this.runtimeInstanceId };
+    }
     this.writePidFile(child.pid);
 
     child.on("error", (err) =>
@@ -319,6 +327,7 @@ export class LocalProcessOrchestrator implements Orchestrator {
       if (code === 0 && signal === null) {
         this.child = null;
         this.handle = null;
+        this.runtimeInstanceId = null;
         this.removePidFile();
         return;
       }
@@ -363,6 +372,8 @@ export class LocalProcessOrchestrator implements Orchestrator {
     // ensureRuntime's waitForHealth surface the failure.
     if (!this.everHealthy) {
       this.child = null;
+      this.handle = null;
+      this.runtimeInstanceId = null;
       return;
     }
     const now = Date.now();
@@ -373,6 +384,7 @@ export class LocalProcessOrchestrator implements Orchestrator {
       this.gaveUp = true;
       this.child = null;
       this.handle = null;
+      this.runtimeInstanceId = null;
       const fatal = new Error(
         `runtime crashed ${this.restartTimestamps.length + 1} times within ` +
           `${this.opts.restartWindowMs}ms; giving up. Last error: ${err.message}`,

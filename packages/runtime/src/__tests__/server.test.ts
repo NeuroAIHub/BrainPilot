@@ -19,9 +19,10 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
   }
 
   it("GET /health", async () => {
-    const res = await app().request("/health");
+    const manager = new SessionManager({ persist: false, agentFactory: mockAgentFactory });
+    const res = await createServer({ manager, instanceId: "runtime-test-1" }).app.request("/health");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ status: "ok" });
+    expect(await res.json()).toEqual({ status: "ok", instanceId: "runtime-test-1" });
   });
 
   it("GET /metrics", async () => {
@@ -38,6 +39,22 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
     // Opt-in budget unset by default → null (single-user / no throttle).
     expect(body.memLimitBytes).toBeNull();
     expect(body.memRatio).toBeNull();
+  });
+
+  it("accepts only allowlisted backend-managed runtime capabilities", async () => {
+    const a = app();
+    const enabled = await a.request("/runtime/capabilities", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capabilities: ["builtin.monitor"] }),
+    });
+    expect(enabled.status).toBe(200);
+    expect(await enabled.json()).toEqual({ capabilities: ["builtin.monitor"] });
+    expect((await a.request("/runtime/capabilities", {
+      method: "PUT",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ capabilities: ["arbitrary.code"] }),
+    })).status).toBe(400);
   });
 
   it("GET /mcp/status reports the observed runtime state", async () => {
@@ -71,9 +88,9 @@ describe("HTTP server (RUNTIME_ROUTES)", () => {
       expect(await readFile(join(workspace, "value.txt"), "utf8")).toBe("old\n");
     } finally {
       // Restore emits durable trace/task state asynchronously. Settle those
-      // writes before deleting the fixture root so cleanup cannot race a late
-      // mkdir/write and fail with ENOTEMPTY.
-      await manager?.emergencySaveAll();
+      // writes and stop Monitor/background work before deleting the fixture
+      // root so cleanup cannot race a late mkdir/write and fail with ENOTEMPTY.
+      if (manager) await manager.shutdownAndSave();
       await rm(dataRoot, { recursive: true, force: true });
     }
   });

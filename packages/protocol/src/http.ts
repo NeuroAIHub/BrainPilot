@@ -48,6 +48,8 @@ export interface RouteDef {
 
 export const HealthResponseSchema = z.object({
   status: z.enum(["ok", "degraded", "error"]).or(z.string()),
+  /** Stable for one Runtime process; changes whenever that process restarts. */
+  instanceId: z.string().min(1).optional(),
 });
 export type HealthResponse = z.infer<typeof HealthResponseSchema>;
 
@@ -71,6 +73,17 @@ export const MetricsResponseSchema = z.object({
   memRatio: z.number().nullable(),
 });
 export type MetricsResponse = z.infer<typeof MetricsResponseSchema>;
+
+/* ------------------------------------------------------------------ *
+ * PUT /runtime/capabilities  (backend-managed plugin capability sync)
+ * ------------------------------------------------------------------ */
+
+export const RuntimeCapabilitySchema = z.enum(["builtin.monitor"]);
+export type RuntimeCapability = z.infer<typeof RuntimeCapabilitySchema>;
+export const SetRuntimeCapabilitiesRequestSchema = z.object({
+  capabilities: z.array(RuntimeCapabilitySchema),
+});
+export type SetRuntimeCapabilitiesRequest = z.infer<typeof SetRuntimeCapabilitiesRequestSchema>;
 
 /* ------------------------------------------------------------------ *
  * POST /sessions  (create)
@@ -295,6 +308,7 @@ export type EvictSessionResponse = z.infer<typeof EvictSessionResponseSchema>;
 export const RUNTIME_ROUTES = {
   health: { method: "GET", path: "/health" },
   metrics: { method: "GET", path: "/metrics" },
+  setRuntimeCapabilities: { method: "PUT", path: "/runtime/capabilities" },
   mcpStatus: { method: "GET", path: "/mcp/status" },
   createSession: { method: "POST", path: "/sessions" },
   listSessions: { method: "GET", path: "/sessions" },

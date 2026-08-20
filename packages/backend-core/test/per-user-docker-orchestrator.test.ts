@@ -12,6 +12,7 @@ class FakeOrchestrator implements Orchestrator {
   static instances: FakeOrchestrator[] = [];
   readonly hostPort: number;
   readonly dataDir?: string;
+  readonly instanceId: string;
   started = false;
   stopped = false;
   healthy = true;
@@ -19,11 +20,15 @@ class FakeOrchestrator implements Orchestrator {
   constructor(opts: DockerOrchestratorOptions) {
     this.hostPort = opts.hostPort!;
     this.dataDir = opts.dataDir;
+    this.instanceId = `runtime-${FakeOrchestrator.instances.length + 1}`;
     FakeOrchestrator.instances.push(this);
   }
   async ensureRuntime(_opts?: EnsureRuntimeOptions): Promise<RuntimeHandle> {
     this.started = true;
-    return { baseUrl: `http://127.0.0.1:${this.hostPort}` };
+    return {
+      baseUrl: `http://127.0.0.1:${this.hostPort}`,
+      instanceId: this.instanceId,
+    };
   }
   async health(): Promise<boolean> {
     return this.healthy;
@@ -66,16 +71,18 @@ describe("PerUserDockerOrchestrator", () => {
     const a1 = await orch.ensureRuntime({ userId: "alice" });
     const a2 = await orch.ensureRuntime({ userId: "alice" });
     expect(a2.baseUrl).toBe(a1.baseUrl);
+    expect(a2.instanceId).toBe(a1.instanceId);
     expect(FakeOrchestrator.instances).toHaveLength(1);
   });
 
   it("recreates the container when the user's runtime is unhealthy", async () => {
     const orch = makeOrch();
-    await orch.ensureRuntime({ userId: "alice" });
+    const a1 = await orch.ensureRuntime({ userId: "alice" });
     FakeOrchestrator.instances[0]!.healthy = false;
     const a2 = await orch.ensureRuntime({ userId: "alice" });
     expect(FakeOrchestrator.instances).toHaveLength(2);
     expect(a2.baseUrl).toBe("http://127.0.0.1:8100");
+    expect(a2.instanceId).not.toBe(a1.instanceId);
     expect(FakeOrchestrator.instances[0]!.stopped).toBe(true);
   });
 

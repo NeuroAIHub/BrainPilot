@@ -76,6 +76,7 @@ describe("LocalProcessOrchestrator argv/env", () => {
     });
     const handle = await orch.ensureRuntime();
     expect(handle.baseUrl).toBe("http://127.0.0.1:8081");
+    expect(handle.instanceId).toEqual(expect.any(String));
     expect(spawnFn).toHaveBeenCalledTimes(1);
     const [cmd, args, opts] = spawnFn.mock.calls[0]!;
     expect(cmd).toBe("/usr/bin/node");
@@ -101,7 +102,7 @@ describe("LocalProcessOrchestrator restart logic", () => {
       sleep: async () => {},
       maxRestarts: 5,
     });
-    await orch.ensureRuntime();
+    const first = await orch.ensureRuntime();
     expect(spawnFn).toHaveBeenCalledTimes(1);
 
     // First crash -> restart.
@@ -109,6 +110,8 @@ describe("LocalProcessOrchestrator restart logic", () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(spawnFn).toHaveBeenCalledTimes(2);
+    const restarted = await orch.ensureRuntime();
+    expect(restarted.instanceId).not.toBe(first.instanceId);
 
     // Second crash -> restart.
     procs[1]!.emitExit(null, "SIGSEGV");

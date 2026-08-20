@@ -56,6 +56,30 @@ describe("plugin SDK compatibility", () => {
     })).toBeNull();
   });
 
+  it("validates host-managed runtime tool contributions", () => {
+    const manifest = parsePluginManifest({
+      ...base,
+      permissions: ["process:background"],
+      protocols: { runtimeTools: "1" },
+      contributes: {
+        runtimeTools: [{
+          id: "monitor",
+          capability: "builtin.monitor",
+          targets: ["principal", "engineer", "experimentalist"],
+        }],
+      },
+    });
+    expect(manifest?.contributes?.runtimeTools?.[0]).toEqual({
+      id: "monitor",
+      capability: "builtin.monitor",
+      targets: ["principal", "engineer", "experimentalist"],
+    });
+    expect(parsePluginManifest({
+      ...base,
+      contributes: { runtimeTools: [{ id: "bad", capability: "arbitrary.code", targets: ["principal"] }] },
+    })).toBeNull();
+  });
+
   it("uses standard npm SemVer ranges", () => {
     const range = "^0.1.2 || >=1.0.0 <2.0.0";
     expect(isBrainPilotVersionRange(range)).toBe(true);

@@ -10,6 +10,7 @@
  *   GET  /sse/:id  (+ alias GET /sessions/:id/events)
  *   POST /sessions/:id/interrupt, GET /sessions/:id/agents, POST /sessions/:id/evict
  */
+import { randomUUID } from "node:crypto";
 import { pathToFileURL } from "node:url";
 import { Hono } from "hono";
 import { serve } from "@hono/node-server";
@@ -19,6 +20,7 @@ import {
   UpdateSessionRequestSchema,
   SendMessageRequestSchema,
   InterruptRequestSchema,
+  SetRuntimeCapabilitiesRequestSchema,
   TraceDependencyDecisionRequestSchema,
   TraceStateTokenRequestSchema,
   WriteFileRequestSchema,
@@ -27,16 +29,28 @@ import { SessionManager, type SessionManagerOptions } from "./session-manager.js
 import { resolveKbPaths } from "./tools/kb/paths.js";
 import { ev } from "./events.js";
 
-export function createServer(opts: SessionManagerOptions & { manager?: SessionManager } = {}): {
+export function createServer(opts: SessionManagerOptions & {
+  manager?: SessionManager;
+  /** Injectable process identity for tests; production generates one at boot. */
+  instanceId?: string;
+} = {}): {
   app: Hono;
   manager: SessionManager;
 } {
   const manager = opts.manager ?? new SessionManager(opts);
   const app = new Hono();
+  const instanceId = opts.instanceId ?? process.env.BP_RUNTIME_INSTANCE_ID ?? randomUUID();
 
-  app.get("/health", (c) => c.json({ status: "ok" }));
+  app.get("/health", (c) => c.json({ status: "ok", instanceId }));
 
   app.get("/metrics", (c) => c.json(manager.metrics()));
+
+  app.put("/runtime/capabilities", async (c) => {
+    const parsed = SetRuntimeCapabilitiesRequestSchema.safeParse(await safeBody(c));
+    if (!parsed.success) return c.json({ error: "invalid capabilities" }, 400);
+    await manager.setRuntimeCapabilities(parsed.data.capabilities);
+    return c.json({ capabilities: parsed.data.capabilities });
+  });
 
   app.get("/mcp/status", async (c) => c.json(await manager.getMcpRuntimeStatus()));
 
@@ -424,6 +438,8 @@ async function safeBody(c: { req: { json: () => Promise<unknown> } }): Promise<u
 export interface StartServerOptions extends SessionManagerOptions {
   port?: number;
   manager?: SessionManager;
+  /** Stable identity for this Runtime process; generated when omitted. */
+  instanceId?: string;
 }
 
 export async function startServer(opts: StartServerOptions = {}): Promise<{

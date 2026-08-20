@@ -12,6 +12,17 @@ describe("StaticRuntimeOrchestrator", () => {
     expect(handle.baseUrl).toBe("http://sandbox:8081");
   });
 
+  it("forwards the Runtime process identity from health", async () => {
+    const orch = new StaticRuntimeOrchestrator({
+      baseUrl: "http://sandbox:8081",
+      healthProbe: async () => ({ healthy: true, instanceId: "runtime-2" }),
+    });
+    await expect(orch.ensureRuntime()).resolves.toEqual({
+      baseUrl: "http://sandbox:8081",
+      instanceId: "runtime-2",
+    });
+  });
+
   it("strips a trailing slash from baseUrl", async () => {
     const orch = new StaticRuntimeOrchestrator({
       baseUrl: "http://sandbox:8081/",
