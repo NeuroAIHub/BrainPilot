@@ -484,6 +484,10 @@ interface RawSession {
   thinkingLevel?: unknown;
   reasoning_supported?: unknown;
   reasoningSupported?: unknown;
+  provider_id?: unknown;
+  providerId?: unknown;
+  model_id?: unknown;
+  modelId?: unknown;
 }
 
 interface RawFileEntry {
@@ -719,6 +723,8 @@ export function normalizeSession(raw: RawSession): Session {
     reasoningSupported: typeof (raw.reasoningSupported ?? raw.reasoning_supported) === "boolean"
       ? (raw.reasoningSupported ?? raw.reasoning_supported) as boolean
       : undefined,
+    providerId: optionalString(raw.providerId ?? raw.provider_id),
+    modelId: optionalString(raw.modelId ?? raw.model_id),
   };
 }
 

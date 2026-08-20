@@ -192,6 +192,21 @@ describe("writeLocalSettings", () => {
     expect(p.models).toContain("m1");
     expect(raw.selectedProfileId).toBe(p.id);
   });
+
+  it("keeps per-model reasoning support when changing the default model", async () => {
+    const dir = await tmp();
+    const profile = await createProfile(dir, {
+      name: "Mixed",
+      baseUrl: "u",
+      apiKey: "sk",
+      models: ["reasoning", "plain"],
+      reasoningModels: ["reasoning"],
+    });
+    await writeLocalSettings(dir, { model: "plain" });
+    const stored = (await readProviders(dir)).profiles.find((item) => item.id === profile.id);
+    expect(stored?.models[0]).toBe("plain");
+    expect(stored?.reasoningModels).toEqual(["reasoning"]);
+  });
 });
 
 describe("providers registry (CRUD + selection)", () => {

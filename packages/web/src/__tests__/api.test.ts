@@ -2,9 +2,19 @@ import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { api } from "../utils/api";
 import {
   normalizeProviderProfile,
+  normalizeSession,
   serializeProviderCreate,
   serializeProviderUpdate,
 } from "../contracts/backend";
+
+it("normalizes the provider/model frozen on a session", () => {
+  expect(normalizeSession({
+    id: "session-a",
+    title: "A",
+    provider_id: "provider-a",
+    model_id: "model-a",
+  })).toMatchObject({ providerId: "provider-a", modelId: "model-a" });
+});
 
 // These exercise the real-fetch path (runtimeConfig.useMockBackend is false in
 // tests — VITE_USE_MOCK_BACKEND is unset). We stub globalThis.fetch and a

@@ -80,7 +80,11 @@ import { loadCompatPluginProjections } from "./compat-hooks.js";
 import { loadToolToggles, isToolEnabled, type ToolToggles } from "./tool-toggles.js";
 import { materializeSkills } from "./materialize-skills.js";
 import { materializeKb } from "./materialize-kb.js";
-import { resolveSessionProvider, type SessionProviderRef } from "./provider-config.js";
+import {
+  resolveSessionProvider,
+  type ProviderConfig,
+  type SessionProviderRef,
+} from "./provider-config.js";
 import { withExecutionToolContract } from "./execution-contract.js";
 import { MemWatchdog, parseMemLimitMb } from "./mem-watchdog.js";
 import { isWindows } from "./platform.js";
@@ -1502,7 +1506,17 @@ export class SessionManager {
       : this.persist
         ? await this.readProviderRef(id)
         : {};
-    const providerConfig = await resolveSessionProvider(this.dataRoot, providerRef);
+    let providerConfig: ProviderConfig | undefined;
+    try {
+      providerConfig = await resolveSessionProvider(this.dataRoot, providerRef, {
+        requireConfiguredModel: explicitRef,
+      });
+    } catch (error) {
+      // A deleted provider must not hide an existing transcript during boot.
+      // Restored sessions stay visible and fail clearly only if the user tries
+      // to create another agent with their now-unresolvable frozen binding.
+      if (!_restore) throw error;
+    }
     const reasoningSupported = input.reasoningSupported ?? (providerConfig?.reasoningEnabled !== false);
     const requestedThinkingLevel = input.thinkingLevel ?? "medium";
     const thinkingLevel: ThinkingLevel = !reasoningSupported
@@ -2472,6 +2486,8 @@ export class SessionManager {
     const providerConfig = await resolveSessionProvider(this.dataRoot, {
       providerId: entry.providerRef.providerId,
       modelId: args.profile.modelId ?? entry.providerRef.modelId,
+    }, {
+      requireConfiguredModel: args.profile.modelId !== undefined,
     });
     if (args.profile.modelId && providerConfig?.modelId !== args.profile.modelId) {
       throw new Error(`subagent profile model is not available in this provider: ${args.profile.modelId}`);
@@ -2612,7 +2628,10 @@ export class SessionManager {
 
     // Resolve this session's provider against the SSOT (providers.json). When
     // unset/empty the factory falls back to Pi's env-based default.
-    const providerConfig = await resolveSessionProvider(this.dataRoot, entry.providerRef);
+    const resolvedProviderConfig = await resolveSessionProvider(this.dataRoot, entry.providerRef);
+    const providerConfig = resolvedProviderConfig
+      ? { ...resolvedProviderConfig, reasoningEnabled: entry.reasoningSupported }
+      : undefined;
 
     const sessionCwd = this.workspaceDir(sessionId);
     const session = await this.agentFactory({
@@ -3700,6 +3719,8 @@ export class SessionManager {
       domainResources: e.domainResources,
       thinkingLevel: e.thinkingLevel,
       reasoningSupported: e.reasoningSupported,
+      ...(e.providerRef.providerId ? { providerId: e.providerRef.providerId } : {}),
+      ...(e.providerRef.modelId ? { modelId: e.providerRef.modelId } : {}),
     };
   }
 

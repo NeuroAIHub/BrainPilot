@@ -23,9 +23,13 @@ describe("domain schemas", () => {
         createdAt: "2026-06-12T00:00:00Z",
         updatedAt: "2026-06-12T00:00:00Z",
         domainResources: "base",
+        providerId: "provider-a",
+        modelId: "model-a",
       });
     expect(session.id).toBe("s1");
     expect(session.domainResources).toBe("base");
+    expect(session.providerId).toBe("provider-a");
+    expect(session.modelId).toBe("model-a");
     expect(SessionSchema.safeParse({ ...session, domainResources: "unknown" }).success).toBe(false);
   });
 

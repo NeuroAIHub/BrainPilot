@@ -1,4 +1,4 @@
-import { Bot, Paperclip, Square, X } from "lucide-react";
+import { Bot, CircleAlert, Paperclip, Square, X } from "lucide-react";
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
@@ -9,7 +9,6 @@ import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
 import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
-import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
@@ -17,6 +16,11 @@ import { reservePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
+import {
+  ProviderModelControl,
+  selectedModelStatus,
+  selectedModelSupportsReasoning,
+} from "./ProviderModelControl";
 import { MessageStream } from "./MessageStream";
 import type { WorkspaceFileTarget } from "./workspaceFileLink";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
@@ -71,6 +75,52 @@ export function resolveComposerReasoningSupport(input: {
   );
 }
 
+export function mergeProviderHealth(
+  profiles: ProviderProfile[],
+  healthProfiles: ProviderProfile[],
+): ProviderProfile[] {
+  return profiles.map((profile) => {
+    const health = healthProfiles.find((item) => item.id === profile.id);
+    return health
+      ? {
+          ...profile,
+          healthStatus: health.healthStatus,
+          healthCheckedAt: health.healthCheckedAt,
+          modelHealth: health.modelHealth,
+        }
+      : profile;
+  });
+}
+
+export function selectAvailableDraftModel(
+  provider: ProviderProfile | null,
+  candidates: Array<string | undefined>,
+): string {
+  if (!provider) return "";
+  const configuredCandidates = candidates.filter(
+    (model): model is string => Boolean(model && provider.models.includes(model)),
+  );
+  return configuredCandidates.find((model) => selectedModelStatus(provider, model) !== "unavailable")
+    ?? provider.models.find((model) => selectedModelStatus(provider, model) !== "unavailable")
+    ?? configuredCandidates[0]
+    ?? provider.models[0]
+    ?? "";
+}
+
+export function resolveComposerCanSend(input: {
+  sandboxRunning: boolean;
+  isSending: boolean;
+  uploading: boolean;
+  connectedOrDraft: boolean;
+  draftModelUnavailable: boolean;
+}): boolean {
+  return input.sandboxRunning &&
+    !input.isSending &&
+    !input.uploading &&
+    input.connectedOrDraft &&
+    !input.draftModelUnavailable;
+}
+
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
   if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
     URL.revokeObjectURL(attachment.previewUrl);
@@ -88,6 +138,7 @@ type PromptComposerProps = {
 export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: PromptComposerProps = {}) {
   const t = useT();
   const [suggestedTasks, setSuggestedTasks] = useState<string[]>([]);
+  const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>([]);
   const [activeProvider, setActiveProvider] = useState<ProviderProfile | null>(null);
   // Distinguishes "provider load hasn't resolved yet" from "loaded, none
   // active" so the no-provider banner doesn't flash during initial load.
@@ -133,9 +184,19 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : undefined,
     [agents],
   );
+  const draftModelUnavailable = isDraft &&
+    Boolean(activeProvider && selectedModel) &&
+    selectedModelStatus(activeProvider, selectedModel) === "unavailable";
   // In draft mode there's no session/connection yet — allow composing so the
-  // first send can create + connect the session.
-  const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
+  // first send can create + connect the session, unless health already says its
+  // selected model cannot run.
+  const canSend = resolveComposerCanSend({
+    sandboxRunning: sandboxStatus === "running",
+    isSending,
+    uploading,
+    connectedOrDraft: isConnected || isDraft,
+    draftModelUnavailable,
+  });
   const reasoningSupported = resolveComposerReasoningSupport({
     isDraft,
     sessionReasoningSupported: currentSession?.reasoningSupported,
@@ -402,35 +463,30 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     let cancelled = false;
     const loadProviderAndSettings = async () => {
       try {
-        const [providerRes, settings, healthProfiles] = await Promise.all([
-          api.providers.getActive(),
+        const [profiles, settings, healthProfiles] = await Promise.all([
+          api.providers.list(),
           api.settings.get(),
           api.providers.health().catch(() => [] as ProviderProfile[]),
         ]);
         if (cancelled) {
           return;
         }
-        let provider = providerRes;
-        if (provider && healthProfiles.length > 0) {
-          const activeId = provider.id;
-          const hp = healthProfiles.find((p) => p.id === activeId);
-          if (hp) {
-            provider = { ...provider, healthStatus: hp.healthStatus, healthCheckedAt: hp.healthCheckedAt, modelHealth: hp.modelHealth };
-          }
-        }
+        const enrichedProfiles = mergeProviderHealth(profiles, healthProfiles);
+        const provider = (
+          !isDraft && currentSession?.providerId
+            ? enrichedProfiles.find((item) => item.id === currentSession.providerId)
+            : enrichedProfiles.find((item) => item.isActive)
+        ) ?? null;
+        setProviderProfiles(enrichedProfiles);
         setActiveProvider(provider);
         setProvidersLoaded(true);
         setSelectedModel((current) => {
-          if (current && provider?.models.includes(current)) {
-            return current;
-          }
-          if (settings.model && provider?.models.includes(settings.model)) {
-            return settings.model;
-          }
-          return provider?.models[0] ?? "";
+          if (!isDraft && currentSession?.modelId) return currentSession.modelId;
+          return selectAvailableDraftModel(provider, [current, settings.model]);
         });
       } catch {
         if (!cancelled) {
+          setProviderProfiles([]);
           setActiveProvider(null);
           setProvidersLoaded(true);
           setSelectedModel("");
@@ -443,29 +499,26 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       cancelled = true;
       window.removeEventListener("provider-profiles-updated", loadProviderAndSettings);
     };
-  }, []);
+  }, [currentSession?.id, currentSession?.modelId, currentSession?.providerId, isDraft]);
 
   useEffect(() => {
     const refreshProvider = async () => {
       try {
-        const [providerRes, healthProfiles] = await Promise.all([
-          api.providers.getActive(),
+        const [profiles, healthProfiles] = await Promise.all([
+          api.providers.list(),
           api.providers.health().catch(() => [] as ProviderProfile[]),
         ]);
-        let provider = providerRes;
-        if (provider && healthProfiles.length > 0) {
-          const providerId = provider.id;
-          const hp = healthProfiles.find((p) => p.id === providerId);
-          if (hp) {
-            provider = { ...provider, healthStatus: hp.healthStatus, healthCheckedAt: hp.healthCheckedAt, modelHealth: hp.modelHealth };
-          }
-        }
+        const enrichedProfiles = mergeProviderHealth(profiles, healthProfiles);
+        const provider = (
+          !isDraft && currentSession?.providerId
+            ? enrichedProfiles.find((item) => item.id === currentSession.providerId)
+            : enrichedProfiles.find((item) => item.isActive)
+        ) ?? null;
+        setProviderProfiles(enrichedProfiles);
         setActiveProvider(provider);
         setSelectedModel((current) => {
-          if (current && provider?.models.includes(current)) {
-            return current;
-          }
-          return provider?.models[0] ?? "";
+          if (!isDraft && currentSession?.modelId) return currentSession.modelId;
+          return selectAvailableDraftModel(provider, [current]);
         });
       } catch {
         // ignore silent refresh errors
@@ -473,7 +526,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     };
     const id = window.setInterval(() => void refreshProvider(), 30000);
     return () => window.clearInterval(id);
-  }, []);
+  }, [currentSession?.modelId, currentSession?.providerId, isDraft]);
 
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
   const queuedPrompts = sessionId ? (queuedPromptsBySession[sessionId] ?? []) : [];
@@ -683,11 +736,70 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     if (sessionId) draftStore.set(sessionId, value);
   };
 
+  const handleProviderModelSelection = async (providerId: string, modelId: string) => {
+    if (!isDraft) return;
+    const provider = providerProfiles.find((item) => item.id === providerId);
+    if (
+      !provider ||
+      !provider.models.includes(modelId) ||
+      selectedModelStatus(provider, modelId) === "unavailable"
+    ) return;
+    const previousProvider = activeProvider;
+    const previousModel = selectedModel;
+    const previousThinking = thinkingLevel;
+    const supportsReasoning = selectedModelSupportsReasoning(provider, modelId);
+    setActiveProvider(provider);
+    setSelectedModel(modelId);
+    setThinkingLevel((current) => supportsReasoning ? (current === "off" ? "medium" : current) : "off");
+    setComposerError(null);
+    let switchedProvider = false;
+    try {
+      if (!provider.isActive) {
+        await api.providers.setActive(provider.id);
+        switchedProvider = true;
+        setProviderProfiles((current) => current.map((item) => ({
+          ...item,
+          isActive: item.id === provider.id,
+        })));
+      }
+      await api.settings.update({ model: modelId });
+      await reloadConfig();
+    } catch (error) {
+      setActiveProvider(previousProvider);
+      setSelectedModel(previousModel);
+      setThinkingLevel(previousThinking);
+      if (switchedProvider && previousProvider) {
+        void api.providers.setActive(previousProvider.id).catch(() => {});
+        setProviderProfiles((current) => current.map((item) => ({
+          ...item,
+          isActive: item.id === previousProvider.id,
+        })));
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      setComposerError(t("chat.error.saveModel", { msg: message }));
+    }
+  };
+
+  const handleThinkingLevelChange = async (next: ThinkingLevel) => {
+    if (!reasoningSupported) return;
+    const previous = thinkingLevel;
+    setThinkingLevel(next);
+    setComposerError(null);
+    if (!currentSession) return;
+    try {
+      await updateSessionThinking(currentSession.id, next);
+    } catch (error) {
+      setThinkingLevel(previous);
+      setComposerError(error instanceof Error ? error.message : String(error));
+    }
+  };
+
   return (
     <section className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`} aria-labelledby="prompt-heading">
       <div className="prompt-home__inner">
         {showNoProviderBanner ? (
           <div className="composer-notice" role="alert" data-testid="no-provider-banner">
+            <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
             <span className="composer-notice__text">{t("chat.noProvider.banner")}</span>
             <button
               type="button"
@@ -893,74 +1005,18 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
               The send cluster is now just the model picker + send button.
             */}
             <ComposerSendTools
-              modelSelect={
-                <CustomSelect
-                  ariaLabel={t("chat.modelPlaceholder")}
-                  className="model-select"
-                  disabled={!currentSandbox || !activeProvider || activeProvider.models.length === 0}
-                  onChange={async (model) => {
-                    setSelectedModel(model);
-                    setComposerError(null);
-                    try {
-                      await api.settings.update({ model });
-                    } catch (e) {
-                      const msg = e instanceof Error ? e.message : String(e);
-                      console.error("Failed to save model selection", e);
-                      setComposerError(t("chat.error.saveModel", { msg }));
-                      return;
-                    }
-                    try {
-                      await reloadConfig();
-                    } catch (e) {
-                      const msg = e instanceof Error ? e.message : String(e);
-                      console.error("Failed to reload config after model change", e);
-                      setComposerError(t("chat.error.reloadConfig", { msg }));
-                    }
-                  }}
-                  options={activeProvider?.models.map((model) => {
-                    const mh = activeProvider.modelHealth?.find((m) => m.model === model);
-                    const status = mh?.status ?? "unknown";
-                    return {
-                      value: model,
-                      label: model,
-                      indicator: (
-                        <span
-                          className={`model-status-dot model-status-dot--${status}`}
-                          title={mh?.error ?? status}
-                        />
-                      ),
-                    };
-                  }) ?? []}
-                  placeholder={t("chat.modelPlaceholder")}
-                  title={activeProvider ? t("chat.providerTitle", { name: activeProvider.name }) : t("chat.noActiveProvider")}
-                  value={selectedModel}
-                />
-              }
-              thinkingSelect={
-                <CustomSelect
-                  ariaLabel={t("chat.thinkingLevel")}
-                  className="thinking-select"
-                  disabled={!currentSandbox || !reasoningSupported}
-                  onChange={async (value) => {
-                    const next = value as ThinkingLevel;
-                    setThinkingLevel(next);
-                    setComposerError(null);
-                    if (!currentSession) return;
-                    try {
-                      await updateSessionThinking(currentSession.id, next);
-                    } catch (e) {
-                      setThinkingLevel(currentSession.thinkingLevel ?? "medium");
-                      setComposerError(e instanceof Error ? e.message : String(e));
-                    }
-                  }}
-                  options={[
-                    { value: "off", label: t("chat.thinkingLevel.off") },
-                    { value: "low", label: t("chat.thinkingLevel.low") },
-                    { value: "medium", label: t("chat.thinkingLevel.medium") },
-                    { value: "high", label: t("chat.thinkingLevel.high") },
-                  ]}
-                  title={t("chat.thinkingLevel.title")}
-                  value={reasoningSupported ? thinkingLevel : "off"}
+              modelControl={
+                <ProviderModelControl
+                  disabled={!providersLoaded}
+                  isDraft={isDraft}
+                  modelId={selectedModel}
+                  onManageProviders={onOpenProviderSettings}
+                  onSelectModel={handleProviderModelSelection}
+                  onThinkingLevelChange={handleThinkingLevelChange}
+                  providerId={activeProvider?.id}
+                  providers={providerProfiles}
+                  reasoningSupported={reasoningSupported}
+                  thinkingLevel={reasoningSupported ? thinkingLevel : "off"}
                 />
               }
               sendButton={
@@ -980,11 +1036,13 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         {composerError ? <p className="composer-status composer-status--error">{composerError}</p> : null}
         {!canSend ? (
           <p className="composer-status">
-            {sandboxStatus !== "running"
-              ? t("chat.status.startSandbox")
-              : isConnected
-                ? t("chat.status.preparing")
-                : t("chat.status.connecting")}
+            {draftModelUnavailable
+              ? t("chat.status.modelUnavailable")
+              : sandboxStatus !== "running"
+                ? t("chat.status.startSandbox")
+                : isConnected
+                  ? t("chat.status.preparing")
+                  : t("chat.status.connecting")}
           </p>
         ) : null}
 

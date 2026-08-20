@@ -464,7 +464,12 @@ export async function writeLocalSettings(
     ...(patch.api !== undefined ? { api: patch.api } : {}),
     ...(patch.apiKey !== undefined ? { apiKey: patch.apiKey } : {}),
     // merge the model into the profile's model list (front of list = default)
-    ...(models ? { models: Array.from(new Set([...models, ...current.models])) } : {}),
+    ...(models ? {
+      models: Array.from(new Set([...models, ...current.models])),
+      // Reordering the selected default model must not silently mark every
+      // model as reasoning-capable. Preserve the provider's explicit matrix.
+      reasoningModels: current.reasoningModels ?? current.models,
+    } : {}),
   });
 }
 

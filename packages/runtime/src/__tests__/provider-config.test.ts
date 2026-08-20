@@ -69,16 +69,25 @@ describe("resolveSessionProvider", () => {
     expect((await resolveSessionProvider(root, { modelId: "think" }))?.reasoningEnabled).toBe(true);
   });
 
-  it("falls back to the profile's first model when the ref's model is gone", async () => {
+  it("keeps the session's model when it is removed from the current choices", async () => {
     const root = await dataRootWith(file);
     const cfg = await resolveSessionProvider(root, { providerId: "a", modelId: "stale" });
-    expect(cfg?.modelId).toBe("a1");
+    expect(cfg?.modelId).toBe("stale");
   });
 
-  it("falls back to the selected profile when the ref's provider is missing/deleted", async () => {
+  it("rejects a new model that is not configured for the provider", async () => {
     const root = await dataRootWith(file);
-    const cfg = await resolveSessionProvider(root, { providerId: "gone" });
-    expect(cfg?.providerId).toBe("b"); // selectedProfileId
+    await expect(resolveSessionProvider(
+      root,
+      { providerId: "a", modelId: "stale" },
+      { requireConfiguredModel: true },
+    )).rejects.toThrow("model is not configured for provider a: stale");
+  });
+
+  it("does not switch providers when the session's provider is missing/deleted", async () => {
+    const root = await dataRootWith(file);
+    await expect(resolveSessionProvider(root, { providerId: "gone" }))
+      .rejects.toThrow("session provider is no longer configured: gone");
   });
 
   it("returns undefined when no profiles exist (→ env fallback)", async () => {
@@ -91,8 +100,9 @@ describe("resolveSessionProvider", () => {
     expect(await resolveSessionProvider(root, {})).toBeUndefined();
   });
 
-  it("returns undefined when the chosen profile has no key", async () => {
+  it("does not fall back when the session's provider loses its credentials", async () => {
     const root = await dataRootWith({ profiles: [{ id: "x", apiKey: "", models: ["m"] }] });
-    expect(await resolveSessionProvider(root, { providerId: "x" })).toBeUndefined();
+    await expect(resolveSessionProvider(root, { providerId: "x" }))
+      .rejects.toThrow("session provider no longer has credentials: x");
   });
 });
