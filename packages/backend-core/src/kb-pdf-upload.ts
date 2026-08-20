@@ -1,11 +1,27 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { access, cp, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { resolveBundledKbDir } from "@brainpilot/runtime";
 
 export const KB_PDF_UPLOAD_MAX_BYTES = 256 * 1024 * 1024;
 
 export class KbPdfUploadError extends Error {
   constructor(message: string, readonly status: 400 | 409 | 413) {
     super(message);
+  }
+}
+
+/** Materialize bundled pipeline scripts into an explicitly writable KB root. */
+export async function ensureKbRoot(kbRoot: string, sourceOverride?: string): Promise<string> {
+  try {
+    await access(join(kbRoot, "scripts", "build_kb.py"));
+    return kbRoot;
+  } catch {
+    const source = sourceOverride ?? resolveBundledKbDir();
+    if (!source) throw new Error("Bundled Knowledge Base scripts are unavailable.");
+    await mkdir(kbRoot, { recursive: true });
+    await cp(source, kbRoot, { recursive: true, force: false, errorOnExist: false });
+    await access(join(kbRoot, "scripts", "build_kb.py"));
+    return kbRoot;
   }
 }
 

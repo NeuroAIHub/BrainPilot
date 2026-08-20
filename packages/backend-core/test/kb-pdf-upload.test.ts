@@ -1,9 +1,9 @@
-import { mkdtemp, readFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
-import { KbPdfUploadError, readKbPdfBody, saveKbPdf } from "../src/kb-pdf-upload.js";
+import { ensureKbRoot, KbPdfUploadError, readKbPdfBody, saveKbPdf } from "../src/kb-pdf-upload.js";
 
 const pdf = new TextEncoder().encode("%PDF-1.7\nminimal test document");
 
@@ -38,5 +38,14 @@ describe("knowledge-base PDF upload", () => {
       },
     });
     await expect(readKbPdfBody(stream, 5)).rejects.toMatchObject({ status: 413 });
+  });
+
+  it("materializes bundled scripts into a writable persistent root", async () => {
+    const source = await mkdtemp(join(tmpdir(), "bp-kb-source-"));
+    const root = await mkdtemp(join(tmpdir(), "bp-kb-root-"));
+    await mkdir(join(source, "scripts"), { recursive: true });
+    await writeFile(join(source, "scripts", "build_kb.py"), "print('ok')\n");
+    await expect(ensureKbRoot(root, source)).resolves.toBe(root);
+    expect(await readFile(join(root, "scripts", "build_kb.py"), "utf8")).toContain("print('ok')");
   });
 });

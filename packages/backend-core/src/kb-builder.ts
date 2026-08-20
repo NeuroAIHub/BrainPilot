@@ -985,8 +985,8 @@ export function findKbRoot(): string {
   return join(homedir(), ".brainpilot", "KnowledgeBase");
 }
 
-export function getKbBuildStatus(): KbBuildStatus {
-  const environment = describeKbEnvironment();
+export function getKbBuildStatus(kbRoot?: string): KbBuildStatus {
+  const environment = describeKbEnvironment(kbRoot);
   // "Active" now means "any slot is running" — build, env-setup, or model-
   // download. The frontend already fans out on ev.stage for UI display, so
   // this rollup is just used for the "reopened the panel mid-run" banner.

@@ -64,7 +64,7 @@ import {
   subscribeKbBuild,
 } from "./kb-builder.js";
 import { computeKbInventory } from "./kb-inventory.js";
-import { KbPdfUploadError, KB_PDF_UPLOAD_MAX_BYTES, readKbPdfBody, saveKbPdf } from "./kb-pdf-upload.js";
+import { ensureKbRoot, KbPdfUploadError, KB_PDF_UPLOAD_MAX_BYTES, readKbPdfBody, saveKbPdf } from "./kb-pdf-upload.js";
 import {
   installPlugin,
   importExternalPlugin,
@@ -124,6 +124,11 @@ export function createApp(options: CreateAppOptions): Hono {
   const webRoot = options.webRoot ?? process.env.BP_WEB_ROOT ?? "packages/web/dist";
   const orchestrator = options.orchestrator;
   const env = options.env;
+  let kbRootPromise: Promise<string> | null = null;
+  const getWritableKbRoot = () => {
+    if (!kbRootPromise) kbRootPromise = ensureKbRoot(findKbRoot());
+    return kbRootPromise;
+  };
 
   // Runtime clients cached per runtime baseUrl. Capability sync is scoped to a
   // Runtime instance identity, not just its URL: a restarted Runtime commonly
@@ -724,6 +729,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // POST /api/kb/cancel
   api.post("/kb/build", async (c) => {
     const body = await safeJson(c);
+    const writableKbRoot = await getWritableKbRoot();
     // When the frontend sends no metaApiKey (i.e. "reuse the agent's active
     // LLM key" is checked), fill in the credentials from the selected provider
     // profile so the Python extract_meta.py script receives them.
@@ -745,7 +751,7 @@ export function createApp(options: CreateAppOptions): Hono {
     // saved provider config survives page reloads without ever leaving the
     // backend. Each field falls back independently — a user can override
     // just the base URL for one build without re-typing the key.
-    const kbRootForCfg = typeof body.kbRoot === "string" ? body.kbRoot : findKbRoot();
+    const kbRootForCfg = typeof body.kbRoot === "string" ? body.kbRoot : writableKbRoot;
     const savedOcr = await readKbApiConfig(kbRootForCfg);
     const pickStr = (b: unknown, s: string | undefined) => {
       if (typeof b === "string" && b.trim()) return b;
@@ -757,7 +763,7 @@ export function createApp(options: CreateAppOptions): Hono {
     const ocrPrompt = pickStr(body.ocrPrompt, savedOcr.ocrPrompt);
     const ocrApiKey = pickStr(body.ocrApiKey, savedOcr.ocrApiKey);
     const result = startKbBuild({
-      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+      kbRoot: kbRootForCfg,
       ocrPreset,
       ocrBaseUrl,
       ocrModel,
@@ -785,7 +791,7 @@ export function createApp(options: CreateAppOptions): Hono {
     return c.json({ ok: true, startedAt: result.startedAt });
   });
 
-  api.get("/kb/status", (c) => c.json(getKbBuildStatus()));
+  api.get("/kb/status", async (c) => c.json(getKbBuildStatus(await getWritableKbRoot())));
 
   // Force-refresh the env-completeness probe. /kb/status returns a cached
   // reading (60s TTL) so opening the panel is cheap; this endpoint is what
@@ -793,7 +799,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // externally and wants an immediate answer.
   api.post("/kb/probe", async (c) => {
     const body = await safeJson(c);
-    const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : undefined;
+    const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : await getWritableKbRoot();
     return c.json({ environment: probeKbEnvironment(kbRoot) });
   });
 
@@ -802,7 +808,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // rollup ("healthy" or a list of gap-count issues). Cheap enough to call
   // on every KB tab open. GET so the panel can just fetch() with no body.
   api.get("/kb/inventory", async (c) => {
-    const inv = await computeKbInventory();
+    const inv = await computeKbInventory(await getWritableKbRoot());
     return c.json({ inventory: inv });
   });
 
@@ -817,7 +823,7 @@ export function createApp(options: CreateAppOptions): Hono {
     }
     try {
       const bytes = await readKbPdfBody(c.req.raw.body);
-      const saved = await saveKbPdf(findKbRoot(), filename, bytes);
+      const saved = await saveKbPdf(await getWritableKbRoot(), filename, bytes);
       return c.json({ ok: true, ...saved }, 201);
     } catch (error) {
       if (error instanceof KbPdfUploadError) {
@@ -833,12 +839,13 @@ export function createApp(options: CreateAppOptions): Hono {
   // at a time).
   api.post("/kb/setup-env", async (c) => {
     const body = await safeJson(c);
+    const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : await getWritableKbRoot();
     const result = startKbEnvSetup({
       python: typeof body.python === "string" ? body.python : undefined,
       reinstall: typeof body.reinstall === "boolean" ? body.reinstall : undefined,
       pipIndexUrl: typeof body.pipIndexUrl === "string" && body.pipIndexUrl.trim()
         ? body.pipIndexUrl.trim() : undefined,
-      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+      kbRoot,
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
     return c.json({ ok: true, startedAt: result.startedAt });
@@ -849,11 +856,12 @@ export function createApp(options: CreateAppOptions): Hono {
   // setup" one-shot endpoint below chains the two together).
   api.post("/kb/setup-models", async (c) => {
     const body = await safeJson(c);
+    const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : await getWritableKbRoot();
     const result = startKbModelSetup({
       hfMirror: typeof body.hfMirror === "string" ? body.hfMirror : undefined,
       hfToken: typeof body.hfToken === "string" && body.hfToken.trim()
         ? body.hfToken.trim() : undefined,
-      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+      kbRoot,
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
     return c.json({ ok: true, startedAt: result.startedAt });
@@ -864,6 +872,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // has to click once to get an end-to-end-ready KB pipeline.
   api.post("/kb/setup-full", async (c) => {
     const body = await safeJson(c);
+    const kbRoot = typeof body.kbRoot === "string" ? body.kbRoot : await getWritableKbRoot();
     const result = startKbFullSetup({
       python: typeof body.python === "string" ? body.python : undefined,
       reinstall: typeof body.reinstall === "boolean" ? body.reinstall : undefined,
@@ -872,7 +881,7 @@ export function createApp(options: CreateAppOptions): Hono {
         ? body.hfToken.trim() : undefined,
       pipIndexUrl: typeof body.pipIndexUrl === "string" && body.pipIndexUrl.trim()
         ? body.pipIndexUrl.trim() : undefined,
-      kbRoot: typeof body.kbRoot === "string" ? body.kbRoot : undefined,
+      kbRoot,
     });
     if (!result.ok) return c.json({ error: result.message }, 409);
     return c.json({ ok: true, startedAt: result.startedAt });
@@ -884,7 +893,7 @@ export function createApp(options: CreateAppOptions): Hono {
   // secret, so returning them lets the UI show the current provider and
   // pre-fill the form for edits.
   api.get("/kb/api-config", async (c) => {
-    const cfg = await readKbApiConfig(findKbRoot());
+    const cfg = await readKbApiConfig(await getWritableKbRoot());
     return c.json({
       hasOcrApiKey: Boolean(cfg.ocrApiKey),
       ocrApiKeyPreview: cfg.ocrApiKey ? `...${cfg.ocrApiKey.slice(-4)}` : "",
@@ -916,7 +925,7 @@ export function createApp(options: CreateAppOptions): Hono {
     trimIfString(body.ocrModel, "ocrModel");
     trimIfString(body.ocrPrompt, "ocrPrompt");
     trimIfString(body.ocrApiKey, "ocrApiKey");
-    await writeKbApiConfig(findKbRoot(), patch);
+    await writeKbApiConfig(await getWritableKbRoot(), patch);
     return c.json({ ok: true });
   });
 
