@@ -57,6 +57,13 @@ describe("principal workflow guard", () => {
     expect(isSubstantiveScientificExecutionRequest("Polish this document.")).toBe(false);
     expect(isSubstantiveScientificExecutionRequest("Compare regression and classification models.")).toBe(false);
     expect(isSubstantiveScientificExecutionRequest("比较这两种模型的原理。")).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest(
+      "Reply exactly: Safari cloud real model test passed. Do not call tools.",
+    )).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest(
+      "Please respond only with the phrase model evaluation passed.",
+    )).toBe(false);
+    expect(isSubstantiveScientificExecutionRequest("只回复一句：模型测试通过。")).toBe(false);
     expect(isSubstantiveScientificExecutionRequest("Train a model on the dataset and evaluate it.")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("Design an experiment to compare treatments.")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("Find patterns in this dataset.")).toBe(true);
@@ -74,6 +81,9 @@ describe("principal workflow guard", () => {
     expect(isSubstantiveScientificExecutionRequest("Test data quality in the attached dataset.")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("请测试这个数据集并找出异常。")).toBe(true);
     expect(isSubstantiveScientificExecutionRequest("请测试附件中的数据集")).toBe(true);
+    expect(isSubstantiveScientificExecutionRequest(
+      "Reply only after you test this dataset for distribution shift.",
+    )).toBe(true);
   });
 
   it("injects one fresh ephemeral state block and removes stale copies", () => {
