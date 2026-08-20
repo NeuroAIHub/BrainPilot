@@ -69,6 +69,32 @@ export function removeScopedAttachment(
   };
 }
 
+export type VisibleAttachment = {
+  name: string;
+  type?: string;
+  previewUrl?: string;
+};
+
+export function reconcileVisibleAttachments(
+  current: readonly VisibleAttachment[],
+  persistedNames: readonly string[],
+  sameScope: boolean,
+): { attachments: VisibleAttachment[]; revoked: VisibleAttachment[] } {
+  if (!sameScope) {
+    return {
+      attachments: persistedNames.map((name) => ({ name })),
+      revoked: [...current],
+    };
+  }
+
+  const byName = new Map(current.map((attachment) => [attachment.name, attachment]));
+  const persisted = new Set(persistedNames);
+  return {
+    attachments: persistedNames.map((name) => byName.get(name) ?? { name }),
+    revoked: current.filter((attachment) => !persisted.has(attachment.name)),
+  };
+}
+
 export class AttachmentStore {
   private values: AttachmentsBySession;
   private listeners = new Map<string, Set<() => void>>();
@@ -136,6 +162,56 @@ export class AttachmentStore {
       if (listeners.size === 0) this.listeners.delete(sessionId);
     };
   }
+}
+
+export async function deleteScopedAttachmentFile(
+  store: AttachmentStore,
+  scopeId: string,
+  filename: string,
+  deleteFile: () => Promise<void>,
+): Promise<void> {
+  await deleteFile();
+  store.remove(scopeId, filename);
+}
+
+export async function reconcileAttachmentScope({
+  store,
+  scopeId,
+  listFiles,
+  deleteFile,
+  deleteUntracked,
+  isUploadPending = () => false,
+}: {
+  store: AttachmentStore;
+  scopeId: string;
+  listFiles: () => Promise<readonly string[]>;
+  deleteFile: (filename: string) => Promise<void>;
+  deleteUntracked: boolean;
+  isUploadPending?: (filename: string) => boolean;
+}): Promise<{ failedDeletes: string[] }> {
+  const files = new Set(await listFiles());
+  const persisted = store.get(scopeId);
+
+  for (const filename of persisted) {
+    if (!files.has(filename) && !isUploadPending(filename)) {
+      store.remove(scopeId, filename);
+    }
+  }
+
+  const failedDeletes: string[] = [];
+  if (deleteUntracked) {
+    const tracked = new Set(store.get(scopeId));
+    for (const filename of files) {
+      if (tracked.has(filename) || isUploadPending(filename)) continue;
+      try {
+        await deleteFile(filename);
+      } catch {
+        failedDeletes.push(filename);
+      }
+    }
+  }
+
+  return { failedDeletes };
 }
 
 export const attachmentStore = new AttachmentStore();

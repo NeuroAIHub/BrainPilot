@@ -12,9 +12,16 @@ import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
 import { AskUserComposer } from "./AskUserComposer";
-import { attachmentStore, useAttachments } from "./attachmentScopes";
+import {
+  attachmentStore,
+  deleteScopedAttachmentFile,
+  reconcileAttachmentScope,
+  reconcileVisibleAttachments,
+  useAttachments,
+} from "./attachmentScopes";
 import { reservePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
+import { recoverFailedSubmission } from "./composerRecovery";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
 import {
@@ -58,6 +65,10 @@ type QueuedUpload = {
 };
 
 type QueuedPrompt = { id: string; content: string };
+
+function attachmentOperationKey(scopeId: string, filename: string): string {
+  return `${scopeId}\0${filename}`;
+}
 
 export function shouldClearQueuedPrompts(runActive: { active: boolean } | null): boolean {
   return runActive?.active !== true;
@@ -175,9 +186,13 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const uploadAbortRef = useRef<AbortController | null>(null);
   const uploadQueueRef = useRef<QueuedUpload[]>([]);
   const uploadWorkerRef = useRef<Promise<void> | null>(null);
+  const pendingUploadKeysRef = useRef(new Set<string>());
   const reservedUploadNamesRef = useRef(new Set<string>());
   const { status: sandboxStatus, currentSandbox, reloadConfig } = useSandbox();
   const [composerError, setComposerError] = useState<string | null>(null);
+  const [stagingError, setStagingError] = useState<string | null>(null);
+  const [draftStagingReady, setDraftStagingReady] = useState(false);
+  const [removingAttachmentKeys, setRemovingAttachmentKeys] = useState<ReadonlySet<string>>(new Set());
   const uploading = uploadState != null || queuedUploadCount > 0;
   const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
@@ -192,16 +207,16 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const draftModelUnavailable = isDraft &&
     Boolean(activeProvider && selectedModel) &&
     selectedModelStatus(activeProvider, selectedModel) === "unavailable";
-  // In draft mode there's no session/connection yet — allow composing so the
-  // first send can create + connect the session, unless health already says its
-  // selected model cannot run.
+  // In draft mode there's no session/connection yet. Allow the first send only
+  // after recovered attachments have finished staging and unless health already
+  // says the selected model cannot run.
   const canSend = resolveComposerCanSend({
     sandboxRunning: sandboxStatus === "running",
     isSending,
     uploading,
     connectedOrDraft: isConnected || isDraft,
     draftModelUnavailable,
-  });
+  }) && (!isDraft || draftStagingReady);
   const reasoningSupported = resolveComposerReasoningSupport({
     isDraft,
     sessionReasoningSupported: currentSession?.reasoningSupported,
@@ -215,16 +230,75 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   }, [attachments]);
 
   useEffect(() => {
+    const reconciled = reconcileVisibleAttachments(
+      attachmentsRef.current,
+      persistedAttachmentNames,
+      attachmentScopeRef.current === sessionId,
+    );
     attachmentScopeRef.current = sessionId;
-    setAttachments((current) => {
-      const byName = new Map(current.map((attachment) => [attachment.name, attachment]));
-      for (const attachment of current) {
-        if (!persistedAttachmentNames.includes(attachment.name)) revokeAttachmentPreview(attachment);
-      }
-      return persistedAttachmentNames.map((name) => byName.get(name) ?? { name });
-    });
+    attachmentsRef.current = reconciled.attachments;
+    reconciled.revoked.forEach(revokeAttachmentPreview);
+    setAttachments(reconciled.attachments);
     for (const name of persistedAttachmentNames) reservedUploadNamesRef.current.add(name);
   }, [persistedAttachmentNames, sessionId]);
+
+  useEffect(() => {
+    if (!currentSandbox?.id || currentSandbox.status !== "running") {
+      setDraftStagingReady(false);
+      return;
+    }
+    let cancelled = false;
+    setDraftStagingReady(false);
+    setStagingError(null);
+    void reconcileAttachmentScope({
+      store: attachmentStore,
+      scopeId: DRAFT_SESSION_ID,
+      listFiles: async () => (await api.sandbox.listFiles(currentSandbox.id, "/attachments"))
+        .filter((entry) => entry.type === "file")
+        .map((entry) => entry.name),
+      deleteFile: (name) => api.sandbox.deleteFile(currentSandbox.id, `/attachments/${name}`),
+      deleteUntracked: true,
+      isUploadPending: (name) => pendingUploadKeysRef.current.has(attachmentOperationKey(DRAFT_SESSION_ID, name)),
+    }).then(({ failedDeletes }) => {
+      if (cancelled) return;
+      if (failedDeletes.length > 0) {
+        setStagingError(t("chat.upload.cleanupFailed", { msg: failedDeletes.join(", ") }));
+        return;
+      }
+      setDraftStagingReady(true);
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      const msg = error instanceof Error ? error.message : String(error);
+      setStagingError(t("chat.upload.cleanupFailed", { msg }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSandbox?.id, currentSandbox?.status, isDraft, t]);
+
+  useEffect(() => {
+    if (!currentSession?.id || currentSandbox?.status !== "running") return;
+    const scopeId = currentSession.id;
+    let cancelled = false;
+    setStagingError(null);
+    void reconcileAttachmentScope({
+      store: attachmentStore,
+      scopeId,
+      listFiles: async () => (await api.sandbox.listFiles(scopeId, "/attachments"))
+        .filter((entry) => entry.type === "file")
+        .map((entry) => entry.name),
+      deleteFile: (name) => api.sandbox.deleteFile(scopeId, `/attachments/${name}`),
+      deleteUntracked: false,
+      isUploadPending: (name) => pendingUploadKeysRef.current.has(attachmentOperationKey(scopeId, name)),
+    }).catch((error: unknown) => {
+      if (cancelled) return;
+      const msg = error instanceof Error ? error.message : String(error);
+      setStagingError(t("chat.upload.cleanupFailed", { msg }));
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [currentSession?.id, currentSandbox?.status, t]);
 
   useEffect(() => {
     if (currentSession?.thinkingLevel) setThinkingLevel(currentSession.thinkingLevel);
@@ -604,11 +678,15 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     // Restore the draft (and attachment chips) so they can retry without
     // retyping. Only restore if they haven't already started typing again.
     if (!result.ok) {
-      if (draftStore.get(sessionId).trim().length === 0) {
-        draftStore.set(sessionId, content);
-      }
-      if (sentAttachments.length > 0) {
-        attachmentStore.restoreIfEmpty(sessionId, sentAttachments.map((attachment) => attachment.name));
+      const recoveryScope = recoverFailedSubmission({
+        submittedScopeId: sessionId,
+        resultSessionId: result.sessionId,
+        content,
+        attachmentNames: sentAttachments.map((attachment) => attachment.name),
+        drafts: draftStore,
+        attachments: attachmentStore,
+      });
+      if (sentAttachments.length > 0 && attachmentScopeRef.current === recoveryScope) {
         setAttachments((prev) => (prev.length === 0 ? sentAttachments : prev));
       }
     } else {
@@ -649,6 +727,8 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
           percent: null,
           phase: "uploading",
         });
+        const wasTracked = attachmentStore.get(scopeId).includes(file.name);
+        attachmentStore.add(scopeId, file.name);
         try {
           await api.sandbox.uploadFile(uploadId, `/attachments/${file.name}`, file, {
             signal: controller.signal,
@@ -670,7 +750,6 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             type: file.type || undefined,
             previewUrl,
           };
-          attachmentStore.add(scopeId, attachment.name);
           if (attachmentScopeRef.current === scopeId) {
             setAttachments((prev) => {
               const existing = prev.find((item) => item.name === attachment.name);
@@ -682,11 +761,16 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             revokeAttachmentPreview(attachment);
           }
         } catch (e) {
+          if (!wasTracked) {
+            attachmentStore.remove(scopeId, file.name);
+            await api.sandbox.deleteFile(uploadId, `/attachments/${file.name}`).catch(() => undefined);
+          }
           reservedUploadNamesRef.current.delete(file.name);
           if (isUploadAbortError(e)) break;
           const msg = e instanceof Error ? e.message : String(e);
           setComposerError(t("chat.upload.failed", { msg }));
         } finally {
+          pendingUploadKeysRef.current.delete(attachmentOperationKey(scopeId, file.name));
           processed += 1;
         }
       }
@@ -712,6 +796,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     const list = Array.from(files);
     for (const file of list) {
       reservedUploadNamesRef.current.add(file.name);
+      pendingUploadKeysRef.current.add(attachmentOperationKey(scopeId, file.name));
       uploadQueueRef.current.push({ file, uploadId, scopeId });
     }
     setQueuedUploadCount(uploadQueueRef.current.length);
@@ -729,6 +814,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const cancelUpload = () => {
     for (const entry of uploadQueueRef.current) {
       reservedUploadNamesRef.current.delete(entry.file.name);
+      pendingUploadKeysRef.current.delete(attachmentOperationKey(entry.scopeId, entry.file.name));
     }
     uploadQueueRef.current = [];
     setQueuedUploadCount(0);
@@ -741,20 +827,32 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     return enqueueFiles(renamed);
   };
 
-  const removeAttachment = (name: string) => {
-    reservedUploadNamesRef.current.delete(name);
-    if (sessionId) attachmentStore.remove(sessionId, name);
-    setAttachments((prev) => {
-      const removed = prev.find((item) => item.name === name);
-      if (removed) revokeAttachmentPreview(removed);
-      return prev.filter((item) => item.name !== name);
-    });
+  const removeAttachment = async (name: string) => {
+    if (!sessionId) return;
+    const scopeId = sessionId;
     const uploadId = currentSession?.id ?? currentSandbox?.id;
     if (!uploadId) return;
-    void api.sandbox.deleteFile(uploadId, `/attachments/${name}`).catch((e: unknown) => {
+    const operationKey = attachmentOperationKey(scopeId, name);
+    if (removingAttachmentKeys.has(operationKey)) return;
+    setRemovingAttachmentKeys((current) => new Set(current).add(operationKey));
+    try {
+      await deleteScopedAttachmentFile(
+        attachmentStore,
+        scopeId,
+        name,
+        () => api.sandbox.deleteFile(uploadId, `/attachments/${name}`),
+      );
+      reservedUploadNamesRef.current.delete(name);
+    } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : String(e);
       setComposerError(t("chat.upload.removeFailed", { msg }));
-    });
+    } finally {
+      setRemovingAttachmentKeys((current) => {
+        const next = new Set(current);
+        next.delete(operationKey);
+        return next;
+      });
+    }
   };
 
   // Writes to the draft store from non-text controls (slash command picks,
@@ -939,7 +1037,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
                     type="button"
                     className="composer__chip-remove"
                     aria-label={t("chat.aria.removeAttachment")}
-                    onClick={() => removeAttachment(attachment.name)}
+                    onClick={() => void removeAttachment(attachment.name)}
+                    disabled={sessionId
+                      ? removingAttachmentKeys.has(attachmentOperationKey(sessionId, attachment.name))
+                        || pendingUploadKeysRef.current.has(attachmentOperationKey(sessionId, attachment.name))
+                      : true}
                   >
                     <X size={12} />
                   </button>
@@ -1061,7 +1163,9 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         )}
 
         {error ? <p className="composer-status composer-status--error">{error}</p> : null}
-        {composerError ? <p className="composer-status composer-status--error">{composerError}</p> : null}
+        {composerError || stagingError ? (
+          <p className="composer-status composer-status--error">{composerError ?? stagingError}</p>
+        ) : null}
         {!canSend ? (
           <p className="composer-status">
             {draftModelUnavailable
