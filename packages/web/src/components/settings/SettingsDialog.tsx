@@ -567,7 +567,14 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                   className={activeTab === tab.id ? "is-active" : ""}
                   key={tab.id}
                   aria-current={activeTab === tab.id ? "page" : undefined}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={(event) => {
+                    setActiveTab(tab.id);
+                    // WebKit can return focus to the dialog container after the
+                    // active section rerenders. Restore the activating control
+                    // so keyboard users continue from the section they chose.
+                    const button = event.currentTarget;
+                    window.requestAnimationFrame(() => button.focus({ preventScroll: true }));
+                  }}
                   type="button"
                 >
                   <Icon size={15} />

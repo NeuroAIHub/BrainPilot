@@ -27,6 +27,25 @@ export function listFocusable(container: HTMLElement): HTMLElement[] {
 }
 
 /**
+ * Resolve the boundary control for a focus trap. Treat focus on the dialog
+ * container itself (or any other non-control) as outside the ordered control
+ * list so Tab cannot fall through to the inert page behind it.
+ */
+export function resolveFocusTrapTarget<T>(
+  focusable: readonly T[],
+  active: T | null,
+  shiftKey: boolean,
+): T | null {
+  if (focusable.length === 0) return null;
+  const activeIndex = active === null ? -1 : focusable.indexOf(active);
+  if (shiftKey && activeIndex <= 0) return focusable[focusable.length - 1]!;
+  if (!shiftKey && (activeIndex < 0 || activeIndex === focusable.length - 1)) {
+    return focusable[0]!;
+  }
+  return null;
+}
+
+/**
  * Keep Tab / Shift+Tab inside `container`. Returns true if the event was handled.
  */
 export function trapFocusKeyDown(container: HTMLElement, event: KeyboardEvent): boolean {
@@ -36,18 +55,15 @@ export function trapFocusKeyDown(container: HTMLElement, event: KeyboardEvent): 
     event.preventDefault();
     return true;
   }
-  const first = focusable[0]!;
-  const last = focusable[focusable.length - 1]!;
   const active = document.activeElement as HTMLElement | null;
-  if (event.shiftKey) {
-    if (!active || active === first || !container.contains(active)) {
-      event.preventDefault();
-      last.focus();
-      return true;
-    }
-  } else if (active === last) {
+  const target = resolveFocusTrapTarget(
+    focusable,
+    active && container.contains(active) ? active : null,
+    event.shiftKey,
+  );
+  if (target) {
     event.preventDefault();
-    first.focus();
+    target.focus();
     return true;
   }
   return false;

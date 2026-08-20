@@ -4,7 +4,10 @@ import {
   providerFieldErrorKey,
   validateProviderForm,
 } from "../components/settings/providerFormValidation";
-import { resolveEscapeLayer } from "../components/settings/settingsModalStack";
+import {
+  resolveEscapeLayer,
+  resolveFocusTrapTarget,
+} from "../components/settings/settingsModalStack";
 
 const emptyForm = {
   name: "",
@@ -89,5 +92,24 @@ describe("resolveEscapeLayer (#328)", () => {
         isMcpFormOpen: false,
       }),
     ).toBe(null);
+  });
+});
+
+describe("resolveFocusTrapTarget (#487)", () => {
+  const controls = ["first", "middle", "last"] as const;
+
+  it("wraps focus that lands on the dialog container", () => {
+    expect(resolveFocusTrapTarget(controls, null, false)).toBe("first");
+    expect(resolveFocusTrapTarget(controls, null, true)).toBe("last");
+  });
+
+  it("wraps at both control-list boundaries", () => {
+    expect(resolveFocusTrapTarget(controls, "last", false)).toBe("first");
+    expect(resolveFocusTrapTarget(controls, "first", true)).toBe("last");
+  });
+
+  it("leaves normal movement between interior controls to the browser", () => {
+    expect(resolveFocusTrapTarget(controls, "middle", false)).toBeNull();
+    expect(resolveFocusTrapTarget(controls, "middle", true)).toBeNull();
   });
 });
