@@ -6513,7 +6513,9 @@ button {
 
 /* #318 settings-mobile-start
    Narrow viewports: drop the fixed 190px side nav so the content pane is not
-   crushed to ~134px (390×844). Desktop two-column IA above 860px is unchanged. */
+   crushed to ~134px (390×844). Desktop two-column IA above 860px is unchanged.
+   #487: show every section as a compact grid instead of hiding the last tabs
+   beyond an unlabelled horizontal scroll area. */
 @media (max-width: 860px) {
   .settings-modal__panel {
     width: calc(100vw - 24px);
@@ -6528,23 +6530,27 @@ button {
   }
 
   .settings-tabs {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-content: stretch;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
+    overflow: visible;
     border-right: none;
     border-bottom: 1px solid var(--color-border);
     padding: 8px 10px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
   }
 
   .settings-tabs button {
-    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    justify-content: flex-start;
     white-space: nowrap;
+  }
+
+  .settings-tabs button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .settings-content {
@@ -6651,6 +6657,12 @@ button {
 
   .kb-inv__metrics {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .settings-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 /* #318 settings-mobile-end */
@@ -10720,6 +10732,109 @@ button {
   .demo-right { border-bottom: 1px solid var(--color-border); }
   .demo-landing__cards { grid-template-columns: 1fr; }
 }
+
+/* #487 demo-mobile-start
+   The collapsed 64px navigation rail leaves 326px for Live Demo at a 390px
+   viewport. Remove the desktop card minimum/padding at that size so the
+   landing content remains inside its grid column instead of overflowing under
+   the rail. */
+@media (max-width: 600px) {
+  .demo-view {
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+  }
+
+  .demo-landing {
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 18px;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    padding: 24px 16px 32px;
+  }
+
+  .demo-landing__header {
+    width: 100%;
+    max-width: none;
+  }
+
+  .demo-landing__header h1 {
+    font-size: 20px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .demo-landing__header p {
+    overflow-wrap: anywhere;
+  }
+
+  .demo-landing__cards {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .demo-card {
+    min-width: 0;
+    padding: 16px;
+  }
+
+  .demo-card__head,
+  .demo-card__head h2,
+  .demo-card > p,
+  .demo-card__sessions,
+  .demo-session-row,
+  .demo-session-row span,
+  .demo-dropzone {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .demo-card__head h2,
+  .demo-card > p,
+  .demo-dropzone__primary,
+  .demo-dropzone__hint {
+    overflow-wrap: anywhere;
+  }
+
+  .demo-session-row {
+    padding-inline: 10px;
+  }
+
+  .demo-dropzone {
+    padding: 22px 12px;
+  }
+
+  .demo-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .demo-header__title {
+    min-width: 0;
+  }
+
+  .demo-header__title h1,
+  .demo-header__meta {
+    overflow-wrap: anywhere;
+  }
+
+  .demo-header__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .demo-export,
+  .demo-reselect {
+    min-height: 40px;
+  }
+}
+/* #487 demo-mobile-end */
 
 /* Issue #278 — global message-filter list in the agent detail pane. Each row
    is a checkbox + label (with an optional count pill) and a small description
