@@ -14,21 +14,17 @@ import type { ReactNode } from "react";
  * rendered cluster contains no file input, guarding against it creeping back.
  */
 export function ComposerSendTools({
-  modelSelect,
-  thinkingSelect,
+  modelControl,
   sendButton,
 }: {
-  /** The model picker node (parent builds the stateful CustomSelect). */
-  modelSelect: ReactNode;
-  /** Session-wide thinking-level picker. */
-  thinkingSelect: ReactNode;
+  /** Combined provider/model + session reasoning control. */
+  modelControl: ReactNode;
   /** The send button node. */
   sendButton: ReactNode;
 }) {
   return (
     <div className="composer__send-tools">
-      {modelSelect}
-      {thinkingSelect}
+      {modelControl}
       {sendButton}
     </div>
   );

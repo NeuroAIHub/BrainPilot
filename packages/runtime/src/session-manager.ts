@@ -3700,6 +3700,8 @@ export class SessionManager {
       domainResources: e.domainResources,
       thinkingLevel: e.thinkingLevel,
       reasoningSupported: e.reasoningSupported,
+      ...(e.providerRef.providerId ? { providerId: e.providerRef.providerId } : {}),
+      ...(e.providerRef.modelId ? { modelId: e.providerRef.modelId } : {}),
     };
   }
 

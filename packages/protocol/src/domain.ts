@@ -43,6 +43,9 @@ export const SessionSchema = z.object({
   thinkingLevel: ThinkingLevelSchema.optional(),
   /** Whether the model bound to this session supports extended reasoning. */
   reasoningSupported: z.boolean().optional(),
+  /** Provider/model frozen when the session was created (never includes credentials). */
+  providerId: z.string().optional(),
+  modelId: z.string().optional(),
 });
 export type Session = z.infer<typeof SessionSchema>;
 

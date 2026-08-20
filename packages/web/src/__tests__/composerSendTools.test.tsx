@@ -11,8 +11,7 @@ describe("ComposerSendTools — #160 no file-upload control", () => {
   const markup = () =>
     renderToStaticMarkup(
       <ComposerSendTools
-        modelSelect={<div className="model-select">model</div>}
-        thinkingSelect={<div className="thinking-select">medium</div>}
+        modelControl={<div className="provider-model-control">model · medium</div>}
         sendButton={<button type="submit">send</button>}
       />,
     );
@@ -20,8 +19,7 @@ describe("ComposerSendTools — #160 no file-upload control", () => {
   it("renders the passed-in model picker and send button", () => {
     const html = markup();
     expect(html).toContain("composer__send-tools");
-    expect(html).toContain("model-select");
-    expect(html).toContain("thinking-select");
+    expect(html).toContain("provider-model-control");
     expect(html).toContain("send");
   });
 
