@@ -118,6 +118,39 @@ describe("SessionManager.restoreFromDisk", () => {
     expect((await m.listSessions())[0]!.createdAt).toBe("2026-03-01T00:00:00.000Z");
   });
 
+  it("restores a session whose frozen provider was deleted and fails only when starting an agent", async () => {
+    const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-provider-"));
+    const id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    await writeMeta(dataRoot, id, {
+      id,
+      title: "Provider removed",
+      reasoningSupported: true,
+    });
+    await writeFile(
+      join(dataRoot, ".bp", id, "provider.json"),
+      JSON.stringify({ providerId: "gone", modelId: "frozen-model" }),
+      "utf8",
+    );
+    await mkdir(join(dataRoot, "bp_template"), { recursive: true });
+    await writeFile(
+      join(dataRoot, "bp_template", "providers.json"),
+      JSON.stringify({
+        profiles: [{ id: "current", apiKey: "key", models: ["other-model"] }],
+        selectedProfileId: "current",
+      }),
+      "utf8",
+    );
+
+    const m = new SessionManager({ dataRoot, persist: true, agentFactory: mockAgentFactory });
+    await expect(m.restoreFromDisk()).resolves.toEqual([id]);
+    expect(m.getSession(id)).toMatchObject({
+      providerId: "gone",
+      modelId: "frozen-model",
+    });
+    await expect(m.ensureAgent(id, "principal"))
+      .rejects.toThrow("session provider is no longer configured: gone");
+  });
+
   it("persists a cancellation for an orphaned ask_user request", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-restore-"));
     const id = "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee";

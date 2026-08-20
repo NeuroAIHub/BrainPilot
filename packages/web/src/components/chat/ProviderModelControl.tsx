@@ -9,6 +9,7 @@ import {
 import {
   useCallback,
   useEffect,
+  useId,
   useLayoutEffect,
   useMemo,
   useRef,
@@ -19,6 +20,7 @@ import { createPortal } from "react-dom";
 
 import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useT } from "../../i18n/useT";
+import { trapFocusKeyDown } from "../settings/settingsModalStack";
 
 type ProviderModelControlProps = {
   providers: ProviderProfile[];
@@ -43,6 +45,28 @@ export function selectedModelSupportsReasoning(
   return (provider.reasoningModels ?? provider.models).includes(modelId);
 }
 
+export function selectedModelStatus(
+  provider: Pick<ProviderProfile, "healthStatus" | "modelHealth"> | null | undefined,
+  modelId: string,
+): ProviderProfile["healthStatus"] {
+  const modelHealth = provider?.modelHealth.find((entry) => entry.model === modelId);
+  return modelHealth?.status ?? provider?.healthStatus ?? "unknown";
+}
+
+export function focusProviderModelPopup(popup: HTMLElement): void {
+  const target =
+    popup.querySelector<HTMLElement>('.provider-model-option[aria-pressed="true"]:not([disabled])') ??
+    popup.querySelector<HTMLElement>(".provider-model-option:not([disabled])") ??
+    popup.querySelector<HTMLElement>('[aria-pressed="true"]:not([disabled])') ??
+    popup.querySelector<HTMLElement>("button:not([disabled])") ??
+    popup;
+  target.focus();
+}
+
+export function restoreProviderModelFocus(target: HTMLElement | null): void {
+  if (target?.isConnected) target.focus();
+}
+
 export function ProviderModelControl({
   providers,
   providerId,
@@ -58,14 +82,18 @@ export function ProviderModelControl({
   const t = useT();
   const [open, setOpen] = useState(false);
   const [popupStyle, setPopupStyle] = useState<CSSProperties>({});
+  const popupId = useId();
   const rootRef = useRef<HTMLDivElement | null>(null);
   const popupRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLButtonElement | null>(null);
   const selectedProvider = useMemo(
-    () => providers.find((provider) => provider.id === providerId) ?? providers.find((provider) => provider.isActive),
+    () => providerId
+      ? providers.find((provider) => provider.id === providerId)
+      : providers.find((provider) => provider.isActive),
     [providerId, providers],
   );
-  const selectedHealth = selectedProvider?.modelHealth.find((entry) => entry.model === modelId);
-  const selectedStatus = selectedHealth?.status ?? selectedProvider?.healthStatus ?? "unknown";
+  const selectedStatus = selectedModelStatus(selectedProvider, modelId);
+  const selectedProviderLabel = selectedProvider?.name ?? providerId;
 
   const updatePosition = useCallback(() => {
     const root = rootRef.current;
@@ -97,12 +125,31 @@ export function ProviderModelControl({
 
   useEffect(() => {
     if (!open) return;
+    const returnFocus = document.activeElement instanceof HTMLElement
+      ? document.activeElement
+      : triggerRef.current;
+    const frame = window.requestAnimationFrame(() => {
+      if (popupRef.current) focusProviderModelPopup(popupRef.current);
+    });
+    return () => {
+      window.cancelAnimationFrame(frame);
+      restoreProviderModelFocus(returnFocus);
+    };
+  }, [open]);
+
+  useEffect(() => {
+    if (!open) return;
     const handlePointerDown = (event: PointerEvent) => {
       const target = event.target as Node;
       if (!rootRef.current?.contains(target) && !popupRef.current?.contains(target)) setOpen(false);
     };
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setOpen(false);
+      if (event.key === "Escape") {
+        event.preventDefault();
+        setOpen(false);
+        return;
+      }
+      if (popupRef.current) trapFocusKeyDown(popupRef.current, event);
     };
     const reposition = () => updatePosition();
     document.addEventListener("pointerdown", handlePointerDown);
@@ -121,9 +168,11 @@ export function ProviderModelControl({
     <div
       aria-label={t("chat.modelControl.label")}
       className="provider-model-popover"
+      id={popupId}
       ref={popupRef}
       role="dialog"
       style={popupStyle}
+      tabIndex={-1}
     >
       <div className="provider-model-popover__header">
         <BrainCircuit aria-hidden="true" size={17} />
@@ -233,13 +282,17 @@ export function ProviderModelControl({
   return (
     <div className={`provider-model-control ${open ? "is-open" : ""}`} ref={rootRef}>
       <button
+        aria-controls={open ? popupId : undefined}
         aria-expanded={open}
         aria-haspopup="dialog"
         aria-label={t("chat.modelControl.label")}
         className="provider-model-control__trigger"
         disabled={disabled}
         onClick={() => setOpen((current) => !current)}
-        title={selectedProvider ? `${selectedProvider.name} · ${modelId}` : t("chat.modelControl.select")}
+        ref={triggerRef}
+        title={selectedProviderLabel
+          ? [selectedProviderLabel, modelId].filter(Boolean).join(" · ")
+          : t("chat.modelControl.select")}
         type="button"
       >
         <span className={`model-status-dot model-status-dot--${selectedStatus}`} />

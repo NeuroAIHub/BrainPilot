@@ -16,7 +16,11 @@ import { reservePastedImages } from "./clipboardImages";
 import { ComposerInput, type MentionSources } from "./ComposerInput";
 import { ComposerSendButton } from "./ComposerSendButton";
 import { ComposerSendTools } from "./ComposerSendTools";
-import { ProviderModelControl, selectedModelSupportsReasoning } from "./ProviderModelControl";
+import {
+  ProviderModelControl,
+  selectedModelStatus,
+  selectedModelSupportsReasoning,
+} from "./ProviderModelControl";
 import { MessageStream } from "./MessageStream";
 import type { WorkspaceFileTarget } from "./workspaceFileLink";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
@@ -88,6 +92,35 @@ export function mergeProviderHealth(
   });
 }
 
+export function selectAvailableDraftModel(
+  provider: ProviderProfile | null,
+  candidates: Array<string | undefined>,
+): string {
+  if (!provider) return "";
+  const configuredCandidates = candidates.filter(
+    (model): model is string => Boolean(model && provider.models.includes(model)),
+  );
+  return configuredCandidates.find((model) => selectedModelStatus(provider, model) !== "unavailable")
+    ?? provider.models.find((model) => selectedModelStatus(provider, model) !== "unavailable")
+    ?? configuredCandidates[0]
+    ?? provider.models[0]
+    ?? "";
+}
+
+export function resolveComposerCanSend(input: {
+  sandboxRunning: boolean;
+  isSending: boolean;
+  uploading: boolean;
+  connectedOrDraft: boolean;
+  draftModelUnavailable: boolean;
+}): boolean {
+  return input.sandboxRunning &&
+    !input.isSending &&
+    !input.uploading &&
+    input.connectedOrDraft &&
+    !input.draftModelUnavailable;
+}
+
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
   if (attachment.previewUrl && typeof URL !== "undefined" && "revokeObjectURL" in URL) {
     URL.revokeObjectURL(attachment.previewUrl);
@@ -151,9 +184,19 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : undefined,
     [agents],
   );
+  const draftModelUnavailable = isDraft &&
+    Boolean(activeProvider && selectedModel) &&
+    selectedModelStatus(activeProvider, selectedModel) === "unavailable";
   // In draft mode there's no session/connection yet — allow composing so the
-  // first send can create + connect the session.
-  const canSend = sandboxStatus === "running" && !isSending && !uploading && (isConnected || isDraft);
+  // first send can create + connect the session, unless health already says its
+  // selected model cannot run.
+  const canSend = resolveComposerCanSend({
+    sandboxRunning: sandboxStatus === "running",
+    isSending,
+    uploading,
+    connectedOrDraft: isConnected || isDraft,
+    draftModelUnavailable,
+  });
   const reasoningSupported = resolveComposerReasoningSupport({
     isDraft,
     sessionReasoningSupported: currentSession?.reasoningSupported,
@@ -439,13 +482,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         setProvidersLoaded(true);
         setSelectedModel((current) => {
           if (!isDraft && currentSession?.modelId) return currentSession.modelId;
-          if (current && provider?.models.includes(current)) {
-            return current;
-          }
-          if (settings.model && provider?.models.includes(settings.model)) {
-            return settings.model;
-          }
-          return provider?.models[0] ?? "";
+          return selectAvailableDraftModel(provider, [current, settings.model]);
         });
       } catch {
         if (!cancelled) {
@@ -481,10 +518,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         setActiveProvider(provider);
         setSelectedModel((current) => {
           if (!isDraft && currentSession?.modelId) return currentSession.modelId;
-          if (current && provider?.models.includes(current)) {
-            return current;
-          }
-          return provider?.models[0] ?? "";
+          return selectAvailableDraftModel(provider, [current]);
         });
       } catch {
         // ignore silent refresh errors
@@ -705,7 +739,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const handleProviderModelSelection = async (providerId: string, modelId: string) => {
     if (!isDraft) return;
     const provider = providerProfiles.find((item) => item.id === providerId);
-    if (!provider || !provider.models.includes(modelId)) return;
+    if (
+      !provider ||
+      !provider.models.includes(modelId) ||
+      selectedModelStatus(provider, modelId) === "unavailable"
+    ) return;
     const previousProvider = activeProvider;
     const previousModel = selectedModel;
     const previousThinking = thinkingLevel;
@@ -998,11 +1036,13 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         {composerError ? <p className="composer-status composer-status--error">{composerError}</p> : null}
         {!canSend ? (
           <p className="composer-status">
-            {sandboxStatus !== "running"
-              ? t("chat.status.startSandbox")
-              : isConnected
-                ? t("chat.status.preparing")
-                : t("chat.status.connecting")}
+            {draftModelUnavailable
+              ? t("chat.status.modelUnavailable")
+              : sandboxStatus !== "running"
+                ? t("chat.status.startSandbox")
+                : isConnected
+                  ? t("chat.status.preparing")
+                  : t("chat.status.connecting")}
           </p>
         ) : null}
 

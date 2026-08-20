@@ -1,6 +1,14 @@
 import { describe, expect, it } from "vitest";
-import { mergeProviderHealth, resolveComposerReasoningSupport } from "../components/chat/PromptComposer";
-import { selectedModelSupportsReasoning } from "../components/chat/ProviderModelControl";
+import {
+  mergeProviderHealth,
+  resolveComposerCanSend,
+  resolveComposerReasoningSupport,
+  selectAvailableDraftModel,
+} from "../components/chat/PromptComposer";
+import {
+  selectedModelStatus,
+  selectedModelSupportsReasoning,
+} from "../components/chat/ProviderModelControl";
 import type { ProviderProfile } from "../contracts/backend";
 
 describe("composer reasoning support", () => {
@@ -66,5 +74,26 @@ describe("composer reasoning support", () => {
       healthStatus: "healthy",
       modelHealth: [{ model: "m1", status: "healthy" }],
     });
+  });
+
+  it("moves a draft off an unavailable model and blocks an unavailable draft", () => {
+    const provider = {
+      id: "p1",
+      models: ["down", "up"],
+      healthStatus: "healthy",
+      modelHealth: [
+        { model: "down", status: "unavailable" },
+        { model: "up", status: "healthy" },
+      ],
+    } as unknown as ProviderProfile;
+    expect(selectedModelStatus(provider, "down")).toBe("unavailable");
+    expect(selectAvailableDraftModel(provider, ["down"])).toBe("up");
+    expect(resolveComposerCanSend({
+      sandboxRunning: true,
+      isSending: false,
+      uploading: false,
+      connectedOrDraft: true,
+      draftModelUnavailable: true,
+    })).toBe(false);
   });
 });
