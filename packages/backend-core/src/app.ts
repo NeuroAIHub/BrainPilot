@@ -64,6 +64,7 @@ import {
   subscribeKbBuild,
 } from "./kb-builder.js";
 import { computeKbInventory } from "./kb-inventory.js";
+import { KbPdfUploadError, KB_PDF_UPLOAD_MAX_BYTES, readKbPdfBody, saveKbPdf } from "./kb-pdf-upload.js";
 import {
   installPlugin,
   importExternalPlugin,
@@ -803,6 +804,27 @@ export function createApp(options: CreateAppOptions): Hono {
   api.get("/kb/inventory", async (c) => {
     const inv = await computeKbInventory();
     return c.json({ inventory: inv });
+  });
+
+  // Guided KB workflow: upload a user-selected PDF directly into the pipeline
+  // source directory. The helper validates filename, size, signature, and
+  // refuses silent overwrite; technical paths never cross the API boundary.
+  api.post("/kb/pdfs", async (c) => {
+    const filename = c.req.query("filename") ?? "";
+    const declaredSize = Number(c.req.header("content-length") ?? "0");
+    if (Number.isFinite(declaredSize) && declaredSize > KB_PDF_UPLOAD_MAX_BYTES) {
+      return c.json({ error: "The selected PDF exceeds the 256 MB upload limit." }, 413);
+    }
+    try {
+      const bytes = await readKbPdfBody(c.req.raw.body);
+      const saved = await saveKbPdf(findKbRoot(), filename, bytes);
+      return c.json({ ok: true, ...saved }, 201);
+    } catch (error) {
+      if (error instanceof KbPdfUploadError) {
+        return c.json({ error: error.message }, error.status);
+      }
+      return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
+    }
   });
 
   // Bootstrap the KnowledgeBase Python venv. Shares the same run slot /

@@ -1487,6 +1487,20 @@ export const api = {
       return handleJson(await apiFetch(`${API_BASE}/kb/inventory`));
     },
 
+    async uploadPdf(file: File): Promise<{ ok: boolean; filename?: string; size?: number; error?: string }> {
+      const params = new URLSearchParams({ filename: file.name });
+      const res = await apiFetch(`${API_BASE}/kb/pdfs?${params}`, {
+        method: "POST",
+        headers: { "content-type": "application/pdf" },
+        body: file,
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        return { ok: false, error: body.error || `PDF upload failed (${res.status})` };
+      }
+      return handleJson(res);
+    },
+
     async cancel(): Promise<{ ok: boolean; message?: string }> {
       const res = await apiFetch(`${API_BASE}/kb/cancel`, { method: "POST" });
       return res.json().catch(() => ({ ok: false }));
