@@ -3351,6 +3351,13 @@ button {
   background: var(--color-surface);
   border-color: var(--color-accent);
 }
+.ask-user-composer__option:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+}
+.ask-user-composer__option:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  outline-offset: 1px;
+}
 .ask-user-composer__option--free { cursor: text; }
 .ask-user-composer__num {
   flex: none;
