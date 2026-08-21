@@ -248,6 +248,24 @@ export class TaskLedger {
     });
   }
 
+  async cancel(taskId: string, requester: string, reason: string): Promise<TaskRecord> {
+    return this.mutate(() => {
+      const task = this.tasks.find((candidate) => candidate.id === taskId);
+      if (!task) throw new Error(`task not found: ${taskId}`);
+      if (task.created_by !== requester) throw new Error(`task ${taskId} was created by ${task.created_by}`);
+      if (task.status === "cancelled") return this.publicTask(task);
+      if (task.status !== "pending") throw new Error(`task ${taskId} is ${task.status}`);
+      task.status = "cancelled";
+      task.reply = reason;
+      task.completed_at = Date.now();
+      this.notifications = this.notifications.filter(
+        (notification) => !(notification.kind === "assigned" && notification.task_id === task.id),
+      );
+      this.enqueue("cancelled", task.assigned_to, requester, reason, task.id);
+      return this.publicTask(task);
+    });
+  }
+
   async cancelAssignedTo(agent: string, reason: string): Promise<TaskRecord[]> {
     return this.mutate(() => {
       const cancelled: TaskRecord[] = [];

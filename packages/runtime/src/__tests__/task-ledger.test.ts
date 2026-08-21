@@ -39,6 +39,44 @@ describe("TaskLedger", () => {
     await expect(ledger.complete(task.id, "engineer", "different")).rejects.toThrow("different reply");
   });
 
+  it("lets the creator cancel one pending task and prevents assignee redelivery", async () => {
+    const ledger = new TaskLedger("s");
+    const task = await ledger.dispatch("principal", "engineer", "old requirements");
+    await expect(ledger.cancel(task.id, "writer", "wrong owner")).rejects.toThrow("created by principal");
+    await expect(ledger.cancel(task.id, "principal", "superseded")).resolves.toMatchObject({
+      status: "cancelled",
+      reply: "superseded",
+    });
+    expect(ledger.pendingAssignedTo("engineer")).toEqual([]);
+    expect(ledger.peekBatch("engineer")).toEqual([
+      expect.objectContaining({ kind: "cancelled", task_id: task.id, content: "superseded" }),
+    ]);
+    await expect(ledger.cancel(task.id, "principal", "superseded")).resolves.toMatchObject({ status: "cancelled" });
+  });
+
+  it("persists cancellation and never restores the superseded assignment", async () => {
+    const dir = await mkdtemp(join(tmpdir(), "task-ledger-cancel-"));
+    dirs.push(dir);
+    const path = join(dir, "tasks.json");
+    const ledger = new TaskLedger("s", path);
+    const oldTask = await ledger.dispatch("principal", "engineer", "old scope");
+    await ledger.cancel(oldTask.id, "principal", "requirements changed");
+    const replacement = await ledger.dispatch("principal", "engineer", "new scope");
+    await ledger.flush();
+
+    const restored = new TaskLedger("s", path);
+    await restored.recover();
+    expect(restored.get(oldTask.id)).toMatchObject({ status: "cancelled", reply: "requirements changed" });
+    expect(restored.get(replacement.id)).toMatchObject({ status: "pending", content: "new scope" });
+    expect(restored.peekBatch("engineer")).toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "cancelled", task_id: oldTask.id }),
+      expect.objectContaining({ kind: "assigned", task_id: replacement.id }),
+    ]));
+    expect(restored.peekBatch("engineer")).not.toEqual(expect.arrayContaining([
+      expect.objectContaining({ kind: "assigned", task_id: oldTask.id }),
+    ]));
+  });
+
   it("persists tasks and unacknowledged notifications across restart", async () => {
     const dir = await mkdtemp(join(tmpdir(), "task-ledger-"));
     dirs.push(dir);

@@ -30,6 +30,7 @@ export interface ToolDeps {
   trace: GraphOfTrace;
   checkpoints?: WorkspaceCheckpointStore;
   dispatchTask: (to: string, content: string) => Promise<TaskRecord>;
+  cancelTask?: (taskId: string, reason: string) => Promise<TaskRecord>;
   completeTask: (taskId: string, reply: string) => Promise<TaskRecord>;
   dispatchTrace: (content: string) => Promise<{ submissionId: string }>;
   awaitTraceResult?: (
@@ -151,18 +152,22 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
   return {
     name: "dispatch_task",
     description:
-      "Create an independent task for another agent. Returns a stable task ID; include all context and relevant workspace file paths. After dispatching, stop the turn and wait for the result before claiming completion.",
+      "Create an independent task for another agent. Returns a stable task ID; include all context and relevant workspace file paths. To replace your own pending task, pass supersedes_task_id so the old execution is cancelled before the replacement is dispatched. After dispatching, stop the turn and wait for the result before claiming completion.",
     parameters: {
       type: "object",
       properties: {
         content: { type: "string", minLength: 1, description: "Self-contained task and acceptance criteria" },
         to: { type: "string", description: "Target agent name" },
+        supersedes_task_id: { type: "string", description: "Optional pending task created by this agent to cancel before replacement" },
+        supersede_reason: { type: "string", description: "Optional user-facing reason for replacing the task" },
       },
       required: ["content", "to"],
     },
     execute: async (params: Record<string, unknown>) => {
       const to = String(params.to ?? "").trim();
       const content = String(params.content ?? "").trim();
+      const supersedesTaskId = String(params.supersedes_task_id ?? "").trim();
+      const supersedeReason = String(params.supersede_reason ?? "").trim() || `Superseded by a replacement task from ${deps.fromAgent}.`;
       if (!to || !content) return { ...ok("to and content are required"), isError: true };
       if (to === deps.fromAgent) return { ...ok("cannot dispatch a task to yourself"), isError: true };
       if (to === "trace") return { ...ok("cannot dispatch user tasks to the trace agent"), isError: true };
@@ -171,6 +176,10 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
       }
       try {
         await deps.ensureAgent(to);
+        if (supersedesTaskId) {
+          if (!deps.cancelTask) return { ...ok("task cancellation is unavailable"), isError: true };
+          await deps.cancelTask(supersedesTaskId, supersedeReason);
+        }
         const task = await deps.dispatchTask(to, content);
         deps.wakeAgent(to);
         return ok(
@@ -181,6 +190,33 @@ export function createDispatchTaskTool(deps: ToolDeps): SystemTool {
           return { ...ok(`cannot dispatch to ${to}: ${err.message}`), isError: true };
         }
         return { ...ok(`cannot dispatch task: ${(err as Error).message}`), isError: true };
+      }
+    },
+  };
+}
+
+export function createCancelTaskTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "cancel_task",
+    description: "Cancel one pending task that you created, stop its active assignee/children, and prevent redelivery after restart.",
+    parameters: {
+      type: "object",
+      properties: {
+        task_id: { type: "string", minLength: 1 },
+        reason: { type: "string", minLength: 1 },
+      },
+      required: ["task_id", "reason"],
+    },
+    execute: async (params) => {
+      const taskId = String(params.task_id ?? "").trim();
+      const reason = String(params.reason ?? "").trim();
+      if (!taskId || !reason) return { ...ok("task_id and reason are required"), isError: true };
+      if (!deps.cancelTask) return { ...ok("task cancellation is unavailable"), isError: true };
+      try {
+        const task = await deps.cancelTask(taskId, reason);
+        return ok(`task ${task.id} cancelled; ${task.assigned_to} will not resume it`);
+      } catch (error) {
+        return { ...ok(`cannot cancel task: ${(error as Error).message}`), isError: true };
       }
     },
   };
@@ -958,6 +994,7 @@ export function allSystemTools(
   // Always-on tools (comms, orchestration, trace primitives).
   const tools: SystemTool[] = [
     createDispatchTaskTool(deps),
+    createCancelTaskTool(deps),
     createCompleteTaskTool(deps),
     createAskUserTool(deps),
     createCreateAgentTool(deps),
@@ -1008,6 +1045,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // graph-only recorder, not a domain reasoner.
   principal: [
     "dispatch_task",
+    "cancel_task",
     "complete_task",
     "create_agent",
     "destroy_agent",
@@ -1034,6 +1072,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   ],
   expert: [
     "dispatch_task",
+    "cancel_task",
     "complete_task",
     "record_trace",
     "skill_search",
@@ -1041,15 +1080,15 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "search_papers_local",
   ],
   librarian: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
+    "dispatch_task", "cancel_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   engineer: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "run_in_background", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
+    "dispatch_task", "cancel_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "run_in_background", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   experimentalist: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "run_in_background", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
+    "dispatch_task", "cancel_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "run_in_background", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   // Auditor reviews scientific deliverables and has no GoT responsibilities.
@@ -1067,6 +1106,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // Writer: needs ask_user to present format/style options before drafting.
   writer: [
     "dispatch_task",
+    "cancel_task",
     "complete_task",
     "record_trace",
     "spawn_subagent",
@@ -1082,6 +1122,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // Default for any other expert-like agent.
   _default: [
     "dispatch_task",
+    "cancel_task",
     "complete_task",
     "record_trace",
     "skill_search",

@@ -104,6 +104,24 @@ describe("SubagentManager", () => {
     await expect(f.manager.waitFor("engineer", [started[0]!.id])).rejects.toThrow("not owned");
   });
 
+  it("makes parent cancellation immediately inactive and terminal", async () => {
+    let release!: () => void;
+    const gate = new Promise<void>((resolve) => { release = resolve; });
+    const f = await fixture({ gate: () => gate });
+    const [started] = await f.manager.startBatch({
+      parentAgent: "engineer",
+      rootRunId: "run-parent",
+      tasks: [{ name: "background", profile: "code-runner", task: "long work" }],
+    });
+    await f.manager.cancelParent("engineer");
+    expect(f.manager.hasActiveExecutions()).toBe(false);
+    expect(f.manager.listForParent("engineer", [started!.id])[0]).toMatchObject({ status: "cancelled" });
+    release();
+    await expect(f.manager.waitFor("engineer", [started!.id])).resolves.toEqual([
+      expect.objectContaining({ status: "cancelled" }),
+    ]);
+  });
+
   it("borrows parent provider capacity only for a synchronous batch", async () => {
     const f = await fixture();
     await f.manager.runBatch({

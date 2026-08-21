@@ -184,7 +184,11 @@ reason and safe fallback instead of inventing a separate failure status.
 If another agent must contribute, create an independent task with
 \`dispatch_task(to="<agent>", content="<self-contained task and acceptance criteria>")\`,
 then stop. Its completion arrives as a \`<task_event>\`; use the result to
-continue whichever assigned task it supports.`;
+continue whichever assigned task it supports. If new information replaces a
+pending task you created, dispatch the replacement with
+\`supersedes_task_id="<old task ID>"\`; use \`cancel_task\` when the old work
+should stop without a replacement. Never leave both the old and revised task
+active.`;
 
 const HANDOFF_PROTOCOL = `## Handoffs
 
@@ -354,7 +358,11 @@ const PI_DELEGATION_BRIEF = `## Delegation
 
 For substantive tasks, state the task, inputs, expected output, and observable
 completion criteria; add constraints only when material. Check the returned
-primary file against the expected output before accepting or forwarding it.`;
+primary file against the expected output before accepting or forwarding it.
+When revised instructions replace a pending delegation, pass its task ID as
+\`supersedes_task_id\` on the replacement \`dispatch_task\`. Use \`cancel_task\`
+to stop pending work that no longer has a replacement; do not leave obsolete
+and revised tasks running together.`;
 
 const PI_RESEARCH_WORKFLOW = `## Mandatory workflow for complete research tasks
 
