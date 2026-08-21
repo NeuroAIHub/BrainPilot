@@ -22,7 +22,32 @@ interface PiExtensionApi {
 }
 
 interface AgentEndLike {
-  messages?: Array<{ role?: string; stopReason?: string }>;
+  messages?: Array<{
+    role?: string;
+    stopReason?: string;
+    content?: string | Array<{ type?: string; text?: string }>;
+  }>;
+}
+
+function messageText(message: NonNullable<AgentEndLike["messages"]>[number]): string {
+  if (typeof message.content === "string") return message.content;
+  if (!Array.isArray(message.content)) return "";
+  return message.content
+    .filter((part) => part?.type === "text" && typeof part.text === "string")
+    .map((part) => part.text)
+    .join("\n");
+}
+
+/** A direct user prohibition wins over the automatic trace reminder. */
+export function explicitlyDeclinesTrace(messages: AgentEndLike["messages"]): boolean {
+  if (!Array.isArray(messages)) return false;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index];
+    if (message?.role !== "user") continue;
+    const text = messageText(message);
+    return /\b(?:do not|don't|never)\s+(?:call|use|invoke)\s+[`'"]?record_trace\b|(?:不要|请勿|不再|无需)(?:调用|使用|执行)?\s*[`'"]?record_trace\b/i.test(text);
+  }
+  return false;
 }
 
 function endedUnsuccessfully(e: AgentEndLike): boolean {
@@ -109,17 +134,21 @@ const SYS = (kind: string, body: string): string =>
 const TRACE_REMINDER = SYS(
   "trace",
   "This run produced a substantive artifact, result, or handoff without record_trace. " +
-    "Record the milestone before finishing.",
+    "Record the milestone before finishing. This is an internal follow-up: do not repeat or revise " +
+    "the user-facing answer. End with exactly <!--NO-RENDER-->trace reminder handled<!--/NO-RENDER--> " +
+    "and no text outside that wrapper.",
 );
 const REPLY_REMINDER = SYS(
   "reply",
   "Act on the pending assigned task: complete_task with its exact ID, or dispatch_task if another agent must contribute. " +
-    "If the work produced a substantive artifact or decision, record it first with record_trace.",
+    "If the work produced a substantive artifact or decision, record it first with record_trace. " +
+    "Do not repeat the user-facing answer; end with exactly <!--NO-RENDER-->task reminder handled<!--/NO-RENDER-->.",
 );
 const MERGED_REMINDER = SYS(
   "merged",
   "Before finishing, record the substantive milestone with record_trace and complete the pending task " +
-    "with complete_task using its exact ID.",
+    "with complete_task using its exact ID. Do not repeat the user-facing answer; end with exactly " +
+    "<!--NO-RENDER-->coordination reminder handled<!--/NO-RENDER-->.",
 );
 interface RunState {
   traced: boolean;
@@ -204,7 +233,7 @@ export function makeTraceReminderExt(deps: TraceReminderDeps): (pi: PiExtensionA
         return;
       }
 
-      const needTrace = state.traceWorthy && !state.traced;
+      const needTrace = state.traceWorthy && !state.traced && !explicitlyDeclinesTrace(e.messages);
       const needReply =
         (deps.hasPendingTasks?.() ?? false) &&
         !state.dispatched;

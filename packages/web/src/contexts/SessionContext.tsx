@@ -7,6 +7,7 @@ import { useAuth } from "./AuthContext";
 import { useSandbox } from "./SandboxContext";
 import { useSSE } from "./SSEContext";
 import { draftStore } from "./draftStore";
+import { attachmentStore } from "../components/chat/attachmentScopes";
 import { defaultFilterRules, isNonFatalAgentErrorMessage, HIDE_NON_FATAL_AGENT_ERRORS } from "./messageFilters";
 import {
   clearLastSessionId,
@@ -87,7 +88,7 @@ interface SessionContextValue {
   /** Reports whether Pi accepted the message and whether it entered the
    * in-flight follow-up queue. The composer keeps queued messages above the
    * input until their user-message SSE event confirms actual injection. */
-  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources; thinkingLevel?: ThinkingLevel }) => Promise<{ ok: boolean; queued?: boolean; messageId?: string }>;
+  sendPrompt: (content: string, opts?: { providerId?: string; modelId?: string; domainResources?: DomainResources; thinkingLevel?: ThinkingLevel }) => Promise<{ ok: boolean; queued?: boolean; messageId?: string; sessionId?: string }>;
   interruptCurrent: () => Promise<void>;
   interruptSubagent: (childId: string) => Promise<boolean>;
   interruptTool: (toolCallId: string) => Promise<void>;
@@ -452,6 +453,8 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         preferredId: loadLastSessionId(),
         currentSessionId: currentSessionIdRef.current,
         isDraft: isDraftRef.current,
+        hasRecoverableDraft:
+          draftStore.has(DRAFT_SESSION_ID) || attachmentStore.has(DRAFT_SESSION_ID),
       });
       setIsDraft(resolved.isDraft);
       setCurrentSessionId(resolved.sessionId);
@@ -625,6 +628,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Drop any unsent draft so re-creating a session with the same id (rare,
       // but possible) doesn't resurrect stale text.
       draftStore.delete(sessionId);
+      attachmentStore.delete(sessionId);
       hydratedSessionsRef.current.delete(sessionId);
     } catch (err) {
       setError(err instanceof Error ? err.message : tg("ctx.session.deleteFailed"));
@@ -685,6 +689,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const sendPrompt = useCallback(
     async (content: string, opts: { providerId?: string; modelId?: string; domainResources?: DomainResources; thinkingLevel?: ThinkingLevel } = {}) => {
       const trimmed = content.trim();
+      let targetSessionId = currentSession?.id;
       console.log(`[SessionContext] sendPrompt: "${trimmed.slice(0, 40)}...", isConnected=${isConnected}, isDraft=${isDraft}`);
       if (!trimmed) {
         return { ok: false };
@@ -708,13 +713,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (!session) {
           return { ok: false };
         }
+        targetSessionId = session.id;
         // Freshly created (draft → persisted): open the SSE stream so the
         // assistant's streamed reply is received.
         if (!currentSession) {
           connectSession(session.id);
-          // Migrate any draft text the composer stored under the sentinel id
-          // so a tab switch mid-send doesn't lose it.
+          // The composer has captured the submitted values. Clear the sentinel
+          // scope now; if postMessage fails, sendPrompt returns session.id so
+          // the composer restores those values under the real conversation.
           draftStore.delete(DRAFT_SESSION_ID);
+          attachmentStore.delete(DRAFT_SESSION_ID);
         }
 
         const timestamp = new Date().toISOString();
@@ -744,7 +752,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           });
         }
         console.log(`[SessionContext] postMessage success`);
-        return { ok: true, queued: result.queued === true, messageId: uuid };
+        return { ok: true, queued: result.queued === true, messageId: uuid, sessionId: session.id };
       } catch (err) {
         console.error(`[SessionContext] sendPrompt error:`, err);
         // AbortSignal.timeout() rejects with a TimeoutError (and a hard abort
@@ -761,7 +769,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
               ? err.message
               : tg("ctx.session.sendFailed"),
         );
-        return { ok: false };
+        return { ok: false, sessionId: targetSessionId };
       } finally {
         setIsSending(false);
       }

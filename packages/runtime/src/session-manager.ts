@@ -326,6 +326,8 @@ interface SessionEntry {
   deliveryErrors: Map<string, number>;
   runActive: boolean;
   activeRunId: string | null;
+  /** User turn that owns aggregate background work after Principal settles. */
+  turnRunId: string | null;
   /** One visible ask_user plus FIFO requests waiting behind it. */
   userInputs: UserInputArbiter;
   /** This session's chosen provider/model (resolved against providers.json). */
@@ -919,8 +921,8 @@ export class SessionManager {
    * attached in the draft composer *before* the real session exists. They land
    * in `workspaces/local/` — but the agent's cwd is `workspaces/<sessionId>/`,
    * so without this it can't read the file the user just attached. We treat
-   * `workspaces/local/` as a staging area and drain it into the real session
-   * workspace right before the agent runs (see drainLocalUploads).
+   * `workspaces/local/` as a staging area and drain it when the real session is
+   * created (see drainLocalUploads).
    */
   private static readonly UPLOAD_STAGING_SID = "local";
   /**
@@ -1309,7 +1311,8 @@ export class SessionManager {
    * real session's workspace so the agent — whose cwd is `workspaces/<sid>/` —
    * can read files the user attached in the draft composer (when no real
    * session id existed yet, the web uploads against the literal `"local"`
-   * sandbox id). Called right before the agent runs.
+   * sandbox id). Called while the real session is created, before the first
+   * message post can fail.
    *
    * Move semantics: each staged entry is renamed into the session workspace
    * (an existing same-named entry in the session is left untouched and the
@@ -1625,6 +1628,7 @@ export class SessionManager {
       deliveryErrors: new Map(),
       runActive: false,
       activeRunId: null,
+      turnRunId: null,
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       thinkingLevel,
@@ -1687,6 +1691,9 @@ export class SessionManager {
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
     await subagents.restore();
+    if (!_restore) {
+      await this.drainLocalUploads(id);
+    }
     this.emitTaskSnapshot(entry);
     if (_restore) {
       for (const target of taskLedger.notificationTargets()) this.wakeAgent(id, target);
@@ -1853,10 +1860,6 @@ export class SessionManager {
       return { accepted: false };
     }
     const agent = await this.ensureAgent(sessionId, agentName);
-    // #60: pull any composer uploads staged under workspaces/local/ into this
-    // session's workspace (the agent's cwd) before it runs, so it can read the
-    // file the user just attached. No-op when nothing was staged.
-    await this.drainLocalUploads(sessionId);
 
     // Snapshot user/Bench-provided inputs before the first agent prompt. Without
     // this baseline the first record_trace diffs against Git's empty tree and
@@ -1914,7 +1917,7 @@ export class SessionManager {
     // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
     if (agent.isStreaming) {
       const runId = entry.activeRunId ?? undefined;
-      void agent.followUp(content, opts.uuid ?? randomUUID()).finally(() => {
+      void agent.followUp(content, opts.uuid ?? randomUUID(), { messageRunId: runId }).finally(() => {
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
         }
@@ -1942,6 +1945,7 @@ export class SessionManager {
     entry.runActive = agentName === "principal";
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
+    if (agentName === "principal") entry.turnRunId = runId;
     // #70: emit an initial session_state frame here — onStatusChange only fires
     // on a status *change*, and ensureAgent creates the agent as idle without
     // emitting, so without this the panel stays empty until the first
@@ -2283,6 +2287,12 @@ export class SessionManager {
     ) {
       return false;
     }
+    // Capture the user turn before cancelling ask_user or aborting agents. Both
+    // can unwind the Principal and clear activeRunId before the acknowledgement
+    // is emitted, while background work still belongs to the same user turn.
+    const interruptedTurnId = wholeSession
+      ? entry.turnRunId ?? entry.activeRunId ?? undefined
+      : entry.activeRunId ?? undefined;
     // Reject any pending ask_user FIRST: a prompt blocked awaiting user input
     // would never settle, so abort()'s waitForIdle (#101) must not run before
     // these are unblocked or it would deadlock.
@@ -2292,9 +2302,7 @@ export class SessionManager {
       "interrupted",
       !wholeSession,
     );
-    // Capture run identity before aborts clear agent state so the interrupt
-    // acknowledgement can carry a stable id for client hydrate dedupe (#330).
-    const interruptEventId = `interrupt:${sessionId}:${entry.activeRunId ?? randomUUID()}`;
+    const interruptEventId = `interrupt:${sessionId}:${interruptedTurnId ?? randomUUID()}`;
     // Fence new delivery-loop iterations before waiting for in-flight prompts
     // to unwind. The batch already being processed may settle, but later queued
     // events remain durable for the next explicit user turn.
@@ -2319,6 +2327,7 @@ export class SessionManager {
           agent: "principal",
           recoverable: true,
           id: interruptEventId,
+          runId: interruptedTurnId,
         }),
       );
       this.touch(entry);
@@ -2993,7 +3002,7 @@ export class SessionManager {
         if (agent.isStreaming) {
           // The notification is already durable. Queue it into the active Pi
           // run, then fence that run before acknowledging the batch.
-          await agent.followUpAndWait(deliveryInput);
+          await agent.followUpAndWait(deliveryInput, { terminalErrors: false });
           ran = true;
         } else {
           // #167: cap new provider runs across experts in this session.
@@ -3004,8 +3013,11 @@ export class SessionManager {
             if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
             // A user run can start while this delivery waits for a provider
             // slot. Inject rather than racing it with a second plain prompt.
-            if (agent.isStreaming) await agent.followUpAndWait(deliveryInput);
-            else await agent.prompt(deliveryInput);
+            if (agent.isStreaming) {
+              await agent.followUpAndWait(deliveryInput, { terminalErrors: false });
+            } else {
+              await agent.prompt(deliveryInput, { terminalErrors: false });
+            }
             return true;
           });
         }
@@ -3055,7 +3067,7 @@ export class SessionManager {
           entry.id,
           "error",
           `Agent "${name}" 未产生可确认的运行结果，已保留任务事件并暂停投递。`,
-          { agent: name, recoverable: true },
+          { agent: name, recoverable: true, terminal: true },
         ));
         return;
       }
@@ -3140,7 +3152,12 @@ export class SessionManager {
       entry.id,
       "error",
       `Monitor "${batch.description}" ${reason}，已停止该 Monitor 并丢弃 ${discarded} 个待投递批次。`,
-      { agent: name, recoverable: true },
+      {
+        agent: name,
+        details: agent.state().lastError?.message,
+        recoverable: true,
+        terminal: agent.lastRunOutcome === "error",
+      },
     ));
     return false;
   }
@@ -3188,7 +3205,7 @@ export class SessionManager {
         kind === "fatal"
           ? `专家 "${name}" 发生无法自动恢复的错误，已通知任务派遣者。`
           : `专家 "${name}" 连续 ${count} 次执行失败，已通知任务派遣者。`,
-        { agent: name, recoverable: true },
+        { agent: name, details: headline, recoverable: true, terminal: true },
       ),
     );
     // Preserve every event from the failed batch, including completed child
@@ -3222,7 +3239,12 @@ export class SessionManager {
         entry.id,
         "error",
         `Agent "${name}" 无法处理待投递任务事件，已暂停自动投递；下一条用户消息将恢复。`,
-        { agent: name, recoverable: true },
+        {
+          agent: name,
+          details: agent.state().lastError?.message,
+          recoverable: true,
+          terminal: true,
+        },
       ),
     );
     return false;
@@ -3344,10 +3366,12 @@ export class SessionManager {
    * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
    */
   private emitSessionState(entry: SessionEntry): void {
+    const runActive = this.deriveRunActive(entry);
+    const workActive = this.deriveWorkActive(entry);
     entry.bus.emit(
       ev.custom({ sessionId: entry.id }, "session_state", {
-        runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
-        workState: { active: this.deriveWorkActive(entry) },
+        runState: { active: runActive, runId: entry.activeRunId },
+        workState: { active: workActive },
         agents: this.listAgents(entry.id),
         subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3355,6 +3379,7 @@ export class SessionManager {
         tokenUsage: entry.tokenUsage,
       }),
     );
+    if (!workActive) entry.turnRunId = null;
   }
 
   private emitTaskSnapshot(entry: SessionEntry): void {
@@ -3449,6 +3474,7 @@ export class SessionManager {
       const plan = entry.trace.getCausalRollbackPlan(nodeId);
       if (!plan) return undefined;
       const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+      const restorePreview = await entry.checkpoints.previewCausal(checkpointIds);
       await entry.checkpoints.restoreCausal(checkpointIds, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
         this.emitTaskSnapshot(entry);
@@ -3461,6 +3487,24 @@ export class SessionManager {
         reason: `Revoked ${plan.affectedNodeIds.length} causal descendants.`,
         metadata: { affectedNodeIds: plan.affectedNodeIds },
       });
+      await entry.bus.emitDurable(ev.systemMessage(
+        sessionId,
+        "info",
+        "Workspace rolled back to an earlier Trace state.",
+        {
+          id: `workspace-restore:${change.id}`,
+          code: "workspace_restored",
+          metadata: {
+            mode: "causal",
+            nodeId,
+            changeId: change.id,
+            restoredAt: new Date().toISOString(),
+            files: restorePreview.files.map((file) => file.path),
+            fileCount: restorePreview.files.length,
+            affectedNodeCount: plan.affectedNodeIds.length,
+          },
+        },
+      ));
       return { nodeId, affectedNodeIds: plan.affectedNodeIds, changeId: change.id };
     } catch (error) {
       if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
@@ -3476,6 +3520,8 @@ export class SessionManager {
     this.beginWorkspaceOperation(entry, "restore");
     let releaseWorkspace = true;
     try {
+      const restorePreview = await entry.checkpoints.preview(checkpointId);
+      if (!restorePreview) return undefined;
       const restored = await entry.checkpoints.restore(checkpointId, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
         this.emitTaskSnapshot(entry);
@@ -3490,6 +3536,24 @@ export class SessionManager {
         reason: `Restored workspace checkpoint ${checkpointId}.`,
         metadata: { restoredCheckpointId: checkpointId },
       });
+      await entry.bus.emitDurable(ev.systemMessage(
+        sessionId,
+        "info",
+        "Workspace restored to an earlier checkpoint.",
+        {
+          id: `workspace-restore:${change.id}`,
+          code: "workspace_restored",
+          metadata: {
+            mode: "checkpoint",
+            checkpointId,
+            nodeId: targetNode?.id,
+            changeId: change.id,
+            restoredAt: new Date().toISOString(),
+            files: restorePreview.files.map((file) => file.path),
+            fileCount: restorePreview.files.length,
+          },
+        },
+      ));
       return { ...restored, changeId: change.id };
     } catch (error) {
       if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;

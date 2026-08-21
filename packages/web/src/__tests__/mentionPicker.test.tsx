@@ -40,8 +40,17 @@ describe("MentionPicker — #316 markup", () => {
         id: "file:/workspace/a.py",
         kind: "file",
         label: "a.py",
-        detail: "/workspace/a.py",
+        detail: "Current session · /workspace/a.py",
         insertion: "`/workspace/a.py` ",
+        selectable: true,
+        group: "files",
+      },
+      {
+        id: "file:/data/a.py",
+        kind: "file",
+        label: "a.py",
+        detail: "Persistent library · /data/a.py",
+        insertion: "`/data/a.py` ",
         selectable: true,
         group: "files",
       },
@@ -53,6 +62,8 @@ describe("MentionPicker — #316 markup", () => {
     expect(html).toContain("Files");
     expect(html).toContain("filesystem");
     expect(html).toContain("a.py");
+    expect(html).toContain("Current session · /workspace/a.py");
+    expect(html).toContain("Persistent library · /data/a.py");
     expect(html).toContain('aria-selected="true"');
     expect(html).toContain('role="option"');
   });

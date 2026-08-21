@@ -24,6 +24,12 @@ interface SystemMsg {
   level: string;
   text: string;
   agent?: string;
+  terminal?: boolean;
+}
+
+interface RunError {
+  agent?: string;
+  terminal?: boolean;
 }
 
 /** Per-agent script: decide each prompt's outcome (ok / error with a raw blob). */
@@ -184,8 +190,8 @@ describe("delivery error path (#97)", () => {
     const sys: SystemMsg[] = [];
     m.subscribe(s.id, (e) => {
       if (e.type === "system_message") {
-        const v = e as { level?: string; message?: string; agent?: string };
-        sys.push({ level: v.level ?? "", text: v.message ?? "", agent: v.agent });
+        const v = e as { level?: string; message?: string; agent?: string; terminal?: boolean };
+        sys.push({ level: v.level ?? "", text: v.message ?? "", agent: v.agent, terminal: v.terminal });
       }
     });
 
@@ -206,6 +212,7 @@ describe("delivery error path (#97)", () => {
     const error = sys.find((x) => x.level === "error" && x.text.includes("已通知任务派遣者"));
     expect(error!.text).toContain("连续");
     expect(error!.text).toContain("librarian");
+    expect(error!.terminal).toBe(true);
 
     // librarian was prompted 3 times (initial + 2 self-retries).
     const libPrompts = observe.prompts.filter((p) => p.agent === "librarian");
@@ -231,10 +238,14 @@ describe("delivery error path (#97)", () => {
     const s = await m.createSession();
 
     const sys: SystemMsg[] = [];
+    const runErrors: RunError[] = [];
     m.subscribe(s.id, (e) => {
       if (e.type === "system_message") {
-        const v = e as { level?: string; message?: string };
-        sys.push({ level: v.level ?? "", text: v.message ?? "" });
+        const v = e as { level?: string; message?: string; agent?: string; terminal?: boolean };
+        sys.push({ level: v.level ?? "", text: v.message ?? "", agent: v.agent, terminal: v.terminal });
+      } else if (e.type === "RUN_ERROR") {
+        const v = e as { agent_name?: string; terminal?: boolean };
+        runErrors.push({ agent: v.agent_name, terminal: v.terminal });
       }
     });
 
@@ -246,6 +257,8 @@ describe("delivery error path (#97)", () => {
     expect(sys.filter((x) => x.level === "warning" && x.text.includes("正在自动重试")).length).toBe(0);
     const error = sys.find((x) => x.level === "error" && x.text.includes("已通知任务派遣者"));
     expect(error!.text).toContain("无法自动恢复");
+    expect(error!.terminal).toBe(true);
+    expect(runErrors).toEqual([{ agent: "librarian", terminal: false }]);
 
     // librarian prompted exactly once (no self-retry).
     expect(observe.prompts.filter((p) => p.agent === "librarian").length).toBe(1);
@@ -324,10 +337,14 @@ describe("delivery error path (#97)", () => {
     const s = await m.createSession();
 
     const sys: SystemMsg[] = [];
+    const runErrors: RunError[] = [];
     m.subscribe(s.id, (e) => {
       if (e.type === "system_message") {
-        const v = e as { level?: string; message?: string };
-        sys.push({ level: v.level ?? "", text: v.message ?? "" });
+        const v = e as { level?: string; message?: string; agent?: string; terminal?: boolean };
+        sys.push({ level: v.level ?? "", text: v.message ?? "", agent: v.agent, terminal: v.terminal });
+      } else if (e.type === "RUN_ERROR") {
+        const v = e as { agent_name?: string; terminal?: boolean };
+        runErrors.push({ agent: v.agent_name, terminal: v.terminal });
       }
     });
 
@@ -341,6 +358,8 @@ describe("delivery error path (#97)", () => {
     // No escalation lifecycle error (MasAgent's own per-attempt raw bubble may
     // exist, but OUR "已上报主管" escalation must not).
     expect(sys.some((x) => x.level === "error" && x.text.includes("已通知任务派遣者"))).toBe(false);
+    expect(sys.some((x) => x.agent === "librarian" && x.terminal === true)).toBe(false);
+    expect(runErrors).toEqual([{ agent: "librarian", terminal: false }]);
     // No escalation note to the principal.
     expect(observe.prompts.some((p) => p.agent === "principal" && p.text.includes("failed while task"))).toBe(false);
   });

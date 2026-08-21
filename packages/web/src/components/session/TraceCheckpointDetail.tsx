@@ -2,6 +2,7 @@ import { AlertTriangle, FileDiff, GitCommit, Loader2, RotateCcw } from "lucide-r
 import { useEffect, useMemo, useState } from "react";
 import type { TraceCausalRollbackPreview, TraceCheckpointDetail, TraceCheckpointRef, TraceNode, TraceRestorePreview } from "../../contracts/backend";
 import { api } from "../../utils/api";
+import { restoreErrorMessage } from "./restoreError";
 
 interface Props {
   node: TraceNode;
@@ -85,10 +86,9 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     try {
       await api.sessions.restoreTraceCheckpoint(sessionId, value.checkpointId, value.stateToken);
       setPreview(null);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
       await onRestored?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(restoreErrorMessage(reason, t));
       setPreview(null);
     } finally {
       setLoading(false);
@@ -115,10 +115,9 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     try {
       await api.sessions.rollbackTraceNode(sessionId, node.id, value.stateToken);
       setCausalPreview(null);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
       await onRestored?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(restoreErrorMessage(reason, t));
       setCausalPreview(null);
     } finally {
       setLoading(false);
@@ -204,9 +203,21 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
             files: causalPreview.files.length,
           })}</p>
           {causalPreview.conflicts.length ? (
-            <p className="trace-checkpoint__error">
-              <AlertTriangle size={13} /> {t("trace.checkpoint.causalConflicts", { count: causalPreview.conflicts.length })}
-            </p>
+            <div className="trace-checkpoint__conflicts" role="alert">
+              <p className="trace-checkpoint__error">
+                <AlertTriangle size={13} /> {t("trace.checkpoint.causalConflicts", { count: causalPreview.conflicts.length })}
+              </p>
+              <p>{t("trace.checkpoint.conflictGuidance")}</p>
+              <strong>{t("trace.checkpoint.conflictFiles")}</strong>
+              <ul>
+                {causalPreview.conflicts.map((conflict) => (
+                  <li key={`${conflict.path}:${conflict.checkpointIds.join(":")}`}>
+                    <code>{conflict.path}</code>
+                    <small>{conflict.reason}</small>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           <div>
             <button type="button" onClick={() => setCausalPreview(null)}>{t("trace.checkpoint.cancel")}</button>

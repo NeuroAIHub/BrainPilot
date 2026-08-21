@@ -246,6 +246,8 @@ export const RunErrorEventSchema = z
     type: z.literal("RUN_ERROR"),
     message: z.string(),
     code: z.string().default("RUNTIME_ERROR"),
+    /** False when an outer delivery loop still owns retry/escalation. */
+    terminal: z.boolean().optional(),
     run_id: z.string().optional(),
   })
   .passthrough();
@@ -443,6 +445,19 @@ export type AgentStatusUpdateEvent = z.infer<typeof AgentStatusUpdateEventSchema
 export const SystemMessageLevelSchema = z.enum(["info", "warning", "error", "fatal"]);
 export type SystemMessageLevel = z.infer<typeof SystemMessageLevelSchema>;
 
+/** Typed payload for a durable workspace restore history event (#492). */
+export const WorkspaceRestoreEventMetadataSchema = z.object({
+  mode: z.enum(["checkpoint", "causal"]),
+  checkpointId: z.string().optional(),
+  nodeId: z.string().optional(),
+  changeId: z.string().optional(),
+  restoredAt: z.string().optional(),
+  files: z.array(z.string()),
+  fileCount: z.number().int().nonnegative(),
+  affectedNodeCount: z.number().int().nonnegative().optional(),
+});
+export type WorkspaceRestoreEventMetadata = z.infer<typeof WorkspaceRestoreEventMetadataSchema>;
+
 export const SystemMessageEventSchema = z
   .object({
     type: z.literal("system_message"),
@@ -458,6 +473,14 @@ export const SystemMessageEventSchema = z
     timestamp: z.string(),
     /** fatal = red flashing background; affects frontend styling. */
     recoverable: z.boolean(),
+    /** Terminal run failure; the frontend must keep this recovery card visible. */
+    terminal: z.boolean().optional(),
+    /** Durable user-turn identity for lifecycle acknowledgements such as Stop. */
+    run_id: z.string().optional(),
+    /** Stable product-level message code. */
+    code: z.string().optional(),
+    /** Structured workspace-restore metadata. */
+    metadata: WorkspaceRestoreEventMetadataSchema.optional(),
   })
   .passthrough();
 export type SystemMessageEvent = z.infer<typeof SystemMessageEventSchema>;

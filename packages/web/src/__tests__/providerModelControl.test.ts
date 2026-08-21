@@ -19,13 +19,22 @@ describe("ProviderModelControl focus management", () => {
   });
 
   it("restores focus only while the trigger is still mounted", () => {
-    const mounted = { focus: vi.fn(), isConnected: true } as unknown as HTMLElement;
-    const removed = { focus: vi.fn(), isConnected: false } as unknown as HTMLElement;
+    const mounted = {
+      closest: vi.fn(() => null),
+      focus: vi.fn(),
+      isConnected: true,
+    } as unknown as HTMLElement;
+    const removed = {
+      closest: vi.fn(() => null),
+      focus: vi.fn(),
+      isConnected: false,
+    } as unknown as HTMLElement;
+    const schedule = (callback: () => void) => callback();
 
-    restoreProviderModelFocus(mounted);
-    restoreProviderModelFocus(removed);
+    restoreProviderModelFocus(mounted, schedule);
+    restoreProviderModelFocus(removed, schedule);
 
-    expect(mounted.focus).toHaveBeenCalledOnce();
+    expect(mounted.focus).toHaveBeenCalledWith({ preventScroll: true });
     expect(removed.focus).not.toHaveBeenCalled();
   });
 });
