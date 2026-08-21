@@ -9,7 +9,31 @@ export type WorkspaceFileLocation = Pick<Location, "pathname" | "search" | "hash
 
 const EXTERNAL_SCHEME = /^[a-z][a-z0-9+.-]*:/i;
 const MANAGED_ROOTS = ["/workspace", "/data"] as const;
-const APPLICATION_ROUTE_ROOTS = new Set(["api", "assets", "sessions"]);
+const APPLICATION_ROUTE_ROOTS = new Set([
+  "account",
+  "api",
+  "app",
+  "assets",
+  "bench",
+  "demos",
+  "feedback",
+  "sessions",
+]);
+
+export function shouldResetWorkspaceFileLocation(input: {
+  location: WorkspaceFileLocation;
+  previousSessionId: string | null | undefined;
+  nextSessionId: string | null | undefined;
+  hasInitialTarget: boolean;
+  initialTargetHandled: boolean;
+}): boolean {
+  if (input.previousSessionId === input.nextSessionId) return false;
+  if (!/^\/sessions\/[^/]+\/files\/?$/.test(input.location.pathname)) return false;
+  // Preserve a copied deep link until its owning session and file have been
+  // selected once. Every later session/draft transition must leave that route
+  // so Files state from the previous conversation cannot leak into the next.
+  return !input.hasInitialTarget || input.initialTargetHandled;
+}
 
 function parseLineHash(hash: string): number | undefined {
   const lineMatch = /^(?:#)?(?:L|line-?)(\d+)$/i.exec(hash);

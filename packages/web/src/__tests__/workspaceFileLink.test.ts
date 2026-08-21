@@ -4,6 +4,7 @@ import {
   parseWorkspaceFileHref,
   parseWorkspaceFileLocation,
   resolveWorkspaceFileSession,
+  shouldResetWorkspaceFileLocation,
 } from "../components/chat/workspaceFileLink";
 
 describe("parseWorkspaceFileHref", () => {
@@ -85,9 +86,44 @@ describe("workspace file deep links", () => {
   });
 
   it("does not mistake application routes or traversal for legacy files", () => {
-    for (const pathname of ["/api/sessions", "/assets/index.js", "/sessions/abc/files", "/../etc/passwd"]) {
+    for (const pathname of [
+      "/app",
+      "/account/login",
+      "/demos/example",
+      "/bench",
+      "/feedback",
+      "/api/sessions",
+      "/assets/index.js",
+      "/sessions/abc/files",
+      "/../etc/passwd",
+    ]) {
       expect(parseWorkspaceFileLocation({ pathname, search: "", hash: "" })).toBeNull();
     }
+  });
+
+  it("clears an old Files route after switching conversation but preserves initial deep links", () => {
+    const location = { pathname: "/sessions/old/files", search: "?path=%2Fworkspace%2Freport.md", hash: "" };
+    expect(shouldResetWorkspaceFileLocation({
+      location,
+      previousSessionId: "old",
+      nextSessionId: null,
+      hasInitialTarget: true,
+      initialTargetHandled: true,
+    })).toBe(true);
+    expect(shouldResetWorkspaceFileLocation({
+      location,
+      previousSessionId: null,
+      nextSessionId: "old",
+      hasInitialTarget: true,
+      initialTargetHandled: false,
+    })).toBe(false);
+    expect(shouldResetWorkspaceFileLocation({
+      location: { pathname: "/app", search: "", hash: "" },
+      previousSessionId: "old",
+      nextSessionId: "new",
+      hasInitialTarget: false,
+      initialTargetHandled: false,
+    })).toBe(false);
   });
 
   it("honors canonical session ownership and resolves legacy URLs against the active session", () => {
