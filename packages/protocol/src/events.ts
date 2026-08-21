@@ -475,6 +475,8 @@ export const SystemMessageEventSchema = z
     recoverable: z.boolean(),
     /** Terminal run failure; the frontend must keep this recovery card visible. */
     terminal: z.boolean().optional(),
+    /** Durable user-turn identity for lifecycle acknowledgements such as Stop. */
+    run_id: z.string().optional(),
     /** Stable product-level message code. */
     code: z.string().optional(),
     /** Structured workspace-restore metadata. */

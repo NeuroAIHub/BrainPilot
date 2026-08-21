@@ -58,6 +58,48 @@ export type TurnTimerEvent =
   | { type: "reset" };
 
 /**
+ * Bind one timer state to the session that owns it. React runs every passive
+ * effect from a render before applying effect-triggered reducer updates, so a
+ * bare timer state can otherwise be persisted under the next session key
+ * during an A → B switch.
+ */
+export interface SessionTurnTimerState {
+  sessionKey: string | null;
+  timer: TurnTimerState;
+}
+
+export type HydratedTurnTiming = {
+  turnId: string;
+  durationMs: number;
+  status: "completed" | "interrupted";
+};
+
+export type SessionTurnTimerEvent =
+  | { type: "switchSession"; sessionKey: string | null; hydrated?: HydratedTurnTiming }
+  | { type: "timer"; sessionKey: string | null; event: TurnTimerEvent };
+
+export const initialSessionTurnTimerState: SessionTurnTimerState = {
+  sessionKey: null,
+  timer: initialTurnTimerState,
+};
+
+export function sessionTurnTimerReducer(
+  state: SessionTurnTimerState,
+  event: SessionTurnTimerEvent,
+): SessionTurnTimerState {
+  if (event.type === "switchSession") {
+    const timer = event.hydrated
+      ? turnTimerReducer(initialTurnTimerState, { type: "hydrate", ...event.hydrated })
+      : initialTurnTimerState;
+    return { sessionKey: event.sessionKey, timer };
+  }
+  // A stale timeout/effect from the previous session must never mutate the
+  // newly selected session's timer.
+  if (event.sessionKey !== state.sessionKey) return state;
+  return { ...state, timer: turnTimerReducer(state.timer, event.event) };
+}
+
+/**
  * Advance the turn-timer state machine. Pure: returns the next state. The host
  * is responsible for (re)arming the settle timer whenever `candidateEndAt`
  * becomes non-null, and dispatching `{type:"settle"}` after `settleMs`.

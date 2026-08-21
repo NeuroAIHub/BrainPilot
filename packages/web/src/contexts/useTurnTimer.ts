@@ -15,8 +15,9 @@
 import { useEffect, useReducer, useRef, useState } from "react";
 import type { ChatMessage } from "../contracts/backend";
 import {
-  turnTimerReducer,
-  initialTurnTimerState,
+  initialSessionTurnTimerState,
+  sessionTurnTimerReducer,
+  type TurnTimerEvent,
   type TurnTimerState,
 } from "./turnTimer";
 
@@ -70,42 +71,49 @@ interface UseTurnTimerOptions {
 
 export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
   const { runActive, turn, interruption, resetKey, settleMs = DEFAULT_SETTLE_MS, now = Date.now } = options;
-  const [state, dispatch] = useReducer(turnTimerReducer, initialTurnTimerState);
+  const sessionKey = resetKey ?? null;
+  const [ownedState, dispatch] = useReducer(sessionTurnTimerReducer, initialSessionTurnTimerState);
+  const state = ownedState.timer;
   const settleRef = useRef<number | undefined>(undefined);
   const seenTurnRef = useRef<string | null>(null);
   const seenInterruptRef = useRef<string | null>(null);
   const mountedAtRef = useRef(Date.now());
   const [, forceTick] = useState(0);
+  const dispatchTimer = (event: TurnTimerEvent) => dispatch({ type: "timer", sessionKey, event });
 
   // Reset when the session changes.
   useEffect(() => {
     mountedAtRef.current = Date.now();
     seenTurnRef.current = null;
     seenInterruptRef.current = null;
-    dispatch({ type: "reset" });
-    if (!resetKey) return;
+    let hydrated: { turnId: string; durationMs: number; status: "completed" | "interrupted" } | undefined;
+    if (!sessionKey) {
+      dispatch({ type: "switchSession", sessionKey: null });
+      return;
+    }
     try {
-      const raw = window.sessionStorage.getItem(`brainpilot:turn-timing:${resetKey}`);
-      if (!raw) return;
-      const stored = JSON.parse(raw) as { turnId?: unknown; durationMs?: unknown; status?: unknown };
-      if (
-        typeof stored.turnId === "string"
-        && typeof stored.durationMs === "number"
-        && Number.isFinite(stored.durationMs)
-        && (stored.status === "completed" || stored.status === "interrupted")
-      ) {
-        seenTurnRef.current = stored.turnId;
-        dispatch({
-          type: "hydrate",
-          turnId: stored.turnId,
-          durationMs: stored.durationMs,
-          status: stored.status,
-        });
+      const raw = window.sessionStorage.getItem(`brainpilot:turn-timing:${sessionKey}`);
+      if (raw) {
+        const stored = JSON.parse(raw) as { turnId?: unknown; durationMs?: unknown; status?: unknown };
+        if (
+          typeof stored.turnId === "string"
+          && typeof stored.durationMs === "number"
+          && Number.isFinite(stored.durationMs)
+          && (stored.status === "completed" || stored.status === "interrupted")
+        ) {
+          hydrated = {
+            turnId: stored.turnId,
+            durationMs: stored.durationMs,
+            status: stored.status,
+          };
+          seenTurnRef.current = stored.turnId;
+        }
       }
     } catch {
       // Timing persistence is a progressive enhancement.
     }
-  }, [resetKey]);
+    dispatch({ type: "switchSession", sessionKey, hydrated });
+  }, [sessionKey]);
 
   useEffect(() => {
     if (!turn || turn.id === seenTurnRef.current) return;
@@ -117,18 +125,18 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
       return;
     }
     seenTurnRef.current = turn.id;
-    dispatch({ type: "userInput", atMs: turn.atMs, turnId: turn.id });
-  }, [runActive?.active, turn]);
+    dispatchTimer({ type: "userInput", atMs: turn.atMs, turnId: turn.id });
+  }, [sessionKey, runActive?.active, turn]);
 
   useEffect(() => {
     if (!interruption || interruption.id === seenInterruptRef.current) return;
     seenInterruptRef.current = interruption.id;
-    dispatch({
+    dispatchTimer({
       type: "interrupt",
       atMs: interruption.atMs,
       turnId: interruption.turnId,
     });
-  }, [interruption]);
+  }, [interruption, sessionKey]);
 
   // Feed authoritative active transitions into the reducer.
   useEffect(() => {
@@ -138,8 +146,8 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
     // timing record. Live signals (including a fresh prompt immediately after
     // mount) carry a timestamp at or after this hook's session mount boundary.
     if (isHistoricalTurnSignal(runActive.atMs, mountedAtRef.current)) return;
-    dispatch({ type: "active", value: runActive.active, atMs: runActive.atMs });
-  }, [runActive]);
+    dispatchTimer({ type: "active", value: runActive.active, atMs: runActive.atMs });
+  }, [runActive, sessionKey]);
 
   // Arm/disarm the settle timer based on a pending candidate end.
   const hasCandidate = state.candidateEndAt !== null;
@@ -153,7 +161,7 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
     }
     settleRef.current = window.setTimeout(() => {
       settleRef.current = undefined;
-      dispatch({ type: "settle" });
+      dispatchTimer({ type: "settle" });
     }, settleMs);
     return () => {
       if (settleRef.current !== undefined) {
@@ -161,7 +169,7 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
         settleRef.current = undefined;
       }
     };
-  }, [hasCandidate, settleMs]);
+  }, [hasCandidate, sessionKey, settleMs]);
 
   // Tick once per second while running so the live elapsed advances.
   useEffect(() => {
@@ -171,9 +179,10 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
   }, [state.running]);
 
   useEffect(() => {
-    if (!resetKey || !state.lastTurnId || state.lastDurationMs === null || !state.lastStatus) return;
+    const ownerKey = ownedState.sessionKey;
+    if (!ownerKey || !state.lastTurnId || state.lastDurationMs === null || !state.lastStatus) return;
     try {
-      window.sessionStorage.setItem(`brainpilot:turn-timing:${resetKey}`, JSON.stringify({
+      window.sessionStorage.setItem(`brainpilot:turn-timing:${ownerKey}`, JSON.stringify({
         turnId: state.lastTurnId,
         durationMs: state.lastDurationMs,
         status: state.lastStatus,
@@ -181,7 +190,7 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
     } catch {
       // Ignore disabled/quota-limited storage.
     }
-  }, [resetKey, state.lastDurationMs, state.lastStatus, state.lastTurnId]);
+  }, [ownedState.sessionKey, state.lastDurationMs, state.lastStatus, state.lastTurnId]);
 
   return deriveTiming(state, now);
 }

@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  initialSessionTurnTimerState,
+  sessionTurnTimerReducer,
   turnTimerReducer,
   initialTurnTimerState,
   type TurnTimerState,
@@ -11,6 +13,26 @@ function run(events: Parameters<typeof turnTimerReducer>[1][]): TurnTimerState {
 }
 
 describe("turnTimerReducer (#99 whole-turn timing)", () => {
+  it("keeps timer mutations scoped to their owning session", () => {
+    const sessionA = sessionTurnTimerReducer(initialSessionTurnTimerState, {
+      type: "switchSession",
+      sessionKey: "A",
+      hydrated: { turnId: "run-a", durationMs: 4_200, status: "completed" },
+    });
+    expect(sessionA.timer.lastTurnId).toBe("run-a");
+
+    const sessionB = sessionTurnTimerReducer(sessionA, {
+      type: "switchSession",
+      sessionKey: "B",
+    });
+    expect(sessionB.timer).toEqual(initialTurnTimerState);
+    expect(sessionTurnTimerReducer(sessionB, {
+      type: "timer",
+      sessionKey: "A",
+      event: { type: "hydrate", turnId: "stale-a", durationMs: 9_999, status: "completed" },
+    })).toEqual(sessionB);
+  });
+
   it("times a simple turn: user input → active true → active false → settle", () => {
     const s = run([
       { type: "userInput", atMs: 1000 },
