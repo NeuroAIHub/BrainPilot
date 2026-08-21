@@ -1,12 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
   addScopedAttachment,
+  AttachmentStore,
   attachmentStore,
   clearScopedAttachments,
+  deleteScopedAttachmentFile,
+  reconcileAttachmentScope,
+  reconcileVisibleAttachments,
   removeScopedAttachment,
   restoreScopedAttachmentsIfEmpty,
   type AttachmentsBySession,
 } from "../components/chat/attachmentScopes";
+
+function memoryStorage(): Storage {
+  const values = new Map<string, string>();
+  return {
+    get length() { return values.size; },
+    clear: () => values.clear(),
+    getItem: (key) => values.get(key) ?? null,
+    key: (index) => [...values.keys()][index] ?? null,
+    removeItem: (key) => { values.delete(key); },
+    setItem: (key, value) => { values.set(key, value); },
+  };
+}
 
 describe("session-scoped composer attachments (#404)", () => {
   it("keeps attachments isolated while navigating between sessions and drafts", () => {
@@ -43,5 +59,82 @@ describe("session-scoped composer attachments (#404)", () => {
     attachmentStore.add("returning-session", "resume.csv");
     expect(attachmentStore.get("returning-session")).toEqual(["resume.csv"]);
     attachmentStore.delete("returning-session");
+  });
+
+  it("returns a stable empty snapshot for useSyncExternalStore", () => {
+    const store = new AttachmentStore(null);
+    expect(store.get("missing")).toBe(store.get("missing"));
+  });
+
+  it("restores attachment names after a page reload", () => {
+    const storage = memoryStorage();
+    const first = new AttachmentStore(storage);
+    first.add("__draft__", "paper.pdf");
+    first.add("__draft__", "notes.txt");
+
+    const reloaded = new AttachmentStore(storage);
+    expect(reloaded.get("__draft__")).toEqual(["paper.pdf", "notes.txt"]);
+    expect(reloaded.has("__draft__")).toBe(true);
+    reloaded.delete("__draft__");
+    expect(new AttachmentStore(storage).get("__draft__")).toEqual([]);
+  });
+
+  it("removes untracked local staging files and stale browser records on startup", async () => {
+    const store = new AttachmentStore(null);
+    store.add("__draft__", "kept.pdf");
+    store.add("__draft__", "missing.txt");
+    const deleted: string[] = [];
+
+    const result = await reconcileAttachmentScope({
+      store,
+      scopeId: "__draft__",
+      listFiles: async () => ["kept.pdf", "orphan.csv"],
+      deleteFile: async (name) => { deleted.push(name); },
+      deleteUntracked: true,
+    });
+
+    expect(store.get("__draft__")).toEqual(["kept.pdf"]);
+    expect(deleted).toEqual(["orphan.csv"]);
+    expect(result.failedDeletes).toEqual([]);
+  });
+
+  it("keeps attachment metadata when deleting the staged file fails", async () => {
+    const store = new AttachmentStore(null);
+    store.add("session-a", "results.csv");
+
+    await expect(deleteScopedAttachmentFile(
+      store,
+      "session-a",
+      "results.csv",
+      async () => { throw new Error("filesystem busy"); },
+    )).rejects.toThrow("filesystem busy");
+
+    expect(store.get("session-a")).toEqual(["results.csv"]);
+  });
+
+  it("removes attachment metadata after the staged file is deleted", async () => {
+    const store = new AttachmentStore(null);
+    store.add("session-a", "results.csv");
+    let fileDeleted = false;
+
+    await deleteScopedAttachmentFile(store, "session-a", "results.csv", async () => {
+      fileDeleted = true;
+    });
+
+    expect(fileDeleted).toBe(true);
+    expect(store.get("session-a")).toEqual([]);
+  });
+
+  it("does not reuse an image preview from another session with the same filename", () => {
+    const previous = { name: "screenshot.png", type: "image/png", previewUrl: "blob:session-a" };
+
+    const result = reconcileVisibleAttachments(
+      [previous],
+      ["screenshot.png"],
+      false,
+    );
+
+    expect(result.attachments).toEqual([{ name: "screenshot.png" }]);
+    expect(result.revoked).toEqual([previous]);
   });
 });
