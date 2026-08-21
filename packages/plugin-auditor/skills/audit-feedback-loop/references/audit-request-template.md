@@ -29,7 +29,8 @@ Target type: <expert-result | pi-draft | synthesis>
 - Environment and dependency record: <path>
 - Method survey: <path>
 - Scientific protocol and decision rules: <path>
-- Selection mode and rule: <fixed-method or comparative; path>
+- Decision provenance: <decision; independent constraint or selection rule; evidence paths and revisions>
+- Material alternatives or unresolved challenges: <paths or concise summary>
 - Parameter configuration and provenance: <paths>
 - Implementation or procedure: <paths>
 - Implementation checkpoint or diff: <path and revision/time evidence>

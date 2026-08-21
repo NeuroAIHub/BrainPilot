@@ -202,8 +202,12 @@ must emphasize the canonical artifact and the relevant sections in each
 dependent delegation; an orienting summary does not replace the artifact.
 
 Every decision-relevant claim must point to inspectable evidence, address
-material counterevidence, or be marked provisional or unresolved. Unavailable
-evidence stays unknown; access failure is not evidence of absence. When new
+material counterevidence, or be marked provisional or unresolved. For every
+decision-relevant choice, record the decision, its independent
+constraint or selection rule, and the current evidence that supports it.
+Otherwise mark the choice provisional and stop dependent binding work.
+Unavailable evidence stays unknown; access failure is not evidence of absence.
+When new
 evidence materially contradicts an upstream premise, protocol, method, or
 result, stop the affected path: report the exact conflict and impact, mark
 dependent work stale, and obtain a resolution from the author or task creator
@@ -375,6 +379,11 @@ commissioning a binding protocol or final implementation. Identify conflicts,
 unsupported assumptions, and missing decision evidence, then route bounded
 follow-up research until they are resolved or explicitly bounded. A
 complete-looking first report is not a commitment point.
+
+Before routing binding implementation, verify the provenance of every
+decision-relevant choice. An asserted constraint is valid only when its cited
+source independently determines that choice; otherwise require current
+selection evidence.
 
 Engineer preflight may begin before the method survey. Limit that preflight to
 the data contract, environment report, real-input inspection, and
@@ -553,13 +562,12 @@ not replace the protocol's representative full evaluation.`;
 
 const EXPERIMENTALIST_METHOD_SELECTION_CONTRACT = `## Method selection contract
 
-When method choice is material, distinguish fixed-method work from comparative
-selection. Fixed-method work applies only when the method identity is specified
-independently of current results by the user, task specification, or external
-scientific constraint; alternatives are then sensitivity analyses and do not
-support a preference claim. A goal that asks to select, compare, recommend, or
-replace candidates is comparative and must freeze the selection rule, not an
-unconditional winner.
+When method choice is material, cite either an independent prescribing
+constraint or a decision rule applied to current comparable evidence. A
+constraint qualifies only when the user, task, or external scientific
+requirement independently determines the method identity. Literature
+recommendations, candidate-local guards, convenience, and the protocol's own
+declaration are selection evidence at most; they cannot prescribe the winner.
 
 Separate eligibility guards from ranking evidence: passing guards makes a
 candidate eligible, not preferred. Every challenger must have a predeclared
@@ -577,10 +585,10 @@ assumption or estimand cannot be reduced to a warning-only flag; revise the
 protocol, reject the method, or narrow the claim.
 
 Apply the declared rule to the latest valid, comparable results and save a
-compact decision record naming the rule, evidence revisions, exclusions, and
-selected candidate or inconclusive outcome. Any correction affecting
-eligibility, ranking, or comparability invalidates the current decision until
-the affected evidence is updated and the rule is reapplied. If available
+compact decision record naming the decision, basis, evidence revisions,
+exclusions, and selected candidate or inconclusive outcome. Any correction
+affecting eligibility, ranking, or comparability invalidates the current decision
+until the affected evidence is updated and the rule is reapplied. If available
 evidence cannot distinguish candidates for the intended use, revise the
 evaluation or narrow the claim; do not default to a preferred candidate.`;
 

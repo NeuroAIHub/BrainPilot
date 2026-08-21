@@ -102,10 +102,11 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("does not validate cross-session transfer");
     expect(methodReview).toContain("sample counts across sampling");
     expect(methodReview).toContain("rates is not protocol fidelity");
-    expect(methodReview).toContain("fixed-method work from comparative selection");
-    expect(methodReview).toContain("user, task specification, or external scientific constraint");
-    expect(methodReview).toContain("select, compare, recommend, or replace");
-    expect(methodReview).toContain("unconditional winner");
+    expect(methodReview).toContain("Audit decision provenance");
+    expect(methodReview).toContain("independent prescribing constraint or current selection evidence");
+    expect(methodReview).toContain("user, task, or external scientific requirement independently determines");
+    expect(methodReview).toContain("Runtime-owned recent user messages are authoritative");
+    expect(methodReview).toContain("Missing, invalid, or stale decision provenance requires `REVISE`");
     expect(methodReview).toContain("eligibility guards from ranking evidence");
     expect(methodReview).toContain("observable outcome that could change the decision");
     expect(methodReview).toContain("latest valid, comparable results");
@@ -115,7 +116,9 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("Do not choose a replacement method");
     expect(methodReview).toContain("method-specific budgets or stopping rules");
     const requestTemplate = await readFile(join(auditorSkill, "references", "audit-request-template.md"), "utf8");
-    expect(requestTemplate).toContain("Selection mode and rule");
+    expect(requestTemplate).toContain("Decision provenance");
+    expect(requestTemplate).toContain("Material alternatives or unresolved challenges");
+    expect(requestTemplate).not.toContain("Selection mode and rule");
     expect(requestTemplate).toContain("Latest corrected candidate comparison");
     expect(requestTemplate).toContain("Experimentalist selection decision");
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
