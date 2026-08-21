@@ -51,6 +51,8 @@ export interface IAgentSession {
    * run should await this (see `MasAgent.abort`, #101).
    */
   abort(): Promise<void>;
+  /** Drop SDK steering/follow-up messages that must not survive Stop. */
+  clearQueue?(): unknown;
   /** Cancel one locally-running tool without aborting the enclosing agent turn. */
   interruptTool?(toolCallId: string): boolean;
   /** Tear down; release resources. */

@@ -122,6 +122,10 @@ import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
 
 const MAX_MONITOR_EVENT_LINES = 100;
 const TRACE_ACK_TIMEOUT_MS = 60_000;
+const INTERRUPTED_TURN_BOUNDARY =
+  "[SYSTEM-MESSAGE:interruption] The previous user turn was explicitly stopped. " +
+  "Treat every unfinished instruction, requested tool call, and requested output from that turn as cancelled. " +
+  "Follow only the new user message below. This is internal context; do not mention it. [/SYSTEM-MESSAGE]";
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -1925,7 +1929,11 @@ export class SessionManager {
     // exhausted principal/trace notification run. Other targets may resume
     // immediately; this target waits until its direct turn settles so prompts
     // never overlap.
+    const resumedAfterWholeSessionStop = entry.taskLedger.isDeliveryPausedGlobally();
     const resumeTargetAfterRun = await this.resumeTaskDelivery(entry, agentName);
+    const modelInput = resumedAfterWholeSessionStop
+      ? `${INTERRUPTED_TURN_BOUNDARY}\n\n${content}`
+      : content;
 
     // A substantive follow-up extends the current Principal workflow epoch.
     // Exempt follow-ups never turn an already-required epoch off.
@@ -1945,7 +1953,7 @@ export class SessionManager {
     // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
     if (agent.isStreaming) {
       const runId = entry.activeRunId ?? undefined;
-      void agent.followUp(content, opts.uuid ?? randomUUID(), { messageRunId: runId }).finally(() => {
+      void agent.followUp(modelInput, opts.uuid ?? randomUUID(), { messageRunId: runId }).finally(() => {
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
         }
@@ -1990,7 +1998,7 @@ export class SessionManager {
     );
     // Fire-and-track: don't block the HTTP response on the full run.
     // #167: the principal's own turn also counts against the session provider cap.
-    void this.withProviderSlot(sessionId, () => agent.prompt(content))
+    void this.withProviderSlot(sessionId, () => agent.prompt(modelInput))
       .catch((err) => {
         entry.bus.emit(
           ev.systemMessage(sessionId, "error", `发送消息失败: ${(err as Error).message}`, { agent: agentName }),

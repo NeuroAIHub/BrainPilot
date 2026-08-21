@@ -692,6 +692,11 @@ export class MasAgent {
       tool.interruptionReason ??= "task_interrupted";
     }
     if (this.activeToolCalls.size > 0) this.emitStateUpdate();
+    // Stop means queued steering/follow-up work is abandoned too. In
+    // particular, agent_end extensions can have a hidden Trace reminder queued
+    // behind the visible answer; leaving it in Pi makes the next explicit user
+    // prompt execute that reminder instead (#522).
+    this.session.clearQueue?.();
     try {
       await this.session.abort();
     } catch {
@@ -704,6 +709,9 @@ export class MasAgent {
     } catch {
       /* prompt() is error-isolated; nothing to surface */
     }
+    // agent_end handlers may race the first clear while abort() unwinds. Fence
+    // them after the prompt has fully settled as well.
+    this.session.clearQueue?.();
     this.finishDanglingTools("task_interrupted");
     this.pendingFollowUps = [];
     // Keep abortRequested true until prompt() has fully unwound so both Pi's
