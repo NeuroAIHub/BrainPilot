@@ -30,7 +30,14 @@ vi.mock("../utils/api", () => ({
 }));
 
 // Imported after the mock is registered.
-const { buildDemoBundle, DemoBundleTooLargeError, PackAbortedError, toDemoFilePath } = await import("../components/demo/demoBundle");
+const {
+  buildDemoBundle,
+  collectDemoArtifactPaths,
+  DemoBundleTooLargeError,
+  normalizeDemoReplayNodes,
+  PackAbortedError,
+  toDemoFilePath,
+} = await import("../components/demo/demoBundle");
 
 function traceWith(paths: string[]) {
   return {
@@ -60,6 +67,67 @@ describe("buildDemoBundle file collection", () => {
     expect(toDemoFilePath("/data/shared.csv")).toBe("/data/shared.csv");
     expect(toDemoFilePath("shared/reference.pdf")).toBe("/shared/reference.pdf");
     expect(toDemoFilePath("/tmp/output.txt")).toBe("/workspace/tmp/output.txt");
+  });
+
+  it("filters checkpoint metadata and dedupes absolute/relative workspace aliases", async () => {
+    expect(collectDemoArtifactPaths([
+      {
+        artifacts: [
+          { path: "/workspace/analysis_result.md", type: "markdown" },
+          { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+          { path: "analysis_result.md", type: "file" },
+        ],
+      },
+    ])).toEqual(["/workspace/analysis_result.md"]);
+
+    getTrace.mockResolvedValue({
+      nodes: [{
+        id: "n1",
+        parents: [],
+        parentIds: [],
+        childIds: [],
+        artifacts: [
+          { path: "/workspace/analysis_result.md", type: "markdown" },
+          { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+          { path: "analysis_result.md", type: "file" },
+        ],
+      }],
+    });
+    readFile.mockResolvedValue({ content: "one copy", size: 8 });
+
+    const bundle = await buildDemoBundle({
+      session: { id: "s", title: "S" },
+      filesAvailable: true,
+    });
+
+    expect(bundle.files.map((file) => file.path)).toEqual(["/workspace/analysis_result.md"]);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalledWith("s", "/workspace/analysis_result.md");
+  });
+
+  it("replay skips a checkpoint-first artifact and selects its real provenance file", () => {
+    const [node] = normalizeDemoReplayNodes([
+      {
+        ...traceWith([]).nodes[0],
+        artifacts: [
+          { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+          { path: "provenance.md", type: "file" },
+        ],
+      },
+    ] as never, [{ path: "/workspace/provenance.md" }]);
+
+    expect(node.artifacts.map((artifact) => artifact.path))
+      .toEqual(["/workspace/provenance.md"]);
+  });
+
+  it("replay resolves absolute and relative aliases across nodes to the retained bundle path", () => {
+    const nodes = normalizeDemoReplayNodes([
+      { ...traceWith([]).nodes[0], id: "absolute", artifacts: [{ path: "/workspace/a.md", type: "file" }] },
+      { ...traceWith([]).nodes[0], id: "relative", artifacts: [{ path: "a.md", type: "file" }] },
+    ] as never, [{ path: "/workspace/a.md" }]);
+
+    expect(nodes.map((node) => node.artifacts[0]?.path))
+      .toEqual(["/workspace/a.md", "/workspace/a.md"]);
   });
 
   it("marks all files unreadable when no sandbox is available", async () => {

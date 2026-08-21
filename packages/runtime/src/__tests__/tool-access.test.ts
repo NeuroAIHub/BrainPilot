@@ -35,7 +35,7 @@ function deps(name: string): ToolDeps {
       id: taskId, seq: 1, created_by: "principal", assigned_to: name, content: "work",
       status: "replied", reply, created_at: 1, completed_at: 2,
     }),
-    dispatchTrace: async () => {},
+    dispatchTrace: async () => ({ submissionId: "trace-test" }),
     ensureAgent: async () => {},
     destroyAgent: async () => {},
     wakeAgent: () => {},
