@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,15 +34,32 @@ function processIsAlive(pid: number): boolean {
 async function fixture() {
   const batches: MonitorEventBatch[] = [];
   const states: MonitorInfo[] = [];
+  const cwd = await mkdtemp(join(tmpdir(), "bp-monitor-"));
   const manager = new MonitorManager({
-    cwd: await mkdtemp(join(tmpdir(), "bp-monitor-")),
+    cwd,
     onEvents: (batch) => { batches.push(batch); return true; },
     onState: (state) => states.push(state),
   });
-  return { manager, batches, states };
+  return { manager, batches, states, cwd };
 }
 
 describe("MonitorManager", () => {
+  it("executes logical /workspace paths in the session cwd without exposing the host path", async () => {
+    const { manager, cwd } = await fixture();
+    const logicalCommand = nodeCommand("require('node:fs').writeFileSync('/workspace/background.txt', 'BACKGROUND_OK')");
+    manager.start({
+      ownerAgent: "engineer",
+      description: "managed workspace output",
+      command: logicalCommand,
+      timeoutMs: 2_000,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+
+    await expect(readFile(join(cwd, "background.txt"), "utf8")).resolves.toBe("BACKGROUND_OK");
+    expect(manager.list()[0]).toMatchObject({ status: "completed", command: logicalCommand });
+    expect(manager.list()[0]?.command).not.toContain(cwd);
+  });
+
   it("batches stdout lines and never promotes stderr to an event", async () => {
     const { manager, batches } = await fixture();
     const monitor = manager.start({
@@ -70,6 +87,40 @@ describe("MonitorManager", () => {
     });
     await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
     expect(batches).toEqual([]);
+  });
+
+  it("emits one terminal event for a silent finite background job", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "engineer",
+      description: "silent background job",
+      command: nodeCommand("setTimeout(() => {}, 20)"),
+      timeoutMs: 2_000,
+      notifyOnExit: true,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.lines).toContain("Background job completed successfully.");
+  });
+
+  it("delivers bounded stderr diagnostics when a background job fails", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "engineer",
+      description: "failing background job",
+      command: nodeCommand("console.error('failure detail'); process.exit(7)"),
+      timeoutMs: 2_000,
+      notifyOnExit: true,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.lines).toEqual(expect.arrayContaining([
+      "Background job ended with status: failed.",
+      "Exit code: 7.",
+      "Stderr summary: failure detail",
+    ]));
   });
 
   it("times out a bounded monitor and can stop a persistent monitor", async () => {

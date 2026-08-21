@@ -16,6 +16,10 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000): Promise<voi
   }
 }
 
+function nodeCommand(source: string): string {
+  return `${JSON.stringify(process.execPath)} -e ${JSON.stringify(source)}`;
+}
+
 function failingFactory(rawError: string, prompts: string[]): AgentSessionFactory {
   return async ({ sessionId }) => {
     const listeners = new Set<(event: PiAgentEvent) => void>();
@@ -84,6 +88,47 @@ async function queuePersistentMonitorEvent(
 }
 
 describe("Monitor runtime integration", () => {
+  it.each([
+    {
+      name: "silent success",
+      command: nodeCommand("setTimeout(() => {}, 20)"),
+      expected: "Background job completed successfully.",
+    },
+    {
+      name: "stderr-only failure",
+      command: nodeCommand("console.error('integration failure'); process.exit(9)"),
+      expected: "Stderr summary: integration failure",
+    },
+  ])("wakes the owner on $name terminal state", async ({ name, command, expected }) => {
+    const prompts: string[] = [];
+    const factory: AgentSessionFactory = async (params) => {
+      const base = await mockAgentFactory(params);
+      return {
+        get sessionId() { return base.sessionId; },
+        get isStreaming() { return base.isStreaming; },
+        subscribe: (listener) => base.subscribe(listener),
+        prompt: async (text, options) => { prompts.push(text); await base.prompt(text, options); },
+        abort: () => base.abort(),
+        interruptTool: (id) => base.interruptTool?.(id) ?? false,
+        dispose: () => base.dispose(),
+      };
+    };
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: factory,
+      runtimeCapabilities: ["builtin.monitor"],
+    });
+    const session = await manager.createSession();
+    await manager.sendMessage(
+      session.id,
+      `[[tool:run_in_background ${JSON.stringify({ description: name, command, timeout_ms: 2_000 })}]]`,
+      "engineer",
+    );
+    await waitFor(() => prompts.some((prompt) => prompt.includes(expected)));
+    expect(prompts.find((prompt) => prompt.includes(expected))).toContain("<monitor_events untrusted=\"true\">");
+    manager.shutdown();
+  });
+
   it("exposes the official plugin tools and wakes the owner only when stdout arrives", async () => {
     const prompts: string[] = [];
     const toolNames: string[][] = [];
@@ -128,10 +173,12 @@ describe("Monitor runtime integration", () => {
     await manager.sendMessage(session.id, "hello");
     await waitFor(() => toolNames.length > 0);
     expect(toolNames[0]).not.toContain("start_monitor");
+    expect(toolNames[0]).not.toContain("run_in_background");
     await manager.setRuntimeCapabilities(["builtin.monitor"]);
     await (manager as unknown as { ensureAgent(sessionId: string, name: string): Promise<unknown> })
       .ensureAgent(session.id, "engineer");
     expect(toolNames[1]).toContain("start_monitor");
+    expect(toolNames[1]).toContain("run_in_background");
     manager.shutdown();
   });
 

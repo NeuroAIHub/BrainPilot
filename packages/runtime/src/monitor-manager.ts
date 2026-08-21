@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import { rewriteBashWorkspacePaths } from "./managed-path-rewrite.js";
 
 export const MONITOR_DEFAULT_TIMEOUT_MS = 300_000;
 export const MONITOR_MAX_TIMEOUT_MS = 3_600_000;
@@ -37,6 +38,7 @@ export interface MonitorEventBatch {
 
 interface RunningMonitor {
   info: MonitorInfo;
+  notifyOnExit: boolean;
   child: ChildProcess;
   decoder: StringDecoder;
   stdoutBuffer: string;
@@ -81,11 +83,17 @@ export class MonitorManager {
     command: string;
     timeoutMs?: number;
     persistent?: boolean;
+    notifyOnExit?: boolean;
   }): MonitorInfo {
     const description = input.description.trim();
-    const command = input.command.trim();
+    const displayCommand = input.command.trim();
     if (!description) throw new Error("description is required");
-    if (!command) throw new Error("command is required");
+    if (!displayCommand) throw new Error("command is required");
+    // Match Pi's managed bash contract: /workspace is a stable product path,
+    // while the child process must execute against this session's real cwd.
+    // Keep the logical command in public state/tool results so host paths never
+    // leak into model context or the UI.
+    const command = rewriteBashWorkspacePaths(displayCommand, this.opts.cwd).command;
     const persistent = input.persistent === true;
     const requested = input.timeoutMs ?? MONITOR_DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(requested) || requested <= 0 || requested > MONITOR_MAX_TIMEOUT_MS) {
@@ -107,12 +115,13 @@ export class MonitorManager {
         id,
         ownerAgent: input.ownerAgent,
         description,
-        command,
+        command: displayCommand,
         status: "running",
         persistent,
         timeoutMs,
         startedAt: new Date().toISOString(),
       },
+      notifyOnExit: input.notifyOnExit === true,
       child,
       decoder: new StringDecoder("utf8"),
       stdoutBuffer: "",
@@ -284,7 +293,41 @@ export class MonitorManager {
       signal,
     };
     this.opts.onState?.(publicInfo(running));
+    if (running.notifyOnExit) {
+      this.opts.onEvents({
+        monitorId: running.info.id,
+        ownerAgent: running.info.ownerAgent,
+        description: running.info.description,
+        timestamp: new Date().toISOString(),
+        lines: this.terminalEventLines(running),
+      });
+    }
     running.resolveTerminal();
+  }
+
+  private terminalEventLines(running: RunningMonitor): string[] {
+    const status = running.info.status;
+    const lines = [status === "completed"
+      ? "Background job completed successfully."
+      : `Background job ended with status: ${status}.`];
+    if (running.info.exitCode !== null && running.info.exitCode !== undefined) {
+      lines.push(`Exit code: ${running.info.exitCode}.`);
+    }
+    if (running.info.signal) lines.push(`Signal: ${running.info.signal}.`);
+    const stderr = running.stderrBuffer.trim();
+    if (stderr) {
+      const summary = stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-3)
+        .join(" | ")
+        .replaceAll(this.opts.cwd, "/workspace")
+        .replace(/((?:api[_-]?key|token|secret|password|credential|authorization|cookie)\s*[:=]\s*)\S+/gi, "$1[redacted]")
+        .slice(0, 1_000);
+      if (summary) lines.push(`Stderr summary: ${summary}`);
+    }
+    return lines;
   }
 
   private killProcess(running: RunningMonitor, signal: NodeJS.Signals): void {
