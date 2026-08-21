@@ -1,4 +1,4 @@
-import { mkdtemp } from "node:fs/promises";
+import { mkdtemp, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
@@ -34,15 +34,32 @@ function processIsAlive(pid: number): boolean {
 async function fixture() {
   const batches: MonitorEventBatch[] = [];
   const states: MonitorInfo[] = [];
+  const cwd = await mkdtemp(join(tmpdir(), "bp-monitor-"));
   const manager = new MonitorManager({
-    cwd: await mkdtemp(join(tmpdir(), "bp-monitor-")),
+    cwd,
     onEvents: (batch) => { batches.push(batch); return true; },
     onState: (state) => states.push(state),
   });
-  return { manager, batches, states };
+  return { manager, batches, states, cwd };
 }
 
 describe("MonitorManager", () => {
+  it("executes logical /workspace paths in the session cwd without exposing the host path", async () => {
+    const { manager, cwd } = await fixture();
+    const logicalCommand = nodeCommand("require('node:fs').writeFileSync('/workspace/background.txt', 'BACKGROUND_OK')");
+    manager.start({
+      ownerAgent: "engineer",
+      description: "managed workspace output",
+      command: logicalCommand,
+      timeoutMs: 2_000,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+
+    await expect(readFile(join(cwd, "background.txt"), "utf8")).resolves.toBe("BACKGROUND_OK");
+    expect(manager.list()[0]).toMatchObject({ status: "completed", command: logicalCommand });
+    expect(manager.list()[0]?.command).not.toContain(cwd);
+  });
+
   it("batches stdout lines and never promotes stderr to an event", async () => {
     const { manager, batches } = await fixture();
     const monitor = manager.start({

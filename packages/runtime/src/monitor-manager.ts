@@ -1,6 +1,7 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { StringDecoder } from "node:string_decoder";
+import { rewriteBashWorkspacePaths } from "./managed-path-rewrite.js";
 
 export const MONITOR_DEFAULT_TIMEOUT_MS = 300_000;
 export const MONITOR_MAX_TIMEOUT_MS = 3_600_000;
@@ -83,9 +84,14 @@ export class MonitorManager {
     persistent?: boolean;
   }): MonitorInfo {
     const description = input.description.trim();
-    const command = input.command.trim();
+    const displayCommand = input.command.trim();
     if (!description) throw new Error("description is required");
-    if (!command) throw new Error("command is required");
+    if (!displayCommand) throw new Error("command is required");
+    // Match Pi's managed bash contract: /workspace is a stable product path,
+    // while the child process must execute against this session's real cwd.
+    // Keep the logical command in public state/tool results so host paths never
+    // leak into model context or the UI.
+    const command = rewriteBashWorkspacePaths(displayCommand, this.opts.cwd).command;
     const persistent = input.persistent === true;
     const requested = input.timeoutMs ?? MONITOR_DEFAULT_TIMEOUT_MS;
     if (!Number.isFinite(requested) || requested <= 0 || requested > MONITOR_MAX_TIMEOUT_MS) {
@@ -107,7 +113,7 @@ export class MonitorManager {
         id,
         ownerAgent: input.ownerAgent,
         description,
-        command,
+        command: displayCommand,
         status: "running",
         persistent,
         timeoutMs,
