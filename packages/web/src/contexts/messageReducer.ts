@@ -11,6 +11,26 @@ import {
   markLatestPrincipalAnswerPartial,
 } from "./errorRecovery";
 
+const NO_RENDER_OPEN = "<!--NO-RENDER-->";
+
+function splitNoRenderContent(raw: string): { visible: string; pending?: string } {
+  let visible = raw.replace(/<!--NO-RENDER-->[\s\S]*?<!--\/NO-RENDER-->/g, "");
+  const openIndex = visible.indexOf(NO_RENDER_OPEN);
+  if (openIndex >= 0) {
+    return { visible: visible.slice(0, openIndex), pending: visible.slice(openIndex) };
+  }
+  // Hold a partial opening marker so split model chunks never flash internal
+  // control text before the complete wrapper arrives.
+  const maxPrefix = Math.min(NO_RENDER_OPEN.length - 1, visible.length);
+  for (let length = maxPrefix; length > 0; length -= 1) {
+    const suffix = visible.slice(-length);
+    if (NO_RENDER_OPEN.startsWith(suffix)) {
+      return { visible: visible.slice(0, -length), pending: suffix };
+    }
+  }
+  return { visible };
+}
+
 /**
  * AG-UI event → message-list reducer, extracted from SessionContext so both the
  * live session and the demo replay player fold the same way. Keeping a single
@@ -244,9 +264,6 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       const id = event.messageId;
       let delta = typeof event.delta === "string" ? event.delta : "";
       if (!id || !delta) return existing;
-      // Strip NO-RENDER wrapper used by record_trace "Message Complete" hint
-      delta = delta.replace(/<!--NO-RENDER-->[\s\S]*?<!--\/NO-RENDER-->/g, "");
-      if (!delta) return existing;
       const key = streamAppendKey(event, id, delta);
       // Orphaned CONTENT (no matching START) — recover gracefully instead of
       // dropping it. This happens when a demo bundle was exported from a
@@ -254,6 +271,8 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // and a plain `.map` here would no-op, silently swallowing the opening
       // replies. Synthesize the message so the content still renders.
       if (!existing.some((m) => m.id === id)) {
+        const next = splitNoRenderContent(delta);
+        if (!next.visible && !next.pending) return existing;
         return [
           ...existing,
           withAppliedStreamKey(
@@ -261,7 +280,8 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
               id,
               runId: event.runId,
               role: "assistant",
-              content: delta,
+              content: next.visible,
+              suppressedContent: next.pending,
               createdAt: eventTimestamp(event),
               agent,
               streaming: true,
@@ -276,7 +296,13 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
         // Finalized message: history/SSE replay must not re-append (#314).
         if (m.streaming === false) return m;
         if (key && m.appliedStreamKeys?.includes(key)) return m;
-        return withAppliedStreamKey({ ...m, content: (m.content ?? "") + delta }, key);
+        const raw = (m.content ?? "") + (m.suppressedContent ?? "") + delta;
+        const next = splitNoRenderContent(raw);
+        return withAppliedStreamKey({
+          ...m,
+          content: next.visible,
+          suppressedContent: next.pending,
+        }, key);
       });
     }
 
@@ -285,8 +311,12 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       if (!id) return existing;
       // Drop messages whose entire content was a NO-RENDER wrapper
       return existing
-        .filter((m) => !(m.id === id && (m.content ?? "").trim() === ""))
-        .map((m) => (m.id === id ? finalizeStreamMessage(m) : m));
+        .map((m) => {
+          if (m.id !== id) return m;
+          const next = splitNoRenderContent((m.content ?? "") + (m.suppressedContent ?? ""));
+          return finalizeStreamMessage({ ...m, content: next.visible, suppressedContent: undefined });
+        })
+        .filter((m) => !(m.id === id && (m.content ?? "").trim() === ""));
     }
 
     case "TEXT_MESSAGE_CHUNK": {
@@ -308,13 +338,16 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           : message);
       }
       const role = event.role === "assistant" || event.role === "system" ? event.role : "user";
+      const rawContent = typeof event.delta === "string" ? event.delta : "";
+      const content = splitNoRenderContent(rawContent).visible;
+      if (!content.trim() && rawContent.includes(NO_RENDER_OPEN)) return existing;
       return [
         ...existing,
         {
           id,
           runId: event.runId,
           role,
-          content: typeof event.delta === "string" ? event.delta : "",
+          content,
           createdAt: eventTimestamp(event),
           agent: role === "user" ? "user" : agent,
           streaming: false,

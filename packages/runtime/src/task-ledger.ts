@@ -424,6 +424,10 @@ export class TaskLedger {
     return this.deliveryPaused || this.pausedAgents.size > 0;
   }
 
+  isDeliveryPausedGlobally(): boolean {
+    return this.deliveryPaused;
+  }
+
   isPaused(agent: string): boolean {
     return this.deliveryPaused || this.pausedAgents.has(agent);
   }
