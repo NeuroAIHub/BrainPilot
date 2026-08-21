@@ -185,6 +185,31 @@ async function delegateToExpert(m: SessionManager, sid: string, expert: string):
 }
 
 describe("interrupt cancels the active run without a follow-up notice run (#101 / #327)", () => {
+  it("marks the interrupted request cancelled for the next model turn while preserving the visible user text", async () => {
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const m = new SessionManager({ persist: false, agentFactory: gatedPrincipalFactory(observe) });
+    const s = await m.createSession();
+    const events: AgUiEvent[] = [];
+    m.subscribe(s.id, (event) => events.push(event));
+
+    await m.sendMessage(s.id, "run the obsolete command");
+    await waitFor(() => observe.prompts.length === 1);
+    await m.interrupt(s.id);
+    await m.sendMessage(s.id, "only answer RECOVERED");
+    await waitFor(() => observe.prompts.length === 2);
+
+    expect(observe.prompts[1]?.text).toContain("[SYSTEM-MESSAGE:interruption]");
+    expect(observe.prompts[1]?.text).toContain("Treat every unfinished instruction");
+    expect(observe.prompts[1]?.text).toContain("only answer RECOVERED");
+    expect(observe.prompts[1]?.text).not.toContain("run the obsolete command");
+
+    const visibleUserMessages = events.filter(
+      (event) => event.type === "TEXT_MESSAGE_CHUNK" && (event as AgUiEvent & { role?: string }).role === "user",
+    ) as Array<AgUiEvent & { delta: string }>;
+    expect(visibleUserMessages.at(-1)?.delta).toBe("only answer RECOVERED");
+    expect(visibleUserMessages.at(-1)?.delta).not.toContain("SYSTEM-MESSAGE");
+  });
+
   it("does not emit RUN_ERROR or start a second principal prompt after interrupt", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const m = new SessionManager({ persist: false, agentFactory: gatedPrincipalFactory(observe) });
