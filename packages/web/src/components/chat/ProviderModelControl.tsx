@@ -267,7 +267,9 @@ export function ProviderModelControl({
           className="provider-model-popover__manage"
           onClick={(event) => {
             setOpen(false);
-            onManageProviders(event.currentTarget);
+            // The manage row lives inside this portal and unmounts immediately.
+            // Return to the persistent model trigger after Settings closes.
+            onManageProviders(triggerRef.current ?? event.currentTarget);
           }}
           type="button"
         >
