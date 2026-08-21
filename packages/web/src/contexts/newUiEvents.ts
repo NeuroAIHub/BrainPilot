@@ -44,6 +44,27 @@ export function toSystemMessageView(event: WebSocketEvent): SystemMessageView {
   // omits it.
   const recoverable =
     typeof e.recoverable === "boolean" ? e.recoverable : level !== "fatal";
+  const metadata = e.metadata && typeof e.metadata === "object"
+    ? e.metadata as Record<string, unknown>
+    : undefined;
+  const mode: "checkpoint" | "causal" = metadata?.mode === "causal" ? "causal" : "checkpoint";
+  const files = Array.isArray(metadata?.files)
+    ? metadata.files.filter((file): file is string => typeof file === "string")
+    : [];
+  const workspaceRestore: SystemMessageView["workspaceRestore"] = e.code === "workspace_restored"
+    ? {
+        mode,
+        checkpointId: optStr(metadata?.checkpointId),
+        nodeId: optStr(metadata?.nodeId),
+        changeId: optStr(metadata?.changeId),
+        restoredAt: optStr(metadata?.restoredAt),
+        files,
+        fileCount: num(metadata?.fileCount, files.length),
+        affectedNodeCount: typeof metadata?.affectedNodeCount === "number"
+          ? metadata.affectedNodeCount
+          : undefined,
+      }
+    : undefined;
   return {
     level,
     message: str(e.message),
@@ -52,6 +73,8 @@ export function toSystemMessageView(event: WebSocketEvent): SystemMessageView {
     recoverable,
     terminal: e.terminal === true,
     timestamp: optStr(e.timestamp),
+    code: optStr(e.code),
+    workspaceRestore,
   };
 }
 

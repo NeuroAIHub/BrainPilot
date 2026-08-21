@@ -14,6 +14,7 @@ import type {
   CompactionReason,
   CompactionStartValue,
   UserInputCancellationReason,
+  WorkspaceRestoreEventMetadata,
 } from "@brainpilot/protocol";
 import { CUSTOM_EVENT } from "@brainpilot/protocol";
 
@@ -233,7 +234,15 @@ export const ev = {
     sessionId: string,
     level: "info" | "warning" | "error" | "fatal",
     message: string,
-    opts?: { agent?: string; details?: string; recoverable?: boolean; terminal?: boolean; id?: string },
+    opts?: {
+      agent?: string;
+      details?: string;
+      recoverable?: boolean;
+      terminal?: boolean;
+      id?: string;
+      code?: string;
+      metadata?: WorkspaceRestoreEventMetadata;
+    },
   ): AgUiEvent {
     return {
       type: "system_message",
@@ -241,6 +250,8 @@ export const ev = {
       // #167: optional stable id lets the client coalesce repeated messages
       // (e.g. retry warnings) into one updating bubble instead of appending.
       ...(opts?.id ? { id: opts.id } : {}),
+      ...(opts?.code ? { code: opts.code } : {}),
+      ...(opts?.metadata ? { metadata: opts.metadata } : {}),
       agent: opts?.agent,
       level,
       message,

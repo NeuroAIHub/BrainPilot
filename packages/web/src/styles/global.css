@@ -1031,6 +1031,10 @@ button {
 
 .agent-card__header,
 .trace-detail__title,
+.trace-restore-banner .system-message {
+  margin: 0;
+}
+
 .trace-meta {
   display: flex;
   min-width: 0;
@@ -5241,13 +5245,13 @@ button {
   right: var(--active-file-sidebar-width, var(--file-sidebar-width));
   bottom: 0;
   z-index: 22;
-  display: grid;
+  display: flex;
   width: min(
     var(--preview-panel-width, 560px),
     calc(100vw - var(--sidebar-width) - var(--active-file-sidebar-width, var(--file-sidebar-width)))
   );
   min-width: 360px;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
   border-left: 1px solid var(--color-border);
   border-right: 1px solid var(--color-border);
@@ -5349,6 +5353,7 @@ button {
 }
 
 .file-preview-panel .file-preview__header {
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--color-border);
   padding: 14px;
 }
@@ -5375,6 +5380,7 @@ button {
 
 .file-preview__body {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -5437,8 +5443,21 @@ button {
   flex: 1 1 auto;
 }
 
+.file-preview__restored {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
 .file-preview__meta {
   display: grid;
+  flex: 0 0 auto;
   gap: 6px;
   margin: 0;
   border-bottom: 1px solid var(--color-border);
@@ -7314,6 +7333,44 @@ button {
   border-radius: 7px;
   padding: 9px;
   background: var(--surface-2);
+}
+
+.trace-checkpoint__conflicts {
+  display: grid;
+  gap: 6px;
+}
+
+.trace-checkpoint__conflicts p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.trace-checkpoint__conflicts ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-checkpoint__conflicts li {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-1);
+  padding: 6px 8px;
+}
+
+.trace-checkpoint__conflicts code {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.trace-checkpoint__conflicts small {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 

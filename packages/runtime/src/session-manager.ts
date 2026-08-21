@@ -3462,6 +3462,7 @@ export class SessionManager {
       const plan = entry.trace.getCausalRollbackPlan(nodeId);
       if (!plan) return undefined;
       const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+      const restorePreview = await entry.checkpoints.previewCausal(checkpointIds);
       await entry.checkpoints.restoreCausal(checkpointIds, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
         this.emitTaskSnapshot(entry);
@@ -3474,6 +3475,24 @@ export class SessionManager {
         reason: `Revoked ${plan.affectedNodeIds.length} causal descendants.`,
         metadata: { affectedNodeIds: plan.affectedNodeIds },
       });
+      await entry.bus.emitDurable(ev.systemMessage(
+        sessionId,
+        "info",
+        "Workspace rolled back to an earlier Trace state.",
+        {
+          id: `workspace-restore:${change.id}`,
+          code: "workspace_restored",
+          metadata: {
+            mode: "causal",
+            nodeId,
+            changeId: change.id,
+            restoredAt: new Date().toISOString(),
+            files: restorePreview.files.map((file) => file.path),
+            fileCount: restorePreview.files.length,
+            affectedNodeCount: plan.affectedNodeIds.length,
+          },
+        },
+      ));
       return { nodeId, affectedNodeIds: plan.affectedNodeIds, changeId: change.id };
     } catch (error) {
       if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
@@ -3489,6 +3508,8 @@ export class SessionManager {
     this.beginWorkspaceOperation(entry, "restore");
     let releaseWorkspace = true;
     try {
+      const restorePreview = await entry.checkpoints.preview(checkpointId);
+      if (!restorePreview) return undefined;
       const restored = await entry.checkpoints.restore(checkpointId, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
         this.emitTaskSnapshot(entry);
@@ -3503,6 +3524,24 @@ export class SessionManager {
         reason: `Restored workspace checkpoint ${checkpointId}.`,
         metadata: { restoredCheckpointId: checkpointId },
       });
+      await entry.bus.emitDurable(ev.systemMessage(
+        sessionId,
+        "info",
+        "Workspace restored to an earlier checkpoint.",
+        {
+          id: `workspace-restore:${change.id}`,
+          code: "workspace_restored",
+          metadata: {
+            mode: "checkpoint",
+            checkpointId,
+            nodeId: targetNode?.id,
+            changeId: change.id,
+            restoredAt: new Date().toISOString(),
+            files: restorePreview.files.map((file) => file.path),
+            fileCount: restorePreview.files.length,
+          },
+        },
+      ));
       return { ...restored, changeId: change.id };
     } catch (error) {
       if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;

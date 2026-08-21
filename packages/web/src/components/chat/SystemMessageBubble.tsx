@@ -2,6 +2,7 @@ import { AlertTriangle, Info, OctagonAlert, Pencil, RefreshCw, Settings2, Slider
 import type { SystemMessageView } from "../../contracts/backend";
 import { classifyProviderFailure, providerFailureMessageKey } from "../../contexts/errorRecovery";
 import { useT } from "../../i18n/useT";
+import { workspaceRestorePresentation } from "./workspaceRestorePresentation";
 
 export interface SystemMessageRecoveryProps {
   failedPrompt?: string;
@@ -29,6 +30,7 @@ export function SystemMessageBubble({
 }: { view: SystemMessageView } & SystemMessageRecoveryProps) {
   const t = useT();
   const level = view.level;
+  const restorePresentation = workspaceRestorePresentation(view, t);
   const Icon =
     level === "fatal" ? OctagonAlert :
     level === "error" ? XCircle :
@@ -40,7 +42,9 @@ export function SystemMessageBubble({
     level === "warning" ? "chat.system.warning" :
     "chat.system.info";
   const category = view.terminal ? classifyProviderFailure(view) : null;
-  const message = category ? t(providerFailureMessageKey(category)) : view.message;
+  const message = category
+    ? t(providerFailureMessageKey(category))
+    : restorePresentation?.message ?? view.message;
   const details = view.details ?? (category ? view.message : undefined);
   const canRetry = Boolean(
     category
@@ -63,7 +67,7 @@ export function SystemMessageBubble({
     >
       <div className="system-message__head">
         <Icon size={15} className="system-message__icon" aria-hidden="true" />
-        <span className="system-message__label">{t(labelKey)}</span>
+        <span className="system-message__label">{restorePresentation?.title ?? t(labelKey)}</span>
         {view.agent ? <span className="system-message__agent">{view.agent}</span> : null}
       </div>
       <p className="system-message__text">{message}</p>

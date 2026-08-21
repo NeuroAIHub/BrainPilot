@@ -51,6 +51,7 @@ import type {
   TraceNodeRecord,
   TraceCausalParent,
   AuditReport,
+  WorkspaceRestoreEventMetadata,
 } from "@brainpilot/protocol";
 
 // Re-export the canonical protocol domain types under their existing names so
@@ -96,6 +97,7 @@ export type {
   TraceNodeRecord,
   TraceCausalParent,
   AuditReport,
+  WorkspaceRestoreEventMetadata,
 };
 
 /**
@@ -240,6 +242,8 @@ export interface ChatMessage {
 }
 
 /** View-model for a `system_message` AG-UI event (post-normalize). */
+export type WorkspaceRestoreView = WorkspaceRestoreEventMetadata;
+
 export interface SystemMessageView {
   level: "info" | "warning" | "error" | "fatal";
   message: string;
@@ -250,6 +254,8 @@ export interface SystemMessageView {
   /** RUN_ERROR promoted this diagnostic into the visible terminal recovery card. */
   terminal?: boolean;
   timestamp?: string;
+  code?: string;
+  workspaceRestore?: WorkspaceRestoreView;
 }
 
 /** View-model for a `user_input_request` AG-UI event (ask_user, post-normalize). */
@@ -424,6 +430,7 @@ export interface AgUiEvent {
   message?: string;       // RUN_ERROR
   code?: string;          // RUN_ERROR
   terminal?: boolean;     // RUN_ERROR: false while an outer retry loop owns recovery
+  metadata?: WorkspaceRestoreEventMetadata | Record<string, unknown>;
   result?: unknown;       // RUN_FINISHED
   parentRunId?: string;
 
