@@ -58,7 +58,13 @@ import {
   emptySessionStats,
   recomputeSessionTotal,
 } from "./usage-stats.js";
-import { allSystemTools, systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
+import {
+  allSystemTools,
+  systemToolsForRole,
+  builtinToolNamesForRole,
+  type ToolDeps,
+  type TraceDispatchResult,
+} from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
@@ -115,11 +121,26 @@ import {
 import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
 
 const MAX_MONITOR_EVENT_LINES = 100;
+const TRACE_ACK_TIMEOUT_MS = 60_000;
 
 interface Deferred<T> {
   promise: Promise<T>;
   resolve: (value: T) => void;
   reject: (reason: Error) => void;
+}
+
+interface ProviderLease {
+  sessionId: string;
+  childLane: ProviderSemaphore;
+}
+
+interface TraceSubmissionState {
+  deferred: Deferred<TraceDispatchResult>;
+  parentLease?: ProviderLease;
+  parentWaiting: boolean;
+  record?: TraceNodeRecord;
+  reportedSubmitted: boolean;
+  timer?: ReturnType<typeof setTimeout>;
 }
 
 type UserInputPhase = "queued" | "activating" | "active" | "finishing";
@@ -317,6 +338,8 @@ interface SessionEntry {
   workspaceOperationActive: boolean;
   /** Host-bound source record while Trace processes one durable event. */
   currentTraceRecord?: TraceNodeRecord;
+  /** In-flight record_trace acknowledgements keyed by durable notification id. */
+  traceSubmissions: Map<string, TraceSubmissionState>;
   agents: Map<string, MasAgent>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
@@ -370,6 +393,8 @@ export interface SessionManagerOptions {
   agentFactory?: AgentSessionFactory;
   /** Persist events.jsonl / tasks.json / trace.json (default true). */
   persist?: boolean;
+  /** Test override for the record_trace acknowledgement deadline (default 60s). */
+  traceAckTimeoutMs?: number;
   /** Override the external MCP bridge (default: real stdio bridge). Tests inject a fake. */
   mcpBridge?: McpBridge;
   /**
@@ -525,6 +550,7 @@ export class SessionManager {
   private readonly agentFactory: AgentSessionFactory;
   private readonly persist: boolean;
   private readonly userInputTimeoutMs: number;
+  private readonly traceAckTimeoutMs: number;
   private lastActivityAt = 0;
 
   // Active task-event delivery. A loop serially processes one target agent.
@@ -570,7 +596,7 @@ export class SessionManager {
   // (intended range ~2–6 for shared/rate-limited gateways).
   private readonly maxConcurrentAgents: number;
   private readonly providerSlots = new Map<string, ProviderSemaphore>();
-  private readonly providerLease = new AsyncLocalStorage<{ sessionId: string; childLane: ProviderSemaphore }>();
+  private readonly providerLease = new AsyncLocalStorage<ProviderLease>();
 
   // #256: max upload size in bytes (base64 + raw-stream paths). Configurable
   // via BP_UPLOAD_MAX_BYTES / opts; default 1 GiB.
@@ -602,6 +628,7 @@ export class SessionManager {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
+    this.traceAckTimeoutMs = Math.max(1, Math.trunc(opts.traceAckTimeoutMs ?? TRACE_ACK_TIMEOUT_MS));
     this.userInputTimeoutMs =
       typeof opts.userInputTimeoutMs === "number"
         && Number.isFinite(opts.userInputTimeoutMs)
@@ -1624,6 +1651,7 @@ export class SessionManager {
       checkpoints,
       workspaceOperationActive: false,
       currentTraceRecord: undefined,
+      traceSubmissions: new Map(),
       agents: new Map(),
       deliveryErrors: new Map(),
       runActive: false,
@@ -2307,6 +2335,11 @@ export class SessionManager {
     // to unwind. The batch already being processed may settle, but later queued
     // events remain durable for the next explicit user turn.
     if (wholeSession) await entry.taskLedger.pauseDelivery();
+    // A caller blocked inside record_trace cannot finish abort() while Trace
+    // delivery is paused. Release only the synchronous acknowledgement wait;
+    // keep the durable notification and submission state so a later resumed
+    // delivery can still converge to accepted/rejected.
+    this.releaseTraceWaitersForInterrupt(entry, agentName);
     const monitorsStopped = agentName
       ? await entry.monitorManager.stopOwner(agentName)
       : await entry.monitorManager.stopAll();
@@ -2555,7 +2588,13 @@ export class SessionManager {
         }
         return task;
       },
-      dispatchTrace: async (content) => entry.taskLedger.enqueueTrace(name, content),
+      dispatchTrace: async (content) => {
+        const notification = await entry.taskLedger.enqueueTrace(name, content);
+        this.registerTraceSubmission(entry, notification.id, this.providerLease.getStore());
+        return { submissionId: notification.id };
+      },
+      awaitTraceResult: (submissionId, record) =>
+        this.awaitTraceResult(entry, submissionId, record),
       ensureAgent: async (target) => {
         await this.ensureAgent(sessionId, target);
       },
@@ -2958,6 +2997,127 @@ export class SessionManager {
     });
   }
 
+  private traceNodeForRecord(entry: SessionEntry, record: TraceNodeRecord) {
+    return entry.trace.getGraph().nodes.find((node) => (node.records ?? []).some((candidate) => {
+      if (record.checkpointId) return candidate.checkpointId === record.checkpointId;
+      return candidate.sourceAgent === record.sourceAgent
+        && candidate.createdAt === record.createdAt
+        && candidate.description === record.description;
+    }));
+  }
+
+  private registerTraceSubmission(
+    entry: SessionEntry,
+    submissionId: string,
+    parentLease?: ProviderLease,
+  ): TraceSubmissionState {
+    const existing = entry.traceSubmissions.get(submissionId);
+    if (existing) {
+      if (parentLease?.sessionId === entry.id) existing.parentLease = parentLease;
+      return existing;
+    }
+    const state: TraceSubmissionState = {
+      deferred: makeDeferred<TraceDispatchResult>(),
+      ...(parentLease?.sessionId === entry.id ? { parentLease } : {}),
+      parentWaiting: false,
+      reportedSubmitted: false,
+    };
+    entry.traceSubmissions.set(submissionId, state);
+    return state;
+  }
+
+  private emitTraceSubmissionResult(
+    entry: SessionEntry,
+    result: TraceDispatchResult & { status: "accepted" | "rejected" },
+  ): void {
+    const accepted = result.status === "accepted";
+    const message = accepted
+      ? "Trace accepted the submitted research milestone and added it to the graph."
+      : result.reason ?? "Trace processed this event but did not add a node. No durable Trace record was created.";
+    entry.bus.emit(ev.systemMessage(entry.id, "info", message, {
+      agent: "trace",
+      id: `trace-result:${result.submissionId}`,
+      code: accepted ? "trace_submission_accepted" : "trace_submission_rejected",
+      details: accepted
+        ? `Submission ${result.submissionId}; node ${result.nodeId}.`
+        : `Submission ${result.submissionId}.`,
+    }));
+  }
+
+  private completeTraceSubmission(
+    entry: SessionEntry,
+    result: TraceDispatchResult & { status: "accepted" | "rejected" },
+  ): void {
+    const state = entry.traceSubmissions.get(result.submissionId);
+    // Rejections are always surfaced quietly. Accepted results only need a
+    // separate Chat update after the tool already returned submitted, or when
+    // a durable notification is recovered after a process restart.
+    if (result.status === "rejected" || state?.reportedSubmitted || !state) {
+      this.emitTraceSubmissionResult(entry, result);
+    }
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
+    state.parentWaiting = false;
+    state.deferred.resolve(result);
+    entry.traceSubmissions.delete(result.submissionId);
+  }
+
+  private runTraceDeliveryWithProviderCapacity<T>(
+    entry: SessionEntry,
+    submissionId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const state = entry.traceSubmissions.get(submissionId);
+    const parentLease = state?.parentWaiting ? state.parentLease : undefined;
+    if (parentLease?.sessionId === entry.id) {
+      return this.providerLease.run(
+        parentLease,
+        () => this.withProviderSlot(entry.id, fn, true),
+      );
+    }
+    return this.withProviderSlot(entry.id, fn);
+  }
+
+  private submittedTraceResult(submissionId: string): TraceDispatchResult {
+    return {
+      status: "submitted",
+      submissionId,
+      reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
+    };
+  }
+
+  private releaseTraceWaitersForInterrupt(entry: SessionEntry, agentName?: string): void {
+    for (const [submissionId, state] of entry.traceSubmissions) {
+      const affected = agentName === undefined
+        || agentName === "trace"
+        || state.record?.sourceAgent === agentName;
+      if (!affected || !state.parentWaiting) continue;
+      if (state.timer) clearTimeout(state.timer);
+      state.reportedSubmitted = true;
+      state.parentWaiting = false;
+      state.deferred.resolve(this.submittedTraceResult(submissionId));
+    }
+  }
+
+  private async awaitTraceResult(
+    entry: SessionEntry,
+    submissionId: string,
+    record: TraceNodeRecord,
+  ): Promise<TraceDispatchResult> {
+    const state = this.registerTraceSubmission(entry, submissionId);
+    state.record = record;
+    state.parentWaiting = true;
+    const submitted = this.submittedTraceResult(submissionId);
+    const timeout = new Promise<TraceDispatchResult>((resolve) => {
+      state.timer = setTimeout(() => {
+        state.reportedSubmitted = true;
+        state.parentWaiting = false;
+        resolve(submitted);
+      }, this.traceAckTimeoutMs);
+    });
+    return Promise.race([state.deferred.promise, timeout]);
+  }
+
   /**
    * Peek `name`'s durable task events and run it, looping so events that arrive
    * during a turn are picked up without a second external wake. Events are only
@@ -2982,6 +3142,9 @@ export class SessionManager {
       if (notifications.length === 0 && !monitorBatch) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
+      const traceToolErrorBaseline = name === "trace"
+        ? Object.values(agent.stats().errors).reduce((total, count) => total + count, 0)
+        : undefined;
       // A task notification may be injected into an active turn below. A
       // Monitor-only delivery must wait for idle because monitor output starts
       // a fresh agent turn rather than joining the current one.
@@ -3005,8 +3168,17 @@ export class SessionManager {
           await agent.followUpAndWait(deliveryInput, { terminalErrors: false });
           ran = true;
         } else {
-          // #167: cap new provider runs across experts in this session.
-          ran = await this.withProviderSlot(sessionId, async () => {
+          // #167: cap new provider runs across experts in this session. A
+          // record_trace delivery may borrow the provider lease held by the
+          // caller that is synchronously waiting for this exact notification.
+          const runWithCapacity = name === "trace" && notifications[0]
+            ? (fn: () => Promise<boolean>) => this.runTraceDeliveryWithProviderCapacity(
+                entry,
+                notifications[0]!.id,
+                fn,
+              )
+            : (fn: () => Promise<boolean>) => this.withProviderSlot(sessionId, fn);
+          ran = await runWithCapacity(async () => {
             // Stop may have paused delivery while this run waited for a provider
             // semaphore slot. Do not start a new model call after Stop completed.
             const current = this.sessions.get(sessionId);
@@ -3079,6 +3251,30 @@ export class SessionManager {
       );
       if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
+      if (name === "trace" && notifications[0]) {
+        const submissionId = notifications[0].id;
+        const sourceRecord = traceRecord ?? entry.traceSubmissions.get(submissionId)?.record;
+        const accepted = sourceRecord ? this.traceNodeForRecord(entry, sourceRecord) : undefined;
+        if (accepted) {
+          this.completeTraceSubmission(entry, {
+            status: "accepted",
+            submissionId,
+            nodeId: accepted.id,
+          });
+        } else {
+          const traceToolErrorCount = Object.values(agent.stats().errors)
+            .reduce((total, count) => total + count, 0);
+          const traceToolFailed = traceToolErrorBaseline !== undefined
+            && traceToolErrorCount > traceToolErrorBaseline;
+          this.completeTraceSubmission(entry, {
+            status: "rejected",
+            submissionId,
+            reason: traceToolFailed
+              ? "Trace processed this event but could not add a node because a curation action failed validation or execution. No durable Trace record was created."
+              : "Trace processed this event but did not add a node. No durable Trace record was created.",
+          });
+        }
+      }
     }
   }
 
