@@ -3,7 +3,7 @@ import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from
 import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
-import { useTurnTimer } from "../../contexts/useTurnTimer";
+import { latestDurableUserTurn, useTurnTimer } from "../../contexts/useTurnTimer";
 import { draftStore } from "../../contexts/draftStore";
 import { writeRecoveryDraft } from "../../contexts/errorRecovery";
 import { applyMessageFilters } from "../../contexts/messageFilters";
@@ -668,9 +668,34 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : current));
   }, [runActive, sessionId]);
 
+  const latestTimedTurn = useMemo(() => latestDurableUserTurn(messages), [messages]);
+
+  const latestInterruption = useMemo(() => {
+    if (!latestTimedTurn) return null;
+    const prefix = currentSession?.id ? `interrupt:${currentSession.id}:` : "interrupt:";
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.kind !== "system_message" || !message.id.startsWith(prefix)) continue;
+      const atMs = Date.parse(message.createdAt);
+      if (!Number.isFinite(atMs) || atMs < latestTimedTurn.atMs) return null;
+      return {
+        id: message.id,
+        turnId: message.runId ?? message.id.slice(prefix.length),
+        atMs,
+        startedAt: latestTimedTurn.atMs,
+      };
+    }
+    return null;
+  }, [currentSession?.id, latestTimedTurn, messages]);
+
   // #99: whole-turn timer — spans user input → every agent finished (workState
   // settles false), debounced against hook/system re-wakes.
-  const turnTiming = useTurnTimer({ runActive: workActive, resetKey: currentSession?.id ?? null });
+  const turnTiming = useTurnTimer({
+    runActive: workActive,
+    turn: latestTimedTurn,
+    interruption: latestInterruption,
+    resetKey: currentSession?.id ?? null,
+  });
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();

@@ -516,6 +516,10 @@ export function createApp(options: CreateAppOptions): Hono {
     const servers = await readMcpServers(dataDir);
     return c.json(servers.map(toHttpMcpServer));
   });
+  // Hosted deployments replace this capability endpoint with a JSON status
+  // array. Self-hosted explicitly answers 204 so the Settings feature probe can
+  // disable BYOK cards without generating an expected 404 in the browser.
+  api.get("/mcp-servers/byok", (c) => c.body(null, 204));
   api.post("/mcp-servers", async (c) => {
     const body = await safeJson(c);
     const name = typeof body.name === "string" ? body.name.trim() : "";

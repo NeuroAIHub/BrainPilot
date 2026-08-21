@@ -18,12 +18,36 @@ export function resolveEscapeLayer(state: {
 
 /** CSS selector for focusable controls inside a dialog. */
 export const FOCUSABLE_SELECTOR =
-  'a[href], button:not([disabled]), textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
+  'a[href], button:not([disabled]), summary, textarea:not([disabled]), input:not([disabled]), select:not([disabled]), [tabindex]:not([tabindex="-1"])';
 
 export function listFocusable(container: HTMLElement): HTMLElement[] {
   return Array.from(container.querySelectorAll<HTMLElement>(FOCUSABLE_SELECTOR)).filter(
     (el) => !el.hasAttribute("disabled") && el.tabIndex !== -1 && el.offsetParent !== null,
   );
+}
+
+/**
+ * Resolve the next control for a focus trap. The trap owns every Tab movement
+ * instead of relying on WebKit's native traversal through an inert background;
+ * Safari can otherwise drop focus onto body between two valid dialog controls.
+ * Focus on the dialog container itself (or another non-control) starts at the
+ * appropriate boundary.
+ */
+export function resolveFocusTrapTarget<T>(
+  focusable: readonly T[],
+  active: T | null,
+  shiftKey: boolean,
+): T | null {
+  if (focusable.length === 0) return null;
+  const activeIndex = active === null ? -1 : focusable.indexOf(active);
+  if (shiftKey) {
+    const previousIndex = activeIndex <= 0 ? focusable.length - 1 : activeIndex - 1;
+    return focusable[previousIndex]!;
+  }
+  const nextIndex = activeIndex < 0 || activeIndex === focusable.length - 1
+    ? 0
+    : activeIndex + 1;
+  return focusable[nextIndex]!;
 }
 
 /**
@@ -36,19 +60,13 @@ export function trapFocusKeyDown(container: HTMLElement, event: KeyboardEvent): 
     event.preventDefault();
     return true;
   }
-  const first = focusable[0]!;
-  const last = focusable[focusable.length - 1]!;
   const active = document.activeElement as HTMLElement | null;
-  if (event.shiftKey) {
-    if (!active || active === first || !container.contains(active)) {
-      event.preventDefault();
-      last.focus();
-      return true;
-    }
-  } else if (active === last) {
-    event.preventDefault();
-    first.focus();
-    return true;
-  }
-  return false;
+  const target = resolveFocusTrapTarget(
+    focusable,
+    active && container.contains(active) ? active : null,
+    event.shiftKey,
+  );
+  event.preventDefault();
+  target?.focus();
+  return true;
 }

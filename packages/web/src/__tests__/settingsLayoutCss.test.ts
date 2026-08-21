@@ -43,11 +43,19 @@ describe("#318 Settings mobile layout CSS contract", () => {
     expect(block).toMatch(/aspect-ratio:\s*auto/);
   });
 
-  it("turns section tabs into a horizontal scroll strip", () => {
+  it("shows every section in a non-scrolling grid", () => {
     const block = mobileBlock();
     expect(block).toContain(".settings-tabs");
-    expect(block).toMatch(/\.settings-tabs\s*\{[^}]*display:\s*flex/s);
-    expect(block).toMatch(/overflow-x:\s*auto/);
+    expect(block).toMatch(/\.settings-tabs\s*\{[^}]*display:\s*grid/s);
+    expect(block).toMatch(/grid-template-columns:\s*repeat\(3,\s*minmax\(0,\s*1fr\)\)/);
+    expect(block).toMatch(/@media\s*\(\s*max-width:\s*520px\s*\)/);
+    expect(block).toMatch(/grid-template-columns:\s*repeat\(2,\s*minmax\(0,\s*1fr\)\)/);
+    expect(block).not.toMatch(/overflow-x:\s*auto/);
+  });
+
+  it("keeps mobile tab controls touch sized", () => {
+    const block = mobileBlock();
+    expect(block).toMatch(/\.settings-tabs button\s*\{[^}]*height:\s*42px/s);
   });
 
   it("reflows provider/MCP action grids so fixed 82px columns do not clip", () => {

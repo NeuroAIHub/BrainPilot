@@ -349,6 +349,8 @@ interface SessionEntry {
   deliveryErrors: Map<string, number>;
   runActive: boolean;
   activeRunId: string | null;
+  /** User turn that owns aggregate background work after Principal settles. */
+  turnRunId: string | null;
   /** One visible ask_user plus FIFO requests waiting behind it. */
   userInputs: UserInputArbiter;
   /** This session's chosen provider/model (resolved against providers.json). */
@@ -1654,6 +1656,7 @@ export class SessionManager {
       deliveryErrors: new Map(),
       runActive: false,
       activeRunId: null,
+      turnRunId: null,
       userInputs: { queue: [], operations: Promise.resolve() },
       providerRef,
       thinkingLevel,
@@ -1942,7 +1945,7 @@ export class SessionManager {
     // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
     if (agent.isStreaming) {
       const runId = entry.activeRunId ?? undefined;
-      void agent.followUp(content, opts.uuid ?? randomUUID()).finally(() => {
+      void agent.followUp(content, opts.uuid ?? randomUUID(), { messageRunId: runId }).finally(() => {
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
         }
@@ -1970,6 +1973,7 @@ export class SessionManager {
     entry.runActive = agentName === "principal";
     entry.activeRunId = `run_${randomUUID()}`;
     const runId = entry.activeRunId;
+    if (agentName === "principal") entry.turnRunId = runId;
     // #70: emit an initial session_state frame here — onStatusChange only fires
     // on a status *change*, and ensureAgent creates the agent as idle without
     // emitting, so without this the panel stays empty until the first
@@ -2311,6 +2315,12 @@ export class SessionManager {
     ) {
       return false;
     }
+    // Capture the user turn before cancelling ask_user or aborting agents. Both
+    // can unwind the Principal and clear activeRunId before the acknowledgement
+    // is emitted, while background work still belongs to the same user turn.
+    const interruptedTurnId = wholeSession
+      ? entry.turnRunId ?? entry.activeRunId ?? undefined
+      : entry.activeRunId ?? undefined;
     // Reject any pending ask_user FIRST: a prompt blocked awaiting user input
     // would never settle, so abort()'s waitForIdle (#101) must not run before
     // these are unblocked or it would deadlock.
@@ -2320,9 +2330,7 @@ export class SessionManager {
       "interrupted",
       !wholeSession,
     );
-    // Capture run identity before aborts clear agent state so the interrupt
-    // acknowledgement can carry a stable id for client hydrate dedupe (#330).
-    const interruptEventId = `interrupt:${sessionId}:${entry.activeRunId ?? randomUUID()}`;
+    const interruptEventId = `interrupt:${sessionId}:${interruptedTurnId ?? randomUUID()}`;
     // Fence new delivery-loop iterations before waiting for in-flight prompts
     // to unwind. The batch already being processed may settle, but later queued
     // events remain durable for the next explicit user turn.
@@ -2352,6 +2360,7 @@ export class SessionManager {
           agent: "principal",
           recoverable: true,
           id: interruptEventId,
+          runId: interruptedTurnId,
         }),
       );
       this.touch(entry);
@@ -3553,10 +3562,12 @@ export class SessionManager {
    * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
    */
   private emitSessionState(entry: SessionEntry): void {
+    const runActive = this.deriveRunActive(entry);
+    const workActive = this.deriveWorkActive(entry);
     entry.bus.emit(
       ev.custom({ sessionId: entry.id }, "session_state", {
-        runState: { active: this.deriveRunActive(entry), runId: entry.activeRunId },
-        workState: { active: this.deriveWorkActive(entry) },
+        runState: { active: runActive, runId: entry.activeRunId },
+        workState: { active: workActive },
         agents: this.listAgents(entry.id),
         subagents: entry.subagents.list(),
         lastActivityTs: new Date(entry.lastActivityAt).toISOString(),
@@ -3564,6 +3575,7 @@ export class SessionManager {
         tokenUsage: entry.tokenUsage,
       }),
     );
+    if (!workActive) entry.turnRunId = null;
   }
 
   private emitTaskSnapshot(entry: SessionEntry): void {

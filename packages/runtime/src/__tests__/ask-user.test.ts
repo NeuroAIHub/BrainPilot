@@ -131,7 +131,7 @@ describe("ask_user (SessionManager)", () => {
     const session = await m.createSession({ title: "T" });
     const events: AgUiEvent[] = [];
     m.subscribe(session.id, (e) => events.push(e));
-    await m.sendMessage(session.id, 'decide [[tool:ask_user {"question":"Q"}]]');
+    const firstRun = await m.sendMessage(session.id, 'decide [[tool:ask_user {"question":"Q"}]]');
     await new Promise((r) => setTimeout(r, 20));
     expect(events.find((e) => e.type === "user_input_request")).toBeTruthy();
 
@@ -146,6 +146,20 @@ describe("ask_user (SessionManager)", () => {
       reason: "interrupted",
     });
     expect(parseEvent(cancelled)).toBeTruthy();
+
+    const acknowledgement = events.find((event) =>
+      event.type === "system_message"
+      && String((event as { message?: string }).message).includes("中断"));
+    expect(acknowledgement).toMatchObject({
+      id: `interrupt:${session.id}:${firstRun.runId}`,
+      run_id: firstRun.runId,
+    });
+
+    const resumedRun = await m.sendMessage(session.id, "resume immediately");
+    expect(resumedRun.runId).toMatch(/^run_/);
+    expect(resumedRun.runId).not.toBe(firstRun.runId);
+    await new Promise((resolve) => setTimeout(resolve, 20));
+    expect(m.getSessionState(session.id)?.workState.active).toBe(false);
   });
 
   it("answer and interrupt produce exactly one terminal event", async () => {

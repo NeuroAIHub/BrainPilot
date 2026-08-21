@@ -114,6 +114,20 @@ describe("system_message mapping", () => {
     expect(replayed[0]?.id).toBe("event-terminal-1");
   });
 
+  it("keeps both transport dedupe identity and user-turn identity", () => {
+    const [message] = reduceMessagesForEvent([], {
+      type: "system_message",
+      _eventId: "event-interrupt-1",
+      run_id: "run-original",
+      level: "info",
+      message: "stopped",
+    } as unknown as WebSocketEvent);
+    expect(message).toMatchObject({
+      id: "event-interrupt-1",
+      runId: "run-original",
+    });
+  });
+
   it("deduplicates legacy terminal errors that predate stable event ids", () => {
     const event = {
       type: "system_message",

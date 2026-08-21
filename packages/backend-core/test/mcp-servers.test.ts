@@ -48,6 +48,13 @@ function del(app: ReturnType<typeof createApp>, name: string) {
 }
 
 describe("MCP Servers CRUD (/api/mcp-servers)", () => {
+  it("reports hosted-only BYOK as unsupported without a 404", async () => {
+    const { app } = await setup();
+    const res = await app.request("/api/mcp-servers/byok");
+    expect(res.status).toBe(204);
+    expect(await res.text()).toBe("");
+  });
+
   it("GET returns empty array when no config file exists", async () => {
     const { app } = await setup();
     const res = await app.request("/api/mcp-servers");
