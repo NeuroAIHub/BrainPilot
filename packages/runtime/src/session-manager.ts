@@ -919,8 +919,8 @@ export class SessionManager {
    * attached in the draft composer *before* the real session exists. They land
    * in `workspaces/local/` — but the agent's cwd is `workspaces/<sessionId>/`,
    * so without this it can't read the file the user just attached. We treat
-   * `workspaces/local/` as a staging area and drain it into the real session
-   * workspace right before the agent runs (see drainLocalUploads).
+   * `workspaces/local/` as a staging area and drain it when the real session is
+   * created (see drainLocalUploads).
    */
   private static readonly UPLOAD_STAGING_SID = "local";
   /**
@@ -1309,7 +1309,8 @@ export class SessionManager {
    * real session's workspace so the agent — whose cwd is `workspaces/<sid>/` —
    * can read files the user attached in the draft composer (when no real
    * session id existed yet, the web uploads against the literal `"local"`
-   * sandbox id). Called right before the agent runs.
+   * sandbox id). Called while the real session is created, before the first
+   * message post can fail.
    *
    * Move semantics: each staged entry is renamed into the session workspace
    * (an existing same-named entry in the session is left untouched and the
@@ -1687,6 +1688,9 @@ export class SessionManager {
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
     await subagents.restore();
+    if (!_restore) {
+      await this.drainLocalUploads(id);
+    }
     this.emitTaskSnapshot(entry);
     if (_restore) {
       for (const target of taskLedger.notificationTargets()) this.wakeAgent(id, target);
@@ -1853,10 +1857,6 @@ export class SessionManager {
       return { accepted: false };
     }
     const agent = await this.ensureAgent(sessionId, agentName);
-    // #60: pull any composer uploads staged under workspaces/local/ into this
-    // session's workspace (the agent's cwd) before it runs, so it can read the
-    // file the user just attached. No-op when nothing was staged.
-    await this.drainLocalUploads(sessionId);
 
     // Snapshot user/Bench-provided inputs before the first agent prompt. Without
     // this baseline the first record_trace diffs against Git's empty tree and
@@ -2993,7 +2993,7 @@ export class SessionManager {
         if (agent.isStreaming) {
           // The notification is already durable. Queue it into the active Pi
           // run, then fence that run before acknowledging the batch.
-          await agent.followUpAndWait(deliveryInput);
+          await agent.followUpAndWait(deliveryInput, { terminalErrors: false });
           ran = true;
         } else {
           // #167: cap new provider runs across experts in this session.
@@ -3004,8 +3004,11 @@ export class SessionManager {
             if (!current || current !== entry || current.taskLedger.isPaused(name)) return false;
             // A user run can start while this delivery waits for a provider
             // slot. Inject rather than racing it with a second plain prompt.
-            if (agent.isStreaming) await agent.followUpAndWait(deliveryInput);
-            else await agent.prompt(deliveryInput);
+            if (agent.isStreaming) {
+              await agent.followUpAndWait(deliveryInput, { terminalErrors: false });
+            } else {
+              await agent.prompt(deliveryInput, { terminalErrors: false });
+            }
             return true;
           });
         }
@@ -3055,7 +3058,7 @@ export class SessionManager {
           entry.id,
           "error",
           `Agent "${name}" 未产生可确认的运行结果，已保留任务事件并暂停投递。`,
-          { agent: name, recoverable: true },
+          { agent: name, recoverable: true, terminal: true },
         ));
         return;
       }
@@ -3140,7 +3143,12 @@ export class SessionManager {
       entry.id,
       "error",
       `Monitor "${batch.description}" ${reason}，已停止该 Monitor 并丢弃 ${discarded} 个待投递批次。`,
-      { agent: name, recoverable: true },
+      {
+        agent: name,
+        details: agent.state().lastError?.message,
+        recoverable: true,
+        terminal: agent.lastRunOutcome === "error",
+      },
     ));
     return false;
   }
@@ -3188,7 +3196,7 @@ export class SessionManager {
         kind === "fatal"
           ? `专家 "${name}" 发生无法自动恢复的错误，已通知任务派遣者。`
           : `专家 "${name}" 连续 ${count} 次执行失败，已通知任务派遣者。`,
-        { agent: name, recoverable: true },
+        { agent: name, details: headline, recoverable: true, terminal: true },
       ),
     );
     // Preserve every event from the failed batch, including completed child
@@ -3222,7 +3230,12 @@ export class SessionManager {
         entry.id,
         "error",
         `Agent "${name}" 无法处理待投递任务事件，已暂停自动投递；下一条用户消息将恢复。`,
-        { agent: name, recoverable: true },
+        {
+          agent: name,
+          details: agent.state().lastError?.message,
+          recoverable: true,
+          terminal: true,
+        },
       ),
     );
     return false;
@@ -3449,6 +3462,7 @@ export class SessionManager {
       const plan = entry.trace.getCausalRollbackPlan(nodeId);
       if (!plan) return undefined;
       const checkpointIds = (await entry.checkpoints.refs(plan.checkpointIds)).map((ref) => ref.id);
+      const restorePreview = await entry.checkpoints.previewCausal(checkpointIds);
       await entry.checkpoints.restoreCausal(checkpointIds, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was rolled back.");
         this.emitTaskSnapshot(entry);
@@ -3461,6 +3475,24 @@ export class SessionManager {
         reason: `Revoked ${plan.affectedNodeIds.length} causal descendants.`,
         metadata: { affectedNodeIds: plan.affectedNodeIds },
       });
+      await entry.bus.emitDurable(ev.systemMessage(
+        sessionId,
+        "info",
+        "Workspace rolled back to an earlier Trace state.",
+        {
+          id: `workspace-restore:${change.id}`,
+          code: "workspace_restored",
+          metadata: {
+            mode: "causal",
+            nodeId,
+            changeId: change.id,
+            restoredAt: new Date().toISOString(),
+            files: restorePreview.files.map((file) => file.path),
+            fileCount: restorePreview.files.length,
+            affectedNodeCount: plan.affectedNodeIds.length,
+          },
+        },
+      ));
       return { nodeId, affectedNodeIds: plan.affectedNodeIds, changeId: change.id };
     } catch (error) {
       if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;
@@ -3476,6 +3508,8 @@ export class SessionManager {
     this.beginWorkspaceOperation(entry, "restore");
     let releaseWorkspace = true;
     try {
+      const restorePreview = await entry.checkpoints.preview(checkpointId);
+      if (!restorePreview) return undefined;
       const restored = await entry.checkpoints.restore(checkpointId, stateToken, async () => {
         await entry.taskLedger.cancelAllPending("Cancelled because the workspace was restored to an earlier checkpoint.");
         this.emitTaskSnapshot(entry);
@@ -3490,6 +3524,24 @@ export class SessionManager {
         reason: `Restored workspace checkpoint ${checkpointId}.`,
         metadata: { restoredCheckpointId: checkpointId },
       });
+      await entry.bus.emitDurable(ev.systemMessage(
+        sessionId,
+        "info",
+        "Workspace restored to an earlier checkpoint.",
+        {
+          id: `workspace-restore:${change.id}`,
+          code: "workspace_restored",
+          metadata: {
+            mode: "checkpoint",
+            checkpointId,
+            nodeId: targetNode?.id,
+            changeId: change.id,
+            restoredAt: new Date().toISOString(),
+            files: restorePreview.files.map((file) => file.path),
+            fileCount: restorePreview.files.length,
+          },
+        },
+      ));
       return { ...restored, changeId: change.id };
     } catch (error) {
       if ((error as Error & { code?: string }).code === "WORKSPACE_RECOVERY_FAILED") releaseWorkspace = false;

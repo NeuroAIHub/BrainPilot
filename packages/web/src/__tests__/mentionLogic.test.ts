@@ -4,6 +4,7 @@ import {
   filterCandidates,
   buildMentionItems,
   applyMention,
+  appendFileReference,
   formatMcpInsertion,
   formatFileInsertion,
   moveActiveIndex,
@@ -23,6 +24,8 @@ const LABELS = {
   mcpError: "Failed to load MCP",
   filesNeedSandbox: "Start sandbox for files",
   filesError: "Failed to load files",
+  fileScopeSession: "Current session",
+  fileScopePersistent: "Persistent library",
 };
 
 describe("detectMention", () => {
@@ -102,6 +105,19 @@ describe("format insertions", () => {
   it("formats file path with backticks", () => {
     expect(formatFileInsertion("/workspace/a.py")).toBe("`/workspace/a.py` ");
   });
+
+  it("uses a longer fence when a valid filename contains a backtick", () => {
+    expect(formatFileInsertion("/data/a`b.txt")).toBe("``/data/a`b.txt`` ");
+  });
+
+  it("appends a file reference without joining it to the previous word", () => {
+    expect(appendFileReference("Compare", "/data/paper.csv")).toBe(
+      "Compare `/data/paper.csv` ",
+    );
+    expect(appendFileReference("", "/workspace/report.md")).toBe(
+      "`/workspace/report.md` ",
+    );
+  });
 });
 
 describe("buildMentionItems", () => {
@@ -112,8 +128,9 @@ describe("buildMentionItems", () => {
   const filesReady: SourceStatus<MentionFile> = {
     state: "ready",
     items: [
-      { name: "a.py", path: "/workspace/a.py", type: "file" },
-      { name: "src", path: "/workspace/src", type: "folder" },
+      { name: "a.py", path: "/workspace/a.py", type: "file", scope: "session" },
+      { name: "src", path: "/workspace/src", type: "folder", scope: "session" },
+      { name: "ux-test.txt", path: "/data/ux-test.txt", type: "file", scope: "persistent" },
     ],
   };
 
@@ -124,9 +141,15 @@ describe("buildMentionItems", () => {
       query: "",
       labels: LABELS,
     });
-    expect(items.filter((i) => i.selectable)).toHaveLength(4);
+    expect(items.filter((i) => i.selectable)).toHaveLength(5);
     expect(items.find((i) => i.id === "mcp:filesystem")?.insertion).toBe("@mcp:filesystem ");
     expect(items.find((i) => i.id === "file:/workspace/src")?.insertion).toBe("`/workspace/src/` ");
+    expect(items.find((i) => i.id === "file:/workspace/a.py")?.detail).toBe(
+      "Current session · /workspace/a.py",
+    );
+    expect(items.find((i) => i.id === "file:/data/ux-test.txt")?.detail).toBe(
+      "Persistent library · /data/ux-test.txt",
+    );
   });
 
   it("shows MCP empty status while still listing files", () => {
@@ -137,7 +160,7 @@ describe("buildMentionItems", () => {
       labels: LABELS,
     });
     expect(items.some((i) => i.id === "mcp-empty")).toBe(true);
-    expect(items.filter((i) => i.kind === "file")).toHaveLength(2);
+    expect(items.filter((i) => i.kind === "file")).toHaveLength(3);
   });
 
   it("shows files-need-sandbox while listing MCP", () => {
@@ -170,6 +193,18 @@ describe("buildMentionItems", () => {
       labels: LABELS,
     });
     expect(items.filter((i) => i.selectable).map((i) => i.label)).toEqual(["search"]);
+  });
+
+  it("finds a persistent-library file by filename", () => {
+    const items = buildMentionItems({
+      plugins: pluginsReady,
+      files: filesReady,
+      query: "ux-test",
+      labels: LABELS,
+    });
+    expect(items.filter((i) => i.selectable).map((i) => i.insertion)).toEqual([
+      "`/data/ux-test.txt` ",
+    ]);
   });
 
   it("shows loading status for plugins", () => {

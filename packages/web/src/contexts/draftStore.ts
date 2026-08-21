@@ -16,9 +16,48 @@ import { useCallback, useSyncExternalStore } from "react";
  *   - Drafts must be isolated per session — switching sessions keeps the
  *     composer mounted but should swap which draft is visible.
  */
-class DraftStore {
-  private drafts = new Map<string, string>();
+export const DRAFT_STORAGE_KEY = "bp.web.composerDrafts.v1";
+
+function defaultLocalStorage(): Storage | null {
+  try {
+    return typeof window === "undefined" ? null : window.localStorage;
+  } catch {
+    return null;
+  }
+}
+
+function readPersistedDrafts(storage: Pick<Storage, "getItem"> | null): Map<string, string> {
+  if (!storage) return new Map();
+  try {
+    const parsed = JSON.parse(storage.getItem(DRAFT_STORAGE_KEY) ?? "{}") as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return new Map();
+    return new Map(Object.entries(parsed as Record<string, unknown>)
+      .filter((entry): entry is [string, string] => typeof entry[1] === "string" && entry[1].length > 0));
+  } catch {
+    return new Map();
+  }
+}
+
+export class DraftStore {
+  private drafts: Map<string, string>;
   private listeners = new Map<string, Set<() => void>>();
+
+  constructor(private readonly storage: Pick<Storage, "getItem" | "setItem" | "removeItem"> | null = defaultLocalStorage()) {
+    this.drafts = readPersistedDrafts(storage);
+  }
+
+  private persist(): void {
+    if (!this.storage) return;
+    try {
+      if (this.drafts.size === 0) {
+        this.storage.removeItem(DRAFT_STORAGE_KEY);
+      } else {
+        this.storage.setItem(DRAFT_STORAGE_KEY, JSON.stringify(Object.fromEntries(this.drafts)));
+      }
+    } catch {
+      // Quota/private mode: keep the in-memory draft for this page lifetime.
+    }
+  }
 
   get(sessionId: string): string {
     return this.drafts.get(sessionId) ?? "";
@@ -29,7 +68,9 @@ class DraftStore {
       // Skip notify on no-op writes so React doesn't schedule needless work.
       return;
     }
-    this.drafts.set(sessionId, value);
+    if (value.length > 0) this.drafts.set(sessionId, value);
+    else this.drafts.delete(sessionId);
+    this.persist();
     const subs = this.listeners.get(sessionId);
     if (subs) {
       subs.forEach((listener) => listener());
@@ -55,9 +96,12 @@ class DraftStore {
 
   delete(sessionId: string): void {
     this.drafts.delete(sessionId);
-    // Keep listener set alive — if a component is currently mounted on this id
-    // (rare, but possible during async deletion), it will still get notified
-    // of the implicit "" snapshot via get().
+    this.persist();
+    this.listeners.get(sessionId)?.forEach((listener) => listener());
+  }
+
+  has(sessionId: string): boolean {
+    return this.get(sessionId).length > 0;
   }
 }
 

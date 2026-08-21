@@ -20,7 +20,7 @@ type SidebarProps = {
   onOpenDemo: () => void;
   onGoWorkspace: () => void;
   onOpenPlugins: () => void;
-  onOpenSettings: () => void;
+  onOpenSettings: (trigger: HTMLButtonElement) => void;
   onOpenSearch: () => void;
   onResizeStart: (pointerX: number) => void;
   onToggle: () => void;
@@ -205,7 +205,12 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
             <span>{t("sidebar.home")}</span>
           </a>
         )}
-        <button className="nav-item" onClick={onOpenSettings} type="button" title={t("sidebar.settings")}>
+        <button
+          className="nav-item"
+          onClick={(event) => onOpenSettings(event.currentTarget)}
+          type="button"
+          title={t("sidebar.settings")}
+        >
           <Settings size={16} />
           <span>{t("sidebar.settings")}</span>
         </button>
