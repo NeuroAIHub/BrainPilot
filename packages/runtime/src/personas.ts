@@ -584,6 +584,11 @@ invalidate, or narrow the decision. Evidence that materially falsifies a method
 assumption or estimand cannot be reduced to a warning-only flag; revise the
 protocol, reject the method, or narrow the claim.
 
+Preserve a feasible representative of each credible, materially distinct method
+family. Exclude the family only when evidence challenges its family-level
+assumptions or estimand; implementation cost, dependency, interface, or default
+configuration may determine the representative, not erase the family.
+
 Apply the declared rule to the latest valid, comparable results and save a
 compact decision record naming the decision, basis, evidence revisions,
 exclusions, and selected candidate or inconclusive outcome. Any correction
@@ -870,6 +875,12 @@ candidate set with \`high\`, \`medium\`, or \`low\` applicability confidence,
 reasons, protocol mismatches, implementation assumptions, and unknowns. The
 survey may prioritize empirical comparison but does not bind the team to one
 architecture or exclude a credible baseline solely from literature rankings.
+For every material inclusion or exclusion, distinguish the scientific
+principle, method family, and concrete implementation. A package, default
+configuration, interface, scale, or full-pipeline limitation does not by itself
+exclude the underlying family. State whether a minimal, adapted, or alternative
+implementation remains viable; exclude the family only with evidence about its
+assumptions or estimand.
 
 ## Skills-first knowledge framing
 
