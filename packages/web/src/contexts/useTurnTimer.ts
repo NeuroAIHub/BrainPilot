@@ -13,25 +13,67 @@
  * turn momentarily ends — that mid-flap false must NOT end the turn.
  */
 import { useEffect, useReducer, useRef, useState } from "react";
+import type { ChatMessage } from "../contracts/backend";
 import {
-  turnTimerReducer,
-  initialTurnTimerState,
+  initialSessionTurnTimerState,
+  sessionTurnTimerReducer,
+  type TurnTimerEvent,
   type TurnTimerState,
 } from "./turnTimer";
 
 /** Default debounce for the terminal active=false transition. */
 export const DEFAULT_SETTLE_MS = 900;
 
+export function isHistoricalTurnSignal(atMs: number, mountedAtMs: number, slopMs = 1_000): boolean {
+  return atMs < mountedAtMs - slopMs;
+}
+
+/**
+ * History hydration can merge a live SSE tail after the persisted base, so
+ * array position is not a durable chronology signal. Pick the newest user run
+ * by its backend timestamp instead of assuming the final user row is latest.
+ * A queued follow-up belongs to the same run, so retain that run's first user
+ * timestamp as the whole-turn start rather than shortening it to the follow-up.
+ */
+export function latestDurableUserTurn(
+  messages: readonly Pick<ChatMessage, "role" | "runId" | "createdAt">[],
+): { id: string; atMs: number } | null {
+  const runs = new Map<string, { firstAtMs: number; latestAtMs: number }>();
+  for (const message of messages) {
+    if (message.role !== "user" || !message.runId) continue;
+    const atMs = Date.parse(message.createdAt);
+    if (!Number.isFinite(atMs)) continue;
+    const existing = runs.get(message.runId);
+    runs.set(message.runId, existing
+      ? {
+          firstAtMs: Math.min(existing.firstAtMs, atMs),
+          latestAtMs: Math.max(existing.latestAtMs, atMs),
+        }
+      : { firstAtMs: atMs, latestAtMs: atMs });
+  }
+  let latest: { id: string; firstAtMs: number; latestAtMs: number } | null = null;
+  for (const [id, run] of runs) {
+    if (!latest || run.latestAtMs >= latest.latestAtMs) latest = { id, ...run };
+  }
+  return latest ? { id: latest.id, atMs: latest.firstAtMs } : null;
+}
+
 export interface TurnTiming {
   running: boolean;
   /** Live elapsed while running; the settled duration once finished; null if none. */
   elapsedMs: number | null;
   lastDurationMs: number | null;
+  turnId: string | null;
+  status: "running" | "completed" | "interrupted" | null;
 }
 
 interface UseTurnTimerOptions {
   /** Backend run-active snapshot; null until the first session_state arrives. */
   runActive: { active: boolean; atMs: number } | null;
+  /** Latest durable user run/message identity. */
+  turn?: { id: string; atMs: number } | null;
+  /** Canonical interrupt acknowledgement for that turn, when present. */
+  interruption?: { id: string; turnId?: string; atMs: number; startedAt?: number } | null;
   /** Key that resets the timer when it changes (e.g. session id). */
   resetKey?: string | null;
   settleMs?: number;
@@ -40,21 +82,85 @@ interface UseTurnTimerOptions {
 }
 
 export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
-  const { runActive, resetKey, settleMs = DEFAULT_SETTLE_MS, now = Date.now } = options;
-  const [state, dispatch] = useReducer(turnTimerReducer, initialTurnTimerState);
+  const { runActive, turn, interruption, resetKey, settleMs = DEFAULT_SETTLE_MS, now = Date.now } = options;
+  const sessionKey = resetKey ?? null;
+  const [ownedState, dispatch] = useReducer(sessionTurnTimerReducer, initialSessionTurnTimerState);
+  const state = ownedState.timer;
   const settleRef = useRef<number | undefined>(undefined);
+  const seenTurnRef = useRef<string | null>(null);
+  const seenInterruptRef = useRef<string | null>(null);
+  const mountedAtRef = useRef(Date.now());
   const [, forceTick] = useState(0);
+  const dispatchTimer = (event: TurnTimerEvent) => dispatch({ type: "timer", sessionKey, event });
 
   // Reset when the session changes.
   useEffect(() => {
-    dispatch({ type: "reset" });
-  }, [resetKey]);
+    mountedAtRef.current = Date.now();
+    seenTurnRef.current = null;
+    seenInterruptRef.current = null;
+    let hydrated: { turnId: string; durationMs: number; status: "completed" | "interrupted" } | undefined;
+    if (!sessionKey) {
+      dispatch({ type: "switchSession", sessionKey: null });
+      return;
+    }
+    try {
+      const raw = window.sessionStorage.getItem(`brainpilot:turn-timing:${sessionKey}`);
+      if (raw) {
+        const stored = JSON.parse(raw) as { turnId?: unknown; durationMs?: unknown; status?: unknown };
+        if (
+          typeof stored.turnId === "string"
+          && typeof stored.durationMs === "number"
+          && Number.isFinite(stored.durationMs)
+          && (stored.status === "completed" || stored.status === "interrupted")
+        ) {
+          hydrated = {
+            turnId: stored.turnId,
+            durationMs: stored.durationMs,
+            status: stored.status,
+          };
+          seenTurnRef.current = stored.turnId;
+        }
+      }
+    } catch {
+      // Timing persistence is a progressive enhancement.
+    }
+    dispatch({ type: "switchSession", sessionKey, hydrated });
+  }, [sessionKey]);
+
+  useEffect(() => {
+    if (!turn || turn.id === seenTurnRef.current) return;
+    // History hydration can reveal an old user message after mount. Do not
+    // reinterpret it as a freshly submitted turn unless the backend says work
+    // is active; live optimistic messages have a current timestamp.
+    if (!runActive?.active && turn.atMs < mountedAtRef.current - 1_000) {
+      seenTurnRef.current = turn.id;
+      return;
+    }
+    seenTurnRef.current = turn.id;
+    dispatchTimer({ type: "userInput", atMs: turn.atMs, turnId: turn.id });
+  }, [sessionKey, runActive?.active, turn]);
+
+  useEffect(() => {
+    if (!interruption || interruption.id === seenInterruptRef.current) return;
+    seenInterruptRef.current = interruption.id;
+    dispatchTimer({
+      type: "interrupt",
+      atMs: interruption.atMs,
+      turnId: interruption.turnId,
+      startedAt: interruption.startedAt,
+    });
+  }, [interruption, sessionKey]);
 
   // Feed authoritative active transitions into the reducer.
   useEffect(() => {
     if (!runActive) return;
-    dispatch({ type: "active", value: runActive.active, atMs: runActive.atMs });
-  }, [runActive]);
+    // Session history replays old session_state frames during hydration. They
+    // describe prior runs and must not restart/overwrite the persisted latest
+    // timing record. Live signals (including a fresh prompt immediately after
+    // mount) carry a timestamp at or after this hook's session mount boundary.
+    if (isHistoricalTurnSignal(runActive.atMs, mountedAtRef.current)) return;
+    dispatchTimer({ type: "active", value: runActive.active, atMs: runActive.atMs });
+  }, [runActive, sessionKey]);
 
   // Arm/disarm the settle timer based on a pending candidate end.
   const hasCandidate = state.candidateEndAt !== null;
@@ -68,7 +174,7 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
     }
     settleRef.current = window.setTimeout(() => {
       settleRef.current = undefined;
-      dispatch({ type: "settle" });
+      dispatchTimer({ type: "settle" });
     }, settleMs);
     return () => {
       if (settleRef.current !== undefined) {
@@ -76,7 +182,7 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
         settleRef.current = undefined;
       }
     };
-  }, [hasCandidate, settleMs]);
+  }, [hasCandidate, sessionKey, settleMs]);
 
   // Tick once per second while running so the live elapsed advances.
   useEffect(() => {
@@ -84,6 +190,20 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
     const id = window.setInterval(() => forceTick((n) => n + 1), 1000);
     return () => window.clearInterval(id);
   }, [state.running]);
+
+  useEffect(() => {
+    const ownerKey = ownedState.sessionKey;
+    if (!ownerKey || !state.lastTurnId || state.lastDurationMs === null || !state.lastStatus) return;
+    try {
+      window.sessionStorage.setItem(`brainpilot:turn-timing:${ownerKey}`, JSON.stringify({
+        turnId: state.lastTurnId,
+        durationMs: state.lastDurationMs,
+        status: state.lastStatus,
+      }));
+    } catch {
+      // Ignore disabled/quota-limited storage.
+    }
+  }, [ownedState.sessionKey, state.lastDurationMs, state.lastStatus, state.lastTurnId]);
 
   return deriveTiming(state, now);
 }
@@ -94,11 +214,15 @@ function deriveTiming(state: TurnTimerState, now: () => number): TurnTiming {
       running: true,
       elapsedMs: Math.max(0, now() - state.startedAt),
       lastDurationMs: state.lastDurationMs,
+      turnId: state.currentTurnId,
+      status: "running",
     };
   }
   return {
     running: false,
     elapsedMs: state.lastDurationMs,
     lastDurationMs: state.lastDurationMs,
+    turnId: state.lastTurnId,
+    status: state.lastStatus,
   };
 }

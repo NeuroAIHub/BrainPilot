@@ -108,10 +108,13 @@ describe("concurrent send → follow-up queue", () => {
     const observe: Observed = { prompts: [], followUps: [] };
     const m = new SessionManager({ persist: false, agentFactory: gatedFactory(observe) });
     const s = await m.createSession();
-    const visibleUserMessages: string[] = [];
+    const visibleUserMessages: Array<{ text: string; runId?: string }> = [];
     m.subscribe(s.id, (event) => {
       if (event.type === "TEXT_MESSAGE_CHUNK" && event.role === "user") {
-        visibleUserMessages.push(String(event.delta ?? ""));
+        visibleUserMessages.push({
+          text: String(event.delta ?? ""),
+          runId: event.run_id,
+        });
       }
     });
 
@@ -130,12 +133,15 @@ describe("concurrent send → follow-up queue", () => {
     expect(observe.followUps).toEqual(["second"]);
     // The second message never went through the plain-prompt path.
     expect(observe.prompts).toEqual(["first"]);
-    expect(visibleUserMessages).toEqual(["first"]);
+    expect(visibleUserMessages).toEqual([{ text: "first", runId: first.runId }]);
 
     // Release the gate so the run drains cleanly (no lingering timers).
     releases.get(s.id)?.();
-    await waitFor(() => visibleUserMessages.includes("second"));
-    expect(visibleUserMessages).toEqual(["first", "second"]);
+    await waitFor(() => visibleUserMessages.some((message) => message.text === "second"));
+    expect(visibleUserMessages).toEqual([
+      { text: "first", runId: first.runId },
+      { text: "second", runId: first.runId },
+    ]);
   });
 
   it("preserves FIFO order for multiple messages queued during one run", async () => {

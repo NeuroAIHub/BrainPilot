@@ -20,6 +20,7 @@ import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 import { BuiltinToolsSection } from "./BuiltinToolsSection";
 import { McpByokCard } from "./McpByokCard";
 import { resolveMcpEntryView } from "./mcpPresetView";
+import { restoreFocusAfterModalClose } from "./settingsFocusReturn";
 import {
   canSubmitProviderForm,
   providerFieldErrorKey,
@@ -36,6 +37,8 @@ type SettingsDialogProps = {
   /** Deep-link target: when opening, jump straight to this tab (e.g. the
    *  no-provider banner opens directly to "providers"). */
   initialTab?: SettingsTab;
+  /** Explicit opener for Safari, which may not focus a pointer-clicked button. */
+  returnFocusTo?: HTMLElement | null;
 };
 
 const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
@@ -101,7 +104,7 @@ function splitList(value: string) {
     .filter(Boolean);
 }
 
-export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogProps) {
+export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: SettingsDialogProps) {
   const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
@@ -243,8 +246,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   // Capture the control that opened Settings and restore focus on close (#328).
   useEffect(() => {
     if (!isOpen) return;
-    returnFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnFocusRef.current = returnFocusTo
+      ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     // Focus the settings panel after paint.
     const id = window.requestAnimationFrame(() => {
       const panel = settingsPanelRef.current;
@@ -254,16 +257,9 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
     });
     return () => {
       window.cancelAnimationFrame(id);
-      const el = returnFocusRef.current;
-      if (el && typeof el.focus === "function") {
-        try {
-          el.focus();
-        } catch {
-          /* element may be gone */
-        }
-      }
+      restoreFocusAfterModalClose(returnFocusRef.current);
     };
-  }, [isOpen]);
+  }, [isOpen, returnFocusTo]);
 
   // Isolate background content from AT while any settings layer is open (#328).
   useEffect(() => {
@@ -567,7 +563,14 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
                   className={activeTab === tab.id ? "is-active" : ""}
                   key={tab.id}
                   aria-current={activeTab === tab.id ? "page" : undefined}
-                  onClick={() => setActiveTab(tab.id)}
+                  onClick={(event) => {
+                    setActiveTab(tab.id);
+                    // WebKit can return focus to the dialog container after the
+                    // active section rerenders. Restore the activating control
+                    // so keyboard users continue from the section they chose.
+                    const button = event.currentTarget;
+                    window.requestAnimationFrame(() => button.focus({ preventScroll: true }));
+                  }}
                   type="button"
                 >
                   <Icon size={15} />

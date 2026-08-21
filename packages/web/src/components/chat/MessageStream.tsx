@@ -11,6 +11,7 @@ import { AutoRetryIndicator } from "./AutoRetryIndicator";
 import { formatToolName, formatPayload } from "../../utils/toolDisplay";
 import { formatElapsed } from "../../utils/format";
 import { getChatScroll, setChatScroll, resolveScrollTop } from "./chatScrollMemory";
+import { findFailedPrompt } from "../../contexts/errorRecovery";
 import {
   copyFailureMessageKey,
   copyTextToClipboard,
@@ -42,11 +43,23 @@ interface MessageStreamProps {
    * the footer shows this authoritative turn duration instead of a per-message
    * span estimate. `running` drives a live ticking display.
    */
-  turnTiming?: { running: boolean; elapsedMs: number | null; lastDurationMs: number | null };
+  turnTiming?: {
+    running: boolean;
+    elapsedMs: number | null;
+    lastDurationMs: number | null;
+    turnId: string | null;
+    status: "running" | "completed" | "interrupted" | null;
+  };
   className?: string;
   ariaLabel?: string;
   /** 修正6 — cancel a pending auto-retry. Omitted in read-only contexts. */
   onRetryCancel?: () => void;
+  /** Recovery actions for a terminal provider/run failure. */
+  onRetryMessage?: (prompt: string) => void;
+  onEditMessage?: (prompt: string) => void;
+  onChangeModel?: (prompt?: string) => void;
+  onOpenProviderSettings?: () => void;
+  recoveryBusy?: boolean;
   /**
    * Names of agents whose run is currently active (RUN_STARTED..RUN_FINISHED).
    * Keeps a folded activity block "in progress" across ReAct rounds even when
@@ -95,6 +108,11 @@ function MessageStreamImpl({
   className,
   ariaLabel,
   onRetryCancel,
+  onRetryMessage,
+  onEditMessage,
+  onChangeModel,
+  onOpenProviderSettings,
+  recoveryBusy = false,
   runningAgents,
   groupExpertActivity = false,
   workspaceFileSessionId,
@@ -333,7 +351,21 @@ function MessageStreamImpl({
   const renderSingle = (message: ChatMessage, isContinuation = false) => {
     // 修正6 — new-UI kinds render via their dedicated components.
     if (message.kind === "system_message" && message.systemMessage) {
-      return <SystemMessageBubble key={message.id} view={message.systemMessage} />;
+      const failedPrompt = message.systemMessage.terminal
+        ? findFailedPrompt(messages, message.id)
+        : undefined;
+      return (
+        <SystemMessageBubble
+          key={message.id}
+          view={message.systemMessage}
+          failedPrompt={failedPrompt}
+          busy={recoveryBusy}
+          onRetry={onRetryMessage}
+          onEdit={onEditMessage}
+          onChangeModel={onChangeModel}
+          onOpenProviderSettings={onOpenProviderSettings}
+        />
+      );
     }
     if (message.kind === "ask_user" && message.askUser) {
       // #272: the stream card is a record only; answering happens in the
@@ -422,6 +454,7 @@ function MessageStreamImpl({
               <span className={`message-row__name ${isExpert ? "message-row__name--expert" : ""}`}>
                 {displayName}
               </span>
+              {message.partial ? <span className="message-row__partial">{t("chat.errorRecovery.partial")}</span> : null}
               {timing ? <span className="message-row__timer">· {timing}</span> : null}
               {message.streaming ? <span className="message-row__streaming">{t("chat.streaming")}</span> : null}
               {copyButtonFor(message)}
@@ -586,10 +619,20 @@ function MessageStreamImpl({
         item.type === "expertGroup" ? renderExpertGroup(item) : renderItem(item),
       )}
       {showTiming && turnTiming && turnTiming.elapsedMs !== null ? (
-        <div className="message-stack__total" role="status">
-          {t(turnTiming.running ? "chat.turnTimeRunning" : "chat.totalTime", {
-            time: formatElapsed(turnTiming.elapsedMs),
-          })}
+        <div
+          className="message-stack__total"
+          data-turn-id={turnTiming.turnId ?? undefined}
+          data-turn-status={turnTiming.status ?? undefined}
+          role="status"
+        >
+          {t(
+            turnTiming.running
+              ? "chat.turnTimeRunning"
+              : turnTiming.status === "interrupted"
+                ? "chat.turnTimeInterrupted"
+                : "chat.totalTime",
+            { time: formatElapsed(turnTiming.elapsedMs) },
+          )}
         </div>
       ) : null}
     </div>

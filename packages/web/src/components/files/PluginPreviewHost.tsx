@@ -10,15 +10,18 @@ import type { EnabledPreviewer } from "./previewerRegistry";
 const MAX_RANGE_BYTES = 8 * 1024 * 1024;
 const MAX_WHOLE_FILE_BYTES = 50 * 1024 * 1024;
 
-export function PluginPreviewHost({ previewer, sandboxId, path, name, size }: {
+export function PluginPreviewHost({ previewer, sandboxId, path, name, size, onRendered }: {
   previewer: EnabledPreviewer;
   sandboxId: string;
   path: string;
   name: string;
   size: number;
+  onRendered?: () => void;
 }) {
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
   const tokenRef = useRef(crypto.randomUUID());
+  const onRenderedRef = useRef(onRendered);
+  onRenderedRef.current = onRendered;
   const [status, setStatus] = useState("Loading plugin…");
   const [error, setError] = useState<string | null>(null);
   const [height, setHeight] = useState(480);
@@ -117,7 +120,10 @@ export function PluginPreviewHost({ previewer, sandboxId, path, name, size }: {
         return;
       }
       if (message.type === "preview/error") setError(message.message);
-      if (message.type === "preview/rendered") setStatus("");
+      if (message.type === "preview/rendered") {
+        setStatus("");
+        onRenderedRef.current?.();
+      }
       if (message.type === "preview/resize") setHeight(Math.max(240, Math.min(1600, message.height)));
       if (message.type !== "preview/ready" || delivered) return;
       delivered = true;

@@ -20,6 +20,10 @@ import { createPortal } from "react-dom";
 
 import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useT } from "../../i18n/useT";
+import {
+  restoreFocusAfterModalClose,
+  type FocusScheduler,
+} from "../settings/settingsFocusReturn";
 import { trapFocusKeyDown } from "../settings/settingsModalStack";
 
 type ProviderModelControlProps = {
@@ -32,7 +36,7 @@ type ProviderModelControlProps = {
   disabled?: boolean;
   onSelectModel: (providerId: string, modelId: string) => void | Promise<void>;
   onThinkingLevelChange: (level: ThinkingLevel) => void | Promise<void>;
-  onManageProviders?: () => void;
+  onManageProviders?: (trigger?: HTMLElement) => void;
 };
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
@@ -63,8 +67,11 @@ export function focusProviderModelPopup(popup: HTMLElement): void {
   target.focus();
 }
 
-export function restoreProviderModelFocus(target: HTMLElement | null): void {
-  if (target?.isConnected) target.focus();
+export function restoreProviderModelFocus(
+  target: HTMLElement | null,
+  schedule?: FocusScheduler,
+): void {
+  restoreFocusAfterModalClose(target, schedule);
 }
 
 export function ProviderModelControl({
@@ -125,15 +132,15 @@ export function ProviderModelControl({
 
   useEffect(() => {
     if (!open) return;
-    const returnFocus = document.activeElement instanceof HTMLElement
-      ? document.activeElement
-      : triggerRef.current;
     const frame = window.requestAnimationFrame(() => {
       if (popupRef.current) focusProviderModelPopup(popupRef.current);
     });
     return () => {
       window.cancelAnimationFrame(frame);
-      restoreProviderModelFocus(returnFocus);
+      // The trigger is the stable opener. In Safari, focusing synchronously
+      // while the portal is being removed is overwritten by WebKit's own
+      // dialog teardown, so restore only after the close has painted.
+      restoreProviderModelFocus(triggerRef.current);
     };
   }, [open]);
 
@@ -265,9 +272,11 @@ export function ProviderModelControl({
       {onManageProviders ? (
         <button
           className="provider-model-popover__manage"
-          onClick={() => {
+          onClick={(event) => {
             setOpen(false);
-            onManageProviders();
+            // The manage row lives inside this portal and unmounts immediately.
+            // Return to the persistent model trigger after Settings closes.
+            onManageProviders(triggerRef.current ?? event.currentTarget);
           }}
           type="button"
         >
