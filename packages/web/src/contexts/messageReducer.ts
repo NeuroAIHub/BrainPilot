@@ -228,9 +228,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
         ...existing,
         {
           id,
+          runId: event.runId,
           role,
           content: "",
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent,
           streaming: true,
           kind: "text",
@@ -258,9 +259,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           withAppliedStreamKey(
             {
               id,
+              runId: event.runId,
               role: "assistant",
               content: delta,
-              createdAt: new Date().toISOString(),
+              createdAt: eventTimestamp(event),
               agent,
               streaming: true,
               kind: "text",
@@ -290,17 +292,30 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
     case "TEXT_MESSAGE_CHUNK": {
       // Atomic message — created and completed in one step.
       const id = event.messageId;
-      if (!id || existing.some((m) => m.id === id)) {
+      if (!id) {
         return existing;
+      }
+      if (existing.some((m) => m.id === id)) {
+        // The composer inserts an optimistic user row before the Runtime echoes
+        // the durable CHUNK with the same UUID. Merge authoritative run/time
+        // metadata into that row so turn timing can bind and persist correctly.
+        return existing.map((message) => message.id === id
+          ? {
+              ...message,
+              runId: message.runId ?? event.runId,
+              createdAt: eventTimestamp(event),
+            }
+          : message);
       }
       const role = event.role === "assistant" || event.role === "system" ? event.role : "user";
       return [
         ...existing,
         {
           id,
+          runId: event.runId,
           role,
           content: typeof event.delta === "string" ? event.delta : "",
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent: role === "user" ? "user" : agent,
           streaming: false,
           kind: "text",

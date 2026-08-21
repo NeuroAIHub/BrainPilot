@@ -43,7 +43,13 @@ interface MessageStreamProps {
    * the footer shows this authoritative turn duration instead of a per-message
    * span estimate. `running` drives a live ticking display.
    */
-  turnTiming?: { running: boolean; elapsedMs: number | null; lastDurationMs: number | null };
+  turnTiming?: {
+    running: boolean;
+    elapsedMs: number | null;
+    lastDurationMs: number | null;
+    turnId: string | null;
+    status: "running" | "completed" | "interrupted" | null;
+  };
   className?: string;
   ariaLabel?: string;
   /** 修正6 — cancel a pending auto-retry. Omitted in read-only contexts. */
@@ -613,10 +619,20 @@ function MessageStreamImpl({
         item.type === "expertGroup" ? renderExpertGroup(item) : renderItem(item),
       )}
       {showTiming && turnTiming && turnTiming.elapsedMs !== null ? (
-        <div className="message-stack__total" role="status">
-          {t(turnTiming.running ? "chat.turnTimeRunning" : "chat.totalTime", {
-            time: formatElapsed(turnTiming.elapsedMs),
-          })}
+        <div
+          className="message-stack__total"
+          data-turn-id={turnTiming.turnId ?? undefined}
+          data-turn-status={turnTiming.status ?? undefined}
+          role="status"
+        >
+          {t(
+            turnTiming.running
+              ? "chat.turnTimeRunning"
+              : turnTiming.status === "interrupted"
+                ? "chat.turnTimeInterrupted"
+                : "chat.totalTime",
+            { time: formatElapsed(turnTiming.elapsedMs) },
+          )}
         </div>
       ) : null}
     </div>

@@ -19,6 +19,8 @@
  */
 
 export interface TurnTimerState {
+  /** Durable backend run id for the active user turn. */
+  currentTurnId: string | null;
   /** ms epoch when the current turn started (user input / first active=true). */
   startedAt: number | null;
   /** Whether a turn is currently in progress (active, or within settle window). */
@@ -27,13 +29,18 @@ export interface TurnTimerState {
   candidateEndAt: number | null;
   /** The last settled whole-turn duration in ms, or null if none yet. */
   lastDurationMs: number | null;
+  lastTurnId: string | null;
+  lastStatus: "completed" | "interrupted" | null;
 }
 
 export const initialTurnTimerState: TurnTimerState = {
+  currentTurnId: null,
   startedAt: null,
   running: false,
   candidateEndAt: null,
   lastDurationMs: null,
+  lastTurnId: null,
+  lastStatus: null,
 };
 
 export type TurnTimerEvent =
@@ -42,9 +49,55 @@ export type TurnTimerEvent =
   /** The settle window elapsed with active still false → commit the turn end. */
   | { type: "settle" }
   /** A fresh user submission opens a new turn at `atMs` (optimistic start). */
-  | { type: "userInput"; atMs: number }
+  | { type: "userInput"; atMs: number; turnId?: string }
+  /** Canonical Stop acknowledgement for the current turn. */
+  | { type: "interrupt"; atMs: number; turnId?: string; startedAt?: number }
+  /** Restore a settled timing record after page reload. */
+  | { type: "hydrate"; turnId: string; durationMs: number; status: "completed" | "interrupted" }
   /** Session switch / reset — clear all timing. */
   | { type: "reset" };
+
+/**
+ * Bind one timer state to the session that owns it. React runs every passive
+ * effect from a render before applying effect-triggered reducer updates, so a
+ * bare timer state can otherwise be persisted under the next session key
+ * during an A → B switch.
+ */
+export interface SessionTurnTimerState {
+  sessionKey: string | null;
+  timer: TurnTimerState;
+}
+
+export type HydratedTurnTiming = {
+  turnId: string;
+  durationMs: number;
+  status: "completed" | "interrupted";
+};
+
+export type SessionTurnTimerEvent =
+  | { type: "switchSession"; sessionKey: string | null; hydrated?: HydratedTurnTiming }
+  | { type: "timer"; sessionKey: string | null; event: TurnTimerEvent };
+
+export const initialSessionTurnTimerState: SessionTurnTimerState = {
+  sessionKey: null,
+  timer: initialTurnTimerState,
+};
+
+export function sessionTurnTimerReducer(
+  state: SessionTurnTimerState,
+  event: SessionTurnTimerEvent,
+): SessionTurnTimerState {
+  if (event.type === "switchSession") {
+    const timer = event.hydrated
+      ? turnTimerReducer(initialTurnTimerState, { type: "hydrate", ...event.hydrated })
+      : initialTurnTimerState;
+    return { sessionKey: event.sessionKey, timer };
+  }
+  // A stale timeout/effect from the previous session must never mutate the
+  // newly selected session's timer.
+  if (event.sessionKey !== state.sessionKey) return state;
+  return { ...state, timer: turnTimerReducer(state.timer, event.event) };
+}
 
 /**
  * Advance the turn-timer state machine. Pure: returns the next state. The host
@@ -60,26 +113,66 @@ export function turnTimerReducer(state: TurnTimerState, event: TurnTimerEvent): 
       // Opening (or continuing) a turn from the user side. If a turn is already
       // running, keep its original start; otherwise begin a new one. Clears any
       // stale candidate end.
-      if (state.running && state.startedAt !== null) {
+      const startsNewTurn = Boolean(event.turnId && event.turnId !== state.currentTurnId);
+      if (state.running && state.startedAt !== null && !startsNewTurn) {
         return { ...state, candidateEndAt: null };
       }
       return {
+        currentTurnId: event.turnId ?? state.currentTurnId,
         startedAt: event.atMs,
         running: true,
         candidateEndAt: null,
         lastDurationMs: state.lastDurationMs,
+        lastTurnId: state.lastTurnId,
+        lastStatus: state.lastStatus,
       };
     }
+
+    case "interrupt": {
+      const startedAt = event.startedAt ?? state.startedAt;
+      if (startedAt === null || startedAt === undefined) return state;
+      // A Stop system event paired with the latest durable user turn is more
+      // authoritative than transient hook state. This lets reload/remount and
+      // background-work handoffs recover even if the local timer was reset or
+      // briefly rebound while Principal was already idle.
+      if (
+        event.startedAt === undefined
+        && (!state.running || (event.turnId && state.currentTurnId && event.turnId !== state.currentTurnId))
+      ) return state;
+      return {
+        currentTurnId: null,
+        startedAt: null,
+        running: false,
+        candidateEndAt: null,
+        lastDurationMs: Math.max(0, event.atMs - startedAt),
+        lastTurnId: event.turnId ?? state.currentTurnId ?? null,
+        lastStatus: "interrupted",
+      };
+    }
+
+    case "hydrate":
+      return {
+        currentTurnId: null,
+        startedAt: null,
+        running: false,
+        candidateEndAt: null,
+        lastDurationMs: event.durationMs,
+        lastTurnId: event.turnId,
+        lastStatus: event.status,
+      };
 
     case "active": {
       if (event.value) {
         // active=true: turn is (still) running. Cancel any pending end. Seed a
         // start if the user-input optimistic open was missed (e.g. reconnect).
         return {
+          currentTurnId: state.currentTurnId,
           startedAt: state.startedAt ?? event.atMs,
           running: true,
           candidateEndAt: null,
           lastDurationMs: state.lastDurationMs,
+          lastTurnId: state.lastTurnId,
+          lastStatus: state.lastStatus,
         };
       }
       // active=false: candidate terminal transition. Only meaningful if a turn
@@ -94,10 +187,13 @@ export function turnTimerReducer(state: TurnTimerState, event: TurnTimerEvent): 
       if (state.candidateEndAt === null || state.startedAt === null) return state;
       const duration = Math.max(0, state.candidateEndAt - state.startedAt);
       return {
+        currentTurnId: null,
         startedAt: null,
         running: false,
         candidateEndAt: null,
         lastDurationMs: duration,
+        lastTurnId: state.currentTurnId,
+        lastStatus: "completed",
       };
     }
 

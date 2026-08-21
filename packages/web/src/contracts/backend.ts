@@ -201,6 +201,8 @@ export interface SandboxStats {
 
 export interface ChatMessage {
   id: string;
+  /** Backend run that owns this message; used to bind turn timing. */
+  runId?: string;
   role: "user" | "assistant" | "system";
   content: string;
   createdAt: string;

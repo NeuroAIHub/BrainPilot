@@ -45,11 +45,13 @@ describe("AG-UI event union — NEW events", () => {
         timestamp: "2026-06-12T00:00:00Z",
         recoverable: level !== "fatal",
         terminal: level === "error" || level === "fatal",
+        run_id: "run-original",
       };
       const parsed = parseEvent(e);
       expect(parsed.type).toBe("system_message");
       expect(SystemMessageEventSchema.parse(e).level).toBe(level);
       expect(SystemMessageEventSchema.parse(e).terminal).toBe(level === "error" || level === "fatal");
+      expect(SystemMessageEventSchema.parse(e).run_id).toBe("run-original");
     }
   });
 

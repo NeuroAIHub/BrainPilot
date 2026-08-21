@@ -240,6 +240,7 @@ export const ev = {
       recoverable?: boolean;
       terminal?: boolean;
       id?: string;
+      runId?: string;
       code?: string;
       metadata?: WorkspaceRestoreEventMetadata;
     },
@@ -250,6 +251,7 @@ export const ev = {
       // #167: optional stable id lets the client coalesce repeated messages
       // (e.g. retry warnings) into one updating bubble instead of appending.
       ...(opts?.id ? { id: opts.id } : {}),
+      ...(opts?.runId ? { run_id: opts.runId } : {}),
       ...(opts?.code ? { code: opts.code } : {}),
       ...(opts?.metadata ? { metadata: opts.metadata } : {}),
       agent: opts?.agent,
