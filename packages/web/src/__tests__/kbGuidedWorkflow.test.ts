@@ -4,6 +4,7 @@ import {
   deriveKbGuidedState,
   kbPdfUploadErrorKey,
   kbPdfUploadRecovery,
+  kbHydrateActiveJob,
   kbSetupEventNeedsProbe,
 } from "../components/settings/kbGuidedWorkflow";
 
@@ -46,5 +47,18 @@ describe("guided Knowledge Base workflow (#486)", () => {
       { stage: "setup-full", event: "done" },
     ];
     expect(sequence.map(kbSetupEventNeedsProbe)).toEqual([false, true, true]);
+  });
+
+  it("restores the preparing state while a chained model download is active", () => {
+    expect(kbHydrateActiveJob(true, [
+      { stage: "setup-full", event: "info" },
+      { stage: "setup-env", event: "done" },
+      { stage: "setup-models", event: "info" },
+    ])).toEqual({
+      active: false,
+      activeJob: "setup-full",
+      envBusy: false,
+      modelBusy: true,
+    });
   });
 });

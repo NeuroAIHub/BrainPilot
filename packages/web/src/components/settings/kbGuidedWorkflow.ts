@@ -12,6 +12,71 @@ export interface KbGuidedState {
 }
 
 export type KbPdfUploadRecovery = "choose" | "retry";
+export type KbActiveJob = "build" | "setup-env" | "setup-models" | "setup-full" | null;
+
+interface KbLifecycleEvent {
+  stage: string;
+  event: string;
+}
+
+export interface KbHydratedActiveJob {
+  active: boolean;
+  activeJob: KbActiveJob;
+  envBusy: boolean;
+  modelBusy: boolean;
+}
+
+/** Restore the running KB job after Settings is closed and opened mid-task. */
+export function kbHydrateActiveJob(
+  active: boolean,
+  history: readonly KbLifecycleEvent[],
+): KbHydratedActiveJob {
+  const idle: KbHydratedActiveJob = {
+    active: false,
+    activeJob: null,
+    envBusy: false,
+    modelBusy: false,
+  };
+  if (!active) return idle;
+
+  const latestByStage = new Map<string, { event: string; index: number }>();
+  history.forEach((event, index) => {
+    if (["build", "setup-env", "setup-models", "setup-full"].includes(event.stage)) {
+      latestByStage.set(event.stage, { event: event.event, index });
+    }
+  });
+  const isRunning = (stage: string) => {
+    const event = latestByStage.get(stage)?.event;
+    return event != null && event !== "done" && event !== "error";
+  };
+  const fullSetup = isRunning("setup-full");
+  const runningStage = ["build", "setup-env", "setup-models"]
+    .filter(isRunning)
+    .sort((a, b) => latestByStage.get(b)!.index - latestByStage.get(a)!.index)[0];
+
+  if (runningStage === "setup-models") {
+    return {
+      active: false,
+      activeJob: fullSetup ? "setup-full" : "setup-models",
+      envBusy: false,
+      modelBusy: true,
+    };
+  }
+  if (runningStage === "setup-env") {
+    return {
+      active: false,
+      activeJob: fullSetup ? "setup-full" : "setup-env",
+      envBusy: true,
+      modelBusy: fullSetup,
+    };
+  }
+  if (runningStage === "build") {
+    return { active: true, activeJob: "build", envBusy: false, modelBusy: false };
+  }
+  // The backend is authoritative that work is active. If its bounded event
+  // history has no matching start marker, preserve the prior build fallback.
+  return { active: true, activeJob: "build", envBusy: false, modelBusy: false };
+}
 
 export function kbPdfUploadErrorKey(code?: string): string {
   switch (code) {

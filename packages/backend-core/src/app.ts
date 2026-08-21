@@ -88,6 +88,11 @@ export interface CreateAppOptions {
   orchestrator: Orchestrator;
   /** Data dir for local config routes. Default `./brainpilot`. */
   dataDir?: string;
+  /**
+   * Host-visible Knowledge Base root owned by the management API. Docker
+   * launchers set this to the directory bind-mounted into the runtime.
+   */
+  kbRoot?: string;
   /** Web build dir to serve. Default `$BP_WEB_ROOT` or `packages/web/dist`. */
   webRoot?: string;
   /** Injectable fetch for the runtime client (tests). */
@@ -126,7 +131,7 @@ export function createApp(options: CreateAppOptions): Hono {
   const env = options.env;
   let kbRootPromise: Promise<string> | null = null;
   const getWritableKbRoot = () => {
-    if (!kbRootPromise) kbRootPromise = ensureKbRoot(findKbRoot());
+    if (!kbRootPromise) kbRootPromise = ensureKbRoot(options.kbRoot ?? findKbRoot());
     return kbRootPromise;
   };
 

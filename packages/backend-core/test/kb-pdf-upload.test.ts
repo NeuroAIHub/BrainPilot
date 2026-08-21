@@ -85,4 +85,33 @@ describe("knowledge-base PDF upload", () => {
     expect(duplicate.status).toBe(409);
     expect(await duplicate.json()).toMatchObject({ code: "KB_PDF_ALREADY_EXISTS" });
   });
+
+  it("writes HTTP uploads to an explicitly mapped Docker host root", async () => {
+    const fallbackRoot = await mkdtemp(join(tmpdir(), "bp-kb-fallback-"));
+    const mappedRoot = await mkdtemp(join(tmpdir(), "bp-kb-mapped-"));
+    for (const root of [fallbackRoot, mappedRoot]) {
+      await mkdir(join(root, "scripts"), { recursive: true });
+      await writeFile(join(root, "scripts", "build_kb.py"), "print('ok')\n");
+    }
+    vi.stubEnv("BP_KB_ROOT", fallbackRoot);
+    const app = createApp({
+      serveWeb: false,
+      kbRoot: mappedRoot,
+      orchestrator: {
+        ensureRuntime: async () => ({ baseUrl: "http://runtime.test" }),
+        health: async () => true,
+        stopRuntime: async () => {},
+      },
+    });
+
+    const response = await app.request("/api/kb/pdfs?filename=mapped.pdf", {
+      method: "POST",
+      headers: { "content-type": "application/pdf" },
+      body: new Blob([pdf], { type: "application/pdf" }),
+    });
+
+    expect(response.status).toBe(201);
+    expect(await readFile(join(mappedRoot, "source", "pdf", "mapped.pdf"), "utf8"))
+      .toContain("%PDF-1.7");
+  });
 });

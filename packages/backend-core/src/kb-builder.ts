@@ -94,10 +94,17 @@ const EVENT_BUFFER_CAP = 5_000; // last N events kept for the status panel
 const SLOTS: Slots = { build: null, envSetup: null, modelSetup: null };
 const BUS: EventBus = { events: [], listeners: new Set() };
 
-/** Back-compat re-export: some diagnostic code path may still consult a
- *  "primary" run. Prefer `slotByKey` in new code. */
+/** Return a running job, ignoring completed slots retained for diagnostics. */
 function anyActiveSlot(): JobSlot | null {
-  return SLOTS.build ?? SLOTS.envSetup ?? SLOTS.modelSetup;
+  return [SLOTS.build, SLOTS.envSetup, SLOTS.modelSetup]
+    .find((slot): slot is JobSlot => slot != null && slot.doneAt == null) ?? null;
+}
+
+/** Most recently started job, used only for terminal status diagnostics. */
+function latestSlot(): JobSlot | null {
+  return [SLOTS.build, SLOTS.envSetup, SLOTS.modelSetup]
+    .filter((slot): slot is JobSlot => slot != null)
+    .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
 /**
@@ -991,7 +998,7 @@ export function getKbBuildStatus(kbRoot?: string): KbBuildStatus {
   // download. The frontend already fans out on ev.stage for UI display, so
   // this rollup is just used for the "reopened the panel mid-run" banner.
   const active = anyActiveSlot();
-  const primary = SLOTS.build ?? SLOTS.envSetup ?? SLOTS.modelSetup;
+  const primary = active ?? latestSlot();
   if (!primary) {
     return {
       active: false,

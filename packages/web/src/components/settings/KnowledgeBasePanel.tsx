@@ -29,9 +29,11 @@ import {
 } from "./kbReadiness";
 import {
   deriveKbGuidedState,
+  kbHydrateActiveJob,
   kbPdfUploadErrorKey,
   kbPdfUploadRecovery as recoveryForKbPdfUpload,
   kbSetupEventNeedsProbe,
+  type KbActiveJob,
   type KbGuideStepState,
   type KbPdfUploadRecovery,
 } from "./kbGuidedWorkflow";
@@ -616,7 +618,7 @@ export function KnowledgeBasePanel() {
    *  UI can show the right spinner / disable the right buttons.
    *  "setup-full" covers the one-click orchestration that runs venv + model
    *  download back-to-back. */
-  const [activeJob, setActiveJob] = useState<"build" | "setup-env" | "setup-full" | null>(null);
+  const [activeJob, setActiveJob] = useState<KbActiveJob>(null);
   const [error, setError] = useState<string | null>(null);
   const [env, setEnv] = useState<KbEnvironment | null>(null);
   /** Live-updating "N seconds ago" clock — needs its own tick to advance
@@ -722,23 +724,11 @@ export function KnowledgeBasePanel() {
           replayStages(status.recentEvents);
           replaySetupProgress(status.recentEvents);
         }
-        if (status.active) {
-          // Guess which job is running from the most recent event with a
-          // known stage. setup-env and build share the same RUN slot, so
-          // we can't ask the server directly — but the last event's
-          // `stage` is reliable enough for the UI banner.
-          const recent = status.recentEvents ?? [];
-          const last = [...recent].reverse().find(
-            (ev) => ev.stage === "setup-env" || ev.stage === "build",
-          );
-          if (last?.stage === "setup-env") {
-            setEnvBusy(true);
-            setActiveJob("setup-env");
-          } else {
-            setActive(true);
-            setActiveJob("build");
-          }
-        }
+        const hydrated = kbHydrateActiveJob(status.active, status.recentEvents ?? []);
+        setActive(hydrated.active);
+        setActiveJob(hydrated.activeJob);
+        setEnvBusy(hydrated.envBusy);
+        setModelBusy(hydrated.modelBusy);
       } catch {
         /* status fetch is best-effort */
       }
@@ -1041,6 +1031,7 @@ export function KnowledgeBasePanel() {
       setEnvProgress((prev) => deriveSetupState(prev, ev));
       if (ev.event === "done" || ev.event === "error") {
         setEnvBusy(false);
+        setActiveJob((current) => current === "setup-env" ? null : current);
         // Re-fetch environment so the banner flips from yellow to green
         // (or stays yellow with the right error).
         void refreshEnv();
@@ -1051,6 +1042,7 @@ export function KnowledgeBasePanel() {
       if (ev.event === "info" && !modelBusy) setModelBusy(true);
       if (ev.event === "done" || ev.event === "error") {
         setModelBusy(false);
+        setActiveJob((current) => current === "setup-models" ? null : current);
       }
     }
     // The whole "setup-full" umbrella job clears activeJob only when both
@@ -1058,6 +1050,8 @@ export function KnowledgeBasePanel() {
     // synthetic done/error event that we key off here.
     if (ev.stage === "setup-full" && (ev.event === "done" || ev.event === "error")) {
       setActiveJob(null);
+      setEnvBusy(false);
+      setModelBusy(false);
     }
     if (kbSetupEventNeedsProbe(ev)) void startProbe();
   }
@@ -1220,7 +1214,7 @@ export function KnowledgeBasePanel() {
   async function startModelSetup() {
     setError(null);
     setModelBusy(true);
-    setActiveJob((cur) => cur ?? "setup-env");
+    setActiveJob((cur) => cur ?? "setup-models");
     setModelProgress({ percent: 0, msg: "", status: "running" });
     try {
       const r = await api.kb.setupModels({
