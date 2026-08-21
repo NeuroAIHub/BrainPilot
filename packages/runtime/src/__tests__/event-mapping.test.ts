@@ -17,6 +17,32 @@ import type { IAgentSession, PiAgentEvent } from "../types.js";
  * (via parseEvent) and that the expected types appear in order.
  */
 describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
+  it("clears SDK follow-up queues on both sides of abort settlement", async () => {
+    const bus = new EventBus();
+    let releasePrompt!: () => void;
+    let streaming = false;
+    let clears = 0;
+    const session: IAgentSession = {
+      sessionId: "clear-follow-ups",
+      subscribe: () => () => {},
+      prompt: () => {
+        streaming = true;
+        return new Promise<void>((resolve) => {
+          releasePrompt = () => { streaming = false; resolve(); };
+        });
+      },
+      abort: async () => releasePrompt(),
+      clearQueue: () => { clears += 1; },
+      dispose: () => {},
+      get isStreaming() { return streaming; },
+    };
+    const agent = new MasAgent({ sessionId: session.sessionId, name: "principal", role: "principal", session, bus });
+    const run = agent.prompt("work");
+    await agent.abort();
+    await run;
+    expect(clears).toBe(2);
+  });
+
   it("assigns a unique stable transport identity to each emitted event", () => {
     const first = ev.textMessageContent(
       { sessionId: "identity", agentName: "principal" },
