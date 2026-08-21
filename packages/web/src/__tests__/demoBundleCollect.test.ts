@@ -30,7 +30,13 @@ vi.mock("../utils/api", () => ({
 }));
 
 // Imported after the mock is registered.
-const { buildDemoBundle, DemoBundleTooLargeError, PackAbortedError, toDemoFilePath } = await import("../components/demo/demoBundle");
+const {
+  buildDemoBundle,
+  collectDemoArtifactPaths,
+  DemoBundleTooLargeError,
+  PackAbortedError,
+  toDemoFilePath,
+} = await import("../components/demo/demoBundle");
 
 function traceWith(paths: string[]) {
   return {
@@ -60,6 +66,42 @@ describe("buildDemoBundle file collection", () => {
     expect(toDemoFilePath("/data/shared.csv")).toBe("/data/shared.csv");
     expect(toDemoFilePath("shared/reference.pdf")).toBe("/shared/reference.pdf");
     expect(toDemoFilePath("/tmp/output.txt")).toBe("/workspace/tmp/output.txt");
+  });
+
+  it("filters checkpoint metadata and dedupes absolute/relative workspace aliases", async () => {
+    expect(collectDemoArtifactPaths([
+      {
+        artifacts: [
+          { path: "/workspace/analysis_result.md", type: "markdown" },
+          { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+          { path: "analysis_result.md", type: "file" },
+        ],
+      },
+    ])).toEqual(["/workspace/analysis_result.md"]);
+
+    getTrace.mockResolvedValue({
+      nodes: [{
+        id: "n1",
+        parents: [],
+        parentIds: [],
+        childIds: [],
+        artifacts: [
+          { path: "/workspace/analysis_result.md", type: "markdown" },
+          { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+          { path: "analysis_result.md", type: "file" },
+        ],
+      }],
+    });
+    readFile.mockResolvedValue({ content: "one copy", size: 8 });
+
+    const bundle = await buildDemoBundle({
+      session: { id: "s", title: "S" },
+      filesAvailable: true,
+    });
+
+    expect(bundle.files.map((file) => file.path)).toEqual(["/workspace/analysis_result.md"]);
+    expect(readFile).toHaveBeenCalledTimes(1);
+    expect(readFile).toHaveBeenCalledWith("s", "/workspace/analysis_result.md");
   });
 
   it("marks all files unreadable when no sandbox is available", async () => {

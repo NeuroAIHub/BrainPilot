@@ -100,6 +100,32 @@ export function toDemoFilePath(path: string): string {
   return `/workspace/${rel}`;
 }
 
+/** Collect only real files, deduped by the canonical file-API path. */
+export function collectDemoArtifactPaths(
+  nodes: ReadonlyArray<{ artifacts?: ReadonlyArray<{ path?: string; type?: string }> }>,
+): string[] {
+  const seenCanonical = new Set<string>();
+  const paths: string[] = [];
+  for (const node of nodes) {
+    for (const artifact of node.artifacts ?? []) {
+      const rawPath = artifact.path?.trim();
+      if (
+        !rawPath
+        || artifact.type === "dir"
+        || artifact.type === "checkpoint"
+        || rawPath.startsWith("checkpoint:")
+      ) {
+        continue;
+      }
+      const canonical = toDemoFilePath(rawPath);
+      if (seenCanonical.has(canonical)) continue;
+      seenCanonical.add(canonical);
+      paths.push(rawPath);
+    }
+  }
+  return paths;
+}
+
 /** Chunked base64 encode of binary data (avoids call-stack overflow). */
 async function blobToBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -288,20 +314,10 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
     assertTimelineFits(events);
   }
 
-  // Collect produced-file paths from trace artifacts (dedupe, skip dirs).
-  const seen = new Set<string>();
-  const paths: string[] = [];
-  for (const node of trace.nodes) {
-    for (const artifact of node.artifacts ?? []) {
-      if (!artifact.path || artifact.type === "dir") {
-        continue;
-      }
-      if (!seen.has(artifact.path)) {
-        seen.add(artifact.path);
-        paths.push(artifact.path);
-      }
-    }
-  }
+  // Trace also carries metadata pseudo-artifacts (for example
+  // checkpoint:checkpoint_...). They are not workspace files and must never be
+  // fetched or rendered in a replay.
+  const paths = collectDemoArtifactPaths(trace.nodes);
 
   const files = await collectFiles(filesAvailable ? session.id : undefined, paths, onProgress, filesUnavailableDetail, signal);
 
