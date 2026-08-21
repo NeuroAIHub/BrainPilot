@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from "vitest";
 import {
+  explicitlyDeclinesTrace,
   isReadOnlyShellCommand,
   makeTraceReminderExt,
   type TraceReminderDeps,
@@ -65,6 +66,24 @@ function runOnce(
 }
 
 describe("trace-reminder: event-driven trace gating", () => {
+  it("respects an explicit user request not to call record_trace", async () => {
+    const pi = fakePi();
+    makeTraceReminderExt({ role: "principal", name: "principal", onUnreplied: () => {} })(pi as never);
+    pi.fire("agent_start");
+    pi.fire("tool_execution_start", { toolCallId: "x", toolName: "write", args: {} });
+    pi.fire("tool_execution_end", { toolCallId: "x", toolName: "write", isError: false });
+    await pi.fireAsync("agent_end", {
+      messages: [
+        { role: "user", content: [{ type: "text", text: "Do not call record_trace." }] },
+        { role: "assistant", stopReason: "end_turn" },
+      ],
+    });
+    expect(pi.sent).toEqual([]);
+    expect(explicitlyDeclinesTrace([
+      { role: "user", content: "请勿调用 record_trace" },
+    ])).toBe(true);
+  });
+
   it.each([
     "read",
     "grep",
@@ -286,5 +305,6 @@ describe("trace-reminder: failures and message envelope", () => {
     expect(sent[0]!.content).toMatch(
       /^\[SYSTEM-MESSAGE:reply\] [\s\S]+ \[\/SYSTEM-MESSAGE\]$/,
     );
+    expect(sent[0]!.content).toContain("<!--NO-RENDER-->");
   });
 });

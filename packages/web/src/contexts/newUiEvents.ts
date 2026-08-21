@@ -71,6 +71,7 @@ export function toSystemMessageView(event: WebSocketEvent): SystemMessageView {
     details: optStr(e.details),
     agent: optStr(e.agent) ?? optStr(e.agentName),
     recoverable,
+    terminal: e.terminal === true,
     timestamp: optStr(e.timestamp),
     code: optStr(e.code),
     workspaceRestore,
@@ -141,7 +142,8 @@ export function systemMessageToChatMessage(event: WebSocketEvent): ChatMessage {
   const view = toSystemMessageView(event);
   const e = event as Record<string, unknown>;
   return {
-    id: str(e.id ?? e.messageId) || `sysmsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: str(e.id ?? e.messageId ?? e._eventId ?? e._event_id)
+      || `sysmsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role: "system",
     content: view.message,
     createdAt: view.timestamp ?? new Date().toISOString(),

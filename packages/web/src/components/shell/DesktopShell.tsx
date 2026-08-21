@@ -2,9 +2,11 @@ import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react"
 import { Bot, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
-import { useSessions } from "../../contexts/SessionContext";
+import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
+import { draftStore } from "../../contexts/draftStore";
 import { useT } from "../../i18n/useT";
 import { runtimeConfig } from "../../config";
+import { appendFileReference } from "../chat/mentionLogic";
 import { PromptComposer } from "../chat/PromptComposer";
 import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
@@ -35,6 +37,7 @@ export function DesktopShell() {
     sessions,
     sessionsListStatus,
     currentSession,
+    isDraft,
     currentView,
     isRefreshingMessages,
     refreshMessages,
@@ -62,8 +65,12 @@ export function DesktopShell() {
   // Deep-link target for the next Settings open (e.g. the composer's
   // no-provider banner jumps straight to Providers). Undefined = default tab.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
-  const openSettings = (tab?: SettingsTab) => {
+  const [settingsReturnFocusTo, setSettingsReturnFocusTo] = useState<HTMLElement | null>(null);
+  const openSettings = (tab?: SettingsTab, trigger?: HTMLElement) => {
     setSettingsInitialTab(tab);
+    setSettingsReturnFocusTo(
+      trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null),
+    );
     setIsSettingsOpen(true);
   };
   const [isFilesOpen, setIsFilesOpen] = useState(false);
@@ -101,6 +108,24 @@ export function DesktopShell() {
       buildWorkspaceFileDeepLink(currentSession.id, target),
     );
   }, [currentSession?.id]);
+
+  const useFileInConversation = useCallback((path: string) => {
+    const composerScope = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
+    if (!composerScope) return;
+    draftStore.set(
+      composerScope,
+      appendFileReference(draftStore.get(composerScope), path),
+    );
+    setCurrentView("chat");
+    setOpenFileRequest(null);
+    setIsFilesOpen(false);
+    requestAnimationFrame(() => {
+      const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  }, [currentSession?.id, isDraft, setCurrentView]);
 
   useEffect(() => {
     const initialTarget = initialWorkspaceFileTargetRef.current;
@@ -234,7 +259,7 @@ export function DesktopShell() {
         }}
         onGoWorkspace={() => setActivePage("workspace")}
         onOpenPlugins={() => setActivePage("plugins")}
-        onOpenSettings={() => openSettings()}
+        onOpenSettings={(trigger) => openSettings(undefined, trigger)}
         onOpenSearch={() => setIsSearchOpen(true)}
         onResizeStart={(pointerX) => {
           if (isSidebarCollapsed) {
@@ -323,7 +348,7 @@ export function DesktopShell() {
 
         {currentView === "chat" ? (
           <PromptComposer
-            onOpenProviderSettings={() => openSettings("providers")}
+            onOpenProviderSettings={(trigger) => openSettings("providers", trigger)}
             onOpenWorkspaceFile={openWorkspaceFile}
           />
         ) : null}
@@ -341,6 +366,7 @@ export function DesktopShell() {
             setIsFilesOpen(false);
           }}
           onDirtyChange={setHasUnsavedFileChanges}
+          onUseInConversation={useFileInConversation}
           onResize={setFileSidebarWidth}
           onResizeEnd={() => setIsFileSidebarResizing(false)}
           onResizeStart={() => setIsFileSidebarResizing(true)}
@@ -359,6 +385,7 @@ export function DesktopShell() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         initialTab={settingsInitialTab}
+        returnFocusTo={settingsReturnFocusTo}
       />
       {!sandboxOverlayDismissed && (operation === "creating" || operation === "rebuilding") ? (
         <SandboxBuildingOverlay operation={operation} error={error} onDismiss={() => setSandboxOverlayDismissed(true)} />

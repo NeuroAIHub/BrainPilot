@@ -17,6 +17,10 @@ export const HIDE_NON_FATAL_AGENT_ERRORS = "hide-non-fatal-agent-errors";
 export function isNonFatalAgentErrorMessage(msg: ChatMessage): boolean {
   if (msg.kind !== "system_message") return false;
   if (!msg.systemMessage) return false;
+  // RUN_ERROR promotes the last diagnostic into one actionable terminal card.
+  // It must remain visible even though transient warning/error diagnostics are
+  // folded by default.
+  if (msg.systemMessage.terminal) return false;
   const level = msg.systemMessage.level;
   return level === "error" || level === "warning";
 }

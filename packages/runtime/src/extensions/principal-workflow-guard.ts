@@ -35,6 +35,13 @@ export const WORKFLOW_TAG_OPEN = "<principal_workflow_state>";
 export const WORKFLOW_TAG_CLOSE = "</principal_workflow_state>";
 
 const INFORMATIONAL_REQUEST = /^(?:what\s+(?:is|are|does)|why\b|how\s+(?:do|does|is|are|can|could|would|should|to)\b|(?:(?:please|can you|could you)\s+)?(?:explain|define|describe|summari[sz]e|translate|proofread|rewrite|polish)\b|什么是|为什么|为何|如何理解|怎么理解|(?:请(?:帮我)?)?(?:解释|介绍|概述|总结|翻译|润色))/i;
+// Evaluation/smoke-test prompts often contain a literal phrase such as
+// "model test passed". Classifying the requested output text as user intent
+// arms the delegation guard, which then runs the provider twice and exposes
+// two assistant messages. Only exempt explicit literal-output forms; a request
+// such as "Reply after you test this dataset" must still be classified by its
+// substantive action.
+const LITERAL_OUTPUT_REQUEST = /^(?:(?:please|kindly)\s+)?(?:reply|respond|answer|say|repeat|echo|return|output)\s+(?:(?:with|using)\s+)?(?:exactly\b|only\s+(?:with\s+)?(?:the\s+)?(?:word|phrase|text|string)\b)|^(?:请)?(?:只|仅)(?:回复|回答|输出|返回)(?:一句|以下)?(?=\s*[:："'“])/i;
 const CONCEPTUAL_REQUEST = /\b(?:principles?|concepts?|differences?|pros?\s+and\s+cons?|advantages?|disadvantages?|overview|tutorial|meaning|definition|theory)\b|(?:原理|概念|区别|差异|优缺点|优势|劣势|含义|定义|理论|教程)/i;
 const DIRECT_EXECUTION_ACTION = /\b(?:process|clean|transform|train|fit|fine[- ]?tune|optimi[sz]e|simulate|run|execute|implement|build|develop|design|perform|conduct|model|predict|classify|cluster|forecast)\b|(?:处理|清洗|转换|训练|拟合|微调|优化|模拟|运行|执行|实现|构建|开发|设计|建模|预测|分类|聚类)/i;
 const INPUT_BOUND_ACTION = /\b(?:analy[sz]e|evaluate|benchmark|validate|test|compare|interpret|infer|inspect|check|find|detect|identify)\b|(?:分析|评估|基准测试|验证|测试|比较|解读|推断|检查|查看|看看|寻找|找出|识别|检测)/i;
@@ -58,7 +65,11 @@ function intentText(content: string): string {
 /** Host-side gate for the bounded delegation reminder; prompt prose alone cannot suppress a follow-up. */
 export function isSubstantiveScientificExecutionRequest(content: string): boolean {
   const normalized = intentText(content);
-  if (!normalized || INFORMATIONAL_REQUEST.test(normalized)) return false;
+  if (
+    !normalized
+    || INFORMATIONAL_REQUEST.test(normalized)
+    || LITERAL_OUTPUT_REQUEST.test(normalized)
+  ) return false;
   const hasConcreteInput = CONCRETE_INPUT.test(normalized);
   if (CONCEPTUAL_REQUEST.test(normalized) && !hasConcreteInput) return false;
   return (DIRECT_EXECUTION_ACTION.test(normalized) && SCIENTIFIC_SCOPE.test(normalized))
@@ -98,6 +109,8 @@ const DELEGATION_REMINDER =
   "[SYSTEM-MESSAGE:workflow] If the request involves substantive scientific execution, " +
   "consider dispatching a qualifying Expert task before finalizing it. Simple questions, " +
   "document-only work, and summaries of already-validated results do not need delegation. " +
+  "This is an internal follow-up: do not repeat or revise the user-facing answer. End with exactly " +
+  "<!--NO-RENDER-->workflow reminder handled<!--/NO-RENDER--> and no text outside that wrapper. " +
   "[/SYSTEM-MESSAGE]";
 
 /**

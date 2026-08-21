@@ -228,6 +228,8 @@ export interface ChatMessage {
   askUser?: AskUserView;
   // kind === "auto_retry": auto-retry countdown + cancel indicator (doc §6)
   autoRetry?: AutoRetryView;
+  /** Principal output produced after a delegated agent failure. */
+  partial?: boolean;
   /**
    * Reducer-internal: stable keys of stream-append events already applied to
    * this message (`TEXT_MESSAGE_CONTENT` / `REASONING_MESSAGE_CONTENT` /
@@ -256,6 +258,8 @@ export interface SystemMessageView {
   agent?: string;
   /** fatal events are non-recoverable; drives the emphasized red styling. */
   recoverable: boolean;
+  /** RUN_ERROR promoted this diagnostic into the visible terminal recovery card. */
+  terminal?: boolean;
   timestamp?: string;
   code?: string;
   workspaceRestore?: WorkspaceRestoreView;
@@ -432,6 +436,7 @@ export interface AgUiEvent {
   // RUN_*
   message?: string;       // RUN_ERROR
   code?: string;          // RUN_ERROR
+  terminal?: boolean;     // RUN_ERROR: false while an outer retry loop owns recovery
   result?: unknown;       // RUN_FINISHED
   parentRunId?: string;
 
