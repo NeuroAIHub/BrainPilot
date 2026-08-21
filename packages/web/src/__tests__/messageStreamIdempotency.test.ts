@@ -60,6 +60,19 @@ function textTriad(
 }
 
 describe("message stream idempotency (#314)", () => {
+  it("preserves run identity and backend time for turn timing (#489)", () => {
+    const [message] = fold([{
+      type: "TEXT_MESSAGE_CHUNK",
+      messageId: "user-1",
+      role: "user",
+      runId: "run_489",
+      delta: "resume",
+      _ts: "2026-08-21T01:02:03.000Z",
+    } as WebSocketEvent]);
+    expect(message.runId).toBe("run_489");
+    expect(message.createdAt).toBe("2026-08-21T01:02:03.000Z");
+  });
+
   it("preserves the originating name on a tool result activity (#465)", () => {
     const messages = fold([
       {

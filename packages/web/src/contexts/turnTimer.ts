@@ -19,6 +19,8 @@
  */
 
 export interface TurnTimerState {
+  /** Durable backend run id for the active user turn. */
+  currentTurnId: string | null;
   /** ms epoch when the current turn started (user input / first active=true). */
   startedAt: number | null;
   /** Whether a turn is currently in progress (active, or within settle window). */
@@ -27,13 +29,18 @@ export interface TurnTimerState {
   candidateEndAt: number | null;
   /** The last settled whole-turn duration in ms, or null if none yet. */
   lastDurationMs: number | null;
+  lastTurnId: string | null;
+  lastStatus: "completed" | "interrupted" | null;
 }
 
 export const initialTurnTimerState: TurnTimerState = {
+  currentTurnId: null,
   startedAt: null,
   running: false,
   candidateEndAt: null,
   lastDurationMs: null,
+  lastTurnId: null,
+  lastStatus: null,
 };
 
 export type TurnTimerEvent =
@@ -42,7 +49,11 @@ export type TurnTimerEvent =
   /** The settle window elapsed with active still false → commit the turn end. */
   | { type: "settle" }
   /** A fresh user submission opens a new turn at `atMs` (optimistic start). */
-  | { type: "userInput"; atMs: number }
+  | { type: "userInput"; atMs: number; turnId?: string }
+  /** Canonical Stop acknowledgement for the current turn. */
+  | { type: "interrupt"; atMs: number; turnId?: string }
+  /** Restore a settled timing record after page reload. */
+  | { type: "hydrate"; turnId: string; durationMs: number; status: "completed" | "interrupted" }
   /** Session switch / reset — clear all timing. */
   | { type: "reset" };
 
@@ -60,26 +71,58 @@ export function turnTimerReducer(state: TurnTimerState, event: TurnTimerEvent): 
       // Opening (or continuing) a turn from the user side. If a turn is already
       // running, keep its original start; otherwise begin a new one. Clears any
       // stale candidate end.
-      if (state.running && state.startedAt !== null) {
+      const startsNewTurn = Boolean(event.turnId && event.turnId !== state.currentTurnId);
+      if (state.running && state.startedAt !== null && !startsNewTurn) {
         return { ...state, candidateEndAt: null };
       }
       return {
+        currentTurnId: event.turnId ?? state.currentTurnId,
         startedAt: event.atMs,
         running: true,
         candidateEndAt: null,
         lastDurationMs: state.lastDurationMs,
+        lastTurnId: state.lastTurnId,
+        lastStatus: state.lastStatus,
       };
     }
+
+    case "interrupt": {
+      if (!state.running || state.startedAt === null) return state;
+      if (event.turnId && state.currentTurnId && event.turnId !== state.currentTurnId) return state;
+      return {
+        currentTurnId: null,
+        startedAt: null,
+        running: false,
+        candidateEndAt: null,
+        lastDurationMs: Math.max(0, event.atMs - state.startedAt),
+        lastTurnId: state.currentTurnId ?? event.turnId ?? null,
+        lastStatus: "interrupted",
+      };
+    }
+
+    case "hydrate":
+      return {
+        currentTurnId: null,
+        startedAt: null,
+        running: false,
+        candidateEndAt: null,
+        lastDurationMs: event.durationMs,
+        lastTurnId: event.turnId,
+        lastStatus: event.status,
+      };
 
     case "active": {
       if (event.value) {
         // active=true: turn is (still) running. Cancel any pending end. Seed a
         // start if the user-input optimistic open was missed (e.g. reconnect).
         return {
+          currentTurnId: state.currentTurnId,
           startedAt: state.startedAt ?? event.atMs,
           running: true,
           candidateEndAt: null,
           lastDurationMs: state.lastDurationMs,
+          lastTurnId: state.lastTurnId,
+          lastStatus: state.lastStatus,
         };
       }
       // active=false: candidate terminal transition. Only meaningful if a turn
@@ -94,10 +137,13 @@ export function turnTimerReducer(state: TurnTimerState, event: TurnTimerEvent): 
       if (state.candidateEndAt === null || state.startedAt === null) return state;
       const duration = Math.max(0, state.candidateEndAt - state.startedAt);
       return {
+        currentTurnId: null,
         startedAt: null,
         running: false,
         candidateEndAt: null,
         lastDurationMs: duration,
+        lastTurnId: state.currentTurnId,
+        lastStatus: "completed",
       };
     }
 

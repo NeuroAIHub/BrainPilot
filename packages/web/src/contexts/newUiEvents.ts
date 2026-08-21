@@ -119,6 +119,7 @@ export function systemMessageToChatMessage(event: WebSocketEvent): ChatMessage {
   const e = event as Record<string, unknown>;
   return {
     id: str(e.id ?? e.messageId) || `sysmsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    runId: optStr(e.runId ?? e.run_id),
     role: "system",
     content: view.message,
     createdAt: view.timestamp ?? new Date().toISOString(),

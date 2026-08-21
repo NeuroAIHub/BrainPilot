@@ -219,9 +219,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
         ...existing,
         {
           id,
+          runId: event.runId,
           role,
           content: "",
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent,
           streaming: true,
           kind: "text",
@@ -248,9 +249,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           withAppliedStreamKey(
             {
               id,
+              runId: event.runId,
               role: "assistant",
               content: delta,
-              createdAt: new Date().toISOString(),
+              createdAt: eventTimestamp(event),
               agent,
               streaming: true,
               kind: "text",
@@ -288,9 +290,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
         ...existing,
         {
           id,
+          runId: event.runId,
           role,
           content: typeof event.delta === "string" ? event.delta : "",
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent: role === "user" ? "user" : agent,
           streaming: false,
           kind: "text",

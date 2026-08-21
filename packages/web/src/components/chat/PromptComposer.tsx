@@ -548,9 +548,41 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : current));
   }, [runActive, sessionId]);
 
+  const latestTimedTurn = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.role !== "user" || !message.runId) continue;
+      const atMs = Date.parse(message.createdAt);
+      return { id: message.runId, atMs: Number.isFinite(atMs) ? atMs : Date.now() };
+    }
+    return null;
+  }, [messages]);
+
+  const latestInterruption = useMemo(() => {
+    if (!latestTimedTurn) return null;
+    const prefix = currentSession?.id ? `interrupt:${currentSession.id}:` : "interrupt:";
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.kind !== "system_message" || !message.id.startsWith(prefix)) continue;
+      const atMs = Date.parse(message.createdAt);
+      if (!Number.isFinite(atMs) || atMs < latestTimedTurn.atMs) return null;
+      return {
+        id: message.id,
+        turnId: message.runId ?? message.id.slice(prefix.length),
+        atMs,
+      };
+    }
+    return null;
+  }, [currentSession?.id, latestTimedTurn, messages]);
+
   // #99: whole-turn timer — spans user input → every agent finished (workState
   // settles false), debounced against hook/system re-wakes.
-  const turnTiming = useTurnTimer({ runActive: workActive, resetKey: currentSession?.id ?? null });
+  const turnTiming = useTurnTimer({
+    runActive: workActive,
+    turn: latestTimedTurn,
+    interruption: latestInterruption,
+    resetKey: currentSession?.id ?? null,
+  });
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
