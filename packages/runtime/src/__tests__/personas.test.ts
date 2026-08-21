@@ -340,6 +340,19 @@ Stale local routing rule.`;
     expect(engineer).toContain("do not make the final scientific selection");
   });
 
+  it("separates method families from concrete implementations", () => {
+    const librarian = PERSONAS.librarian!.replace(/\s+/g, " ");
+    const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
+
+    expect(librarian).toContain("scientific principle, method family, and concrete implementation");
+    expect(librarian).toContain("does not by itself exclude the underlying family");
+    expect(librarian).toContain("minimal, adapted, or alternative implementation remains viable");
+
+    expect(experimentalist).toContain("feasible representative of each credible, materially distinct method family");
+    expect(experimentalist).toContain("family-level assumptions or estimand");
+    expect(experimentalist).toContain("implementation cost, dependency, interface, or default configuration");
+  });
+
   it("injects the Experimentalist method-selection contract into old overrides exactly once", () => {
     const old = "# Old Experimentalist\n\nLocal protocol guidance.";
     const once = withCoreCoordinationProtocols(old, "experimentalist", "expert");

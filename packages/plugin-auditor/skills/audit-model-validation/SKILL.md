@@ -56,6 +56,12 @@ the latest protocol, evidence, and decision. Protocol conformance cannot pass
 when the protocol still depends on a premise that current evidence has
 invalidated or left unresolved.
 
+For material inclusions and exclusions, distinguish the scientific principle,
+method family, and concrete implementation. An implementation-specific
+limitation cannot exclude a method family without evidence against the family's
+assumptions or estimand. Verify that a minimal, adapted, or alternative
+implementation was considered when the full tool or pipeline was unsuitable.
+
 ## Checks
 
 1. Identify the intended use and claim. Determine whether the evidence source,

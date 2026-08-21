@@ -115,6 +115,9 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("current evidence has invalidated or left unresolved");
     expect(methodReview).toContain("Do not choose a replacement method");
     expect(methodReview).toContain("method-specific budgets or stopping rules");
+    expect(methodReview).toContain("scientific principle, method family, and concrete implementation");
+    expect(methodReview).toContain("implementation-specific limitation cannot exclude a method family");
+    expect(methodReview).toContain("minimal, adapted, or alternative implementation");
     const requestTemplate = await readFile(join(auditorSkill, "references", "audit-request-template.md"), "utf8");
     expect(requestTemplate).toContain("Decision provenance");
     expect(requestTemplate).toContain("Material alternatives or unresolved challenges");
