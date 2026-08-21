@@ -682,6 +682,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         id: message.id,
         turnId: message.runId ?? message.id.slice(prefix.length),
         atMs,
+        startedAt: latestTimedTurn.atMs,
       };
     }
     return null;

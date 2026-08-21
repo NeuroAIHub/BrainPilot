@@ -135,4 +135,36 @@ describe("useTurnTimer session lifecycle (#489)", () => {
     });
     act(() => renderer.unmount());
   });
+
+  it("rehydrates a background-work Stop from durable turn timestamps", () => {
+    const startedAt = Date.parse("2026-08-21T00:00:00.000Z");
+    const stoppedAt = startedAt + 27_250;
+    vi.setSystemTime(stoppedAt + 2_000);
+    let timing: TurnTiming | null = null;
+    let renderer!: ReactTestRenderer;
+
+    act(() => {
+      renderer = create(
+        <Harness
+          capture={(value) => { timing = value; }}
+          resetKey="background-session"
+          runActive={{ active: false, atMs: stoppedAt }}
+          turn={{ id: "run-background", atMs: startedAt }}
+          interruption={{
+            id: "interrupt:background-session:run-background",
+            turnId: "run-background",
+            atMs: stoppedAt,
+            startedAt,
+          }}
+        />,
+      );
+    });
+    expect(timing).toMatchObject({
+      running: false,
+      turnId: "run-background",
+      elapsedMs: 27_250,
+      status: "interrupted",
+    });
+    act(() => renderer.unmount());
+  });
 });

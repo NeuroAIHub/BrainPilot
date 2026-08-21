@@ -61,7 +61,7 @@ interface UseTurnTimerOptions {
   /** Latest durable user run/message identity. */
   turn?: { id: string; atMs: number } | null;
   /** Canonical interrupt acknowledgement for that turn, when present. */
-  interruption?: { id: string; turnId?: string; atMs: number } | null;
+  interruption?: { id: string; turnId?: string; atMs: number; startedAt?: number } | null;
   /** Key that resets the timer when it changes (e.g. session id). */
   resetKey?: string | null;
   settleMs?: number;
@@ -135,6 +135,7 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
       type: "interrupt",
       atMs: interruption.atMs,
       turnId: interruption.turnId,
+      startedAt: interruption.startedAt,
     });
   }, [interruption, sessionKey]);
 

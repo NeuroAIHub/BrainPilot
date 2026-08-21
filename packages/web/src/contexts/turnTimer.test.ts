@@ -140,6 +140,21 @@ describe("turnTimerReducer (#99 whole-turn timing)", () => {
     expect(unchanged).toEqual(s);
   });
 
+  it("reconstructs an interrupted duration from the durable user turn after a remount", () => {
+    const s = turnTimerReducer(initialTurnTimerState, {
+      type: "interrupt",
+      turnId: "run-background",
+      startedAt: 1_000,
+      atMs: 28_250,
+    });
+    expect(s).toMatchObject({
+      running: false,
+      lastTurnId: "run-background",
+      lastDurationMs: 27_250,
+      lastStatus: "interrupted",
+    });
+  });
+
   it("hydrates a settled run-to-duration record after reload", () => {
     const s = run([{
       type: "hydrate",

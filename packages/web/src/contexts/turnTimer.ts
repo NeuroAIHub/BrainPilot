@@ -51,7 +51,7 @@ export type TurnTimerEvent =
   /** A fresh user submission opens a new turn at `atMs` (optimistic start). */
   | { type: "userInput"; atMs: number; turnId?: string }
   /** Canonical Stop acknowledgement for the current turn. */
-  | { type: "interrupt"; atMs: number; turnId?: string }
+  | { type: "interrupt"; atMs: number; turnId?: string; startedAt?: number }
   /** Restore a settled timing record after page reload. */
   | { type: "hydrate"; turnId: string; durationMs: number; status: "completed" | "interrupted" }
   /** Session switch / reset — clear all timing. */
@@ -129,15 +129,23 @@ export function turnTimerReducer(state: TurnTimerState, event: TurnTimerEvent): 
     }
 
     case "interrupt": {
-      if (!state.running || state.startedAt === null) return state;
-      if (event.turnId && state.currentTurnId && event.turnId !== state.currentTurnId) return state;
+      const startedAt = event.startedAt ?? state.startedAt;
+      if (startedAt === null || startedAt === undefined) return state;
+      // A Stop system event paired with the latest durable user turn is more
+      // authoritative than transient hook state. This lets reload/remount and
+      // background-work handoffs recover even if the local timer was reset or
+      // briefly rebound while Principal was already idle.
+      if (
+        event.startedAt === undefined
+        && (!state.running || (event.turnId && state.currentTurnId && event.turnId !== state.currentTurnId))
+      ) return state;
       return {
         currentTurnId: null,
         startedAt: null,
         running: false,
         candidateEndAt: null,
-        lastDurationMs: Math.max(0, event.atMs - state.startedAt),
-        lastTurnId: state.currentTurnId ?? event.turnId ?? null,
+        lastDurationMs: Math.max(0, event.atMs - startedAt),
+        lastTurnId: event.turnId ?? state.currentTurnId ?? null,
         lastStatus: "interrupted",
       };
     }
