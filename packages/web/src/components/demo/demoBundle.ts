@@ -1,4 +1,4 @@
-import type { AgentStatus, ChatMessage } from "../../contracts/backend";
+import type { AgentStatus, ChatMessage, TraceNode } from "../../contracts/backend";
 import {
   DEMO_BUNDLE_FORMAT,
   DEMO_BUNDLE_VERSION,
@@ -100,6 +100,21 @@ export function toDemoFilePath(path: string): string {
   return `/workspace/${rel}`;
 }
 
+type DemoArtifactLike = { path?: string; type?: string };
+
+/** Shared artifact gate for both bundle packing and replay. */
+export function isDemoFileArtifact(
+  artifact: DemoArtifactLike,
+): artifact is DemoArtifactLike & { path: string } {
+  const path = artifact.path?.trim();
+  return Boolean(
+    path
+    && artifact.type !== "dir"
+    && artifact.type !== "checkpoint"
+    && !path.startsWith("checkpoint:"),
+  );
+}
+
 /** Collect only real files, deduped by the canonical file-API path. */
 export function collectDemoArtifactPaths(
   nodes: ReadonlyArray<{ artifacts?: ReadonlyArray<{ path?: string; type?: string }> }>,
@@ -108,15 +123,8 @@ export function collectDemoArtifactPaths(
   const paths: string[] = [];
   for (const node of nodes) {
     for (const artifact of node.artifacts ?? []) {
-      const rawPath = artifact.path?.trim();
-      if (
-        !rawPath
-        || artifact.type === "dir"
-        || artifact.type === "checkpoint"
-        || rawPath.startsWith("checkpoint:")
-      ) {
-        continue;
-      }
+      if (!isDemoFileArtifact(artifact)) continue;
+      const rawPath = artifact.path.trim();
       const canonical = toDemoFilePath(rawPath);
       if (seenCanonical.has(canonical)) continue;
       seenCanonical.add(canonical);
@@ -124,6 +132,31 @@ export function collectDemoArtifactPaths(
     }
   }
   return paths;
+}
+
+/**
+ * Resolve Trace artifact aliases onto the exact path spelling retained in
+ * bundle.files. Pseudo artifacts and paths absent from the bundle disappear,
+ * so every replay consumer can safely use exact string identity afterwards.
+ */
+export function normalizeDemoReplayNodes(
+  nodes: readonly TraceNode[],
+  files: ReadonlyArray<Pick<DemoFile, "path">>,
+): TraceNode[] {
+  const retainedPathByCanonical = new Map(
+    files.map((file) => [toDemoFilePath(file.path), file.path]),
+  );
+  return nodes.map((node) => {
+    const seen = new Set<string>();
+    const artifacts = node.artifacts.flatMap((artifact) => {
+      if (!isDemoFileArtifact(artifact)) return [];
+      const retainedPath = retainedPathByCanonical.get(toDemoFilePath(artifact.path.trim()));
+      if (!retainedPath || seen.has(retainedPath)) return [];
+      seen.add(retainedPath);
+      return [{ ...artifact, path: retainedPath }];
+    });
+    return { ...node, artifacts };
+  });
 }
 
 /** Chunked base64 encode of binary data (avoids call-stack overflow). */

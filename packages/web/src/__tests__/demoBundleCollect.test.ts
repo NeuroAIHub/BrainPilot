@@ -34,6 +34,7 @@ const {
   buildDemoBundle,
   collectDemoArtifactPaths,
   DemoBundleTooLargeError,
+  normalizeDemoReplayNodes,
   PackAbortedError,
   toDemoFilePath,
 } = await import("../components/demo/demoBundle");
@@ -102,6 +103,31 @@ describe("buildDemoBundle file collection", () => {
     expect(bundle.files.map((file) => file.path)).toEqual(["/workspace/analysis_result.md"]);
     expect(readFile).toHaveBeenCalledTimes(1);
     expect(readFile).toHaveBeenCalledWith("s", "/workspace/analysis_result.md");
+  });
+
+  it("replay skips a checkpoint-first artifact and selects its real provenance file", () => {
+    const [node] = normalizeDemoReplayNodes([
+      {
+        ...traceWith([]).nodes[0],
+        artifacts: [
+          { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+          { path: "provenance.md", type: "file" },
+        ],
+      },
+    ] as never, [{ path: "/workspace/provenance.md" }]);
+
+    expect(node.artifacts.map((artifact) => artifact.path))
+      .toEqual(["/workspace/provenance.md"]);
+  });
+
+  it("replay resolves absolute and relative aliases across nodes to the retained bundle path", () => {
+    const nodes = normalizeDemoReplayNodes([
+      { ...traceWith([]).nodes[0], id: "absolute", artifacts: [{ path: "/workspace/a.md", type: "file" }] },
+      { ...traceWith([]).nodes[0], id: "relative", artifacts: [{ path: "a.md", type: "file" }] },
+    ] as never, [{ path: "/workspace/a.md" }]);
+
+    expect(nodes.map((node) => node.artifacts[0]?.path))
+      .toEqual(["/workspace/a.md", "/workspace/a.md"]);
   });
 
   it("marks all files unreadable when no sandbox is available", async () => {
