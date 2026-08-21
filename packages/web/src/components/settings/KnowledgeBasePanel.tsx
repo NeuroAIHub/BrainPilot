@@ -1386,7 +1386,7 @@ export function KnowledgeBasePanel() {
             <AlertTriangle size={15} aria-hidden />
             <div>
               <strong>{t("settings.kb.guide.errorTitle")}</strong>
-              <p>{t("settings.kb.guide.errorHint")}</p>
+              <p>{pdfUploadError ?? t("settings.kb.guide.errorHint")}</p>
             </div>
             {lastFailedPdfs.length > 0 ? (
               <button className="settings-button settings-button--ghost" type="button" onClick={() => void uploadPdfs(lastFailedPdfs)} disabled={pdfUploadBusy}>

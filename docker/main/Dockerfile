@@ -40,7 +40,7 @@ RUN if [ -n "$APT_MIRROR" ]; then \
       sed -i "s|http://deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/*.sources 2>/dev/null || true; \
     fi \
     && apt-get update \
-    && apt-get install -y --no-install-recommends curl ca-certificates git git-annex wget python3 python3-pip \
+    && apt-get install -y --no-install-recommends curl ca-certificates git git-annex wget python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/* \
     && if [ -n "$PIP_INDEX_URL" ]; then pip3 config set global.index-url "$PIP_INDEX_URL"; fi \
     && pip3 install --no-cache-dir --break-system-packages datalad==1.6.0 dandi==0.76.7 \

@@ -25,6 +25,7 @@ describe("dataset marketplace", () => {
     for (const token of [
       "git-annex",
       "wget",
+      "python3-venv",
       "datalad==1.6.0",
       "dandi==0.76.7",
       "datalad --version",
