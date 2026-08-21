@@ -49,13 +49,36 @@ export function findFailedPrompt(messages: readonly ChatMessage[], errorId: stri
   return undefined;
 }
 
+type RecoveryDraftStore = {
+  get(scopeId: string): string;
+  set(scopeId: string, value: string): void;
+};
+
+/** Preserve an unrelated draft unless the user explicitly agrees to replace it. */
+export function writeRecoveryDraft(
+  store: RecoveryDraftStore,
+  scopeId: string,
+  prompt: string,
+  confirmReplace: () => boolean,
+): boolean {
+  const existing = store.get(scopeId);
+  if (
+    existing.trim()
+    && existing.trim() !== prompt.trim()
+    && !confirmReplace()
+  ) return false;
+  store.set(scopeId, prompt);
+  return true;
+}
+
 export function isDelegatedFailure(message: ChatMessage): boolean {
   const view = message.systemMessage;
   return message.kind === "system_message"
     && Boolean(view)
     && (view!.level === "error" || view!.level === "fatal")
     && Boolean(view!.agent)
-    && view!.agent !== "principal";
+    && view!.agent !== "principal"
+    && view!.terminal === true;
 }
 
 /** A Principal answer after a specialist failure must be labelled partial. */

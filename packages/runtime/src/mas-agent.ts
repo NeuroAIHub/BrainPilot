@@ -55,6 +55,11 @@ export type ToolInterruptResult = {
   reason?: "already_finished" | "not_cancellable" | "timeout";
 };
 
+export interface MasAgentPromptOptions {
+  /** Whether a run failure is final from the user's perspective. */
+  terminalErrors?: boolean;
+}
+
 const TOOL_INTERRUPT_TIMEOUT_MS = 10_000;
 const OUTPUT_LIMIT_ERROR_CODE = "OUTPUT_LIMIT_EXCEEDED";
 const OUTPUT_LIMIT_ERROR_MESSAGE =
@@ -141,6 +146,8 @@ export class MasAgent {
   private outputLimitReached = false;
   /** True while an explicit BrainPilot interrupt is unwinding the active run. */
   private abortRequested = false;
+  /** Delivery runs defer user-visible terminal recovery to SessionManager. */
+  private currentErrorTerminal = true;
   private currentRunId: string | undefined;
   private currentMessageId: string | undefined;
   /** User follow-ups waiting for Pi to inject them after the current turn. */
@@ -419,8 +426,8 @@ export class MasAgent {
    * Send a prompt and stream events. Error-isolated (§7 L2): never throws.
    * The settled promise is tracked in `currentPrompt` so `abort()` can await it.
    */
-  prompt(text: string): Promise<void> {
-    const p = this.runPrompt(text).finally(() => {
+  prompt(text: string, options: MasAgentPromptOptions = {}): Promise<void> {
+    const p = this.runPrompt(text, options.terminalErrors !== false).finally(() => {
       // Clear the tracker only if no newer prompt has replaced it.
       if (this.currentPrompt === p) this.currentPrompt = undefined;
     });
@@ -444,7 +451,11 @@ export class MasAgent {
    * Falls back to a normal `prompt()` if the run has already drained (not
    * streaming anymore) by the time this lands, so a race can't drop the message.
    */
-  followUp(text: string, messageId?: string): Promise<void> {
+  followUp(
+    text: string,
+    messageId?: string,
+    options: MasAgentPromptOptions = {},
+  ): Promise<void> {
     if (!this.session.isStreaming) {
       // Race: the run finished between the caller's check and here — just start
       // a normal run so the message isn't lost.
@@ -458,7 +469,7 @@ export class MasAgent {
           ),
         );
       }
-      return this.prompt(text);
+      return this.prompt(text, options);
     }
     if (messageId) this.pendingFollowUps.push({ id: messageId, text });
     return this.session.prompt(text, { streamingBehavior: "followUp" }).catch((err) => {
@@ -469,7 +480,11 @@ export class MasAgent {
       const { message, details } = normalizeAgentError(raw);
       this.recordError(message, details, raw);
       this.bus.emit(
-        ev.runError({ sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId }, message),
+        ev.runError(
+          { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId },
+          message,
+          { terminal: this.currentErrorTerminal },
+        ),
       );
       this.setStatus("error");
     });
@@ -483,19 +498,20 @@ export class MasAgent {
    * durable notification. If the run drains between the streaming check and
    * `followUp`, its normal-prompt fallback is awaited by `followUp` itself.
    */
-  async followUpAndWait(text: string): Promise<void> {
+  async followUpAndWait(text: string, options: MasAgentPromptOptions = {}): Promise<void> {
     const activePrompt = this.currentPrompt;
-    await this.followUp(text);
+    await this.followUp(text, undefined, options);
     await activePrompt;
   }
 
-  private async runPrompt(text: string): Promise<void> {
+  private async runPrompt(text: string, terminalErrors: boolean): Promise<void> {
     const runId = newRunId();
     const runStartedAt = Date.now();
     const runStartSnapshot = cloneAgentStats(this.cumulativeStats);
     this.currentRunId = runId;
     this.runStartedAt = runStartedAt;
     this.abortRequested = false;
+    this.currentErrorTerminal = terminalErrors;
     this._lastRunOutcome = undefined;
     this.currentRetry = undefined;
     this.pendingProviderError = undefined;
@@ -537,7 +553,7 @@ export class MasAgent {
           ev.runError(
             { sessionId: this.sessionId, agentName: this.name, runId },
             OUTPUT_LIMIT_ERROR_MESSAGE,
-            OUTPUT_LIMIT_ERROR_CODE,
+            { code: OUTPUT_LIMIT_ERROR_CODE, terminal: this.currentErrorTerminal },
           ),
         );
         this.setStatus("error");
@@ -548,7 +564,11 @@ export class MasAgent {
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
         this.bus.emit(
-          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId }, message),
+          ev.runError(
+            { sessionId: this.sessionId, agentName: this.name, runId },
+            message,
+            { terminal: this.currentErrorTerminal },
+          ),
         );
         this.setStatus("error");
         runOutcome = "error";
@@ -586,7 +606,11 @@ export class MasAgent {
         const { message, details } = normalizeAgentError(raw);
         this.recordError(message, details, raw);
         this.bus.emit(
-          ev.runError({ sessionId: this.sessionId, agentName: this.name, runId }, message),
+          ev.runError(
+            { sessionId: this.sessionId, agentName: this.name, runId },
+            message,
+            { terminal: this.currentErrorTerminal },
+          ),
         );
         this.setStatus("error");
         runOutcome = "error";
@@ -606,6 +630,7 @@ export class MasAgent {
         this.currentMessageId = undefined;
         this.runStartSnapshot = undefined;
         this.runStartedAt = undefined;
+        this.currentErrorTerminal = true;
       }
     }
   }
@@ -705,7 +730,7 @@ export class MasAgent {
         agent: this.name,
         details,
         recoverable: true,
-        terminal: true,
+        terminal: this.currentErrorTerminal,
         id: `run-error:${this.sessionId}:${this.currentRunId ?? "unknown"}:${this.name}`,
       }),
     );

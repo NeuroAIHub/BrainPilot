@@ -423,6 +423,7 @@ export interface AgUiEvent {
   // RUN_*
   message?: string;       // RUN_ERROR
   code?: string;          // RUN_ERROR
+  terminal?: boolean;     // RUN_ERROR: false while an outer retry loop owns recovery
   result?: unknown;       // RUN_FINISHED
   parentRunId?: string;
 

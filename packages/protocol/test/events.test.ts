@@ -153,7 +153,10 @@ describe("AG-UI event union — existing events", () => {
     expect(parseEvent({ type: "RUN_FINISHED", run_id: "r1", result: { ok: 1 } }).type).toBe(
       "RUN_FINISHED",
     );
-    expect(parseEvent({ type: "RUN_ERROR", message: "boom", code: "X" }).type).toBe("RUN_ERROR");
+    expect(parseEvent({ type: "RUN_ERROR", message: "boom", code: "X", terminal: false })).toMatchObject({
+      type: "RUN_ERROR",
+      terminal: false,
+    });
   });
 
   it("round-trips MESSAGES_SNAPSHOT with a message", () => {

@@ -442,6 +442,38 @@ describe("run terminators clear dangling streaming flags", () => {
     });
   });
 
+  it("does not turn a retryable delegated RUN_ERROR into a terminal or partial result", () => {
+    const user: ChatMessage = {
+      id: "u",
+      role: "user",
+      content: "run the analysis",
+      createdAt: new Date().toISOString(),
+    };
+    const diagnostic = reduceMessagesForEvent([user], {
+      type: "system_message",
+      agent: "analyst",
+      level: "error",
+      message: "503 unavailable",
+      recoverable: true,
+      terminal: false,
+    } as WebSocketEvent);
+    const afterAttempt = reduceMessagesForEvent(diagnostic, {
+      type: "RUN_ERROR",
+      agentName: "analyst",
+      message: "503 unavailable",
+      terminal: false,
+    } as WebSocketEvent);
+    const out = reduceMessagesForEvent(afterAttempt, {
+      type: "TEXT_MESSAGE_START",
+      messageId: "principal-answer",
+      agentName: "principal",
+      role: "assistant",
+    } as WebSocketEvent);
+
+    expect(afterAttempt.some((message) => message.systemMessage?.terminal)).toBe(false);
+    expect(out.find((message) => message.id === "principal-answer")?.partial).not.toBe(true);
+  });
+
   it("marks a downstream Principal answer partial after delegated work fails", () => {
     const user: ChatMessage = {
       id: "u",
@@ -455,6 +487,7 @@ describe("run terminators clear dangling streaming flags", () => {
       level: "error",
       message: "analysis failed",
       recoverable: true,
+      terminal: true,
     } as WebSocketEvent);
     const out = reduceMessagesForEvent(failed, {
       type: "TEXT_MESSAGE_START",

@@ -61,8 +61,18 @@ export const ev = {
   runFinished(ctx: Ctx, result?: unknown): AgUiEvent {
     return { type: "RUN_FINISHED", ...envelope(ctx), result } as AgUiEvent;
   },
-  runError(ctx: Ctx, message: string, code = "RUNTIME_ERROR"): AgUiEvent {
-    return { type: "RUN_ERROR", ...envelope(ctx), message, code } as AgUiEvent;
+  runError(
+    ctx: Ctx,
+    message: string,
+    options: { code?: string; terminal?: boolean } = {},
+  ): AgUiEvent {
+    return {
+      type: "RUN_ERROR",
+      ...envelope(ctx),
+      message,
+      code: options.code ?? "RUNTIME_ERROR",
+      terminal: options.terminal ?? true,
+    } as AgUiEvent;
   },
   textMessageStart(ctx: Ctx, messageId: string, role = "assistant"): AgUiEvent {
     return { type: "TEXT_MESSAGE_START", ...envelope(ctx), message_id: messageId, role } as AgUiEvent;

@@ -456,6 +456,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       const message = event.message ?? "Run error";
       // Run is over → clear transient retry UI and sweep dangling streams.
       const swept = sweepStreaming(clearAutoRetry(existing, event.agentName), event.agentName);
+      // Delegated delivery attempts have their own RUN_ERROR lifecycle, but an
+      // outer loop may still retry them. SessionManager emits the actionable
+      // terminal system_message only when that recovery path is exhausted.
+      if (event.terminal === false) return swept;
       const terminalAgent = event.agentName ?? "principal";
       // MasAgent emits a rich system_message (raw provider detail folded) just
       // before RUN_ERROR. Promote that existing row instead of appending a

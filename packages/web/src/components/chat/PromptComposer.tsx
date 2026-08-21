@@ -5,6 +5,7 @@ import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
 import { useTurnTimer } from "../../contexts/useTurnTimer";
 import { draftStore } from "../../contexts/draftStore";
+import { writeRecoveryDraft } from "../../contexts/errorRecovery";
 import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
@@ -805,13 +806,12 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
 
   const editFailedPrompt = (prompt: string) => {
     if (!sessionId) return;
-    const existing = draftStore.get(sessionId);
-    if (
-      existing.trim()
-      && existing.trim() !== prompt.trim()
-      && !window.confirm(t("chat.errorRecovery.replaceDraft"))
-    ) return;
-    draftStore.set(sessionId, prompt);
+    if (!writeRecoveryDraft(
+      draftStore,
+      sessionId,
+      prompt,
+      () => window.confirm(t("chat.errorRecovery.replaceDraft")),
+    )) return;
     focusComposerAtEnd();
   };
 
@@ -826,7 +826,12 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   };
 
   const changeModelForFailedPrompt = (prompt?: string) => {
-    if (prompt) draftStore.set(DRAFT_SESSION_ID, prompt);
+    if (prompt && !writeRecoveryDraft(
+      draftStore,
+      DRAFT_SESSION_ID,
+      prompt,
+      () => window.confirm(t("chat.errorRecovery.replaceDraft")),
+    )) return;
     startDraftSession();
     // Existing sessions freeze provider/model. Move the failed prompt into a
     // new draft, then open whichever model control is present (main or #494).

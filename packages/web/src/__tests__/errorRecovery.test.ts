@@ -6,6 +6,7 @@ import {
   findFailedPrompt,
   hasDelegatedFailureSinceLastUser,
   markLatestPrincipalAnswerPartial,
+  writeRecoveryDraft,
 } from "../contexts/errorRecovery";
 
 function view(message: string, details?: string): SystemMessageView {
@@ -46,6 +47,33 @@ describe("failed prompt recovery", () => {
     ];
     expect(findFailedPrompt(messages, "err")).toBe("retry this");
   });
+
+  it("does not overwrite a different draft when replacement is declined", () => {
+    const drafts = new Map([["__draft__", "keep this draft"]]);
+    const store = {
+      get: (id: string) => drafts.get(id) ?? "",
+      set: (id: string, value: string) => drafts.set(id, value),
+    };
+
+    expect(writeRecoveryDraft(store, "__draft__", "failed prompt", () => false)).toBe(false);
+    expect(drafts.get("__draft__")).toBe("keep this draft");
+  });
+
+  it("writes the recovery prompt when no different draft would be lost", () => {
+    const drafts = new Map<string, string>();
+    let confirmations = 0;
+    const store = {
+      get: (id: string) => drafts.get(id) ?? "",
+      set: (id: string, value: string) => drafts.set(id, value),
+    };
+
+    expect(writeRecoveryDraft(store, "__draft__", "failed prompt", () => {
+      confirmations += 1;
+      return false;
+    })).toBe(true);
+    expect(drafts.get("__draft__")).toBe("failed prompt");
+    expect(confirmations).toBe(0);
+  });
 });
 
 describe("partial result labelling", () => {
@@ -71,6 +99,16 @@ describe("partial result labelling", () => {
     expect(hasDelegatedFailureSinceLastUser([
       delegatedError,
       message({ role: "user", content: "new turn" }),
+    ])).toBe(false);
+  });
+
+  it("does not treat a retryable delegated attempt as a final failure", () => {
+    expect(hasDelegatedFailureSinceLastUser([
+      message({ role: "user", content: "run" }),
+      message({
+        ...delegatedError,
+        systemMessage: { ...delegatedError.systemMessage!, terminal: false },
+      }),
     ])).toBe(false);
   });
 

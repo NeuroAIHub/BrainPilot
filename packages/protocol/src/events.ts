@@ -246,6 +246,8 @@ export const RunErrorEventSchema = z
     type: z.literal("RUN_ERROR"),
     message: z.string(),
     code: z.string().default("RUNTIME_ERROR"),
+    /** False when an outer delivery loop still owns retry/escalation. */
+    terminal: z.boolean().optional(),
     run_id: z.string().optional(),
   })
   .passthrough();
