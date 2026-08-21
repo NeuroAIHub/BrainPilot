@@ -3,7 +3,7 @@ import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from
 import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
-import { useTurnTimer } from "../../contexts/useTurnTimer";
+import { latestDurableUserTurn, useTurnTimer } from "../../contexts/useTurnTimer";
 import { draftStore } from "../../contexts/draftStore";
 import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
@@ -548,15 +548,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : current));
   }, [runActive, sessionId]);
 
-  const latestTimedTurn = useMemo(() => {
-    for (let index = messages.length - 1; index >= 0; index -= 1) {
-      const message = messages[index];
-      if (message.role !== "user" || !message.runId) continue;
-      const atMs = Date.parse(message.createdAt);
-      return { id: message.runId, atMs: Number.isFinite(atMs) ? atMs : Date.now() };
-    }
-    return null;
-  }, [messages]);
+  const latestTimedTurn = useMemo(() => latestDurableUserTurn(messages), [messages]);
 
   const latestInterruption = useMemo(() => {
     if (!latestTimedTurn) return null;

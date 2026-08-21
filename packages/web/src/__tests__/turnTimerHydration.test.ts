@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { isHistoricalTurnSignal } from "../contexts/useTurnTimer";
+import { isHistoricalTurnSignal, latestDurableUserTurn } from "../contexts/useTurnTimer";
 
 describe("turn timer hydration boundary (#489)", () => {
   it("ignores replayed active frames older than the mounted session", () => {
@@ -9,5 +9,22 @@ describe("turn timer hydration boundary (#489)", () => {
   it("accepts live frames and small clock-ordering differences", () => {
     expect(isHistoricalTurnSignal(20_000, 20_000)).toBe(false);
     expect(isHistoricalTurnSignal(19_500, 20_000)).toBe(false);
+  });
+
+  it("selects the newest durable user run when hydration order is not chronological", () => {
+    expect(latestDurableUserTurn([
+      { role: "user", runId: "run-new", createdAt: "2026-08-21T04:36:14.456Z" },
+      { role: "assistant", runId: "run-internal", createdAt: "2026-08-21T04:36:16.000Z" },
+      { role: "user", runId: "run-old", createdAt: "2026-08-21T04:32:27.757Z" },
+    ])).toEqual({
+      id: "run-new",
+      atMs: Date.parse("2026-08-21T04:36:14.456Z"),
+    });
+  });
+
+  it("ignores malformed timestamps rather than turning them into a current run", () => {
+    expect(latestDurableUserTurn([
+      { role: "user", runId: "run-invalid", createdAt: "not-a-date" },
+    ])).toBeNull();
   });
 });

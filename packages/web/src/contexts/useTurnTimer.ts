@@ -13,6 +13,7 @@
  * turn momentarily ends — that mid-flap false must NOT end the turn.
  */
 import { useEffect, useReducer, useRef, useState } from "react";
+import type { ChatMessage } from "../contracts/backend";
 import {
   turnTimerReducer,
   initialTurnTimerState,
@@ -24,6 +25,24 @@ export const DEFAULT_SETTLE_MS = 900;
 
 export function isHistoricalTurnSignal(atMs: number, mountedAtMs: number, slopMs = 1_000): boolean {
   return atMs < mountedAtMs - slopMs;
+}
+
+/**
+ * History hydration can merge a live SSE tail after the persisted base, so
+ * array position is not a durable chronology signal. Pick the newest user run
+ * by its backend timestamp instead of assuming the final user row is latest.
+ */
+export function latestDurableUserTurn(
+  messages: readonly Pick<ChatMessage, "role" | "runId" | "createdAt">[],
+): { id: string; atMs: number } | null {
+  let latest: { id: string; atMs: number } | null = null;
+  for (const message of messages) {
+    if (message.role !== "user" || !message.runId) continue;
+    const atMs = Date.parse(message.createdAt);
+    if (!Number.isFinite(atMs)) continue;
+    if (!latest || atMs >= latest.atMs) latest = { id: message.runId, atMs };
+  }
+  return latest;
 }
 
 export interface TurnTiming {
