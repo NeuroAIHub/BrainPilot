@@ -13,6 +13,7 @@ import {
   Pencil,
   Save,
   Maximize2,
+  MessageSquarePlus,
   Minimize2,
   RefreshCw,
   Trash2,
@@ -58,6 +59,7 @@ type FileSidebarProps = {
   openFileRequest?: { path: string; line?: number; requestId: number } | null;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  onUseInConversation?: (path: string) => void;
   onResize: (width: number) => void;
   onResizeEnd: () => void;
   onResizeStart: () => void;
@@ -79,6 +81,12 @@ const DATA_ROOT_PATH = "/data";
 
 export function isInlineEditable(name: string): boolean {
   return /\.(?:md|txt)$/i.test(name);
+}
+
+function notifyFileSourcesChanged(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new CustomEvent("brainpilot:files-changed"));
+  }
 }
 
 function parentPath(path: string): string {
@@ -195,6 +203,7 @@ export function FileSidebar({
   openFileRequest,
   onClose,
   onDirtyChange,
+  onUseInConversation,
   onResize,
   onResizeEnd,
   onResizeStart,
@@ -384,6 +393,11 @@ export function FileSidebar({
   const selectedFile = selectedNode?.type === "file" ? selectedNode : null;
   const selectedDownloadCount = selectedDownloadPaths.size;
 
+  const useSelectedFileInConversation = () => {
+    if (!selectedFile || !onUseInConversation || !confirmDiscard()) return;
+    onUseInConversation(selectedFile.path);
+  };
+
   const getNodeForPath = useCallback((path: string) => findFileSidebarNode(tree, path), [tree]);
 
   const loadDirectoryEntries = useCallback(
@@ -459,6 +473,7 @@ export function FileSidebar({
         setSelectedContent(null);
         setIsPreviewMaximized(false);
       }
+      notifyFileSourcesChanged();
     },
     [selectedPath, selectedContent],
   );
@@ -631,6 +646,7 @@ export function FileSidebar({
       if (completedCount > 0) {
         setExpandedPaths((current) => new Set(current).add(DATA_ROOT_PATH));
         await loadDirectory(DATA_ROOT_PATH);
+        notifyFileSourcesChanged();
       }
     } catch (err) {
       if (!isUploadAbortError(err)) {
@@ -641,6 +657,7 @@ export function FileSidebar({
         setExpandedPaths((current) => new Set(current).add(DATA_ROOT_PATH));
         try {
           await loadDirectory(DATA_ROOT_PATH);
+          notifyFileSourcesChanged();
         } catch {
           // loadDirectory already surfaces its own error
         }
@@ -770,6 +787,7 @@ export function FileSidebar({
       setSelectedContent(nextContent);
       setConflictContent(null);
       await loadDirectory(parentPath(selectedFile.path));
+      notifyFileSourcesChanged();
     } catch (err) {
       setEditError(err instanceof Error ? err.message : t("files.editor.saveFailed"));
     } finally {
@@ -1042,6 +1060,7 @@ export function FileSidebar({
           setEditError(null);
         }}
         onSave={(force) => void saveSelectedFile(force)}
+        onUseInConversation={onUseInConversation && selectedFile ? useSelectedFileInConversation : undefined}
         sandboxId={sandboxId}
         toDisplayPath={toDisplayPath}
         onToggleMaximize={() => setIsPreviewMaximized((current) => !current)}
@@ -1067,6 +1086,7 @@ function FilePreviewPanel({
   onPreview,
   onReloadConflict,
   onSave,
+  onUseInConversation,
   sandboxId,
   toDisplayPath,
   onToggleMaximize,
@@ -1087,6 +1107,7 @@ function FilePreviewPanel({
   onPreview: () => void;
   onReloadConflict: () => void;
   onSave: (force: boolean) => void;
+  onUseInConversation?: () => void;
   sandboxId: string | null;
   toDisplayPath: (virtualPath: string) => string;
   onToggleMaximize: () => void;
@@ -1260,6 +1281,16 @@ function FilePreviewPanel({
           <h3>{file.name}</h3>
         </div>
         <div className="file-preview__actions">
+          {onUseInConversation ? (
+            <button
+              className="file-preview__use"
+              onClick={onUseInConversation}
+              type="button"
+            >
+              <MessageSquarePlus size={14} />
+              <span>{t("files.preview.useInConversation")}</span>
+            </button>
+          ) : null}
           {editable && content ? (
             <>
               <button

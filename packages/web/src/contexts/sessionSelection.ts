@@ -22,6 +22,8 @@ export interface ResolveSessionSelectionInput {
   preferredId: string | null;
   currentSessionId: string | null;
   isDraft: boolean;
+  /** A browser-persisted new-conversation draft should win on page reload. */
+  hasRecoverableDraft?: boolean;
 }
 
 export interface ResolveSessionSelectionResult {
@@ -43,7 +45,7 @@ export interface ResolveSessionSelectionResult {
 export function resolveSessionSelection(
   input: ResolveSessionSelectionInput,
 ): ResolveSessionSelectionResult {
-  const { listStatus, sessions, preferredId, currentSessionId, isDraft } = input;
+  const { listStatus, sessions, preferredId, currentSessionId, isDraft, hasRecoverableDraft = false } = input;
 
   if (listStatus === "idle" || listStatus === "loading") {
     return { sessionId: currentSessionId, isDraft };
@@ -51,6 +53,12 @@ export function resolveSessionSelection(
 
   // Intentional new-conversation draft after the list is known — don't yank.
   if (isDraft && currentSessionId == null) {
+    return { sessionId: null, isDraft: true };
+  }
+
+  // On a fresh page load currentSessionId is null. Prefer a recoverable
+  // new-conversation draft over reopening the last persisted session.
+  if (hasRecoverableDraft && currentSessionId == null) {
     return { sessionId: null, isDraft: true };
   }
 

@@ -43,10 +43,12 @@ describe("AG-UI event union — NEW events", () => {
         details: "120s",
         timestamp: "2026-06-12T00:00:00Z",
         recoverable: level !== "fatal",
+        terminal: level === "error" || level === "fatal",
       };
       const parsed = parseEvent(e);
       expect(parsed.type).toBe("system_message");
       expect(SystemMessageEventSchema.parse(e).level).toBe(level);
+      expect(SystemMessageEventSchema.parse(e).terminal).toBe(level === "error" || level === "fatal");
     }
   });
 
@@ -151,7 +153,10 @@ describe("AG-UI event union — existing events", () => {
     expect(parseEvent({ type: "RUN_FINISHED", run_id: "r1", result: { ok: 1 } }).type).toBe(
       "RUN_FINISHED",
     );
-    expect(parseEvent({ type: "RUN_ERROR", message: "boom", code: "X" }).type).toBe("RUN_ERROR");
+    expect(parseEvent({ type: "RUN_ERROR", message: "boom", code: "X", terminal: false })).toMatchObject({
+      type: "RUN_ERROR",
+      terminal: false,
+    });
   });
 
   it("round-trips MESSAGES_SNAPSHOT with a message", () => {

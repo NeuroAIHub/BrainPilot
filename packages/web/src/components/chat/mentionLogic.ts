@@ -21,6 +21,7 @@ export type MentionFile = {
   name: string;
   path: string;
   type: "file" | "folder" | "symlink";
+  scope: "session" | "persistent";
 };
 
 export type SourceStatus<T> =
@@ -114,6 +115,8 @@ export type BuildMentionItemsInput = {
     mcpError: string;
     filesNeedSandbox: string;
     filesError: string;
+    fileScopeSession: string;
+    fileScopePersistent: string;
   };
 };
 
@@ -330,7 +333,7 @@ function collectFileItems(
             id: `file:${f.path}`,
             kind: "file" as const,
             label: f.name,
-            detail: path,
+            detail: `${f.scope === "persistent" ? labels.fileScopePersistent : labels.fileScopeSession} · ${path}`,
             insertion: formatFileInsertion(path),
             selectable: true,
             group: "files" as const,
@@ -349,7 +352,15 @@ export function formatMcpInsertion(name: string): string {
 
 /** Insertion text for a workspace file path. */
 export function formatFileInsertion(path: string): string {
-  return `\`${path}\` `;
+  const longestRun = Math.max(0, ...(path.match(/`+/g) ?? []).map((run) => run.length));
+  const fence = "`".repeat(Math.max(1, longestRun + 1));
+  return `${fence}${path}${fence} `;
+}
+
+/** Append a safe logical file reference to an existing composer draft. */
+export function appendFileReference(draft: string, path: string): string {
+  const separator = draft.length > 0 && !/\s$/.test(draft) ? " " : "";
+  return `${draft}${separator}${formatFileInsertion(path)}`;
 }
 
 /**
