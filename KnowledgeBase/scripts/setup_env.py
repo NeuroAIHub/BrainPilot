@@ -261,7 +261,13 @@ def main() -> int:
     _emit("progress", f"installing dependencies from {req_file.name} "
                       "(this can take several minutes the first time) ...", percent=40)
     rc = _run_streaming(
-        [str(venv_py), "-m", "pip", "install", "-r", str(req_file)],
+        [
+            str(venv_py), "-m", "pip", "install",
+            "--retries", "12",
+            "--resume-retries", "24",
+            "--timeout", "120",
+            "-r", str(req_file),
+        ],
         label="install-requirements",
         env=pip_env,
     )

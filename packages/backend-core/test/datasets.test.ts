@@ -37,6 +37,15 @@ describe("dataset marketplace", () => {
     expect(dockerfile).not.toContain("pip3 config set global.index-url");
   });
 
+  it("keeps large KB dependency downloads resumable on unstable cloud links", () => {
+    const setupScript = readFileSync(
+      new URL("../../../KnowledgeBase/scripts/setup_env.py", import.meta.url),
+      "utf8",
+    );
+    expect(setupScript).toContain('"--resume-retries", "24"');
+    expect(setupScript).toContain('"--timeout", "120"');
+  });
+
   it("publishes metadata without exposing executable recipes", async () => {
     const entries = listDatasets();
     expect(entries.length).toBeGreaterThanOrEqual(10);
