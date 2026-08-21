@@ -10,6 +10,7 @@ const a: TraceNode = {
 };
 const b: TraceNode = {
   id: "b", title: "Analyze", type: "task", status: "pending", parents: [], artifacts: [], parentIds: [], childIds: [], toolCalls: [], primaryEpisodeId: "ep", episodeTags: ["review"],
+  confidence: "high", reviewConclusion: "approved", reviewReason: "Checked", reason: "Evidence", context: "Study",
 };
 
 const graph: TraceGraph = {
@@ -38,10 +39,18 @@ describe("TraceNodeDetail V2 sections", () => {
       />,
     );
     expect(html).toContain("trace.node.dependencies");
-    expect(html).toContain("Candidate dependencies / evidence");
-    expect(html).toContain("Episode");
+    expect(html).toContain("trace.node.candidateDependencies");
+    expect(html).toContain("trace.node.episodeTitle");
     expect(html).toContain("Evidence review");
-    expect(html).toContain("Accept");
-    expect(html).toContain("Reject");
+    expect(html).toContain("trace.node.acceptDependency");
+    expect(html).toContain("trace.node.rejectDependency");
+    expect(html).toContain("trace.node.reviewTitle");
+    expect(html).toContain("trace.node.reasonTitle");
+    expect(html).toContain("trace.node.contextTitle");
+    expect(html).toContain("trace.review.approved");
+    expect(html).toContain("trace.confidence.low");
+    expect(html).not.toContain(">Accept<");
+    expect(html).not.toContain(">Reject<");
+    expect(html).not.toContain(">approved<");
   });
 });

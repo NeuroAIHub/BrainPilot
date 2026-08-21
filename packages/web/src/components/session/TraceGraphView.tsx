@@ -27,6 +27,8 @@ interface TraceGraphViewProps {
   /** Shown when there are no nodes to display. */
   emptyLabel?: string;
   formatKind?: (kind: string) => string;
+  formatRelation?: (relation: string) => string;
+  revokedLabel?: string;
   /** Display labels for internal Episode IDs carried by V2 nodes. */
   episodeTitles?: ReadonlyMap<string, string>;
   zoomLabels?: {
@@ -54,6 +56,8 @@ export function TraceGraphView({
   fitToken,
   emptyLabel,
   formatKind,
+  formatRelation,
+  revokedLabel,
   episodeTitles,
   zoomLabels,
   showProposedDependencies = true,
@@ -268,7 +272,9 @@ export function TraceGraphView({
                 : `M ${startX} ${startY} C ${startX} ${startY + 42}, ${endX} ${endY - 42}, ${endX} ${endY}`;
               const midX = (startX + endX) / 2;
               const midY = (startY + endY) / 2;
-              const labelText = parentRef.relation ? (relationLabels[parentRef.relation] || parentRef.relation) : "";
+              const labelText = parentRef.relation
+                ? (formatRelation?.(parentRef.relation) ?? relationLabels[parentRef.relation] ?? parentRef.relation)
+                : "";
               const labelWidth = Math.max(48, labelText.length * 5.5 + 10);
               const edgeKind = parentRef.edgeType || parentRef.relation || "necessitated_by";
               return (
@@ -324,7 +330,7 @@ export function TraceGraphView({
                 <rect height={adjustedLayout.nodeHeight} rx="8" width={adjustedLayout.nodeWidth} />
                 <circle className={`trace-node__dot--${normalizeStatus(node.status)}`} cx="16" cy="24" r="4" />
                 <text className="trace-map-node__title" x="28" y="26">{truncateNodeTitle(node.title)}</text>
-                <text className="trace-map-node__meta" x="28" y="44">{node.revoked ? "Revoked" : `${node.agent || kindLabel} · ${node.confidence ?? "?"}`}</text>
+                <text className="trace-map-node__meta" x="28" y="44">{node.revoked ? (revokedLabel ?? kindLabel) : (node.agent || kindLabel)}</text>
                 <text className="trace-map-node__kind" x="28" y="58">{truncateNodeTitle(kindAndEpisode)}</text>
               </g>
             );

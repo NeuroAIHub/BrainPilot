@@ -44,6 +44,26 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
   const nodeById = new Map((nodes ?? []).map((item) => [item.id, item]));
   const kind = getNodeKind(node);
   const kindLabel = formatKind?.(kind) ?? kind;
+  const confidenceLabel = (value?: string) => {
+    if (value === "high" || value === "medium" || value === "low") return t(`trace.confidence.${value}`);
+    return value || t("trace.node.unassessed");
+  };
+  const reviewLabel = (value?: string) => {
+    if (value === "approved" || value === "rejected" || value === "needs_revision") return t(`trace.review.${value}`);
+    return value;
+  };
+  const originLabel = (value?: string) => {
+    if (value === "host" || value === "trace" || value === "agent") return t(`trace.origin.${value}`);
+    return value || t("trace.origin.system");
+  };
+  const relationLabel = (value?: string) => {
+    const normalized = value || "parent";
+    return relationLabels[normalized] ? t(`trace.relation.${normalized}`) : normalized;
+  };
+  const artifactLabel = (value?: string) => {
+    const normalized = value || "file";
+    return artifactLabels[normalized] ? t(`trace.artifact.${normalized}`) : normalized;
+  };
   const parentLabel = (id: string) =>
     nodeById.get(id)?.title || t("trace.node.parentFallback");
   const childNodes = node.childIds
@@ -61,7 +81,7 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
       <button key={"id" in dependency ? dependency.id : prerequisiteId} onClick={() => onSelectNode(prerequisiteId)} title={prerequisiteId} type="button">
         <strong>{parentLabel(prerequisiteId)}</strong>
         {dependency.reason ? <small>{dependency.reason}</small> : null}
-        {"confidence" in dependency && dependency.confidence ? <span>{dependency.confidence}</span> : null}
+        {"confidence" in dependency && dependency.confidence ? <span>{confidenceLabel(dependency.confidence)}</span> : null}
       </button>
     );
   };
@@ -88,9 +108,9 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
       </div>
       <div className="trace-detail__badges">
         <span title={kind}>{kindLabel}</span>
-        {node.revoked ? <span className="trace-detail__badge--revoked">Revoked</span> : null}
-        <span>{t("trace.node.confidence", { level: node.confidence ?? t("trace.node.unassessed") })}</span>
-        {node.reviewConclusion && node.reviewConclusion !== "unreviewed" ? <span>{node.reviewConclusion}</span> : null}
+        {node.revoked ? <span className="trace-detail__badge--revoked">{t("trace.node.revoked")}</span> : null}
+        <span>{t("trace.node.confidence", { level: confidenceLabel(node.confidence) })}</span>
+        {node.reviewConclusion && node.reviewConclusion !== "unreviewed" ? <span>{reviewLabel(node.reviewConclusion)}</span> : null}
         {node.agent ? <span>{node.agent}</span> : null}
         {node.metadata?.auto ? (
           <span className="trace-detail__badge--auto" title={t("trace.node.autoTitle")}>
@@ -98,7 +118,7 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
           </span>
         ) : null}
       </div>
-      <p>{node.summary || node.description || node.content || "No summary recorded."}</p>
+      <p>{node.summary || node.description || node.content || t("trace.node.summaryFallback")}</p>
       {node.confidenceReason ? (
         <section className="trace-detail__section">
           <h4><AlertTriangle size={13} /> {t("trace.node.confidenceTitle")}</h4>
@@ -107,13 +127,13 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
       ) : null}
       {node.reviewReason ? (
         <section className="trace-detail__section">
-          <h4><AlertTriangle size={13} /> Review</h4>
+          <h4><AlertTriangle size={13} /> {t("trace.node.reviewTitle")}</h4>
           <p>{node.reviewReason}</p>
         </section>
       ) : null}
       {node.records?.length ? (
         <section className="trace-detail__section">
-          <h4><FileText size={13} /> Source records</h4>
+          <h4><FileText size={13} /> {t("trace.node.sourceRecords")}</h4>
           <div className="trace-relation-list">
             {node.records.map((record, index) => (
               <div key={`${record.createdAt}-${index}`}>
@@ -127,13 +147,13 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
       ) : null}
       {node.reason ? (
         <section className="trace-detail__section">
-          <h4><ArrowRight size={13} /> Reason</h4>
+          <h4><ArrowRight size={13} /> {t("trace.node.reasonTitle")}</h4>
           <p>{node.reason}</p>
         </section>
       ) : null}
       {node.context ? (
         <section className="trace-detail__section">
-          <h4><FileText size={13} /> Context</h4>
+          <h4><FileText size={13} /> {t("trace.node.contextTitle")}</h4>
           <p>{node.context}</p>
         </section>
       ) : null}
@@ -150,22 +170,22 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
           <div className="trace-relation-list">
             {officialDependencies.map((dependency) => "prerequisiteId" in dependency
               ? renderDependency(dependency)
-              : <button key={dependency.id} onClick={() => onSelectNode(dependency.id)} title={dependency.id} type="button"><strong>{parentLabel(dependency.id)}</strong><span>{relationLabels[dependency.relation || ""] || dependency.relation || "parent"}</span>{dependency.explanation ? <small>{dependency.explanation}</small> : null}</button>)}
+              : <button key={dependency.id} onClick={() => onSelectNode(dependency.id)} title={dependency.id} type="button"><strong>{parentLabel(dependency.id)}</strong><span>{relationLabel(dependency.relation)}</span>{dependency.explanation ? <small>{dependency.explanation}</small> : null}</button>)}
           </div>
         </section>
       ) : null}
       {candidateDependencies.length > 0 ? (
         <section className="trace-detail__section">
-          <h4><GitBranch size={13} /> Candidate dependencies / evidence</h4>
+          <h4><GitBranch size={13} /> {t("trace.node.candidateDependencies")}</h4>
           <div className="trace-relation-list">
             {candidateDependencies.map((dependency) => (
               <div key={dependency.id} className="trace-dependency-candidate">
                 {renderDependency(dependency)}
-                <small>{dependency.origin} · {dependency.evidence.length} evidence item{dependency.evidence.length === 1 ? "" : "s"}</small>
+                <small>{t("trace.node.candidateMeta", { origin: originLabel(dependency.origin), count: dependency.evidence.length })}</small>
                 {onDependencyDecision ? (
                   <span className="trace-dependency-candidate__actions">
-                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "accept")}>Accept</button>
-                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "reject")}>Reject</button>
+                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "accept")}>{t("trace.node.acceptDependency")}</button>
+                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "reject")}>{t("trace.node.rejectDependency")}</button>
                   </span>
                 ) : null}
               </div>
@@ -175,8 +195,8 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
       ) : null}
       {episode ? (
         <section className="trace-detail__section">
-          <h4><GitBranch size={13} /> Episode</h4>
-          <p>{episode.title}{node.episodeTags?.length ? ` · tags: ${node.episodeTags.join(", ")}` : ""}</p>
+          <h4><GitBranch size={13} /> {t("trace.node.episodeTitle")}</h4>
+          <p>{episode.title}{node.episodeTags?.length ? ` · ${t("trace.node.episodeTags", { tags: node.episodeTags.join(", ") })}` : ""}</p>
         </section>
       ) : null}
       {node.toolCalls.length > 0 ? (
@@ -198,7 +218,7 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
           <h4><Box size={13} /> {t("trace.node.artifactsTitle")}</h4>
           <div className="trace-artifact-list">
             {node.artifacts.map((artifact) => {
-              const label = artifactLabels[artifact.type || ""] || artifact.type || "file";
+              const label = artifactLabel(artifact.type);
               const name = artifact.path.split("/").pop() || artifact.path;
               if (onSelectArtifact) {
                 return (

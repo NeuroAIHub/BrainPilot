@@ -14,7 +14,7 @@ import { FilePreviewView, PreviewSource } from "../files/FilePreviewView";
 import { getPreviewKind, isMarkdown } from "../files/filePreview";
 import { IconButton } from "../primitives/IconButton";
 import { TraceGraphView } from "../session/TraceGraphView";
-import { getNodeKindLabelKey } from "../session/traceLayout";
+import { getNodeKindLabelKey, relationLabels } from "../session/traceLayout";
 import {
   buildDemoBundle,
   DemoBundleTooLargeError,
@@ -873,6 +873,8 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
                 fitToken={revealedNodes.length}
                 emptyLabel={nodes.length === 0 ? t("demo.trace.empty") : undefined}
                 formatKind={formatNodeKind}
+                formatRelation={(relation) => relationLabels[relation] ? t(`trace.relation.${relation}`) : relation}
+                revokedLabel={t("trace.node.revoked")}
                 episodeTitles={episodeTitles}
                 zoomLabels={{
                   controls: t("trace.aria.zoomControls"),

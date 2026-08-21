@@ -17,6 +17,7 @@ import {
   getNodeKindLabelKey,
   getStatusLabelKey,
   normalizeStatus,
+  relationLabels,
 } from "./traceLayout";
 import {
   layoutToggleState,
@@ -452,6 +453,8 @@ export function TracePanel() {
                   fitToken={fitToken}
                   emptyLabel={emptyLabel}
                   formatKind={formatNodeKind}
+                  formatRelation={(relation) => relationLabels[relation] ? t(`trace.relation.${relation}`) : relation}
+                  revokedLabel={t("trace.node.revoked")}
                   episodeTitles={episodeTitles}
                   showProposedDependencies={showProposedDependencies}
                   zoomLabels={{
