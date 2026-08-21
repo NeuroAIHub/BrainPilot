@@ -171,6 +171,7 @@ export function TracePanel() {
   const [fitToken, setFitToken] = useState(0);
   const [showProposedDependencies, setShowProposedDependencies] = useState(true);
   const [collapseEpisodes, setCollapseEpisodes] = useState(false);
+  const [showSimpleTraceWorkbench, setShowSimpleTraceWorkbench] = useState(false);
   const wasUserAdjustedRef = useRef(false);
   const prevNodeCountRef = useRef(0);
   const formatNodeKind = (kind: string) => {
@@ -279,6 +280,7 @@ export function TracePanel() {
     prevNodeCountRef.current = allNodes.length;
     wasUserAdjustedRef.current = false;
     setIsPlaying(false);
+    setShowSimpleTraceWorkbench(false);
   }, [currentSession?.id]);
 
   useEffect(() => {
@@ -391,12 +393,18 @@ export function TracePanel() {
           </div>
         ) : null}
 
-        {trace ? (
-          <details
-            className={`progressive-workbench ${traceSummary.simple ? "is-simple" : "is-full"}`}
-            open={traceSummary.simple ? undefined : true}
+        {trace && traceSummary.simple ? (
+          <button
+            aria-expanded={showSimpleTraceWorkbench}
+            className="progressive-workbench__trigger"
+            onClick={() => setShowSimpleTraceWorkbench((current) => !current)}
+            type="button"
           >
-            <summary>{t("trace.simple.openWorkbench")}</summary>
+            {t(showSimpleTraceWorkbench ? "trace.simple.closeWorkbench" : "trace.simple.openWorkbench")}
+          </button>
+        ) : null}
+
+        {trace && (!traceSummary.simple || showSimpleTraceWorkbench) ? (
             <div className="progressive-summary__workbench progressive-summary__workbench--trace">
             <div className="trace-meta">
               <span>{trace.meta.projectName || currentSession?.title || t("trace.untitled")}</span>
@@ -534,7 +542,6 @@ export function TracePanel() {
               </article>
             </div>
             </div>
-          </details>
         ) : null}
       </div>
     </section>
