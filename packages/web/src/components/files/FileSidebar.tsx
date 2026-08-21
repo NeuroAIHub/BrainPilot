@@ -38,7 +38,11 @@ import {
   findFileSidebarNode,
   type FileSidebarTreeNode,
 } from "./fileSidebarTree";
-import { restoreNoticeIsCurrent } from "./workspaceRestoreState";
+import {
+  restoreNoticeIsCurrent,
+  restorePreviewLoadKey,
+  shouldReloadRestorePreview,
+} from "./workspaceRestoreState";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
 import { PluginPreviewHost } from "./PluginPreviewHost";
 import { matchEnabledPreviewer, type EnabledPreviewer } from "./previewerRegistry";
@@ -56,9 +60,20 @@ type DataUploadState = {
 type FileNode = FileSidebarTreeNode;
 
 type WorkspaceRestoreNotice = {
+  restoreKey: string;
+  requestKey: string;
   restoredAt: string;
   checkpointId?: string;
   files: string[];
+};
+
+type WorkspaceRestorePreviewRequest = {
+  restoreKey: string;
+  requestKey: string;
+  path: string;
+  relativePath: string;
+  restoredAt: string;
+  checkpointId?: string;
 };
 
 type FileSidebarProps = {
@@ -114,6 +129,17 @@ function workspaceRelativePath(path: string) {
     return "workspace";
   }
   return path.startsWith("/workspace/") ? path.slice("/workspace/".length) : path.replace(/^\/+/, "");
+}
+
+function workspaceRestoreKey(restore: {
+  changeId?: string;
+  restoredAt?: string;
+  checkpointId?: string;
+}): string {
+  return restore.changeId
+    ?? restore.restoredAt
+    ?? restore.checkpointId
+    ?? "workspace-restore";
 }
 
 function removeNestedSelections(paths: string[]): string[] {
@@ -249,7 +275,10 @@ export function FileSidebar({
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
   const [restoreNotice, setRestoreNotice] = useState<WorkspaceRestoreNotice | null>(null);
-  const handledRestoreRef = useRef<string | null>(null);
+  const handledRestoreRef = useRef<{ restoreKey: string | null; paths: Set<string> }>({
+    restoreKey: null,
+    paths: new Set(),
+  });
   // #305: replace boolean busy with progress UI state; null = idle.
   const [dataUploadState, setDataUploadState] = useState<DataUploadState | null>(null);
   const dataUploadAbortRef = useRef<AbortController | null>(null);
@@ -353,6 +382,10 @@ export function FileSidebar({
     [currentSandbox, sandboxId, t],
   );
 
+  const selectedNode = useMemo(() => findFileSidebarNode(tree, selectedPath), [selectedPath, tree]);
+  const selectedFile = selectedNode?.type === "file" ? selectedNode : null;
+  const selectedDownloadCount = selectedDownloadPaths.size;
+
   const latestWorkspaceRestore = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const view = messages[index].systemMessage;
@@ -363,62 +396,121 @@ export function FileSidebar({
     return null;
   }, [messages]);
 
-  useEffect(() => {
-    if (!latestWorkspaceRestore) return;
-    // Chat keeps the durable restore event as history. The file-preview badge
-    // is stricter: it only claims the selected bytes are restored when this is
-    // still the latest event and those bytes were successfully reloaded.
-    if (!restoreNoticeIsCurrent({
+  const latestRestoreKey = latestWorkspaceRestore
+    ? workspaceRestoreKey(latestWorkspaceRestore.restore)
+    : null;
+  const latestRestoreIsLastMessage = latestWorkspaceRestore?.messageIndex === messages.length - 1;
+  const restoreIsLatest = latestWorkspaceRestore
+    ? restoreNoticeIsCurrent({
       restoreMessageIndex: latestWorkspaceRestore.messageIndex,
       messageCount: messages.length,
       isDirty,
       successfullyReloaded: true,
-    })) {
-      setRestoreNotice(null);
-      return;
-    }
-    const restore = latestWorkspaceRestore.restore;
-    const restoreKey = restore.changeId
-      ?? restore.restoredAt
-      ?? restore.checkpointId
-      ?? "workspace-restore";
-    if (handledRestoreRef.current === restoreKey) return;
-    handledRestoreRef.current = restoreKey;
-    setRestoreNotice(null);
-    if (!isOpen || currentSandbox?.status !== "running") return;
-    void loadDirectory(WORKSPACE_ROOT_PATH);
+    })
+    : false;
 
-    const relativePath = selectedPath ? workspaceRelativePath(selectedPath) : null;
+  const isRestorePathHandled = useCallback((restoreKey: string, relativePath: string): boolean => {
+    const handled = handledRestoreRef.current;
+    return handled.restoreKey === restoreKey && handled.paths.has(relativePath);
+  }, []);
+
+  const markRestorePathHandled = useCallback((restoreKey: string, relativePath: string): void => {
+    const handled = handledRestoreRef.current;
+    if (handled.restoreKey !== restoreKey) {
+      handled.restoreKey = restoreKey;
+      handled.paths = new Set();
+    }
+    handled.paths.add(relativePath);
+  }, []);
+
+  const selectedRelativePath = selectedPath ? workspaceRelativePath(selectedPath) : null;
+  const selectedFileAffected = Boolean(
+    selectedRelativePath && latestWorkspaceRestore?.restore.files.includes(selectedRelativePath),
+  );
+  const alreadyReloaded = Boolean(
+    latestRestoreKey
+    && selectedRelativePath
+    && isRestorePathHandled(latestRestoreKey, selectedRelativePath),
+  );
+  const shouldReloadSelectedRestore = shouldReloadRestorePreview({
+    isOpen,
+    sandboxReady: currentSandbox?.status === "running" && Boolean(sandboxId),
+    hasSelectedFile: Boolean(selectedFile && selectedPath && selectedRelativePath),
+    selectedFileAffected,
+    isDirty,
+    restoreIsLatest,
+    alreadyReloaded,
+  });
+  const restorePreviewRequest: WorkspaceRestorePreviewRequest | null = (
+    shouldReloadSelectedRestore
+    && latestWorkspaceRestore
+    && latestRestoreKey
+    && selectedPath
+    && selectedRelativePath
+  )
+    ? {
+      restoreKey: latestRestoreKey,
+      requestKey: JSON.stringify([latestRestoreKey, selectedRelativePath]),
+      path: selectedPath,
+      relativePath: selectedRelativePath,
+      restoredAt: latestWorkspaceRestore.restore.restoredAt ?? new Date().toISOString(),
+      checkpointId: latestWorkspaceRestore.restore.checkpointId,
+    }
+    : null;
+
+  const completeRestoreReload = useCallback((request: WorkspaceRestorePreviewRequest): void => {
     if (
-      !relativePath
-      || !restore.files.includes(relativePath)
-      || !sandboxId
+      !restoreIsLatest
+      || latestRestoreKey !== request.restoreKey
+      || selectedPath !== request.path
       || isDirty
     ) return;
-    void api.sandbox.readFile(sandboxId, selectedPath!).then((loaded) => {
+    markRestorePathHandled(request.restoreKey, request.relativePath);
+    setRestoreNotice({
+      restoreKey: request.restoreKey,
+      requestKey: request.requestKey,
+      restoredAt: request.restoredAt,
+      checkpointId: request.checkpointId,
+      files: [request.relativePath],
+    });
+  }, [isDirty, latestRestoreKey, markRestorePathHandled, restoreIsLatest, selectedPath]);
+
+  useEffect(() => {
+    setRestoreNotice((current) => {
+      if (!current) return current;
+      return restoreIsLatest && current.restoreKey === latestRestoreKey ? current : null;
+    });
+  }, [latestRestoreKey, restoreIsLatest]);
+
+  useEffect(() => {
+    if (!restorePreviewRequest || !sandboxId || !selectedFile) return;
+    const request = restorePreviewRequest;
+    setRestoreNotice(null);
+    void loadDirectory(WORKSPACE_ROOT_PATH);
+
+    // Binary and plugin previews own their byte loading below. They complete
+    // the request only after the new blob/plugin render is ready.
+    if (getPreviewKind(selectedFile.name) !== "text" || selectedFile.size > ONE_MB) return;
+
+    let cancelled = false;
+    void api.sandbox.readFile(sandboxId, request.path).then((loaded) => {
+      if (cancelled) return;
       setSelectedContent(loaded);
       setDraftContent(loaded.content);
       setEditError(null);
       setConflictContent(null);
-      if (restoreNoticeIsCurrent({
-        restoreMessageIndex: latestWorkspaceRestore.messageIndex,
-        messageCount: messages.length,
-        isDirty: false,
-        successfullyReloaded: true,
-      })) {
-        setRestoreNotice({
-          restoredAt: restore.restoredAt ?? new Date().toISOString(),
-          checkpointId: restore.checkpointId,
-          files: [relativePath],
-        });
-      }
+      completeRestoreReload(request);
     }).catch(() => {
+      if (cancelled) return;
       setSelectedContent(null);
       setDraftContent("");
       setRestoreNotice(null);
       setEditError(t("files.preview.restoredMissing"));
     });
-  }, [currentSandbox?.status, isDirty, isOpen, latestWorkspaceRestore, loadDirectory, messages.length, sandboxId, selectedPath, t]);
+    return () => {
+      cancelled = true;
+    };
+  }, [completeRestoreReload, loadDirectory, restorePreviewRequest?.requestKey, sandboxId, selectedFile?.name, selectedFile?.size, t]);
 
   useEffect(() => {
     if (isDirty) setRestoreNotice(null);
@@ -468,10 +560,6 @@ export function FileSidebar({
       window.removeEventListener("pointerup", handlePointerUp);
     };
   }, [onResize, onResizeEnd]);
-
-  const selectedNode = useMemo(() => findFileSidebarNode(tree, selectedPath), [selectedPath, tree]);
-  const selectedFile = selectedNode?.type === "file" ? selectedNode : null;
-  const selectedDownloadCount = selectedDownloadPaths.size;
 
   const useSelectedFileInConversation = () => {
     if (!selectedFile || !onUseInConversation || !confirmDiscard()) return;
@@ -866,6 +954,16 @@ export function FileSidebar({
       const blob = new Blob([draftContent], { type: "text/plain;charset=utf-8" });
       const saved = await api.sandbox.uploadFile(sandboxId, selectedFile.path, blob);
       const nextContent = { path: selectedFile.path, content: draftContent, size: saved.size };
+      const relativePath = workspaceRelativePath(selectedFile.path);
+      if (
+        latestRestoreIsLastMessage
+        && latestRestoreKey
+        && latestWorkspaceRestore?.restore.files.includes(relativePath)
+      ) {
+        // A user save supersedes the restored bytes. Record the path as handled
+        // before isDirty becomes false so the old restore is never re-badged.
+        markRestorePathHandled(latestRestoreKey, relativePath);
+      }
       setSelectedContent(nextContent);
       setRestoreNotice(null);
       setConflictContent(null);
@@ -1122,6 +1220,7 @@ export function FileSidebar({
         isMaximized={isPreviewMaximized}
         isSaving={isSaving}
         requestedLine={requestedLine}
+        restoreRequest={restorePreviewRequest}
         restoreNotice={
           restoreNotice && selectedFile && restoreNotice.files.includes(workspaceRelativePath(selectedFile.path))
             ? restoreNotice
@@ -1140,6 +1239,7 @@ export function FileSidebar({
         onDraftChange={setDraftContent}
         onEdit={() => setIsEditing(true)}
         onPreview={() => setIsEditing(false)}
+        onRestoreReloaded={completeRestoreReload}
         onReloadConflict={() => {
           if (!conflictContent) return;
           setSelectedContent(conflictContent);
@@ -1168,11 +1268,13 @@ function FilePreviewPanel({
   isMaximized,
   isSaving,
   requestedLine,
+  restoreRequest,
   restoreNotice,
   onClose,
   onDraftChange,
   onEdit,
   onPreview,
+  onRestoreReloaded,
   onReloadConflict,
   onSave,
   onUseInConversation,
@@ -1190,11 +1292,13 @@ function FilePreviewPanel({
   isMaximized: boolean;
   isSaving: boolean;
   requestedLine?: number;
+  restoreRequest: WorkspaceRestorePreviewRequest | null;
   restoreNotice: WorkspaceRestoreNotice | null;
   onClose: () => void;
   onDraftChange: (content: string) => void;
   onEdit: () => void;
   onPreview: () => void;
+  onRestoreReloaded: (request: WorkspaceRestorePreviewRequest) => void;
   onReloadConflict: () => void;
   onSave: (force: boolean) => void;
   onUseInConversation?: () => void;
@@ -1214,6 +1318,8 @@ function FilePreviewPanel({
   const previewKind = file ? getPreviewKind(file.name) : "download";
   const pluginPreviewer = file ? matchEnabledPreviewer(file.name, enabledPreviewers) : null;
   const editable = file ? isInlineEditable(file.name) : false;
+  const restoreRequestKey = restoreRequest?.requestKey ?? restoreNotice?.requestKey;
+  const previewLoadKey = file ? restorePreviewLoadKey(file.path, restoreRequestKey) : "no-file";
 
   useEffect(() => {
     if (!isEditing) return;
@@ -1271,6 +1377,7 @@ function FilePreviewPanel({
         }
         objectUrl = URL.createObjectURL(blob);
         setBlobUrl(objectUrl);
+        if (restoreRequest) onRestoreReloaded(restoreRequest);
       })
       .catch((err) => {
         if (!isCancelled) {
@@ -1284,7 +1391,7 @@ function FilePreviewPanel({
         URL.revokeObjectURL(objectUrl);
       }
     };
-  }, [file?.path, pluginPreviewer, previewKind, sandboxId]);
+  }, [onRestoreReloaded, pluginPreviewer, previewKind, previewLoadKey, sandboxId]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -1473,12 +1580,13 @@ function FilePreviewPanel({
           />
         ) : pluginPreviewer && sandboxId ? (
           <PluginPreviewHost
-            key={`${pluginPreviewer.pluginId}:${pluginPreviewer.pluginVersion}:${file.path}`}
+            key={`${pluginPreviewer.pluginId}:${pluginPreviewer.pluginVersion}:${previewLoadKey}`}
             previewer={pluginPreviewer}
             sandboxId={sandboxId}
             path={file.path}
             name={file.name}
             size={file.size}
+            onRendered={restoreRequest ? () => onRestoreReloaded(restoreRequest) : undefined}
           />
         ) : (
           <FilePreviewView
