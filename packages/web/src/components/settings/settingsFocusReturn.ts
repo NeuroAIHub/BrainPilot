@@ -1,4 +1,13 @@
-type FocusScheduler = (callback: () => void) => void;
+export type FocusScheduler = (callback: () => void) => void;
+
+function scheduleAfterPaint(callback: () => void): void {
+  // WebKit can move focus back to the document while removing a focused
+  // dialog during the first frame. Wait for that browser cleanup as well as
+  // React's inert cleanup before restoring the opener.
+  window.requestAnimationFrame(() => {
+    window.requestAnimationFrame(callback);
+  });
+}
 
 /**
  * Restore focus only after React has finished every modal cleanup. Safari
@@ -7,9 +16,7 @@ type FocusScheduler = (callback: () => void) => void;
  */
 export function restoreFocusAfterModalClose(
   element: HTMLElement | null,
-  schedule: FocusScheduler = (callback) => {
-    window.requestAnimationFrame(callback);
-  },
+  schedule: FocusScheduler = scheduleAfterPaint,
 ): void {
   if (!element) return;
   schedule(() => {

@@ -14,7 +14,7 @@ function fakeElement(overrides: {
 }
 
 describe("Settings focus return (#501)", () => {
-  it("waits until the next frame before focusing the opener", () => {
+  it("waits for the supplied post-close scheduler before focusing the opener", () => {
     const opener = fakeElement();
     let scheduled: (() => void) | undefined;
 
