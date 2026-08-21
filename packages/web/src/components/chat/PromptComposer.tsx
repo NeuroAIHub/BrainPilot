@@ -131,7 +131,7 @@ type PromptComposerProps = {
   /** Open Settings deep-linked to the Providers tab — wired to the
    *  no-provider banner's CTA. Optional so the composer still renders standalone
    *  (e.g. in tests). */
-  onOpenProviderSettings?: () => void;
+  onOpenProviderSettings?: (trigger?: HTMLElement) => void;
   onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 };
 
@@ -804,7 +804,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             <button
               type="button"
               className="composer-notice__cta"
-              onClick={() => onOpenProviderSettings?.()}
+              onClick={(event) => onOpenProviderSettings?.(event.currentTarget)}
             >
               {t("chat.noProvider.cta")}
             </button>

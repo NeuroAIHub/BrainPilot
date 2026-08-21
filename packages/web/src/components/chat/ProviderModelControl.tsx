@@ -32,7 +32,7 @@ type ProviderModelControlProps = {
   disabled?: boolean;
   onSelectModel: (providerId: string, modelId: string) => void | Promise<void>;
   onThinkingLevelChange: (level: ThinkingLevel) => void | Promise<void>;
-  onManageProviders?: () => void;
+  onManageProviders?: (trigger?: HTMLElement) => void;
 };
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "low", "medium", "high"];
@@ -265,9 +265,9 @@ export function ProviderModelControl({
       {onManageProviders ? (
         <button
           className="provider-model-popover__manage"
-          onClick={() => {
+          onClick={(event) => {
             setOpen(false);
-            onManageProviders();
+            onManageProviders(event.currentTarget);
           }}
           type="button"
         >

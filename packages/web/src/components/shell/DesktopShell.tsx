@@ -62,8 +62,12 @@ export function DesktopShell() {
   // Deep-link target for the next Settings open (e.g. the composer's
   // no-provider banner jumps straight to Providers). Undefined = default tab.
   const [settingsInitialTab, setSettingsInitialTab] = useState<SettingsTab | undefined>(undefined);
-  const openSettings = (tab?: SettingsTab) => {
+  const [settingsReturnFocusTo, setSettingsReturnFocusTo] = useState<HTMLElement | null>(null);
+  const openSettings = (tab?: SettingsTab, trigger?: HTMLElement) => {
     setSettingsInitialTab(tab);
+    setSettingsReturnFocusTo(
+      trigger ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null),
+    );
     setIsSettingsOpen(true);
   };
   const [isFilesOpen, setIsFilesOpen] = useState(false);
@@ -234,7 +238,7 @@ export function DesktopShell() {
         }}
         onGoWorkspace={() => setActivePage("workspace")}
         onOpenPlugins={() => setActivePage("plugins")}
-        onOpenSettings={() => openSettings()}
+        onOpenSettings={(trigger) => openSettings(undefined, trigger)}
         onOpenSearch={() => setIsSearchOpen(true)}
         onResizeStart={(pointerX) => {
           if (isSidebarCollapsed) {
@@ -323,7 +327,7 @@ export function DesktopShell() {
 
         {currentView === "chat" ? (
           <PromptComposer
-            onOpenProviderSettings={() => openSettings("providers")}
+            onOpenProviderSettings={(trigger) => openSettings("providers", trigger)}
             onOpenWorkspaceFile={openWorkspaceFile}
           />
         ) : null}
@@ -359,6 +363,7 @@ export function DesktopShell() {
         isOpen={isSettingsOpen}
         onClose={() => setIsSettingsOpen(false)}
         initialTab={settingsInitialTab}
+        returnFocusTo={settingsReturnFocusTo}
       />
       {!sandboxOverlayDismissed && (operation === "creating" || operation === "rebuilding") ? (
         <SandboxBuildingOverlay operation={operation} error={error} onDismiss={() => setSandboxOverlayDismissed(true)} />

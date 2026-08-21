@@ -37,6 +37,8 @@ type SettingsDialogProps = {
   /** Deep-link target: when opening, jump straight to this tab (e.g. the
    *  no-provider banner opens directly to "providers"). */
   initialTab?: SettingsTab;
+  /** Explicit opener for Safari, which may not focus a pointer-clicked button. */
+  returnFocusTo?: HTMLElement | null;
 };
 
 const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> = [
@@ -102,7 +104,7 @@ function splitList(value: string) {
     .filter(Boolean);
 }
 
-export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogProps) {
+export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: SettingsDialogProps) {
   const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
@@ -244,8 +246,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
   // Capture the control that opened Settings and restore focus on close (#328).
   useEffect(() => {
     if (!isOpen) return;
-    returnFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    returnFocusRef.current = returnFocusTo
+      ?? (document.activeElement instanceof HTMLElement ? document.activeElement : null);
     // Focus the settings panel after paint.
     const id = window.requestAnimationFrame(() => {
       const panel = settingsPanelRef.current;
@@ -257,7 +259,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab }: SettingsDialogPr
       window.cancelAnimationFrame(id);
       restoreFocusAfterModalClose(returnFocusRef.current);
     };
-  }, [isOpen]);
+  }, [isOpen, returnFocusTo]);
 
   // Isolate background content from AT while any settings layer is open (#328).
   useEffect(() => {
