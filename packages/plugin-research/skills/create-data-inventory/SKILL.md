@@ -24,6 +24,9 @@ Include:
 - loaded structure where relevant: shapes, axes, dtypes, value domains, feature
   ordering, labels and label mappings;
 - documented or observed split relationships and grouping boundaries;
+- bounded, structure-aware summaries of decision-relevant variation across
+  natural groups or axes, including localized concentration, extreme patterns,
+  and quality or covariate coverage that could invalidate downstream assumptions;
 - reconciled totals and the checks used to obtain them;
 - missing metadata, ambiguous mappings, unreadable inputs, discrepancies, and
   any parts of the assigned scope that could not be inspected;
@@ -31,8 +34,9 @@ Include:
   must preserve when designing or reviewing later work.
 
 Keep the inventory descriptive. Do not train models, choose methods, freeze
-hyperparameters, or treat inventory inspection as empirical validation. Link
-supporting metadata or inspection outputs when they are useful, but keep the
+hyperparameters, or treat inventory inspection as empirical validation. Report
+observed patterns without selecting a method or assigning a scientific cause.
+Link supporting metadata or inspection outputs when they are useful, but keep the
 inventory self-contained enough that another agent can use it without repeating
 the discovery work.
 

@@ -40,10 +40,13 @@ describe("bundled system plugins", () => {
     const engineerSkills = systemPluginSkillPaths(plugins, snapshot, "engineer");
     expect(engineerSkills).toHaveLength(1);
     expect(engineerSkills[0]).toMatch(/plugin-research.*create-data-inventory/);
-    const inventorySkill = await readFile(join(engineerSkills[0]!, "SKILL.md"), "utf8");
+    const inventorySkill = (await readFile(join(engineerSkills[0]!, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
     expect(inventorySkill).toContain("before creating or updating any data inventory");
     expect(inventorySkill).toContain("docs/specs/data-inventory.md");
     expect(inventorySkill).toContain("one canonical Markdown document");
+    expect(inventorySkill).toContain("bounded, structure-aware summaries");
+    expect(inventorySkill).toContain("localized concentration, extreme patterns");
+    expect(inventorySkill).toContain("Report observed patterns without selecting a method");
     expect(inventorySkill).not.toContain("forbidden/private");
     const librarianSkills = systemPluginSkillPaths(plugins, snapshot, "librarian");
     expect(librarianSkills).toHaveLength(1);
