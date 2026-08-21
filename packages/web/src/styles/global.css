@@ -5353,6 +5353,7 @@ button {
 }
 
 .file-preview-panel .file-preview__header {
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--color-border);
   padding: 14px;
 }
@@ -5379,7 +5380,7 @@ button {
 
 .file-preview__body {
   display: flex;
-  flex: 1 1 auto;
+  flex: 1 1 0;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -5444,6 +5445,7 @@ button {
 
 .file-preview__restored {
   display: flex;
+  flex: 0 0 auto;
   align-items: center;
   gap: 7px;
   border-bottom: 1px solid var(--color-border);
@@ -5455,6 +5457,7 @@ button {
 
 .file-preview__meta {
   display: grid;
+  flex: 0 0 auto;
   gap: 6px;
   margin: 0;
   border-bottom: 1px solid var(--color-border);

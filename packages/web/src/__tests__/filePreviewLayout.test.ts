@@ -16,6 +16,9 @@ function ruleBody(source: string, selector: string): string {
 describe("file preview optional restore notice layout", () => {
   it("uses a column layout whose preview body consumes the remaining height", () => {
     const panel = ruleBody(css, ".file-preview-panel");
+    const header = ruleBody(css, ".file-preview-panel .file-preview__header");
+    const restored = ruleBody(css, ".file-preview__restored");
+    const metadata = ruleBody(css, ".file-preview__meta");
     const body = ruleBody(css, ".file-preview__body");
 
     // The restore notice is an optional fourth child between the header and
@@ -24,7 +27,10 @@ describe("file preview optional restore notice layout", () => {
     expect(panel).toMatch(/display:\s*flex/);
     expect(panel).toMatch(/flex-direction:\s*column/);
     expect(panel).not.toMatch(/grid-template-rows/);
-    expect(body).toMatch(/flex:\s*1\s+1\s+auto/);
+    expect(header).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(restored).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(metadata).toMatch(/flex:\s*0\s+0\s+auto/);
+    expect(body).toMatch(/flex:\s*1\s+1\s+0/);
     expect(body).toMatch(/min-height:\s*0/);
   });
 });
