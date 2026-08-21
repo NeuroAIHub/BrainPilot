@@ -99,6 +99,63 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 describe("Trace Agent — record_trace dispatches to a spawned trace agent", () => {
+  it("returns authoritative accepted acknowledgement after a node binds the source record", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "accepted milestone" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: (text) => text.includes("[Trace Event]")
+          ? {
+              tool: "create_trace_node",
+              args: {
+                title: "Accepted milestone",
+                description: "A durable milestone accepted by Trace.",
+                episode: "Acceptance",
+                confidence: "medium",
+                confidence_reason: "The source record is bound by the Host.",
+              },
+            }
+          : undefined,
+      },
+    });
+    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const session = await manager.createSession();
+    const results: string[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+    });
+
+    await manager.sendMessage(session.id, "record accepted work");
+    await waitFor(() => results.some((result) => result.includes('"status":"accepted"')));
+    expect(results.join("\n")).toContain('"nodeId"');
+  });
+
+  it("returns rejected and surfaces quiet guidance when Trace adds no node", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "routine process noise" } }
+          : undefined,
+      },
+      trace: { onPrompt: () => undefined },
+    });
+    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const session = await manager.createSession();
+    const results: string[] = [];
+    const notices: string[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+      if (event.type === "system_message" && "message" in event) notices.push(String(event.message));
+    });
+
+    await manager.sendMessage(session.id, "record noise");
+    await waitFor(() => results.some((result) => result.includes('"status":"rejected"')));
+    expect(notices.join("\n")).toContain("did not add a node");
+  });
+
   it("ensures a trace agent appears in listAgents after record_trace", async () => {
     const factory = scriptedFactory({
       principal: {

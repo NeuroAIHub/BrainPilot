@@ -31,7 +31,11 @@ export interface ToolDeps {
   checkpoints?: WorkspaceCheckpointStore;
   dispatchTask: (to: string, content: string) => Promise<TaskRecord>;
   completeTask: (taskId: string, reply: string) => Promise<TaskRecord>;
-  dispatchTrace: (content: string) => Promise<void>;
+  dispatchTrace: (content: string) => Promise<{ submissionId: string }>;
+  awaitTraceResult?: (
+    submissionId: string,
+    record: TraceNodeRecord,
+  ) => Promise<TraceDispatchResult>;
   /** Ensure an agent exists (auto-create/resurrect). */
   ensureAgent: (name: string) => Promise<void>;
   /** Destroy an agent (memory only; history kept). */
@@ -68,6 +72,13 @@ export interface ToolDeps {
   startMonitor?: (input: { description: string; command: string; timeoutMs?: number; persistent?: boolean }) => unknown;
   listMonitors?: () => unknown;
   stopMonitor?: (monitorId: string) => Promise<boolean>;
+}
+
+export interface TraceDispatchResult {
+  status: "submitted" | "accepted" | "rejected";
+  submissionId: string;
+  nodeId?: string;
+  reason?: string;
 }
 
 function ok(text: string): { content: [{ type: "text"; text: string }] } {
@@ -484,7 +495,9 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       "real agent that owns the Graph of Trace; it decides whether to create a " +
       "new node, update an existing one, or ignore process noise. Prefer one " +
       "independently meaningful research unit per call; report distinct settings, " +
-      "results, analyses, findings, or conclusions separately when they can be inspected independently.",
+      "results, analyses, findings, or conclusions separately when they can be inspected independently. " +
+      "The JSON result is authoritative: only status=accepted means a Trace node was recorded; " +
+      "status=submitted is still pending and status=rejected means no node was added.",
     parameters: {
       type: "object",
       properties: {
@@ -568,15 +581,23 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       // "idle/running" in the Agents panel.
       await deps.ensureAgent("trace");
       try {
-        await deps.dispatchTrace(envelope);
+        const submission = await deps.dispatchTrace(envelope);
+        // Fire the target only after the durable queue write returns. The
+        // acknowledgement below waits for this exact notification rather than
+        // inferring success from the Trace Agent's transient running state.
+        deps.wakeAgent("trace");
+        const result = deps.awaitTraceResult
+          ? await deps.awaitTraceResult(submission.submissionId, record)
+          : {
+              status: "submitted" as const,
+              submissionId: submission.submissionId,
+              reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
+            };
+        return ok(JSON.stringify(result));
       } catch (err) {
         if (err instanceof TaskQueueFullError) return { ...ok(`cannot deliver to trace: ${err.message}`), isError: true };
         throw err;
       }
-      // Fire-and-forget: kick the trace agent's delivery loop so the envelope
-      // is consumed in its own run rather than sitting unread.
-      deps.wakeAgent("trace");
-      return ok("trace event dispatched");
     },
   };
 }

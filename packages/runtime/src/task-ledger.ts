@@ -284,8 +284,8 @@ export class TaskLedger {
     });
   }
 
-  async enqueueTrace(fromAgent: string, content: string): Promise<void> {
-    await this.mutate(() => { this.enqueue("trace", "trace", fromAgent, content); });
+  async enqueueTrace(fromAgent: string, content: string): Promise<TaskNotification> {
+    return this.mutate(() => this.enqueue("trace", "trace", fromAgent, content));
   }
 
   async enqueueSystem(toAgent: string, content: string, taskId?: string): Promise<void> {
@@ -392,6 +392,10 @@ export class TaskLedger {
 
   count(agent: string): number {
     return this.notifications.reduce((total, notification) => total + Number(notification.to_agent === agent), 0);
+  }
+
+  hasNotification(id: string): boolean {
+    return this.notifications.some((notification) => notification.id === id);
   }
 
   notificationTargets(): string[] {

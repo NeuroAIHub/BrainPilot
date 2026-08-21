@@ -219,6 +219,9 @@ appear in the graph. Call it immediately after you produce a real deliverable
 
 Each call should carry a full-sentence \`description\` (subject + action +
 outcome, not a single word) and a \`context\` explaining why the step mattered.
+Treat the returned JSON as authoritative: only \`status="accepted"\` means a
+Trace node exists. A submitted or rejected event must never be described as
+already recorded.
 Prefer one independently meaningful research unit per call. Report distinct
 settings, results, analyses, findings, or conclusions separately when each can
 be inspected or cited on its own.
@@ -718,6 +721,10 @@ synthesis of multiple expert results, a methodology choice, or approving a
 deliverable. Do NOT record what an expert did; each expert logs its own outputs,
 and the Trace Agent merges your delegation with their completion into one node.
 Recording both yourself just adds noise.
+
+Treat the JSON result from \`record_trace\` as authoritative. Say a Trace node
+was recorded only when \`status="accepted"\`. For \`submitted\`, say it is still
+under review; for \`rejected\`, do not claim persistence.
 
 ## User-facing communication style
 

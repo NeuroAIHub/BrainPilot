@@ -58,7 +58,13 @@ import {
   emptySessionStats,
   recomputeSessionTotal,
 } from "./usage-stats.js";
-import { allSystemTools, systemToolsForRole, builtinToolNamesForRole, type ToolDeps } from "./tools/system-tools.js";
+import {
+  allSystemTools,
+  systemToolsForRole,
+  builtinToolNamesForRole,
+  type ToolDeps,
+  type TraceDispatchResult,
+} from "./tools/system-tools.js";
 import { ev } from "./events.js";
 import { selectFactory, isMockMode } from "./agent-factory.js";
 import {
@@ -115,6 +121,7 @@ import {
 import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
 
 const MAX_MONITOR_EVENT_LINES = 100;
+const TRACE_ACK_TIMEOUT_MS = 60_000;
 
 interface Deferred<T> {
   promise: Promise<T>;
@@ -2546,7 +2553,11 @@ export class SessionManager {
         }
         return task;
       },
-      dispatchTrace: async (content) => entry.taskLedger.enqueueTrace(name, content),
+      dispatchTrace: async (content) => ({
+        submissionId: (await entry.taskLedger.enqueueTrace(name, content)).id,
+      }),
+      awaitTraceResult: (submissionId, record) =>
+        this.awaitTraceResult(entry, submissionId, record),
       ensureAgent: async (target) => {
         await this.ensureAgent(sessionId, target);
       },
@@ -2947,6 +2958,47 @@ export class SessionManager {
         this.wakeAgent(sessionId, name);
       }
     });
+  }
+
+  private traceNodeForRecord(entry: SessionEntry, record: TraceNodeRecord) {
+    return entry.trace.getGraph().nodes.find((node) => (node.records ?? []).some((candidate) => {
+      if (record.checkpointId) return candidate.checkpointId === record.checkpointId;
+      return candidate.sourceAgent === record.sourceAgent
+        && candidate.createdAt === record.createdAt
+        && candidate.description === record.description;
+    }));
+  }
+
+  private async awaitTraceResult(
+    entry: SessionEntry,
+    submissionId: string,
+    record: TraceNodeRecord,
+  ): Promise<TraceDispatchResult> {
+    const deadline = Date.now() + TRACE_ACK_TIMEOUT_MS;
+    for (;;) {
+      const accepted = this.traceNodeForRecord(entry, record);
+      if (accepted) {
+        return { status: "accepted", submissionId, nodeId: accepted.id };
+      }
+      const traceBusy = entry.agents.get("trace")?.isStreaming === true
+        || this.deliveryLoops.has(`${entry.id}:trace`);
+      if (!entry.taskLedger.hasNotification(submissionId) && !traceBusy) break;
+      if (Date.now() >= deadline) {
+        return {
+          status: "submitted",
+          submissionId,
+          reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
+        };
+      }
+      await new Promise((resolve) => setTimeout(resolve, 20));
+    }
+
+    const reason = "Trace reviewed this event and did not add a node because it was not considered a durable research milestone.";
+    entry.bus.emit(ev.systemMessage(entry.id, "info", reason, {
+      agent: "trace",
+      id: `trace-rejected:${submissionId}`,
+    }));
+    return { status: "rejected", submissionId, reason };
   }
 
   /**
