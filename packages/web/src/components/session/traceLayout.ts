@@ -54,6 +54,8 @@ export function getNodeKindLabelKey(kind: string): string | null {
       return "trace.kind.research";
     case "step":
       return "trace.kind.step";
+    case "session_start":
+      return "trace.kind.sessionStart";
     default:
       return null;
   }
@@ -99,6 +101,7 @@ export const relationLabels: Record<string, string> = {
 };
 
 export const artifactLabels: Record<string, string> = {
+  file: "file",
   data: "data",
   code: "code",
   text: "text",

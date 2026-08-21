@@ -92,4 +92,67 @@ describe("TraceGraphView empty markup (#317)", () => {
     expect(html).toContain("Ablation — dropout");
     expect(html).not.toContain("ep-private-id");
   });
+
+  it("does not expose raw confidence or revoked enum labels on node cards", () => {
+    const node = {
+      id: "revoked-a",
+      title: "Earlier step",
+      type: "session_start",
+      status: "completed",
+      revoked: true,
+      confidence: "high",
+      parents: [] as { id: string; title?: string }[],
+      parentIds: [] as string[],
+      childIds: [] as string[],
+      artifacts: [] as { path: string }[],
+      toolCalls: [] as string[],
+    };
+    const html = renderToStaticMarkup(
+      <TraceGraphView
+        nodes={[node as never]}
+        direction="LR"
+        selectedNodeId="revoked-a"
+        onSelectNode={() => {}}
+        zoom={1}
+        onZoomChange={() => {}}
+        formatKind={() => "Session start"}
+        revokedLabel="Undone"
+      />,
+    );
+    expect(html).toContain("Undone");
+    expect(html).not.toContain("Revoked");
+    expect(html).not.toContain("high");
+    expect(html).not.toContain(">session_start<");
+  });
+
+  it("uses localized title and agent labels for the system start card", () => {
+    const node = {
+      id: "root",
+      title: "Session Start",
+      type: "session_start",
+      status: "completed",
+      agent: "host",
+      parents: [] as { id: string; title?: string }[],
+      parentIds: [] as string[],
+      childIds: [] as string[],
+      artifacts: [] as { path: string }[],
+      toolCalls: [] as string[],
+    };
+    const html = renderToStaticMarkup(
+      <TraceGraphView
+        nodes={[node as never]}
+        direction="LR"
+        selectedNodeId="root"
+        onSelectNode={() => {}}
+        zoom={1}
+        onZoomChange={() => {}}
+        formatNodeTitle={() => "会话开始"}
+        formatAgent={() => "系统"}
+      />,
+    );
+    expect(html).toContain("会话开始");
+    expect(html).toContain("系统");
+    expect(html).not.toContain("Session Start");
+    expect(html).not.toContain(">host<");
+  });
 });
