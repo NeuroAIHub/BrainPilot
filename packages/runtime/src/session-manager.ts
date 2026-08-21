@@ -1917,7 +1917,7 @@ export class SessionManager {
     // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
     if (agent.isStreaming) {
       const runId = entry.activeRunId ?? undefined;
-      void agent.followUp(content, opts.uuid ?? randomUUID()).finally(() => {
+      void agent.followUp(content, opts.uuid ?? randomUUID(), { messageRunId: runId }).finally(() => {
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
         }

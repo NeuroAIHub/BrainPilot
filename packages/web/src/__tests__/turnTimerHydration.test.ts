@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { isHistoricalTurnSignal, latestDurableUserTurn } from "../contexts/useTurnTimer";
+import { initialTurnTimerState, turnTimerReducer } from "../contexts/turnTimer";
 
 describe("turn timer hydration boundary (#489)", () => {
   it("ignores replayed active frames older than the mounted session", () => {
@@ -20,6 +21,26 @@ describe("turn timer hydration boundary (#489)", () => {
       id: "run-new",
       atMs: Date.parse("2026-08-21T04:36:14.456Z"),
     });
+  });
+
+  it("keeps the whole interrupted duration when a turn contains queued follow-ups", () => {
+    const turn = latestDurableUserTurn([
+      { role: "user", runId: "run-current", createdAt: "2026-08-21T04:36:27.456Z" },
+      { role: "user", runId: "run-old", createdAt: "2026-08-21T04:32:27.757Z" },
+      { role: "user", runId: "run-current", createdAt: "2026-08-21T04:36:14.456Z" },
+    ]);
+    expect(turn).toEqual({
+      id: "run-current",
+      atMs: Date.parse("2026-08-21T04:36:14.456Z"),
+    });
+
+    const stopped = turnTimerReducer(initialTurnTimerState, {
+      type: "interrupt",
+      turnId: turn!.id,
+      startedAt: turn!.atMs,
+      atMs: Date.parse("2026-08-21T04:36:34.456Z"),
+    });
+    expect(stopped.lastDurationMs).toBe(20_000);
   });
 
   it("ignores malformed timestamps rather than turning them into a current run", () => {

@@ -60,6 +60,11 @@ export interface MasAgentPromptOptions {
   terminalErrors?: boolean;
 }
 
+export interface MasAgentFollowUpOptions extends MasAgentPromptOptions {
+  /** Host-owned turn id used to correlate the persisted user message. */
+  messageRunId?: string;
+}
+
 const TOOL_INTERRUPT_TIMEOUT_MS = 10_000;
 const OUTPUT_LIMIT_ERROR_CODE = "OUTPUT_LIMIT_EXCEEDED";
 const OUTPUT_LIMIT_ERROR_MESSAGE =
@@ -151,7 +156,7 @@ export class MasAgent {
   private currentRunId: string | undefined;
   private currentMessageId: string | undefined;
   /** User follow-ups waiting for Pi to inject them after the current turn. */
-  private pendingFollowUps: Array<{ id: string; text: string }> = [];
+  private pendingFollowUps: Array<{ id: string; text: string; messageRunId?: string }> = [];
   private inReasoning = false;
   private activeToolExecutions = new Set<string>();
   /** Runtime authority for live tools; chat events are only its persisted projection. */
@@ -454,7 +459,7 @@ export class MasAgent {
   followUp(
     text: string,
     messageId?: string,
-    options: MasAgentPromptOptions = {},
+    options: MasAgentFollowUpOptions = {},
   ): Promise<void> {
     if (!this.session.isStreaming) {
       // Race: the run finished between the caller's check and here — just start
@@ -462,7 +467,11 @@ export class MasAgent {
       if (messageId) {
         this.bus.emit(
           ev.textMessageChunk(
-            { sessionId: this.sessionId, agentName: this.name, runId: this.currentRunId },
+            {
+              sessionId: this.sessionId,
+              agentName: this.name,
+              runId: options.messageRunId ?? this.currentRunId,
+            },
             messageId,
             text,
             "user",
@@ -471,7 +480,7 @@ export class MasAgent {
       }
       return this.prompt(text, options);
     }
-    if (messageId) this.pendingFollowUps.push({ id: messageId, text });
+    if (messageId) this.pendingFollowUps.push({ id: messageId, text, messageRunId: options.messageRunId });
     return this.session.prompt(text, { streamingBehavior: "followUp" }).catch((err) => {
       if (messageId) {
         this.pendingFollowUps = this.pendingFollowUps.filter((item) => item.id !== messageId);
@@ -815,7 +824,12 @@ export class MasAgent {
           const index = this.pendingFollowUps.findIndex((item) => item.text === text);
           if (index >= 0) {
             const [injected] = this.pendingFollowUps.splice(index, 1);
-            this.bus.emit(ev.textMessageChunk(ctx, injected!.id, injected!.text, "user"));
+            this.bus.emit(ev.textMessageChunk(
+              { ...ctx, runId: injected!.messageRunId ?? ctx.runId },
+              injected!.id,
+              injected!.text,
+              "user",
+            ));
           }
         }
         return;

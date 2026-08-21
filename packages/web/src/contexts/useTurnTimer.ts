@@ -32,18 +32,30 @@ export function isHistoricalTurnSignal(atMs: number, mountedAtMs: number, slopMs
  * History hydration can merge a live SSE tail after the persisted base, so
  * array position is not a durable chronology signal. Pick the newest user run
  * by its backend timestamp instead of assuming the final user row is latest.
+ * A queued follow-up belongs to the same run, so retain that run's first user
+ * timestamp as the whole-turn start rather than shortening it to the follow-up.
  */
 export function latestDurableUserTurn(
   messages: readonly Pick<ChatMessage, "role" | "runId" | "createdAt">[],
 ): { id: string; atMs: number } | null {
-  let latest: { id: string; atMs: number } | null = null;
+  const runs = new Map<string, { firstAtMs: number; latestAtMs: number }>();
   for (const message of messages) {
     if (message.role !== "user" || !message.runId) continue;
     const atMs = Date.parse(message.createdAt);
     if (!Number.isFinite(atMs)) continue;
-    if (!latest || atMs >= latest.atMs) latest = { id: message.runId, atMs };
+    const existing = runs.get(message.runId);
+    runs.set(message.runId, existing
+      ? {
+          firstAtMs: Math.min(existing.firstAtMs, atMs),
+          latestAtMs: Math.max(existing.latestAtMs, atMs),
+        }
+      : { firstAtMs: atMs, latestAtMs: atMs });
   }
-  return latest;
+  let latest: { id: string; firstAtMs: number; latestAtMs: number } | null = null;
+  for (const [id, run] of runs) {
+    if (!latest || run.latestAtMs >= latest.latestAtMs) latest = { id, ...run };
+  }
+  return latest ? { id: latest.id, atMs: latest.firstAtMs } : null;
 }
 
 export interface TurnTiming {
