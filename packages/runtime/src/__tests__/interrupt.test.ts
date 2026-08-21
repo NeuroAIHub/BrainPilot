@@ -179,6 +179,42 @@ describe("whole-session interrupt (#90 / #327)", () => {
     expect(state?.runState?.active).toBe(false);
   });
 
+  it("keeps the originating user run id when Stop lands during background delivery", async () => {
+    const observe = { prompts: [] as Array<{ agent: string; text: string }> };
+    const factory = scriptedFactory(
+      {
+        principal: {
+          onPrompt: (text) => text.includes("DELEGATE")
+            ? { tool: "dispatch_task", args: { to: "librarian", content: "background script" } }
+            : undefined,
+        },
+        librarian: {},
+      },
+      observe,
+    );
+    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const session = await manager.createSession();
+    const events: AgUiEvent[] = [];
+    manager.subscribe(session.id, (event) => events.push(event));
+
+    const accepted = await manager.sendMessage(session.id, "please DELEGATE");
+    expect(accepted.runId).toMatch(/^run_/);
+    await waitFor(() => observe.prompts.some((prompt) => prompt.agent === "librarian"));
+    await waitFor(() => {
+      const state = manager.getSessionState(session.id);
+      return state?.runState.runId === null && state.workState.active === true;
+    });
+
+    await manager.interrupt(session.id);
+    const acknowledgement = events.findLast((event) =>
+      event.type === "system_message"
+      && String((event as { message?: string }).message).includes("中断"));
+    expect(acknowledgement).toMatchObject({
+      id: `interrupt:${session.id}:${accepted.runId}`,
+      run_id: accepted.runId,
+    });
+  });
+
   it("targeted interrupt(agent) does not prompt the principal with a notice", async () => {
     const observe = { prompts: [] as Array<{ agent: string; text: string }> };
     const factory = scriptedFactory(

@@ -53,7 +53,19 @@ import type {
   PluginCompatibility,
   PluginUpdateStatus,
 } from "@brainpilot/plugin-sdk";
-import type { ThinkingLevel } from "@brainpilot/protocol";
+import type { ThinkingLevel, TraceCausalRollbackConflict } from "@brainpilot/protocol";
+
+export class ApiResponseError extends Error {
+  constructor(
+    message: string,
+    readonly status: number,
+    readonly code?: string,
+    readonly conflicts?: TraceCausalRollbackConflict[],
+  ) {
+    super(message);
+    this.name = "ApiResponseError";
+  }
+}
 
 export type MarketplaceApiEntry = MarketplaceEntry & { compatibility: PluginCompatibility };
 export type InstalledPluginApiEntry = InstalledPlugin & { compatibility: PluginCompatibility };
@@ -187,22 +199,50 @@ function parseErrorFromParts(status: number, contentType: string, text: string):
   return text || `Request failed (${status})`;
 }
 
-async function parseError(res: Response): Promise<string> {
+type ApiErrorPayload = {
+  detail?: unknown;
+  error?: unknown;
+  details?: unknown;
+  code?: unknown;
+  conflicts?: unknown;
+};
+
+async function parseApiError(res: Response): Promise<{
+  message: string;
+  code?: string;
+  conflicts?: TraceCausalRollbackConflict[];
+}> {
   const contentType = res.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) {
-    const body = (await res.json().catch(() => null)) as
-      | { detail?: unknown; error?: unknown; details?: unknown }
-      | null;
-    const formatted = formatErrorBody(body);
-    if (formatted) return formatted;
-  }
   const text = await res.text().catch(() => "");
-  return text || `Request failed (${res.status})`;
+  if (contentType.includes("application/json")) {
+    let body: ApiErrorPayload | null = null;
+    try {
+      body = text ? JSON.parse(text) as ApiErrorPayload : null;
+    } catch {
+      body = null;
+    }
+    const formatted = formatErrorBody(body);
+    if (formatted) {
+      return {
+        message: formatted,
+        ...(typeof body?.code === "string" ? { code: body.code } : {}),
+        ...(Array.isArray(body?.conflicts)
+          ? { conflicts: body.conflicts as TraceCausalRollbackConflict[] }
+          : {}),
+      };
+    }
+  }
+  return { message: text || `Request failed (${res.status})` };
+}
+
+async function parseError(res: Response): Promise<string> {
+  return (await parseApiError(res)).message;
 }
 
 async function handleJson<T>(res: Response): Promise<T> {
   if (!res.ok) {
-    throw new Error(await parseError(res));
+    const error = await parseApiError(res);
+    throw new ApiResponseError(error.message, res.status, error.code, error.conflicts);
   }
   if (res.status === 204) {
     return undefined as T;
