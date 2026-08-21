@@ -53,4 +53,33 @@ describe("TraceNodeDetail V2 sections", () => {
     expect(html).not.toContain(">Reject<");
     expect(html).not.toContain(">approved<");
   });
+
+  it("localizes the system start node instead of exposing host implementation text", () => {
+    const root: TraceNode = {
+      id: "root",
+      title: "Session Start",
+      type: "session_start",
+      status: "completed",
+      agent: "host",
+      description: "Initial context and structural root for this session.",
+      confidenceReason: "Created deterministically by the Host for this session.",
+      reviewReason: "System structural node; no scientific review required.",
+      parents: [],
+      artifacts: [],
+      parentIds: [],
+      childIds: [],
+      toolCalls: [],
+    };
+    const html = renderToStaticMarkup(
+      <TraceNodeDetail node={root} nodes={[root]} onSelectNode={() => {}} t={t} />,
+    );
+    expect(html).toContain("trace.sessionStart.title");
+    expect(html).toContain("trace.sessionStart.summary");
+    expect(html).toContain("trace.sessionStart.confidenceReason");
+    expect(html).toContain("trace.sessionStart.reviewReason");
+    expect(html).toContain("trace.origin.system");
+    expect(html).not.toContain("Session Start");
+    expect(html).not.toContain("Initial context and structural root");
+    expect(html).not.toContain(">host<");
+  });
 });

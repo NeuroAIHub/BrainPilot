@@ -43,7 +43,14 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
   const statusKey = getStatusLabelKey(node.status);
   const nodeById = new Map((nodes ?? []).map((item) => [item.id, item]));
   const kind = getNodeKind(node);
+  const isSessionStart = kind === "session_start";
   const kindLabel = formatKind?.(kind) ?? kind;
+  const nodeTitle = isSessionStart ? t("trace.sessionStart.title") : node.title;
+  const nodeSummary = isSessionStart
+    ? t("trace.sessionStart.summary")
+    : node.summary || node.description || node.content || t("trace.node.summaryFallback");
+  const confidenceReason = isSessionStart ? t("trace.sessionStart.confidenceReason") : node.confidenceReason;
+  const reviewReason = isSessionStart ? t("trace.sessionStart.reviewReason") : node.reviewReason;
   const confidenceLabel = (value?: string) => {
     if (value === "high" || value === "medium" || value === "low") return t(`trace.confidence.${value}`);
     return value || t("trace.node.unassessed");
@@ -64,8 +71,11 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
     const normalized = value || "file";
     return artifactLabels[normalized] ? t(`trace.artifact.${normalized}`) : normalized;
   };
-  const parentLabel = (id: string) =>
-    nodeById.get(id)?.title || t("trace.node.parentFallback");
+  const parentLabel = (id: string) => {
+    const parent = nodeById.get(id);
+    if (!parent) return t("trace.node.parentFallback");
+    return getNodeKind(parent) === "session_start" ? t("trace.sessionStart.title") : parent.title;
+  };
   const childNodes = node.childIds
     .map((id) => ({ id, title: nodeById.get(id)?.title }))
     .filter((item) => item.title);
@@ -101,7 +111,7 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
     <>
       <div className="trace-detail__title">
         <GitBranch size={17} />
-        <h3>{node.title}</h3>
+        <h3>{nodeTitle}</h3>
         <span className={`trace-detail__status trace-detail__status--${normalizeStatus(node.status)}`}>
           {statusKey ? t(statusKey) : node.status}
         </span>
@@ -111,24 +121,24 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
         {node.revoked ? <span className="trace-detail__badge--revoked">{t("trace.node.revoked")}</span> : null}
         <span>{t("trace.node.confidence", { level: confidenceLabel(node.confidence) })}</span>
         {node.reviewConclusion && node.reviewConclusion !== "unreviewed" ? <span>{reviewLabel(node.reviewConclusion)}</span> : null}
-        {node.agent ? <span>{node.agent}</span> : null}
+        {node.agent ? <span>{node.agent === "host" ? t("trace.origin.system") : node.agent}</span> : null}
         {node.metadata?.auto ? (
           <span className="trace-detail__badge--auto" title={t("trace.node.autoTitle")}>
             {t("trace.node.auto")}
           </span>
         ) : null}
       </div>
-      <p>{node.summary || node.description || node.content || t("trace.node.summaryFallback")}</p>
-      {node.confidenceReason ? (
+      <p>{nodeSummary}</p>
+      {confidenceReason ? (
         <section className="trace-detail__section">
           <h4><AlertTriangle size={13} /> {t("trace.node.confidenceTitle")}</h4>
-          <p>{node.confidenceReason}</p>
+          <p>{confidenceReason}</p>
         </section>
       ) : null}
-      {node.reviewReason ? (
+      {reviewReason ? (
         <section className="trace-detail__section">
           <h4><AlertTriangle size={13} /> {t("trace.node.reviewTitle")}</h4>
-          <p>{node.reviewReason}</p>
+          <p>{reviewReason}</p>
         </section>
       ) : null}
       {node.records?.length ? (
