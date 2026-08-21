@@ -128,10 +128,12 @@ describe("Monitor runtime integration", () => {
     await manager.sendMessage(session.id, "hello");
     await waitFor(() => toolNames.length > 0);
     expect(toolNames[0]).not.toContain("start_monitor");
+    expect(toolNames[0]).not.toContain("run_in_background");
     await manager.setRuntimeCapabilities(["builtin.monitor"]);
     await (manager as unknown as { ensureAgent(sessionId: string, name: string): Promise<unknown> })
       .ensureAgent(session.id, "engineer");
     expect(toolNames[1]).toContain("start_monitor");
+    expect(toolNames[1]).toContain("run_in_background");
     manager.shutdown();
   });
 

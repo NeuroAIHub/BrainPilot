@@ -9,6 +9,7 @@ import {
   createAskUserTool,
   createDispatchTaskTool,
   createCompleteTaskTool,
+  createRunInBackgroundTool,
   createStartMonitorTool,
   type ToolDeps,
 } from "../tools/system-tools.js";
@@ -54,6 +55,25 @@ describe("tool access control (§9)", () => {
     expect(description).toContain("Do not run sleep commands or poll");
     expect(description).toContain("end the current turn");
     expect(description).toContain("wake you automatically");
+  });
+
+  it("runs finite background jobs through the managed monitor process", async () => {
+    const starts: unknown[] = [];
+    const d = deps("engineer");
+    d.startMonitor = (input) => { starts.push(input); return { id: "mon_job" }; };
+    const tool = createRunInBackgroundTool(d);
+    expect((tool.parameters.required as string[])).toEqual(["description", "command", "timeout_ms"]);
+    expect((await tool.execute({
+      description: "train model",
+      command: "python train.py",
+      timeout_ms: 900_000,
+    })).isError).toBeUndefined();
+    expect(starts).toEqual([{
+      description: "train model",
+      command: "python train.py",
+      timeoutMs: 900_000,
+      persistent: false,
+    }]);
   });
 
   it("dispatch_task and complete_task expose stable task-oriented contracts", async () => {
@@ -139,6 +159,12 @@ describe("tool access control (§9)", () => {
         expect.arrayContaining(["start_monitor", "list_monitors", "stop_monitor"]),
       );
     }
+    expect(systemToolsForRole("expert", "engineer", withMonitor("engineer")).map((tool) => tool.name))
+      .toContain("run_in_background");
+    expect(systemToolsForRole("expert", "experimentalist", withMonitor("experimentalist")).map((tool) => tool.name))
+      .toContain("run_in_background");
+    expect(systemToolsForRole("principal", "principal", withMonitor("principal")).map((tool) => tool.name))
+      .not.toContain("run_in_background");
     for (const name of ["librarian", "writer", "auditor", "statistician"]) {
       expect(systemToolsForRole("expert", name, withMonitor(name)).map((tool) => tool.name)).not.toContain("start_monitor");
     }

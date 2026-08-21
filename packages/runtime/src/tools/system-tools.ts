@@ -348,6 +348,46 @@ export function createStartMonitorTool(deps: ToolDeps): SystemTool {
   };
 }
 
+export function createRunInBackgroundTool(deps: ToolDeps): SystemTool {
+  return {
+    name: "run_in_background",
+    description:
+      "Run one long, finite compute job outside the 300-second foreground Bash limit. " +
+      "Use this for training, hyperparameter search, full-data evaluation, or simulations. " +
+      "Provide a realistic timeout_ms (maximum 60 minutes), emit concise line-buffered progress, " +
+      "then end the current turn; the runtime wakes you on output and completion. " +
+      "Use start_monitor only for observation/persistent watches, not as a compute-job substitute.",
+    parameters: {
+      type: "object",
+      properties: {
+        description: { type: "string", minLength: 1, maxLength: 200 },
+        command: { type: "string", minLength: 1, maxLength: 16_000 },
+        timeout_ms: { type: "number", minimum: 1, maximum: 3_600_000 },
+      },
+      required: ["description", "command", "timeout_ms"],
+    },
+    execute: async (params) => {
+      if (!deps.startMonitor) return { ...ok("Background Jobs are not enabled for this session"), isError: true };
+      const description = typeof params.description === "string" ? params.description.trim() : "";
+      const command = typeof params.command === "string" ? params.command.trim() : "";
+      const timeoutMs = typeof params.timeout_ms === "number" ? params.timeout_ms : NaN;
+      if (!description || !command || !Number.isFinite(timeoutMs)) {
+        return { ...ok("description, command, and timeout_ms are required"), isError: true };
+      }
+      try {
+        return ok(JSON.stringify(deps.startMonitor({
+          description,
+          command,
+          timeoutMs,
+          persistent: false,
+        }), null, 2));
+      } catch (error) {
+        return { ...ok((error as Error).message), isError: true };
+      }
+    },
+  };
+}
+
 export function createListMonitorsTool(deps: ToolDeps): SystemTool {
   return {
     name: "list_monitors",
@@ -938,7 +978,7 @@ export function allSystemTools(
     tools.push(createSpawnSubagentTool(deps), createWaitSubagentTool(deps), createGetSubagentTool(deps), createCancelSubagentTool(deps), createListSubagentProfilesTool(deps));
   }
   if (deps.startMonitor && deps.listMonitors && deps.stopMonitor) {
-    tools.push(createStartMonitorTool(deps), createListMonitorsTool(deps), createStopMonitorTool(deps));
+    tools.push(createRunInBackgroundTool(deps), createStartMonitorTool(deps), createListMonitorsTool(deps), createStopMonitorTool(deps));
   }
   if (isToolEnabled(toggles, "skill_search")) {
     tools.push(createSkillSearchTool(deps));
@@ -1004,11 +1044,11 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
     "get_domain_knowledge_local", "search_papers_local",
   ],
   engineer: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "run_in_background", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   experimentalist: [
-    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
+    "dispatch_task", "complete_task", "record_trace", "spawn_subagent", "wait_subagent", "get_subagent", "cancel_subagent", "list_subagent_profiles", "run_in_background", "start_monitor", "list_monitors", "stop_monitor", "skill_search",
     "get_domain_knowledge_local", "search_papers_local",
   ],
   // Auditor reviews scientific deliverables and has no GoT responsibilities.
