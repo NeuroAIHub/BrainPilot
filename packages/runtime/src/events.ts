@@ -61,8 +61,18 @@ export const ev = {
   runFinished(ctx: Ctx, result?: unknown): AgUiEvent {
     return { type: "RUN_FINISHED", ...envelope(ctx), result } as AgUiEvent;
   },
-  runError(ctx: Ctx, message: string, code = "RUNTIME_ERROR"): AgUiEvent {
-    return { type: "RUN_ERROR", ...envelope(ctx), message, code } as AgUiEvent;
+  runError(
+    ctx: Ctx,
+    message: string,
+    options: { code?: string; terminal?: boolean } = {},
+  ): AgUiEvent {
+    return {
+      type: "RUN_ERROR",
+      ...envelope(ctx),
+      message,
+      code: options.code ?? "RUNTIME_ERROR",
+      terminal: options.terminal ?? true,
+    } as AgUiEvent;
   },
   textMessageStart(ctx: Ctx, messageId: string, role = "assistant"): AgUiEvent {
     return { type: "TEXT_MESSAGE_START", ...envelope(ctx), message_id: messageId, role } as AgUiEvent;
@@ -223,7 +233,7 @@ export const ev = {
     sessionId: string,
     level: "info" | "warning" | "error" | "fatal",
     message: string,
-    opts?: { agent?: string; details?: string; recoverable?: boolean; id?: string },
+    opts?: { agent?: string; details?: string; recoverable?: boolean; terminal?: boolean; id?: string },
   ): AgUiEvent {
     return {
       type: "system_message",
@@ -237,6 +247,7 @@ export const ev = {
       details: opts?.details,
       timestamp: ts(),
       recoverable: opts?.recoverable ?? true,
+      ...(opts?.terminal ? { terminal: true } : {}),
     } as AgUiEvent;
   },
   custom(ctx: Ctx, name: string, value: unknown): AgUiEvent {

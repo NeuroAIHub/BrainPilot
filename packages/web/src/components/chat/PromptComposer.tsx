@@ -5,6 +5,7 @@ import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
 import { useTurnTimer } from "../../contexts/useTurnTimer";
 import { draftStore } from "../../contexts/draftStore";
+import { writeRecoveryDraft } from "../../contexts/errorRecovery";
 import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
@@ -194,7 +195,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const [draftStagingReady, setDraftStagingReady] = useState(false);
   const [removingAttachmentKeys, setRemovingAttachmentKeys] = useState<ReadonlySet<string>>(new Set());
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
   const persistedAttachmentNames = useAttachments(sessionId);
   const attachmentScopeRef = useRef<string | null>(sessionId);
@@ -949,6 +950,56 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     }
   };
 
+  const focusComposerAtEnd = () => {
+    requestAnimationFrame(() => {
+      const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
+      if (!input) return;
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    });
+  };
+
+  const editFailedPrompt = (prompt: string) => {
+    if (!sessionId) return;
+    if (!writeRecoveryDraft(
+      draftStore,
+      sessionId,
+      prompt,
+      () => window.confirm(t("chat.errorRecovery.replaceDraft")),
+    )) return;
+    focusComposerAtEnd();
+  };
+
+  const retryFailedPrompt = async (prompt: string) => {
+    if (!canSend || workActive?.active === true) return;
+    const result = await sendPrompt(prompt, {
+      thinkingLevel: reasoningSupported ? thinkingLevel : "off",
+    });
+    if (!result.ok && sessionId && draftStore.get(sessionId).trim().length === 0) {
+      draftStore.set(sessionId, prompt);
+    }
+  };
+
+  const changeModelForFailedPrompt = (prompt?: string) => {
+    if (prompt && !writeRecoveryDraft(
+      draftStore,
+      DRAFT_SESSION_ID,
+      prompt,
+      () => window.confirm(t("chat.errorRecovery.replaceDraft")),
+    )) return;
+    startDraftSession();
+    // Existing sessions freeze provider/model. Move the failed prompt into a
+    // new draft, then open whichever model control is present (main or #494).
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      const trigger = document.querySelector<HTMLButtonElement>(
+        ".provider-model-control__trigger, .model-select .custom-select__trigger",
+      );
+      trigger?.focus();
+      trigger?.click();
+    }));
+  };
+
+  const recoveryBusy = !canSend || workActive?.active === true;
   return (
     <section className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`} aria-labelledby="prompt-heading">
       <div className="prompt-home__inner">
@@ -978,6 +1029,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             runningAgents={runningAgents}
             groupExpertActivity
             onRetryCancel={() => void interruptCurrent()}
+            onRetryMessage={(prompt) => void retryFailedPrompt(prompt)}
+            onEditMessage={editFailedPrompt}
+            onChangeModel={changeModelForFailedPrompt}
+            onOpenProviderSettings={onOpenProviderSettings}
+            recoveryBusy={recoveryBusy}
             workspaceFileSessionId={currentSession?.id}
             onOpenWorkspaceFile={onOpenWorkspaceFile}
           />

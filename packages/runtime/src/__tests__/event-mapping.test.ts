@@ -305,6 +305,8 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     for (const e of captured) expect(() => parseEvent(e)).not.toThrow();
     const sys = captured.filter((e) => e.type === "system_message");
     expect(sys.length).toBeGreaterThan(0);
+    expect(sys.at(-1)).toMatchObject({ terminal: true });
+    expect(String((sys.at(-1) as { id?: string }).id)).toContain("run-error:s3:");
     expect(agent.status).toBe("error");
   });
 

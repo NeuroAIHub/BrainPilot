@@ -246,6 +246,8 @@ export const RunErrorEventSchema = z
     type: z.literal("RUN_ERROR"),
     message: z.string(),
     code: z.string().default("RUNTIME_ERROR"),
+    /** False when an outer delivery loop still owns retry/escalation. */
+    terminal: z.boolean().optional(),
     run_id: z.string().optional(),
   })
   .passthrough();
@@ -458,6 +460,8 @@ export const SystemMessageEventSchema = z
     timestamp: z.string(),
     /** fatal = red flashing background; affects frontend styling. */
     recoverable: z.boolean(),
+    /** Terminal run failure; the frontend must keep this recovery card visible. */
+    terminal: z.boolean().optional(),
   })
   .passthrough();
 export type SystemMessageEvent = z.infer<typeof SystemMessageEventSchema>;

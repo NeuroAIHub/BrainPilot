@@ -46,12 +46,13 @@ describe("hide-non-fatal-agent-errors filter (issue #278)", () => {
     expect(isNonFatalAgentErrorMessage(sysMsg("w", "warning"))).toBe(true);
     expect(isNonFatalAgentErrorMessage(sysMsg("f", "fatal"))).toBe(false);
     expect(isNonFatalAgentErrorMessage(sysMsg("i", "info"))).toBe(false);
+    const terminal = sysMsg("terminal", "error");
+    terminal.systemMessage = { ...terminal.systemMessage!, terminal: true };
+    expect(isNonFatalAgentErrorMessage(terminal)).toBe(false);
   });
 
-  it("does not match non-system_message shapes (e.g. legacy kind=error)", () => {
+  it("does not match non-system_message shapes", () => {
     const legacyError = baseMsg({ id: "x", role: "system", kind: "error", content: "boom" });
-    // Legacy `kind: "error"` from the RUN_ERROR reducer path is a run-death
-    // indicator — must stay visible, not fold.
     expect(isNonFatalAgentErrorMessage(legacyError)).toBe(false);
 
     const askUser = baseMsg({ id: "a", kind: "ask_user", content: "?" });
