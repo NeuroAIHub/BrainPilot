@@ -73,6 +73,7 @@ describe("tool access control (§9)", () => {
       command: "python train.py",
       timeoutMs: 900_000,
       persistent: false,
+      notifyOnExit: true,
     }]);
   });
 
