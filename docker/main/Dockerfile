@@ -42,8 +42,11 @@ RUN if [ -n "$APT_MIRROR" ]; then \
     && apt-get update \
     && apt-get install -y --no-install-recommends curl ca-certificates git git-annex wget python3 python3-pip python3-venv \
     && rm -rf /var/lib/apt/lists/* \
-    && if [ -n "$PIP_INDEX_URL" ]; then pip3 config set global.index-url "$PIP_INDEX_URL"; fi \
-    && pip3 install --no-cache-dir --break-system-packages datalad==1.6.0 dandi==0.76.7 \
+    && if [ -n "$PIP_INDEX_URL" ]; then \
+         PIP_INDEX_URL="$PIP_INDEX_URL" pip3 install --no-cache-dir --break-system-packages datalad==1.6.0 dandi==0.76.7; \
+       else \
+         PIP_INDEX_URL="https://pypi.org/simple" pip3 install --no-cache-dir --break-system-packages datalad==1.6.0 dandi==0.76.7; \
+       fi \
     && datalad --version \
     && dandi --version \
     && wget --version >/dev/null

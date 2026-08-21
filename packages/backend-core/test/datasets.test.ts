@@ -34,6 +34,7 @@ describe("dataset marketplace", () => {
     ]) {
       expect(dockerfile).toContain(token);
     }
+    expect(dockerfile).not.toContain("pip3 config set global.index-url");
   });
 
   it("publishes metadata without exposing executable recipes", async () => {
