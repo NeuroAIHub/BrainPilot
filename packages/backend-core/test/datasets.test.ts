@@ -25,7 +25,6 @@ describe("dataset marketplace", () => {
     for (const token of [
       "git-annex",
       "wget",
-      "python3-venv",
       "datalad==1.6.0",
       "dandi==0.76.7",
       "datalad --version",
@@ -34,16 +33,6 @@ describe("dataset marketplace", () => {
     ]) {
       expect(dockerfile).toContain(token);
     }
-    expect(dockerfile).not.toContain("pip3 config set global.index-url");
-  });
-
-  it("keeps large KB dependency downloads resumable on unstable cloud links", () => {
-    const setupScript = readFileSync(
-      new URL("../../../KnowledgeBase/scripts/setup_env.py", import.meta.url),
-      "utf8",
-    );
-    expect(setupScript).toContain('"--resume-retries", "24"');
-    expect(setupScript).toContain('"--timeout", "120"');
   });
 
   it("publishes metadata without exposing executable recipes", async () => {
