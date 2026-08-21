@@ -320,15 +320,15 @@ Stale local routing rule.`;
 
     expect(pi).toContain("freeze the selection rule rather than a candidate identity");
     expect(pi).toContain("candidate-local guards do not establish preference");
-    expect(pi).toContain("latest valid comparison");
+    expect(pi).toContain("final comparable evidence snapshot");
 
     expect(experimentalist).toContain("independent prescribing constraint or a decision rule");
     expect(experimentalist).toContain("user, task, or external scientific requirement independently determines");
     expect(experimentalist).toContain("Literature recommendations, candidate-local guards, convenience");
     expect(experimentalist).toContain("eligibility guards from ranking evidence");
     expect(experimentalist).toContain("observable outcome that could change the decision");
-    expect(experimentalist).toContain("latest valid, comparable results");
-    expect(experimentalist).toContain("invalidates the current decision");
+    expect(experimentalist).toContain("frozen final comparable evidence snapshot");
+    expect(experimentalist).toContain("invalidates both the snapshot and decision");
     expect(experimentalist).toContain("do not default to a preferred candidate");
     expect(experimentalist).toContain("map each decision-critical assumption to existing evidence");
     expect(experimentalist).toContain("Route a bounded diagnostic for any unresolved assumption");
@@ -338,6 +338,26 @@ Stale local routing rule.`;
     expect(engineer).toContain("mark the affected result superseded");
     expect(engineer).toContain("never carry a stale result into the final decision");
     expect(engineer).toContain("do not make the final scientific selection");
+  });
+
+  it("defers comparative selection until final evidence is frozen", () => {
+    const pi = PERSONAS.principal!.replace(/\s+/g, " ");
+    const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
+    const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
+
+    expect(pi).toContain("baseline or validated fallback carries no scientific preference");
+    expect(pi).toContain("Before the final decision checkpoint");
+    expect(pi).toContain("do not designate, endorse, or freeze a preferred candidate");
+    expect(pi).toContain("Freeze one final comparable evidence snapshot before selection");
+
+    expect(experimentalist).toContain("During exploration, maintain candidate eligibility and evidence needs without naming a winner");
+    expect(experimentalist).toContain("A current lead alone is insufficient justification");
+    expect(experimentalist).toContain("protocol-defined minimum comparable evidence");
+    expect(experimentalist).toContain("Apply the predeclared decision rule once");
+
+    expect(engineer).toContain("without recommendation, preference labels, or a selected-candidate field");
+    expect(engineer).toContain("emit a frozen comparison snapshot with its revision");
+    expect(engineer).toContain("do not apply the scientific decision rule");
   });
 
   it("separates method families from concrete implementations", () => {
@@ -362,7 +382,7 @@ Stale local routing rule.`;
     const normalized = twice.replace(/\s+/g, " ");
     expect(normalized).toContain("independent prescribing constraint or a decision rule");
     expect(normalized).toContain("observable outcome that could change the decision");
-    expect(normalized).toContain("latest valid, comparable results");
+    expect(normalized).toContain("frozen final comparable evidence snapshot");
     expect(normalized).toContain("map each decision-critical assumption to existing evidence");
     expect(normalized).toContain("Route a bounded diagnostic for any unresolved assumption");
   });

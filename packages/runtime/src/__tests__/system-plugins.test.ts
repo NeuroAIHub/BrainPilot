@@ -109,7 +109,7 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("Missing, invalid, or stale decision provenance requires `REVISE`");
     expect(methodReview).toContain("eligibility guards from ranking evidence");
     expect(methodReview).toContain("observable outcome that could change the decision");
-    expect(methodReview).toContain("latest valid, comparable results");
+    expect(methodReview).toContain("frozen final comparable evidence snapshot");
     expect(methodReview).toContain("every correction affecting eligibility, ranking, or comparability");
     expect(methodReview).toContain("every material challenge and contradictory result propagated");
     expect(methodReview).toContain("current evidence has invalidated or left unresolved");
@@ -118,12 +118,17 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("scientific principle, method family, and concrete implementation");
     expect(methodReview).toContain("implementation-specific limitation cannot exclude a method family");
     expect(methodReview).toContain("minimal, adapted, or alternative implementation");
+    expect(methodReview).toContain("first designated after the final comparable evidence snapshot was frozen");
+    expect(methodReview).toContain("earlier preference changed candidate coverage, evaluation effort, pruning, or interpretation");
+    expect(methodReview).toContain("fallback protects delivery continuity but carries no scientific preference");
     const requestTemplate = await readFile(join(auditorSkill, "references", "audit-request-template.md"), "utf8");
     expect(requestTemplate).toContain("Decision provenance");
     expect(requestTemplate).toContain("Material alternatives or unresolved challenges");
     expect(requestTemplate).not.toContain("Selection mode and rule");
-    expect(requestTemplate).toContain("Latest corrected candidate comparison");
-    expect(requestTemplate).toContain("Experimentalist selection decision");
+    expect(requestTemplate).toContain("Final decision record");
+    expect(requestTemplate).toContain("Validated fallback");
+    expect(requestTemplate).toContain("Frozen comparison snapshot");
+    expect(requestTemplate).toContain("Pre-freeze exclusions and resource allocations");
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
     expect(responseTemplate).toContain("## Compact completion reply");
     expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");
