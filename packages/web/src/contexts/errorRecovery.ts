@@ -24,7 +24,7 @@ export function classifyProviderFailure(view: SystemMessageView): ProviderFailur
   if (/\b429\b|rate.?limit|too many requests|quota exceeded/.test(text)) return "rateLimit";
   if (/\b408\b|timeout|timed out|etimedout|deadline exceeded/.test(text)) return "timeout";
   if (
-    /\b5\d{2}\b|network|fetch failed|econnreset|econnrefused|enotfound|socket hang up|connection reset|service unavailable|temporarily unavailable|overload/.test(text)
+    /\b5\d{2}\b|network|fetch failed|econnreset|econnrefused|enotfound|socket hang up|connection (?:error|refused|reset)|unable to connect|could not connect|service unavailable|temporarily unavailable|overload/.test(text)
   ) return "network";
   return "unknown";
 }

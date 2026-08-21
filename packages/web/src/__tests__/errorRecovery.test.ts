@@ -29,6 +29,7 @@ describe("provider failure classification (#485)", () => {
     [view("provider rejected", '429 {"error":{"message":"rate limit exceeded"}}'), "rateLimit"],
     [view("provider request timed out after 30s"), "timeout"],
     [view("fetch failed: ECONNRESET"), "network"],
+    [view("⚠️ Agent principal encountered an error: Connection error."), "network"],
     [view("mock API error"), "unknown"],
   ] as const)("maps %s to %s", (input, expected) => {
     expect(classifyProviderFailure(input)).toBe(expected);
