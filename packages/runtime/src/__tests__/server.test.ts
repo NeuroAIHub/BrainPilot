@@ -523,10 +523,11 @@ describe("workspace file routes", () => {
     expect(res.status).toBe(400);
   });
 
-  // #60: a composer upload staged under workspaces/local/ (the draft sandbox id)
-  // must be drained into the real session workspace before the agent runs, so
-  // the agent's cwd (workspaces/<sid>/) contains the file the user attached.
-  it("drains a staged local upload into the session workspace on sendMessage (#60)", async () => {
+  // #60/#482: a composer upload staged under workspaces/local/ (the draft
+  // sandbox id) must move as soon as the real session is created. The following
+  // postMessage may fail, but the attachment must already belong to that session
+  // rather than remaining available to an unrelated later conversation.
+  it("drains a staged local upload when the real session is created (#60, #482)", async () => {
     const dataRoot = await mkdtemp(join(tmpdir(), "bp-drain-"));
     const manager = new SessionManager({ persist: true, dataRoot, agentFactory: mockAgentFactory });
 
@@ -534,17 +535,16 @@ describe("workspace file routes", () => {
     // id because the real session does not exist yet.
     await manager.writeSessionFile(
       "local",
-      "/workspace/attachment-probe.txt",
+      "/attachments/attachment-probe.txt",
       Buffer.from("probe payload").toString("base64"),
     );
 
-    // The real session is created when the prompt is sent.
+    // The real session is created immediately before the first postMessage.
     const session = await manager.createSession({ title: "Draft" });
-    await manager.sendMessage(session.id, "Please summarize the uploaded attachment.");
 
-    // The file now lives in the agent's cwd (the session workspace)...
+    // The file already lives in the agent's cwd before postMessage can fail.
     const inSession = await readFile(
-      join(dataRoot, "workspaces", session.id, "attachment-probe.txt"),
+      join(dataRoot, "workspaces", session.id, ".attachments", "attachment-probe.txt"),
       "utf8",
     );
     expect(inSession).toBe("probe payload");

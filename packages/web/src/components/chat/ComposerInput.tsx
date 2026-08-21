@@ -72,6 +72,8 @@ export function ComposerInput({
       mcpError: t("chat.mention.mcp.error"),
       filesNeedSandbox: t("chat.mention.files.needSandbox"),
       filesError: t("chat.mention.files.error"),
+      fileScopeSession: t("chat.mention.scope.session"),
+      fileScopePersistent: t("chat.mention.scope.persistent"),
     }),
     [t],
   );
