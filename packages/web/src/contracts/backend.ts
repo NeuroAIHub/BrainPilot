@@ -241,6 +241,8 @@ export interface ChatMessage {
    * not concatenate the same delta twice (#314). Not rendered.
    */
   appliedStreamKeys?: string[];
+  /** Reducer-only buffer for a split NO-RENDER block; never rendered. */
+  suppressedContent?: string;
 }
 
 /** View-model for a `system_message` AG-UI event (post-normalize). */

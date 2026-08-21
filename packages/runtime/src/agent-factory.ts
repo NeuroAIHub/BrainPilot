@@ -337,6 +337,9 @@ class RealAgentSession implements IAgentSession {
   abort(): Promise<void> {
     return this.s.abort();
   }
+  clearQueue(): unknown {
+    return this.s.clearQueue();
+  }
   interruptTool(toolCallId: string): boolean {
     const controller = this.bashControllers.get(toolCallId);
     if (!controller || controller.signal.aborted) return false;
@@ -356,6 +359,7 @@ interface PiSession {
   prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
   setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void;
   abort(): Promise<void>;
+  clearQueue(): unknown;
   dispose(): void;
 }
 interface PiSdk {

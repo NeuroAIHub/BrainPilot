@@ -25,6 +25,7 @@ import {
   buildWorkspaceFileDeepLink,
   parseWorkspaceFileLocation,
   resolveWorkspaceFileSession,
+  shouldResetWorkspaceFileLocation,
   type WorkspaceFileTarget,
 } from "../chat/workspaceFileLink";
 
@@ -87,6 +88,7 @@ export function DesktopShell() {
     typeof window === "undefined" ? null : parseWorkspaceFileLocation(window.location),
   );
   const deepLinkHandledRef = useRef(false);
+  const previousSessionIdRef = useRef<string | null | undefined>(currentSession?.id);
   const openFileRequestIdRef = useRef(0);
   const sidebarResizeRef = useRef<{ pointerX: number; width: number } | null>(null);
   const confirmFileNavigation = useCallback(
@@ -107,6 +109,21 @@ export function DesktopShell() {
       "",
       buildWorkspaceFileDeepLink(currentSession.id, target),
     );
+  }, [currentSession?.id]);
+
+  useEffect(() => {
+    const previousSessionId = previousSessionIdRef.current;
+    const nextSessionId = currentSession?.id;
+    previousSessionIdRef.current = nextSessionId;
+    if (!shouldResetWorkspaceFileLocation({
+      location: window.location,
+      previousSessionId,
+      nextSessionId,
+      hasInitialTarget: initialWorkspaceFileTargetRef.current !== null,
+      initialTargetHandled: deepLinkHandledRef.current,
+    })) return;
+    setOpenFileRequest(null);
+    window.history.replaceState(window.history.state, "", "/app");
   }, [currentSession?.id]);
 
   const useFileInConversation = useCallback((path: string) => {

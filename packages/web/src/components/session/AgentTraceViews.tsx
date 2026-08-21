@@ -17,6 +17,7 @@ import {
   getNodeKindLabelKey,
   getStatusLabelKey,
   normalizeStatus,
+  relationLabels,
 } from "./traceLayout";
 import {
   layoutToggleState,
@@ -172,6 +173,9 @@ export function TracePanel() {
     const key = getNodeKindLabelKey(kind);
     return key ? t(key) : kind;
   };
+  const formatNodeTitle = (node: TraceNode) =>
+    getNodeKind(node) === "session_start" ? t("trace.sessionStart.title") : node.title;
+  const formatAgent = (agent: string) => agent === "host" ? t("trace.origin.system") : agent;
 
   const allNodes = trace?.nodes ?? [];
   const episodeTitles = useMemo(
@@ -452,6 +456,10 @@ export function TracePanel() {
                   fitToken={fitToken}
                   emptyLabel={emptyLabel}
                   formatKind={formatNodeKind}
+                  formatNodeTitle={formatNodeTitle}
+                  formatAgent={formatAgent}
+                  formatRelation={(relation) => relationLabels[relation] ? t(`trace.relation.${relation}`) : relation}
+                  revokedLabel={t("trace.node.revoked")}
                   episodeTitles={episodeTitles}
                   showProposedDependencies={showProposedDependencies}
                   zoomLabels={{

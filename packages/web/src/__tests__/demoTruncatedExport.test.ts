@@ -79,6 +79,35 @@ describe("demo replay tolerates truncated/orphaned events", () => {
     // Entire delta was a NO-RENDER wrapper → nothing to render, no message created.
     expect(msgs).toHaveLength(0);
   });
+
+  it("never renders a NO-RENDER wrapper split across model stream chunks", () => {
+    let msgs: ChatMessage[] = [];
+    const deltas = ["<!--NO", "-RENDER", "-->trace", " reminder handled", "<!--/", "NO", "-RENDER", "-->"];
+    for (const delta of deltas) {
+      msgs = reduceMessagesForEvent(msgs, {
+        type: "TEXT_MESSAGE_CONTENT",
+        messageId: "split-internal",
+        delta,
+        agentName: "principal",
+      } as WebSocketEvent);
+      expect(msgs.every((message) => message.content === "")).toBe(true);
+    }
+    msgs = reduceMessagesForEvent(msgs, {
+      type: "TEXT_MESSAGE_END",
+      messageId: "split-internal",
+    } as WebSocketEvent);
+    expect(msgs).toHaveLength(0);
+  });
+
+  it("drops an atomic NO-RENDER chat chunk", () => {
+    const msgs = reduceMessagesForEvent([], {
+      type: "TEXT_MESSAGE_CHUNK",
+      messageId: "atomic-internal",
+      role: "assistant",
+      delta: "<!--NO-RENDER-->workflow reminder handled<!--/NO-RENDER-->",
+    } as WebSocketEvent);
+    expect(msgs).toHaveLength(0);
+  });
 });
 
 describe("normalizeAgUiEvent preserves transport metadata keys", () => {
