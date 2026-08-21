@@ -40,6 +40,29 @@ describe("system_message mapping", () => {
     expect(v.agent).toBe("librarian");
   });
 
+  it("maps structured workspace restore metadata", () => {
+    const v = toSystemMessageView({
+      type: "system_message",
+      level: "info",
+      message: "fallback",
+      code: "workspace_restored",
+      metadata: {
+        mode: "checkpoint",
+        checkpointId: "checkpoint_abcdef123456",
+        restoredAt: "2026-08-21T01:02:03.000Z",
+        files: ["reports/result.md", "table.csv"],
+        fileCount: 2,
+      },
+    } as WebSocketEvent);
+    expect(v.code).toBe("workspace_restored");
+    expect(v.workspaceRestore).toMatchObject({
+      mode: "checkpoint",
+      checkpointId: "checkpoint_abcdef123456",
+      files: ["reports/result.md", "table.csv"],
+      fileCount: 2,
+    });
+  });
+
   it("falls back to info for unknown level", () => {
     const v = toSystemMessageView({ type: "system_message", level: "bogus", message: "m" } as WebSocketEvent);
     expect(v.level).toBe("info");

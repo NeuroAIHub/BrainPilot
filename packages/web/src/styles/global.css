@@ -1031,6 +1031,10 @@ button {
 
 .agent-card__header,
 .trace-detail__title,
+.trace-restore-banner .system-message {
+  margin: 0;
+}
+
 .trace-meta {
   display: flex;
   min-width: 0;
@@ -5380,6 +5384,17 @@ button {
 
 .file-preview__body > .file-editor__textarea {
   flex: 1 1 auto;
+}
+
+.file-preview__restored {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  padding: 8px 14px;
+  font-size: 12px;
 }
 
 .file-preview__meta {

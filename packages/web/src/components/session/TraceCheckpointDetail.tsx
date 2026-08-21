@@ -2,6 +2,7 @@ import { AlertTriangle, FileDiff, GitCommit, Loader2, RotateCcw } from "lucide-r
 import { useEffect, useMemo, useState } from "react";
 import type { TraceCausalRollbackPreview, TraceCheckpointDetail, TraceCheckpointRef, TraceNode, TraceRestorePreview } from "../../contracts/backend";
 import { api } from "../../utils/api";
+import { restoreErrorMessage } from "./restoreError";
 
 interface Props {
   node: TraceNode;
@@ -85,10 +86,18 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     try {
       await api.sessions.restoreTraceCheckpoint(sessionId, value.checkpointId, value.stateToken);
       setPreview(null);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
+      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", {
+        detail: {
+          sessionId,
+          mode: "checkpoint",
+          checkpointId: value.checkpointId,
+          restoredAt: new Date().toISOString(),
+          files: value.files.map((file) => file.path),
+        },
+      }));
       await onRestored?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(restoreErrorMessage(reason, t));
       setPreview(null);
     } finally {
       setLoading(false);
@@ -115,10 +124,18 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     try {
       await api.sessions.rollbackTraceNode(sessionId, node.id, value.stateToken);
       setCausalPreview(null);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", { detail: { sessionId } }));
+      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", {
+        detail: {
+          sessionId,
+          mode: "causal",
+          nodeId: node.id,
+          restoredAt: new Date().toISOString(),
+          files: value.files.map((file) => file.path),
+        },
+      }));
       await onRestored?.();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : String(reason));
+      setError(restoreErrorMessage(reason, t));
       setCausalPreview(null);
     } finally {
       setLoading(false);

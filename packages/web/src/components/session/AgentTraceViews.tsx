@@ -6,6 +6,7 @@ import { useT } from "../../i18n/useT";
 import { api } from "../../utils/api";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { SystemMessageBubble } from "../chat/SystemMessageBubble";
 import { AgentNetwork } from "./AgentNetwork";
 import { TraceGraphView } from "./TraceGraphView";
 import { TraceNodeDetail } from "./TraceNodeDetail";
@@ -134,7 +135,7 @@ export function AgentsPanel() {
 export function TracePanel() {
   // #79: trace is now live — seeded + kept current by SessionContext via SSE
   // (CUSTOM:trace_node), so this panel reads it instead of polling.
-  const { currentSession, currentTrace, refreshTrace, workActive } = useSessions();
+  const { currentSession, currentTrace, refreshTrace, workActive, messages } = useSessions();
   const t = useT();
   const trace = currentTrace;
   const [selectedNodeId, setSelectedNodeId] = useState<string | null>(null);
@@ -149,6 +150,13 @@ export function TracePanel() {
   const [fitToken, setFitToken] = useState(0);
   const [showProposedDependencies, setShowProposedDependencies] = useState(true);
   const [collapseEpisodes, setCollapseEpisodes] = useState(false);
+  const latestWorkspaceRestore = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const message = messages[index];
+      if (message.systemMessage?.code === "workspace_restored") return message.systemMessage;
+    }
+    return null;
+  }, [messages]);
   const wasUserAdjustedRef = useRef(false);
   const prevNodeCountRef = useRef(0);
   const formatNodeKind = (kind: string) => {
@@ -344,6 +352,12 @@ export function TracePanel() {
             </IconButton>
           </div>
         </header>
+
+        {latestWorkspaceRestore ? (
+          <div className="trace-restore-banner">
+            <SystemMessageBubble view={latestWorkspaceRestore} />
+          </div>
+        ) : null}
 
         {!currentSession ? <p className="workspace-panel__empty">{t("trace.emptyNoSession")}</p> : null}
 

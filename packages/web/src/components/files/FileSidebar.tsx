@@ -53,6 +53,12 @@ type DataUploadState = {
 
 type FileNode = FileSidebarTreeNode;
 
+type WorkspaceRestoreNotice = {
+  restoredAt: string;
+  checkpointId?: string;
+  files: string[];
+};
+
 type FileSidebarProps = {
   isOpen: boolean;
   openFileRequest?: { path: string; line?: number; requestId: number } | null;
@@ -232,6 +238,7 @@ export function FileSidebar({
   const [isDeletingSelection, setIsDeletingSelection] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
+  const [restoreNotice, setRestoreNotice] = useState<WorkspaceRestoreNotice | null>(null);
   // #305: replace boolean busy with progress UI state; null = idle.
   const [dataUploadState, setDataUploadState] = useState<DataUploadState | null>(null);
   const dataUploadAbortRef = useRef<AbortController | null>(null);
@@ -334,6 +341,39 @@ export function FileSidebar({
     },
     [currentSandbox, sandboxId, t],
   );
+
+  useEffect(() => {
+    const onWorkspaceRestored = (event: Event) => {
+      const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+      if (!detail || detail.sessionId !== currentSession?.id) return;
+      const files = Array.isArray(detail.files)
+        ? detail.files.filter((file): file is string => typeof file === "string")
+        : [];
+      const notice: WorkspaceRestoreNotice = {
+        restoredAt: typeof detail.restoredAt === "string" ? detail.restoredAt : new Date().toISOString(),
+        checkpointId: typeof detail.checkpointId === "string" ? detail.checkpointId : undefined,
+        files,
+      };
+      setRestoreNotice(notice);
+      if (!isOpen || currentSandbox?.status !== "running") return;
+      void loadDirectory(WORKSPACE_ROOT_PATH);
+
+      const relativePath = selectedPath ? workspaceRelativePath(selectedPath) : null;
+      if (!relativePath || !files.includes(relativePath) || !sandboxId || isDirty) return;
+      void api.sandbox.readFile(sandboxId, selectedPath!).then((loaded) => {
+        setSelectedContent(loaded);
+        setDraftContent(loaded.content);
+        setEditError(null);
+        setConflictContent(null);
+      }).catch(() => {
+        setSelectedContent(null);
+        setDraftContent("");
+        setEditError(t("files.preview.restoredMissing"));
+      });
+    };
+    window.addEventListener("brainpilot:workspace-restored", onWorkspaceRestored);
+    return () => window.removeEventListener("brainpilot:workspace-restored", onWorkspaceRestored);
+  }, [currentSandbox?.status, currentSession?.id, isDirty, isOpen, loadDirectory, sandboxId, selectedPath, t]);
 
   useEffect(() => {
     if (isOpen && currentSandbox?.status === "running") {
@@ -1021,6 +1061,11 @@ export function FileSidebar({
         isMaximized={isPreviewMaximized}
         isSaving={isSaving}
         requestedLine={requestedLine}
+        restoreNotice={
+          restoreNotice && selectedFile && restoreNotice.files.includes(workspaceRelativePath(selectedFile.path))
+            ? restoreNotice
+            : null
+        }
         onClose={() => {
           if (!confirmDiscard()) return;
           setSelectedPath(null);
@@ -1061,6 +1106,7 @@ function FilePreviewPanel({
   isMaximized,
   isSaving,
   requestedLine,
+  restoreNotice,
   onClose,
   onDraftChange,
   onEdit,
@@ -1081,6 +1127,7 @@ function FilePreviewPanel({
   isMaximized: boolean;
   isSaving: boolean;
   requestedLine?: number;
+  restoreNotice: WorkspaceRestoreNotice | null;
   onClose: () => void;
   onDraftChange: (content: string) => void;
   onEdit: () => void;
@@ -1301,6 +1348,13 @@ function FilePreviewPanel({
           </IconButton>
         </div>
       </div>
+
+      {restoreNotice ? (
+        <div className="file-preview__restored" role="status">
+          <RefreshCw aria-hidden="true" size={14} />
+          <span>{t("files.preview.restoredVersion", { time: new Date(restoreNotice.restoredAt).toLocaleString() })}</span>
+        </div>
+      ) : null}
 
       <dl className="file-preview__meta">
         <div>

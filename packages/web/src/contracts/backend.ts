@@ -238,6 +238,17 @@ export interface ChatMessage {
 }
 
 /** View-model for a `system_message` AG-UI event (post-normalize). */
+export interface WorkspaceRestoreView {
+  mode: "checkpoint" | "causal";
+  checkpointId?: string;
+  nodeId?: string;
+  changeId?: string;
+  restoredAt?: string;
+  files: string[];
+  fileCount: number;
+  affectedNodeCount?: number;
+}
+
 export interface SystemMessageView {
   level: "info" | "warning" | "error" | "fatal";
   message: string;
@@ -246,6 +257,8 @@ export interface SystemMessageView {
   /** fatal events are non-recoverable; drives the emphasized red styling. */
   recoverable: boolean;
   timestamp?: string;
+  code?: string;
+  workspaceRestore?: WorkspaceRestoreView;
 }
 
 /** View-model for a `user_input_request` AG-UI event (ask_user, post-normalize). */

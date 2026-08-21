@@ -47,6 +47,30 @@ describe("SystemMessageBubble — 4 levels", () => {
     expect(html).toContain("<details");
     expect(html).toContain("stack-trace-here");
   });
+
+  it("renders a localized workspace restore summary without internal paths", () => {
+    const html = renderToStaticMarkup(
+      <SystemMessageBubble
+        view={{
+          level: "info",
+          message: "fallback",
+          recoverable: true,
+          code: "workspace_restored",
+          workspaceRestore: {
+            mode: "checkpoint",
+            checkpointId: "checkpoint_abcdef123456",
+            restoredAt: "2026-08-21T01:02:03.000Z",
+            files: ["reports/result.md"],
+            fileCount: 1,
+          },
+        }}
+      />,
+    );
+    expect(html).toContain("chat.restore.title");
+    expect(html).toContain("chat.restore.checkpointSuccess");
+    expect(html).toContain("result.md");
+    expect(html).not.toContain("reports/result.md");
+  });
 });
 
 describe("AskUserCard — structure", () => {

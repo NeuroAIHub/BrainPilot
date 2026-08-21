@@ -1,6 +1,7 @@
 import { AlertTriangle, Info, OctagonAlert, XCircle } from "lucide-react";
 import type { SystemMessageView } from "../../contracts/backend";
 import { useT } from "../../i18n/useT";
+import { workspaceRestorePresentation } from "./workspaceRestorePresentation";
 
 /**
  * 修正6 — system_message bubble. Renders a `system_message` event (level
@@ -11,6 +12,7 @@ import { useT } from "../../i18n/useT";
 export function SystemMessageBubble({ view }: { view: SystemMessageView }) {
   const t = useT();
   const level = view.level;
+  const restorePresentation = workspaceRestorePresentation(view, t);
   const Icon =
     level === "fatal" ? OctagonAlert :
     level === "error" ? XCircle :
@@ -31,10 +33,10 @@ export function SystemMessageBubble({ view }: { view: SystemMessageView }) {
     >
       <div className="system-message__head">
         <Icon size={15} className="system-message__icon" aria-hidden="true" />
-        <span className="system-message__label">{t(labelKey)}</span>
+        <span className="system-message__label">{restorePresentation?.title ?? t(labelKey)}</span>
         {view.agent ? <span className="system-message__agent">{view.agent}</span> : null}
       </div>
-      <p className="system-message__text">{view.message}</p>
+      <p className="system-message__text">{restorePresentation?.message ?? view.message}</p>
       {view.details ? (
         <details className="system-message__details">
           <summary>{t("chat.system.details")}</summary>
