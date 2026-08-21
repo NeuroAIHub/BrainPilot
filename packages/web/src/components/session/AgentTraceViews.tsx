@@ -11,6 +11,10 @@ import { TraceGraphView } from "./TraceGraphView";
 import { TraceNodeDetail } from "./TraceNodeDetail";
 import { AuditReportsPanel } from "./AuditReportsPanel";
 import {
+  summarizeAgentSession,
+  summarizeTraceSession,
+} from "./progressiveDisclosure";
+import {
   formatTime,
   getNodeKind,
   getNodeKindLabelKey,
@@ -96,8 +100,21 @@ export function AgentsPanel() {
     messageFilters,
     setMessageFilterEnabled,
     hiddenErrorsCount,
+    subagents,
   } = useSessions();
   const t = useT();
+  const summary = summarizeAgentSession(agents, messages, subagents.length);
+  const network = (
+    <AgentNetwork
+      agents={agents}
+      agentFilters={agentFilters}
+      messages={messages}
+      onSetAgentFilter={setAgentFilter}
+      messageFilters={messageFilters}
+      onSetMessageFilterEnabled={setMessageFilterEnabled}
+      hiddenErrorsCount={hiddenErrorsCount}
+    />
+  );
 
   return (
     <section className="workspace-panel" aria-labelledby="agents-panel-heading">
@@ -111,21 +128,26 @@ export function AgentsPanel() {
 
         {!currentSession ? (
           <p className="workspace-panel__empty">{t("trace.agents.emptyNoSession")}</p>
-        ) : (
-          <AgentNetwork
-            agents={agents}
-            agentFilters={agentFilters}
-            messages={messages}
-            onSetAgentFilter={setAgentFilter}
-            messageFilters={messageFilters}
-            onSetMessageFilterEnabled={setMessageFilterEnabled}
-            hiddenErrorsCount={hiddenErrorsCount}
-          />
-        )}
-
-        {currentSession && agents.length === 0 ? (
-          <p className="workspace-panel__empty">{t("trace.agents.emptyNoEvents")}</p>
-        ) : null}
+        ) : summary.simple ? (
+          <div className="progressive-summary">
+            <div className="progressive-summary__icon" aria-hidden="true">
+              <Network size={20} />
+            </div>
+            <div className="progressive-summary__content">
+              <strong>{t("trace.agents.simple.title")}</strong>
+              <p>{t("trace.agents.simple.description")}</p>
+              <div className="progressive-summary__metrics">
+                <span>{t("trace.agents.simple.chatMessages", { count: summary.chatMessageCount })}</span>
+                <span>{t("trace.agents.simple.agentMessages", { count: summary.crossAgentMessageCount })}</span>
+                {summary.runningCount > 0 ? <span>{t("trace.agents.simple.running")}</span> : null}
+              </div>
+              <details className="progressive-summary__advanced">
+                <summary>{t("trace.agents.simple.openWorkbench")}</summary>
+                <div className="progressive-summary__workbench">{network}</div>
+              </details>
+            </div>
+          </div>
+        ) : network}
       </div>
     </section>
   );
@@ -157,6 +179,7 @@ export function TracePanel() {
   };
 
   const allNodes = trace?.nodes ?? [];
+  const traceSummary = summarizeTraceSession(allNodes);
   const episodeTitles = useMemo(
     () => new Map((trace?.episodes ?? []).map((episode) => [episode.id, episode.title])),
     [trace?.episodes],
@@ -319,26 +342,28 @@ export function TracePanel() {
             <h2 id="trace-panel-heading">{t("trace.title")}</h2>
           </div>
           <div className="trace-toolbar">
-            <div className="trace-segmented" role="group" aria-label={t("trace.aria.layoutDir")}>
-              <button
-                type="button"
-                className={layoutToggle.lr.pressed ? "is-active" : ""}
-                aria-pressed={layoutToggle.lr.pressed}
-                disabled={layoutToggle.lr.disabled}
-                onClick={() => setDirection("LR")}
-              >
-                {t("trace.layout.horizontal")}
-              </button>
-              <button
-                type="button"
-                className={layoutToggle.tb.pressed ? "is-active" : ""}
-                aria-pressed={layoutToggle.tb.pressed}
-                disabled={layoutToggle.tb.disabled}
-                onClick={() => setDirection("TB")}
-              >
-                {t("trace.layout.vertical")}
-              </button>
-            </div>
+            {!traceSummary.simple ? (
+              <div className="trace-segmented" role="group" aria-label={t("trace.aria.layoutDir")}>
+                <button
+                  type="button"
+                  className={layoutToggle.lr.pressed ? "is-active" : ""}
+                  aria-pressed={layoutToggle.lr.pressed}
+                  disabled={layoutToggle.lr.disabled}
+                  onClick={() => setDirection("LR")}
+                >
+                  {t("trace.layout.horizontal")}
+                </button>
+                <button
+                  type="button"
+                  className={layoutToggle.tb.pressed ? "is-active" : ""}
+                  aria-pressed={layoutToggle.tb.pressed}
+                  disabled={layoutToggle.tb.disabled}
+                  onClick={() => setDirection("TB")}
+                >
+                  {t("trace.layout.vertical")}
+                </button>
+              </div>
+            ) : null}
             <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
               <RefreshCw size={15} />
             </IconButton>
@@ -347,8 +372,32 @@ export function TracePanel() {
 
         {!currentSession ? <p className="workspace-panel__empty">{t("trace.emptyNoSession")}</p> : null}
 
+        {trace && traceSummary.simple ? (
+          <div className="progressive-summary">
+            <div className="progressive-summary__icon" aria-hidden="true">
+              <Network size={20} />
+            </div>
+            <div className="progressive-summary__content">
+              <strong>{t("trace.simple.title")}</strong>
+              <p>{t("trace.simple.description")}</p>
+              <div className="progressive-summary__metrics">
+                <span>
+                  {traceSummary.totalNodeCount > 0
+                    ? t("trace.simple.started")
+                    : t("trace.simple.waiting")}
+                </span>
+              </div>
+            </div>
+          </div>
+        ) : null}
+
         {trace ? (
-          <>
+          <details
+            className={`progressive-workbench ${traceSummary.simple ? "is-simple" : "is-full"}`}
+            open={traceSummary.simple ? undefined : true}
+          >
+            <summary>{t("trace.simple.openWorkbench")}</summary>
+            <div className="progressive-summary__workbench progressive-summary__workbench--trace">
             <div className="trace-meta">
               <span>{trace.meta.projectName || currentSession?.title || t("trace.untitled")}</span>
               {trace.meta.currentFocus ? <span>{t("trace.focus", { focus: String(trace.meta.currentFocus) })}</span> : null}
@@ -484,7 +533,8 @@ export function TracePanel() {
                 <AuditReportsPanel sessionId={currentSession?.id} revision={trace?.revision} t={t} />
               </article>
             </div>
-          </>
+            </div>
+          </details>
         ) : null}
       </div>
     </section>

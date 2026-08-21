@@ -903,6 +903,99 @@ button {
   color: var(--color-danger);
 }
 
+.progressive-summary {
+  display: flex;
+  align-items: flex-start;
+  gap: 14px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-lg);
+  background: var(--color-surface-soft);
+  padding: 18px;
+}
+
+.progressive-summary__icon {
+  display: grid;
+  width: 38px;
+  height: 38px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: 12px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  box-shadow: inset 0 0 0 1px var(--color-border);
+}
+
+.progressive-summary__content {
+  min-width: 0;
+  flex: 1;
+}
+
+.progressive-summary__content > strong {
+  color: var(--color-text);
+  font-size: 14px;
+}
+
+.progressive-summary__content > p {
+  margin: 5px 0 0;
+  color: var(--color-text-muted);
+  font-size: 13px;
+  line-height: 1.55;
+}
+
+.progressive-summary__metrics {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 12px;
+}
+
+.progressive-summary__metrics span {
+  border: 1px solid var(--color-border);
+  border-radius: 999px;
+  background: var(--color-surface);
+  color: var(--color-text-muted);
+  font-size: 11px;
+  padding: 4px 8px;
+}
+
+.progressive-summary__advanced,
+.progressive-workbench.is-simple {
+  margin-top: 14px;
+}
+
+.progressive-summary__advanced > summary,
+.progressive-workbench.is-simple > summary {
+  width: fit-content;
+  cursor: pointer;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  font-weight: 550;
+}
+
+.progressive-summary__advanced > summary:hover,
+.progressive-summary__advanced > summary:focus-visible,
+.progressive-workbench.is-simple > summary:hover,
+.progressive-workbench.is-simple > summary:focus-visible {
+  color: var(--color-text);
+}
+
+.progressive-summary__workbench {
+  margin-top: 14px;
+}
+
+.progressive-summary__workbench--trace {
+  display: grid;
+  gap: 16px;
+}
+
+.progressive-workbench.is-full > summary {
+  display: none;
+}
+
+.progressive-workbench.is-full > .progressive-summary__workbench {
+  margin-top: 0;
+}
+
 .trace-header {
   align-items: flex-start;
 }
