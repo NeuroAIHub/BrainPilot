@@ -73,6 +73,28 @@ describe("message stream idempotency (#314)", () => {
     expect(message.createdAt).toBe("2026-08-21T01:02:03.000Z");
   });
 
+  it("enriches an optimistic user row with the durable run id (#489)", () => {
+    const optimistic: ChatMessage = {
+      id: "user-optimistic",
+      role: "user",
+      content: "resume",
+      createdAt: "2026-08-21T01:00:00.000Z",
+      streaming: false,
+      kind: "text",
+    };
+    const [message] = reduceMessagesForEvent([optimistic], {
+      type: "TEXT_MESSAGE_CHUNK",
+      messageId: "user-optimistic",
+      role: "user",
+      runId: "run_new",
+      delta: "resume",
+      _ts: "2026-08-21T01:02:03.000Z",
+    } as WebSocketEvent);
+    expect(message.content).toBe("resume");
+    expect(message.runId).toBe("run_new");
+    expect(message.createdAt).toBe("2026-08-21T01:02:03.000Z");
+  });
+
   it("preserves the originating name on a tool result activity (#465)", () => {
     const messages = fold([
       {
