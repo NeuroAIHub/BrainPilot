@@ -29,15 +29,15 @@ finding requiring `REVISE` or `BLOCK`, even when every implementation and
 protocol-compliance check passes. A report may separately confirm the narrower
 claim that the artifact is operationally valid.
 
-## Audit selection provenance
+## Audit decision provenance
 
-When method choice is material, distinguish fixed-method work from comparative
-selection. Fixed-method status is valid only when the method identity was
-specified independently of current results by the user, task specification, or
-external scientific constraint; verify that basis. Alternatives are then
-sensitivity analyses and cannot support a preference claim. A goal that asks to
-select, compare, recommend, or replace candidates is comparative and must freeze
-a decision-relevant rule rather than an unconditional winner.
+When method choice is material, verify that the final decision cites either an
+independent prescribing constraint or current selection evidence. A constraint
+qualifies only when the user, task, or external scientific requirement
+independently determines the method identity. Runtime-owned recent user messages
+are authoritative for user constraints; PI summaries cannot replace them.
+Literature recommendations, candidate-local guards, convenience, and the
+protocol's own declaration cannot prescribe the winner.
 
 Separate eligibility guards from ranking evidence. Passing candidate-local
 guards establishes eligibility, not preference. Every claimed challenger must
@@ -48,6 +48,8 @@ every correction affecting eligibility, ranking, or comparability propagated to
 a new decision. If the evidence cannot distinguish candidates for the intended
 claim, mark empirical adequacy `unverified` and require the claim to be revised
 or narrowed. Do not choose a replacement method for the team.
+
+Missing, invalid, or stale decision provenance requires `REVISE`.
 
 Verify that every material challenge and contradictory result propagated into
 the latest protocol, evidence, and decision. Protocol conformance cannot pass

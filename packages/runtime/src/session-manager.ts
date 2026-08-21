@@ -71,7 +71,7 @@ import {
   withSharedRootDirective,
 } from "./personas.js";
 import { renderAgentStatusBlock, collectAgentStatusLines } from "./extensions/agent-status.js";
-import { renderTaskListBlock } from "./extensions/task-context.js";
+import { appendRecentUserMessage, renderTaskListBlock } from "./extensions/task-context.js";
 import { renderPrincipalWorkflowBlock } from "./extensions/principal-workflow-guard.js";
 import { McpBridge, loadMcpServersConfig, type McpRuntimeServerStatus, type McpRuntimeStatus } from "./mcp-bridge.js";
 import { loadCompatPluginProjections } from "./compat-hooks.js";
@@ -344,6 +344,8 @@ interface SessionEntry {
   workflowTaskSeqBaseline: number;
   workflowReminderClaimed: boolean;
   workflowViolationEmitted: boolean;
+  /** Current in-memory user-authored inputs exposed only to Auditor. */
+  recentUserMessages: string[];
   /** Frozen system-plugin state for reproducible experiment sessions. */
   systemPlugins: SystemPluginSnapshot[];
   monitorManager: MonitorManager;
@@ -1697,6 +1699,7 @@ export class SessionManager {
       workflowTaskSeqBaseline: input.workflowTaskSeqBaseline ?? 0,
       workflowReminderClaimed: input.workflowReminderClaimed === true,
       workflowViolationEmitted: input.workflowViolationEmitted === true,
+      recentUserMessages: [],
       systemPlugins,
       monitorManager,
       monitorEvents,
@@ -1979,6 +1982,9 @@ export class SessionManager {
     // broadcast (so SSE replay stays complete) correlated to the CURRENT run.
     if (agent.isStreaming) {
       const runId = entry.activeRunId ?? undefined;
+      if (agentName === "principal") {
+        entry.recentUserMessages = appendRecentUserMessage(entry.recentUserMessages, content);
+      }
       void agent.followUp(content, opts.uuid ?? randomUUID()).finally(() => {
         if (resumeTargetAfterRun && entry.taskLedger.count(agentName) > 0) {
           this.wakeAgent(sessionId, agentName);
@@ -2001,6 +2007,11 @@ export class SessionManager {
       entry.workflowReminderClaimed = false;
       entry.workflowViolationEmitted = false;
       await this.writeMeta(entry);
+    }
+    if (agentName === "principal") {
+      entry.recentUserMessages = startsEpoch
+        ? [content]
+        : appendRecentUserMessage(entry.recentUserMessages, content);
     }
 
     // runState tracks the Principal's user-facing turn for status/timing/Stop.
@@ -2178,6 +2189,7 @@ export class SessionManager {
         return "persist_failed";
       }
       entry.userInputs.active = undefined;
+      entry.recentUserMessages = appendRecentUserMessage(entry.recentUserMessages, normalizedAnswer);
       input.deferred.resolve(normalizedAnswer);
       this.touch(entry);
       await this.promoteNextUserInputLocked(entry);
@@ -2909,6 +2921,7 @@ export class SessionManager {
       entry.taskLedger.pendingAssignedTo(name),
       entry.taskLedger.pendingCreatedBy(name),
       TASK_CONTEXT_MAX_CHARS,
+      name === "auditor" ? entry.recentUserMessages : [],
     );
   }
 
