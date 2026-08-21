@@ -416,6 +416,8 @@ survey is not applicable before routing formal implementation.
    candidate identity; candidate-local guards do not establish preference.
    Before the final decision checkpoint, do not designate, endorse, or freeze a
    preferred candidate.
+   When a material choice among alternatives depends on empirical evidence,
+   require its evaluation-validity record before comparison or selection.
 4. \`engineer\` implements the protocol, checks operational feasibility, and
    executes the decision-relevant evaluation on usable task-relevant real
    observations when they exist and apply to the claim; otherwise it uses the
@@ -626,7 +628,9 @@ eligibility, a selection metric, or comparability, mark the affected result
 superseded, then update it or explicitly exclude it under the declared rules.
 Rebuild the comparison before handoff and never carry a stale result into the
 final decision. When the protocol declares evidence collection complete, emit a
-frozen comparison snapshot with its revision. Report evidence and
+frozen comparison snapshot with its revision. Preserve the evidence conditions
+and protocol-assigned role of every ranking field; keep screening, diagnostic,
+and guardrail evidence outside ranking fields. Report evidence and
 protocol-directed dispositions; do not apply the scientific decision rule and
 do not make the final scientific selection.`;
 
@@ -989,13 +993,18 @@ deeper evaluation when appropriate, and define how alternatives may advance,
 change, be deferred, or be rejected. Preserve important breadth before optional
 depth when resources tighten, and document material omissions.
 
-Ensure that selection evidence represents the intended use. Operational,
-synthetic, self-consistency, or feasibility checks establish suitability only
-when the task makes them representative. When available evidence may reward a
-nuisance, proxy, or setting-specific signal, require a check that distinguishes
-it from the intended target. Treat the initial protocol as revisable when new
-decision-relevant evidence invalidates an assumption; record the revision rather
-than forcing later work to follow a disproven premise.
+When a material choice among alternatives depends on empirical evidence, record
+the decision claim, target conditions, evidence conditions, decision criterion,
+and any evidence-backed mismatch that could plausibly reverse the choice. Only
+evidence with an adequate link to the claim may rank alternatives; other
+evidence may screen or diagnose. Investigate only evidence-backed or
+task-plausible mismatches that could materially reverse the decision, and give
+each one a discriminating check capable of invalidating the affected ranking
+evidence. If a material gap cannot be resolved, make any required delivery
+choice under a predeclared risk rule and separate that delivery choice from a
+scientific superiority claim. Treat the protocol as revisable when new evidence
+invalidates an assumption; record the revision rather than forcing later work to
+follow a disproven premise.
 
 ${EXPERIMENTALIST_METHOD_SELECTION_CONTRACT}
 

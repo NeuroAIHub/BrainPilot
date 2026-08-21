@@ -30,6 +30,7 @@ Target type: <expert-result | pi-draft | synthesis>
 - Method survey: <path>
 - Scientific protocol and decision rules: <path>
 - Decision provenance: <decision; independent constraint or selection rule; evidence paths and revisions>
+- Evaluation validity: <decision claim; target and evidence conditions; criterion; material mismatches and checks>
 - Material alternatives or unresolved challenges: <paths or concise summary>
 - Parameter configuration and provenance: <paths>
 - Implementation or procedure: <paths>

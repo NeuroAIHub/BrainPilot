@@ -121,6 +121,10 @@ describe("bundled system plugins", () => {
     expect(methodReview).toContain("first designated after the final comparable evidence snapshot was frozen");
     expect(methodReview).toContain("earlier preference changed candidate coverage, evaluation effort, pruning, or interpretation");
     expect(methodReview).toContain("fallback protects delivery continuity but carries no scientific preference");
+    expect(methodReview).toContain("material choice among alternatives depends on empirical evidence");
+    expect(methodReview).toContain("decision claim, target conditions, evidence conditions, decision criterion");
+    expect(methodReview).toContain("could plausibly reverse the choice");
+    expect(methodReview).toContain("required delivery choice from a scientific superiority claim");
     const requestTemplate = await readFile(join(auditorSkill, "references", "audit-request-template.md"), "utf8");
     expect(requestTemplate).toContain("Decision provenance");
     expect(requestTemplate).toContain("Material alternatives or unresolved challenges");
@@ -129,6 +133,7 @@ describe("bundled system plugins", () => {
     expect(requestTemplate).toContain("Validated fallback");
     expect(requestTemplate).toContain("Frozen comparison snapshot");
     expect(requestTemplate).toContain("Pre-freeze exclusions and resource allocations");
+    expect(requestTemplate).toContain("Evaluation validity");
     const responseTemplate = await readFile(join(auditorSkill, "references", "audit-response-template.md"), "utf8");
     expect(responseTemplate).toContain("## Compact completion reply");
     expect(responseTemplate).toContain("Report: docs/audits/<actual-report-file>.md");

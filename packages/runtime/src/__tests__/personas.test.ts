@@ -271,7 +271,7 @@ Stale local routing rule.`;
     expect(experimentalist).toContain("smallest procedure that answers the");
     expect(experimentalist).toContain("Do not default to exhaustive nested");
     expect(experimentalist).toContain("broad set of credible alternatives");
-    expect(experimentalist).toContain("selection evidence represents the intended use");
+    expect(experimentalist).toContain("evidence with an adequate link to the claim may rank alternatives");
     expect(experimentalist).toContain("not as a reason to enlarge the");
     expect(engineer).toContain("bounded operational check");
     expect(engineer).toContain("decision-relevant evaluation");
@@ -358,6 +358,24 @@ Stale local routing rule.`;
     expect(engineer).toContain("without recommendation, preference labels, or a selected-candidate field");
     expect(engineer).toContain("emit a frozen comparison snapshot with its revision");
     expect(engineer).toContain("do not apply the scientific decision rule");
+  });
+
+  it("admits ranking evidence only when it supports the intended claim", () => {
+    const pi = PERSONAS.principal!.replace(/\s+/g, " ");
+    const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
+    const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
+
+    expect(pi).toContain("material choice among alternatives depends on empirical evidence");
+    expect(pi).toContain("evaluation-validity record");
+
+    expect(experimentalist).toContain("decision claim, target conditions, evidence conditions, decision criterion");
+    expect(experimentalist).toContain("evidence-backed mismatch that could plausibly reverse the choice");
+    expect(experimentalist).toContain("adequate link to the claim may rank alternatives");
+    expect(experimentalist).toContain("required delivery choice under a predeclared risk rule");
+    expect(experimentalist).toContain("separate that delivery choice from a scientific superiority claim");
+
+    expect(engineer).toContain("evidence conditions and protocol-assigned role of every ranking field");
+    expect(engineer).toContain("screening, diagnostic, and guardrail evidence outside ranking fields");
   });
 
   it("separates method families from concrete implementations", () => {

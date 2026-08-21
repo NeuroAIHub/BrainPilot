@@ -57,6 +57,13 @@ for the team.
 An early designation that altered coverage, effort, pruning, or interpretation
 is invalid decision provenance and requires `REVISE`.
 
+When a material choice among alternatives depends on empirical evidence, verify
+the decision claim, target conditions, evidence conditions, decision criterion,
+and every evidence-backed mismatch that could plausibly reverse the choice. Only
+evidence adequately linked to the claim may rank alternatives. An unresolved
+material gap must separate any required delivery choice from a scientific
+superiority claim and use the predeclared risk rule.
+
 Missing, invalid, or stale decision provenance requires `REVISE`.
 
 Verify that every material challenge and contradictory result propagated into
