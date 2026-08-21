@@ -86,15 +86,6 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     try {
       await api.sessions.restoreTraceCheckpoint(sessionId, value.checkpointId, value.stateToken);
       setPreview(null);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", {
-        detail: {
-          sessionId,
-          mode: "checkpoint",
-          checkpointId: value.checkpointId,
-          restoredAt: new Date().toISOString(),
-          files: value.files.map((file) => file.path),
-        },
-      }));
       await onRestored?.();
     } catch (reason) {
       setError(restoreErrorMessage(reason, t));
@@ -124,15 +115,6 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
     try {
       await api.sessions.rollbackTraceNode(sessionId, node.id, value.stateToken);
       setCausalPreview(null);
-      window.dispatchEvent(new CustomEvent("brainpilot:workspace-restored", {
-        detail: {
-          sessionId,
-          mode: "causal",
-          nodeId: node.id,
-          restoredAt: new Date().toISOString(),
-          files: value.files.map((file) => file.path),
-        },
-      }));
       await onRestored?.();
     } catch (reason) {
       setError(restoreErrorMessage(reason, t));

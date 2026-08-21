@@ -207,7 +207,7 @@ export function FileSidebar({
   width,
 }: FileSidebarProps) {
   const { currentSandbox } = useSandbox();
-  const { currentSession } = useSessions();
+  const { currentSession, messages } = useSessions();
   // The runtime always addresses a workspace by session id (workspaces/<sid>/),
   // never by container id — in both local and remote mode. A container can host
   // several sessions, and the file tree shows the *current session's* workspace.
@@ -239,6 +239,7 @@ export function FileSidebar({
   const [error, setError] = useState<string | null>(null);
   const [isPreviewMaximized, setIsPreviewMaximized] = useState(false);
   const [restoreNotice, setRestoreNotice] = useState<WorkspaceRestoreNotice | null>(null);
+  const handledRestoreRef = useRef<string | null>(null);
   // #305: replace boolean busy with progress UI state; null = idle.
   const [dataUploadState, setDataUploadState] = useState<DataUploadState | null>(null);
   const dataUploadAbortRef = useRef<AbortController | null>(null);
@@ -342,38 +343,49 @@ export function FileSidebar({
     [currentSandbox, sandboxId, t],
   );
 
-  useEffect(() => {
-    const onWorkspaceRestored = (event: Event) => {
-      const detail = (event as CustomEvent<Record<string, unknown>>).detail;
-      if (!detail || detail.sessionId !== currentSession?.id) return;
-      const files = Array.isArray(detail.files)
-        ? detail.files.filter((file): file is string => typeof file === "string")
-        : [];
-      const notice: WorkspaceRestoreNotice = {
-        restoredAt: typeof detail.restoredAt === "string" ? detail.restoredAt : new Date().toISOString(),
-        checkpointId: typeof detail.checkpointId === "string" ? detail.checkpointId : undefined,
-        files,
-      };
-      setRestoreNotice(notice);
-      if (!isOpen || currentSandbox?.status !== "running") return;
-      void loadDirectory(WORKSPACE_ROOT_PATH);
+  const latestWorkspaceRestore = useMemo(() => {
+    for (let index = messages.length - 1; index >= 0; index -= 1) {
+      const view = messages[index].systemMessage;
+      if (view?.code === "workspace_restored" && view.workspaceRestore) return view.workspaceRestore;
+    }
+    return null;
+  }, [messages]);
 
-      const relativePath = selectedPath ? workspaceRelativePath(selectedPath) : null;
-      if (!relativePath || !files.includes(relativePath) || !sandboxId || isDirty) return;
-      void api.sandbox.readFile(sandboxId, selectedPath!).then((loaded) => {
-        setSelectedContent(loaded);
-        setDraftContent(loaded.content);
-        setEditError(null);
-        setConflictContent(null);
-      }).catch(() => {
-        setSelectedContent(null);
-        setDraftContent("");
-        setEditError(t("files.preview.restoredMissing"));
-      });
+  useEffect(() => {
+    if (!latestWorkspaceRestore) return;
+    const restoreKey = latestWorkspaceRestore.changeId
+      ?? latestWorkspaceRestore.restoredAt
+      ?? latestWorkspaceRestore.checkpointId
+      ?? "workspace-restore";
+    if (handledRestoreRef.current === restoreKey) return;
+    handledRestoreRef.current = restoreKey;
+    const notice: WorkspaceRestoreNotice = {
+      restoredAt: latestWorkspaceRestore.restoredAt ?? new Date().toISOString(),
+      checkpointId: latestWorkspaceRestore.checkpointId,
+      files: latestWorkspaceRestore.files,
     };
-    window.addEventListener("brainpilot:workspace-restored", onWorkspaceRestored);
-    return () => window.removeEventListener("brainpilot:workspace-restored", onWorkspaceRestored);
-  }, [currentSandbox?.status, currentSession?.id, isDirty, isOpen, loadDirectory, sandboxId, selectedPath, t]);
+    setRestoreNotice(notice);
+    if (!isOpen || currentSandbox?.status !== "running") return;
+    void loadDirectory(WORKSPACE_ROOT_PATH);
+
+    const relativePath = selectedPath ? workspaceRelativePath(selectedPath) : null;
+    if (
+      !relativePath
+      || !latestWorkspaceRestore.files.includes(relativePath)
+      || !sandboxId
+      || isDirty
+    ) return;
+    void api.sandbox.readFile(sandboxId, selectedPath!).then((loaded) => {
+      setSelectedContent(loaded);
+      setDraftContent(loaded.content);
+      setEditError(null);
+      setConflictContent(null);
+    }).catch(() => {
+      setSelectedContent(null);
+      setDraftContent("");
+      setEditError(t("files.preview.restoredMissing"));
+    });
+  }, [currentSandbox?.status, isDirty, isOpen, latestWorkspaceRestore, loadDirectory, sandboxId, selectedPath, t]);
 
   useEffect(() => {
     if (isOpen && currentSandbox?.status === "running") {
