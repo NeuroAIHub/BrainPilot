@@ -38,6 +38,7 @@ export interface MonitorEventBatch {
 
 interface RunningMonitor {
   info: MonitorInfo;
+  notifyOnExit: boolean;
   child: ChildProcess;
   decoder: StringDecoder;
   stdoutBuffer: string;
@@ -82,6 +83,7 @@ export class MonitorManager {
     command: string;
     timeoutMs?: number;
     persistent?: boolean;
+    notifyOnExit?: boolean;
   }): MonitorInfo {
     const description = input.description.trim();
     const displayCommand = input.command.trim();
@@ -119,6 +121,7 @@ export class MonitorManager {
         timeoutMs,
         startedAt: new Date().toISOString(),
       },
+      notifyOnExit: input.notifyOnExit === true,
       child,
       decoder: new StringDecoder("utf8"),
       stdoutBuffer: "",
@@ -290,7 +293,41 @@ export class MonitorManager {
       signal,
     };
     this.opts.onState?.(publicInfo(running));
+    if (running.notifyOnExit) {
+      this.opts.onEvents({
+        monitorId: running.info.id,
+        ownerAgent: running.info.ownerAgent,
+        description: running.info.description,
+        timestamp: new Date().toISOString(),
+        lines: this.terminalEventLines(running),
+      });
+    }
     running.resolveTerminal();
+  }
+
+  private terminalEventLines(running: RunningMonitor): string[] {
+    const status = running.info.status;
+    const lines = [status === "completed"
+      ? "Background job completed successfully."
+      : `Background job ended with status: ${status}.`];
+    if (running.info.exitCode !== null && running.info.exitCode !== undefined) {
+      lines.push(`Exit code: ${running.info.exitCode}.`);
+    }
+    if (running.info.signal) lines.push(`Signal: ${running.info.signal}.`);
+    const stderr = running.stderrBuffer.trim();
+    if (stderr) {
+      const summary = stderr
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean)
+        .slice(-3)
+        .join(" | ")
+        .replaceAll(this.opts.cwd, "/workspace")
+        .replace(/((?:api[_-]?key|token|secret|password|credential|authorization|cookie)\s*[:=]\s*)\S+/gi, "$1[redacted]")
+        .slice(0, 1_000);
+      if (summary) lines.push(`Stderr summary: ${summary}`);
+    }
+    return lines;
   }
 
   private killProcess(running: RunningMonitor, signal: NodeJS.Signals): void {

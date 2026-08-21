@@ -89,6 +89,40 @@ describe("MonitorManager", () => {
     expect(batches).toEqual([]);
   });
 
+  it("emits one terminal event for a silent finite background job", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "engineer",
+      description: "silent background job",
+      command: nodeCommand("setTimeout(() => {}, 20)"),
+      timeoutMs: 2_000,
+      notifyOnExit: true,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.lines).toContain("Background job completed successfully.");
+  });
+
+  it("delivers bounded stderr diagnostics when a background job fails", async () => {
+    const { manager, batches } = await fixture();
+    manager.start({
+      ownerAgent: "engineer",
+      description: "failing background job",
+      command: nodeCommand("console.error('failure detail'); process.exit(7)"),
+      timeoutMs: 2_000,
+      notifyOnExit: true,
+    });
+    await waitFor(() => manager.list()[0]?.finishedAt !== undefined);
+
+    expect(batches).toHaveLength(1);
+    expect(batches[0]?.lines).toEqual(expect.arrayContaining([
+      "Background job ended with status: failed.",
+      "Exit code: 7.",
+      "Stderr summary: failure detail",
+    ]));
+  });
+
   it("times out a bounded monitor and can stop a persistent monitor", async () => {
     const first = await fixture();
     first.manager.start({
