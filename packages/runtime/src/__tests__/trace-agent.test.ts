@@ -31,7 +31,11 @@ interface Script {
   onPrompt?: (
     text: string,
     turn: number,
-  ) => { tool: string; args: Record<string, unknown> } | undefined;
+  ) =>
+    | { tool: string; args: Record<string, unknown> }
+    | undefined
+    | Promise<{ tool: string; args: Record<string, unknown> } | undefined>;
+  onAbort?: () => void | Promise<void>;
 }
 
 function scriptedFactory(scripts: Record<string, Script>): AgentSessionFactory {
@@ -63,7 +67,7 @@ function scriptedFactory(scripts: Record<string, Script>): AgentSessionFactory {
           type: "message_end",
           message: { role: "assistant", content: [{ type: "text", text: `ok ${agentName}` }] },
         });
-        const call = scripts[agentName]?.onPrompt?.(text, turn);
+        const call = await scripts[agentName]?.onPrompt?.(text, turn);
         if (call) {
           const tool = toolMap.get(call.tool);
           const toolCallId = `tc_${call.tool}_${turn}`;
@@ -83,7 +87,9 @@ function scriptedFactory(scripts: Record<string, Script>): AgentSessionFactory {
         emit({ type: "turn_end" });
         emit({ type: "agent_end", messages: [], willRetry: false });
       },
-      async abort() {},
+      async abort() {
+        await scripts[agentName]?.onAbort?.();
+      },
       dispose() {},
     };
     return session;
@@ -99,6 +105,252 @@ async function waitFor(pred: () => boolean, timeoutMs = 2000): Promise<void> {
 }
 
 describe("Trace Agent — record_trace dispatches to a spawned trace agent", () => {
+  it("returns authoritative accepted acknowledgement with one provider slot", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "accepted milestone" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: (text) => text.includes("[Trace Event]")
+          ? {
+              tool: "create_trace_node",
+              args: {
+                title: "Accepted milestone",
+                description: "A durable milestone accepted by Trace.",
+                episode: "Acceptance",
+                confidence: "medium",
+                confidence_reason: "The source record is bound by the Host.",
+              },
+            }
+          : undefined,
+      },
+    });
+    const manager = new SessionManager({ persist: false, agentFactory: factory, maxConcurrentAgents: 1 });
+    const session = await manager.createSession();
+    const results: string[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+    });
+
+    await manager.sendMessage(session.id, "record accepted work");
+    await waitFor(() => results.some((result) => result.includes('"status":"accepted"')));
+    expect(results.join("\n")).toContain('"nodeId"');
+  });
+
+  it("returns rejected and surfaces quiet guidance with one provider slot", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "routine process noise" } }
+          : undefined,
+      },
+      trace: { onPrompt: () => undefined },
+    });
+    const manager = new SessionManager({ persist: false, agentFactory: factory, maxConcurrentAgents: 1 });
+    const session = await manager.createSession();
+    const results: string[] = [];
+    const notices: string[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+      if (event.type === "system_message" && "message" in event) notices.push(String(event.message));
+    });
+
+    await manager.sendMessage(session.id, "record noise");
+    await waitFor(() => results.some((result) => result.includes('"status":"rejected"')));
+    expect(notices.join("\n")).toContain("did not add a node");
+  });
+
+  it("reports Trace curation validation failure without misclassifying process noise", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "milestone with an invalid curation action" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: (text) => text.includes("[Trace Event]")
+          ? {
+              tool: "create_trace_node",
+              args: {
+                title: "",
+                description: "The Trace Agent attempted to persist this milestone.",
+                episode: "Validation",
+                confidence: "medium",
+                confidence_reason: "The host-bound record is present.",
+              },
+            }
+          : undefined,
+      },
+    });
+    const manager = new SessionManager({ persist: false, agentFactory: factory });
+    const session = await manager.createSession();
+    const results: string[] = [];
+    const notices: string[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+      if (event.type === "system_message" && "code" in event && event.code === "trace_submission_rejected") {
+        notices.push("message" in event ? String(event.message) : "");
+      }
+    });
+
+    await manager.sendMessage(session.id, "record work whose Trace mutation fails validation");
+    await waitFor(() => results.some((result) => result.includes('"status":"rejected"')));
+    const rejected = results.find((result) => result.includes('"status":"rejected"'))!;
+    await waitFor(() => notices.length === 1);
+    expect(rejected).toContain("curation action failed validation or execution");
+    expect(rejected).not.toContain("not considered a durable research milestone");
+    expect(notices[0]).toContain("curation action failed validation or execution");
+  });
+
+  it("converges a timed-out submitted result to late accepted", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "late accepted milestone" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: async (text) => {
+          if (!text.includes("[Trace Event]")) return undefined;
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          return {
+            tool: "create_trace_node",
+            args: {
+              title: "Late accepted milestone",
+              description: "Trace accepted this milestone after the synchronous acknowledgement deadline.",
+              episode: "Late acceptance",
+              confidence: "medium",
+              confidence_reason: "The host-bound record is present.",
+            },
+          };
+        },
+      },
+    });
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: factory,
+      maxConcurrentAgents: 1,
+      traceAckTimeoutMs: 5,
+    });
+    const results: string[] = [];
+    const terminal: AgUiEvent[] = [];
+    const session = await manager.createSession();
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+      if (event.type === "system_message" && "code" in event && event.code === "trace_submission_accepted") {
+        terminal.push(event);
+      }
+    });
+
+    await manager.sendMessage(session.id, "record work that Trace accepts late");
+    await waitFor(() => results.some((result) => result.includes('"status":"submitted"')));
+    const submitted = JSON.parse(results.find((result) => result.includes('"status":"submitted"'))!) as {
+      submissionId: string;
+    };
+    await waitFor(() => terminal.length === 1);
+    expect(terminal[0]).toMatchObject({
+      id: `trace-result:${submitted.submissionId}`,
+      code: "trace_submission_accepted",
+    });
+    expect("details" in terminal[0]! ? terminal[0].details : "").toContain(submitted.submissionId);
+    expect("details" in terminal[0]! ? terminal[0].details : "").toContain("node_");
+  });
+
+  it("converges a timed-out submitted result to late rejected", async () => {
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "late process noise" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: async () => {
+          await new Promise((resolve) => setTimeout(resolve, 40));
+          return undefined;
+        },
+      },
+    });
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: factory,
+      maxConcurrentAgents: 1,
+      traceAckTimeoutMs: 5,
+    });
+    const session = await manager.createSession();
+    const results: string[] = [];
+    const terminal: AgUiEvent[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "TOOL_CALL_RESULT" && "content" in event) results.push(String(event.content));
+      if (event.type === "system_message" && "code" in event && event.code === "trace_submission_rejected") {
+        terminal.push(event);
+      }
+    });
+
+    await manager.sendMessage(session.id, "record noise that Trace rejects late");
+    await waitFor(() => results.some((result) => result.includes('"status":"submitted"')));
+    const submitted = JSON.parse(results.find((result) => result.includes('"status":"submitted"'))!) as {
+      submissionId: string;
+    };
+    await waitFor(() => terminal.length === 1);
+    expect(terminal[0]).toMatchObject({
+      id: `trace-result:${submitted.submissionId}`,
+      code: "trace_submission_rejected",
+    });
+    expect("details" in terminal[0]! ? terminal[0].details : "").toContain(submitted.submissionId);
+    expect("message" in terminal[0]! ? terminal[0].message : "").toContain("did not add a node");
+  });
+
+  it("releases a record_trace waiter immediately on Stop and later converges", async () => {
+    let traceStarted = false;
+    let unblockTrace!: () => void;
+    const traceGate = new Promise<void>((resolve) => { unblockTrace = resolve; });
+    const factory = scriptedFactory({
+      principal: {
+        onPrompt: (_text, turn) => turn === 1
+          ? { tool: "record_trace", args: { description: "milestone interrupted during Trace review" } }
+          : undefined,
+      },
+      trace: {
+        onPrompt: async () => {
+          traceStarted = true;
+          await traceGate;
+          return undefined;
+        },
+        onAbort: () => unblockTrace(),
+      },
+    });
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: factory,
+      traceAckTimeoutMs: 300,
+    });
+    const session = await manager.createSession();
+    const terminal: AgUiEvent[] = [];
+    manager.subscribe(session.id, (event) => {
+      if (event.type === "system_message" && "code" in event && event.code === "trace_submission_rejected") {
+        terminal.push(event);
+      }
+    });
+
+    await manager.sendMessage(session.id, "record work then stop");
+    await waitFor(() => traceStarted);
+    const startedAt = Date.now();
+    expect(await manager.interrupt(session.id)).toBe(true);
+    expect(Date.now() - startedAt).toBeLessThan(150);
+
+    // The whole-session Stop paused but did not delete the durable Trace
+    // notification. A later user turn resumes delivery and publishes the
+    // terminal update for the same submission.
+    await manager.sendMessage(session.id, "resume delivery");
+    await waitFor(() => terminal.length === 1);
+    expect(terminal[0]).toMatchObject({
+      code: "trace_submission_rejected",
+    });
+    expect("id" in terminal[0]! ? terminal[0].id : "").toMatch(/^trace-result:task_event_/);
+  });
+
   it("ensures a trace agent appears in listAgents after record_trace", async () => {
     const factory = scriptedFactory({
       principal: {
@@ -220,9 +472,10 @@ describe("Trace Agent — record_trace dispatches to a spawned trace agent", () 
 
     await m.sendMessage(s.id, "go");
     await waitFor(() => m.getTrace(s.id)!.nodes.some((node) => node.title === "a decision"));
-    // After the trace agent has produced a node, give the manager a tick to
-    // emit the post-run session_state and then assert.
-    await new Promise((r) => setTimeout(r, 20));
+    // Authoritative acknowledgement keeps Principal open until Trace settles,
+    // so wait for Principal's own post-tool turn to finish before asserting
+    // that Trace has not left the derived run-active state stuck on.
+    await waitFor(() => m.getSessionState(s.id)?.runState.active === false);
     const state = m.getSessionState(s.id);
     expect(state).toBeDefined();
     expect(state!.runState.active).toBe(false);
