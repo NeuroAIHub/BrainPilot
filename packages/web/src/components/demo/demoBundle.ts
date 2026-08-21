@@ -159,6 +159,21 @@ export function normalizeDemoReplayNodes(
   });
 }
 
+/** Clean file entries produced by older v1 exporters before replay or re-export. */
+function normalizeImportedDemoFiles(files: readonly DemoFile[]): DemoFile[] {
+  const seenCanonical = new Set<string>();
+  const retained: DemoFile[] = [];
+  for (const file of files) {
+    if (!isDemoFileArtifact(file)) continue;
+    const path = file.path.trim();
+    const canonical = toDemoFilePath(path);
+    if (seenCanonical.has(canonical)) continue;
+    seenCanonical.add(canonical);
+    retained.push(path === file.path ? file : { ...file, path });
+  }
+  return retained;
+}
+
 /** Chunked base64 encode of binary data (avoids call-stack overflow). */
 async function blobToBase64(blob: Blob): Promise<string> {
   const bytes = new Uint8Array(await blob.arrayBuffer());
@@ -395,5 +410,8 @@ export function parseDemoBundle(text: string): DemoBundle {
   if (!isDemoBundle(parsed)) {
     throw new Error("Not a valid live-demo bundle.");
   }
-  return parsed;
+  return {
+    ...parsed,
+    files: normalizeImportedDemoFiles(parsed.files),
+  };
 }
