@@ -1031,6 +1031,10 @@ button {
 
 .agent-card__header,
 .trace-detail__title,
+.trace-restore-banner .system-message {
+  margin: 0;
+}
+
 .trace-meta {
   display: flex;
   min-width: 0;
@@ -3129,6 +3133,34 @@ button {
   white-space: pre-wrap;
   overflow-wrap: break-word;
 }
+.system-message__actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+.system-message__actions button {
+  display: inline-flex;
+  min-height: 28px;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 28%, var(--color-border));
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  font-size: 12px;
+  cursor: pointer;
+}
+.system-message__actions button:hover:not(:disabled),
+.system-message__actions button:focus-visible {
+  border-color: var(--color-border-strong);
+  background: var(--color-hover);
+  outline: none;
+}
+.system-message__actions button:disabled {
+  cursor: default;
+  opacity: 0.5;
+}
 .system-message__details { font-size: 12px; }
 .system-message__details summary {
   cursor: pointer;
@@ -3172,6 +3204,17 @@ button {
 .system-message--fatal .system-message__icon,
 .system-message--fatal .system-message__label { color: var(--color-danger); }
 .system-message--emphasis .system-message__text { font-weight: 560; }
+
+.message-row__partial {
+  display: inline-flex;
+  align-items: center;
+  padding: 1px 6px;
+  border-radius: 999px;
+  background: var(--color-warning-soft);
+  color: var(--color-warning);
+  font-size: 10px;
+  font-weight: 600;
+}
 
 /* ── 修正6 — ask_user interaction card ────────────────────────────── */
 .ask-user {
@@ -3350,6 +3393,13 @@ button {
 .ask-user-composer__option.is-active {
   background: var(--color-surface);
   border-color: var(--color-accent);
+}
+.ask-user-composer__option:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+}
+.ask-user-composer__option:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  outline-offset: 1px;
 }
 .ask-user-composer__option--free { cursor: text; }
 .ask-user-composer__num {
@@ -5195,13 +5245,13 @@ button {
   right: var(--active-file-sidebar-width, var(--file-sidebar-width));
   bottom: 0;
   z-index: 22;
-  display: grid;
+  display: flex;
   width: min(
     var(--preview-panel-width, 560px),
     calc(100vw - var(--sidebar-width) - var(--active-file-sidebar-width, var(--file-sidebar-width)))
   );
   min-width: 360px;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
   border-left: 1px solid var(--color-border);
   border-right: 1px solid var(--color-border);
@@ -5264,6 +5314,7 @@ button {
 }
 
 .file-preview__download,
+.file-preview__use,
 .file-preview__mode,
 .file-preview__save {
   display: inline-flex;
@@ -5289,6 +5340,12 @@ button {
   color: var(--color-accent);
 }
 
+.file-preview__use {
+  border-color: color-mix(in srgb, var(--color-accent) 52%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface));
+  color: var(--color-accent);
+}
+
 .file-preview__actions {
   display: flex;
   align-items: center;
@@ -5296,12 +5353,15 @@ button {
 }
 
 .file-preview-panel .file-preview__header {
+  flex: 0 0 auto;
   border-bottom: 1px solid var(--color-border);
   padding: 14px;
 }
 
 .file-preview__download:hover,
 .file-preview__download:focus-visible,
+.file-preview__use:hover,
+.file-preview__use:focus-visible,
 .file-preview__mode:hover,
 .file-preview__mode:focus-visible,
 .file-preview__save:hover,
@@ -5320,6 +5380,7 @@ button {
 
 .file-preview__body {
   display: flex;
+  flex: 1 1 0;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
@@ -5382,8 +5443,21 @@ button {
   flex: 1 1 auto;
 }
 
+.file-preview__restored {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 7px;
+  border-bottom: 1px solid var(--color-border);
+  background: var(--color-success-soft);
+  color: var(--color-success);
+  padding: 8px 14px;
+  font-size: 12px;
+}
+
 .file-preview__meta {
   display: grid;
+  flex: 0 0 auto;
   gap: 6px;
   margin: 0;
   border-bottom: 1px solid var(--color-border);
@@ -6513,7 +6587,9 @@ button {
 
 /* #318 settings-mobile-start
    Narrow viewports: drop the fixed 190px side nav so the content pane is not
-   crushed to ~134px (390×844). Desktop two-column IA above 860px is unchanged. */
+   crushed to ~134px (390×844). Desktop two-column IA above 860px is unchanged.
+   #487: show every section as a compact grid instead of hiding the last tabs
+   beyond an unlabelled horizontal scroll area. */
 @media (max-width: 860px) {
   .settings-modal__panel {
     width: calc(100vw - 24px);
@@ -6528,23 +6604,27 @@ button {
   }
 
   .settings-tabs {
-    display: flex;
-    flex-direction: row;
-    flex-wrap: nowrap;
-    align-content: stretch;
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
     gap: 4px;
-    overflow-x: auto;
-    overscroll-behavior-x: contain;
+    overflow: visible;
     border-right: none;
     border-bottom: 1px solid var(--color-border);
     padding: 8px 10px;
-    -webkit-overflow-scrolling: touch;
-    scrollbar-width: thin;
   }
 
   .settings-tabs button {
-    flex: 0 0 auto;
+    width: 100%;
+    min-width: 0;
+    height: 42px;
+    justify-content: flex-start;
     white-space: nowrap;
+  }
+
+  .settings-tabs button span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 
   .settings-content {
@@ -6651,6 +6731,12 @@ button {
 
   .kb-inv__metrics {
     grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 520px) {
+  .settings-tabs {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 }
 /* #318 settings-mobile-end */
@@ -7259,6 +7345,44 @@ button {
   border-radius: 7px;
   padding: 9px;
   background: var(--surface-2);
+}
+
+.trace-checkpoint__conflicts {
+  display: grid;
+  gap: 6px;
+}
+
+.trace-checkpoint__conflicts p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.trace-checkpoint__conflicts ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-checkpoint__conflicts li {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-1);
+  padding: 6px 8px;
+}
+
+.trace-checkpoint__conflicts code {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.trace-checkpoint__conflicts small {
+  color: var(--text-muted);
+  font-size: 11px;
 }
 
 
@@ -10720,6 +10844,109 @@ button {
   .demo-right { border-bottom: 1px solid var(--color-border); }
   .demo-landing__cards { grid-template-columns: 1fr; }
 }
+
+/* #487 demo-mobile-start
+   The collapsed 64px navigation rail leaves 326px for Live Demo at a 390px
+   viewport. Remove the desktop card minimum/padding at that size so the
+   landing content remains inside its grid column instead of overflowing under
+   the rail. */
+@media (max-width: 600px) {
+  .demo-view {
+    width: 100%;
+    max-width: 100%;
+    min-height: 0;
+  }
+
+  .demo-landing {
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 18px;
+    width: 100%;
+    max-width: 100%;
+    overflow-x: hidden;
+    padding: 24px 16px 32px;
+  }
+
+  .demo-landing__header {
+    width: 100%;
+    max-width: none;
+  }
+
+  .demo-landing__header h1 {
+    font-size: 20px;
+    line-height: 1.3;
+    overflow-wrap: anywhere;
+  }
+
+  .demo-landing__header p {
+    overflow-wrap: anywhere;
+  }
+
+  .demo-landing__cards {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .demo-card {
+    min-width: 0;
+    padding: 16px;
+  }
+
+  .demo-card__head,
+  .demo-card__head h2,
+  .demo-card > p,
+  .demo-card__sessions,
+  .demo-session-row,
+  .demo-session-row span,
+  .demo-dropzone {
+    min-width: 0;
+    max-width: 100%;
+  }
+
+  .demo-card__head h2,
+  .demo-card > p,
+  .demo-dropzone__primary,
+  .demo-dropzone__hint {
+    overflow-wrap: anywhere;
+  }
+
+  .demo-session-row {
+    padding-inline: 10px;
+  }
+
+  .demo-dropzone {
+    padding: 22px 12px;
+  }
+
+  .demo-header {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 10px;
+    padding: 12px 14px;
+  }
+
+  .demo-header__title {
+    min-width: 0;
+  }
+
+  .demo-header__title h1,
+  .demo-header__meta {
+    overflow-wrap: anywhere;
+  }
+
+  .demo-header__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+
+  .demo-export,
+  .demo-reselect {
+    min-height: 40px;
+  }
+}
+/* #487 demo-mobile-end */
 
 /* Issue #278 — global message-filter list in the agent detail pane. Each row
    is a checkbox + label (with an optional count pill) and a small description

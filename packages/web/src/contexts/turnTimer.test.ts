@@ -1,5 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
+  initialSessionTurnTimerState,
+  sessionTurnTimerReducer,
   turnTimerReducer,
   initialTurnTimerState,
   type TurnTimerState,
@@ -11,6 +13,26 @@ function run(events: Parameters<typeof turnTimerReducer>[1][]): TurnTimerState {
 }
 
 describe("turnTimerReducer (#99 whole-turn timing)", () => {
+  it("keeps timer mutations scoped to their owning session", () => {
+    const sessionA = sessionTurnTimerReducer(initialSessionTurnTimerState, {
+      type: "switchSession",
+      sessionKey: "A",
+      hydrated: { turnId: "run-a", durationMs: 4_200, status: "completed" },
+    });
+    expect(sessionA.timer.lastTurnId).toBe("run-a");
+
+    const sessionB = sessionTurnTimerReducer(sessionA, {
+      type: "switchSession",
+      sessionKey: "B",
+    });
+    expect(sessionB.timer).toEqual(initialTurnTimerState);
+    expect(sessionTurnTimerReducer(sessionB, {
+      type: "timer",
+      sessionKey: "A",
+      event: { type: "hydrate", turnId: "stale-a", durationMs: 9_999, status: "completed" },
+    })).toEqual(sessionB);
+  });
+
   it("times a simple turn: user input → active true → active false → settle", () => {
     const s = run([
       { type: "userInput", atMs: 1000 },
@@ -81,6 +103,69 @@ describe("turnTimerReducer (#99 whole-turn timing)", () => {
     ]);
     expect(s.startedAt).toBe(1000);
     expect(s.running).toBe(true);
+  });
+
+  it("starts a new timer when a different run id arrives inside the settle window", () => {
+    let s = run([
+      { type: "userInput", atMs: 1_000, turnId: "run_old" },
+      { type: "active", value: true, atMs: 1_010 },
+      { type: "active", value: false, atMs: 14_500 },
+    ]);
+    expect(s.candidateEndAt).toBe(14_500);
+
+    s = turnTimerReducer(s, { type: "userInput", atMs: 14_600, turnId: "run_new" });
+    expect(s.currentTurnId).toBe("run_new");
+    expect(s.startedAt).toBe(14_600);
+    expect(s.candidateEndAt).toBeNull();
+
+    s = turnTimerReducer(s, { type: "active", value: false, atMs: 14_850 });
+    s = turnTimerReducer(s, { type: "settle" });
+    expect(s.lastTurnId).toBe("run_new");
+    expect(s.lastDurationMs).toBe(250);
+    expect(s.lastStatus).toBe("completed");
+  });
+
+  it("labels an interrupted turn separately and ignores a stale interrupt", () => {
+    let s = run([
+      { type: "userInput", atMs: 1_000, turnId: "run_1" },
+      { type: "active", value: true, atMs: 1_010 },
+      { type: "interrupt", atMs: 5_000, turnId: "run_1" },
+    ]);
+    expect(s.lastTurnId).toBe("run_1");
+    expect(s.lastDurationMs).toBe(4_000);
+    expect(s.lastStatus).toBe("interrupted");
+
+    s = turnTimerReducer(s, { type: "userInput", atMs: 6_000, turnId: "run_2" });
+    const unchanged = turnTimerReducer(s, { type: "interrupt", atMs: 6_100, turnId: "run_1" });
+    expect(unchanged).toEqual(s);
+  });
+
+  it("reconstructs an interrupted duration from the durable user turn after a remount", () => {
+    const s = turnTimerReducer(initialTurnTimerState, {
+      type: "interrupt",
+      turnId: "run-background",
+      startedAt: 1_000,
+      atMs: 28_250,
+    });
+    expect(s).toMatchObject({
+      running: false,
+      lastTurnId: "run-background",
+      lastDurationMs: 27_250,
+      lastStatus: "interrupted",
+    });
+  });
+
+  it("hydrates a settled run-to-duration record after reload", () => {
+    const s = run([{
+      type: "hydrate",
+      turnId: "run_saved",
+      durationMs: 3_200,
+      status: "completed",
+    }]);
+    expect(s.running).toBe(false);
+    expect(s.lastTurnId).toBe("run_saved");
+    expect(s.lastDurationMs).toBe(3_200);
+    expect(s.lastStatus).toBe("completed");
   });
 
   it("keeps lastDurationMs across a reset of the active turn but reset() clears all", () => {

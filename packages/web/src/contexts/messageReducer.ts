@@ -5,6 +5,11 @@ import {
   isAutoRetryStatus,
   systemMessageToChatMessage,
 } from "./newUiEvents";
+import {
+  hasDelegatedFailureSinceLastUser,
+  isDelegatedFailure,
+  markLatestPrincipalAnswerPartial,
+} from "./errorRecovery";
 
 /**
  * AG-UI event → message-list reducer, extracted from SessionContext so both the
@@ -215,16 +220,22 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
         return existing;
       }
       const role = event.role === "user" || event.role === "system" ? event.role : "assistant";
+      const partial =
+        role === "assistant"
+        && (agent ?? "principal") === "principal"
+        && hasDelegatedFailureSinceLastUser(existing);
       return [
         ...existing,
         {
           id,
+          runId: event.runId,
           role,
           content: "",
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent,
           streaming: true,
           kind: "text",
+          ...(partial ? { partial: true } : {}),
         },
       ];
     }
@@ -248,9 +259,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           withAppliedStreamKey(
             {
               id,
+              runId: event.runId,
               role: "assistant",
               content: delta,
-              createdAt: new Date().toISOString(),
+              createdAt: eventTimestamp(event),
               agent,
               streaming: true,
               kind: "text",
@@ -280,17 +292,30 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
     case "TEXT_MESSAGE_CHUNK": {
       // Atomic message — created and completed in one step.
       const id = event.messageId;
-      if (!id || existing.some((m) => m.id === id)) {
+      if (!id) {
         return existing;
+      }
+      if (existing.some((m) => m.id === id)) {
+        // The composer inserts an optimistic user row before the Runtime echoes
+        // the durable CHUNK with the same UUID. Merge authoritative run/time
+        // metadata into that row so turn timing can bind and persist correctly.
+        return existing.map((message) => message.id === id
+          ? {
+              ...message,
+              runId: message.runId ?? event.runId,
+              createdAt: eventTimestamp(event),
+            }
+          : message);
       }
       const role = event.role === "assistant" || event.role === "system" ? event.role : "user";
       return [
         ...existing,
         {
           id,
+          runId: event.runId,
           role,
           content: typeof event.delta === "string" ? event.delta : "",
-          createdAt: new Date().toISOString(),
+          createdAt: eventTimestamp(event),
           agent: role === "user" ? "user" : agent,
           streaming: false,
           kind: "text",
@@ -446,16 +471,64 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       const message = event.message ?? "Run error";
       // Run is over → clear transient retry UI and sweep dangling streams.
       const swept = sweepStreaming(clearAutoRetry(existing, event.agentName), event.agentName);
-      return [
-        ...swept,
-        {
-          id: generateUUID(),
-          role: "system",
-          content: String(message),
-          createdAt: new Date().toISOString(),
-          kind: "error",
+      // Delegated delivery attempts have their own RUN_ERROR lifecycle, but an
+      // outer loop may still retry them. SessionManager emits the actionable
+      // terminal system_message only when that recovery path is exhausted.
+      if (event.terminal === false) return swept;
+      const terminalAgent = event.agentName ?? "principal";
+      // MasAgent emits a rich system_message (raw provider detail folded) just
+      // before RUN_ERROR. Promote that existing row instead of appending a
+      // second raw red error, so the user gets exactly one recovery card.
+      let diagnosticIndex = -1;
+      let currentTurnStart = -1;
+      for (let index = swept.length - 1; index >= 0; index -= 1) {
+        if (swept[index]!.role === "user") {
+          currentTurnStart = index;
+          break;
+        }
+      }
+      for (let index = swept.length - 1; index > currentTurnStart; index -= 1) {
+        const candidate = swept[index]!;
+        if (
+          candidate.kind === "system_message"
+          && candidate.systemMessage
+          && (candidate.systemMessage.level === "error" || candidate.systemMessage.level === "fatal")
+          && (candidate.agent ?? "principal") === terminalAgent
+        ) {
+          diagnosticIndex = index;
+          break;
+        }
+      }
+      if (diagnosticIndex >= 0) {
+        const next = [...swept];
+        const diagnostic = next[diagnosticIndex]!;
+        next[diagnosticIndex] = {
+          ...diagnostic,
+          systemMessage: { ...diagnostic.systemMessage!, terminal: true },
+        };
+        return next;
+      }
+      const terminal: ChatMessage = {
+        id: typeof (event as Record<string, unknown>)._eventId === "string"
+          ? (event as Record<string, unknown>)._eventId as string
+          : generateUUID(),
+        role: "system",
+        content: String(message),
+        createdAt: new Date().toISOString(),
+        agent: terminalAgent,
+        streaming: false,
+        kind: "system_message",
+        systemMessage: {
+          level: "error",
+          message: String(message),
+          details: event.code ? `Code: ${event.code}` : undefined,
+          agent: terminalAgent,
+          recoverable: true,
+          terminal: true,
         },
-      ];
+      };
+      const next = [...swept, terminal];
+      return isDelegatedFailure(terminal) ? markLatestPrincipalAnswerPartial(next) : next;
     }
 
     // 修正6 — system_message: 4-level styled bubble in the conversation stream.
@@ -466,11 +539,34 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       // the existing bubble in place instead of stacking a new one. Messages
       // without a stable id (random-id path) always append, as before.
       const e = event as Record<string, unknown>;
-      const hasStableId = typeof (e.id ?? e.messageId) === "string";
-      if (hasStableId && existing.some((m) => m.id === msg.id)) {
-        return existing.map((m) => (m.id === msg.id ? msg : m));
+      const hasStableId = typeof (e.id ?? e.messageId ?? e._eventId ?? e._event_id) === "string";
+      // Older persisted terminal errors predate stable ids. History hydration
+      // and SSE replay can still deliver the same row twice; coalesce it by the
+      // terminal semantic identity rather than showing duplicate recovery UI.
+      if (msg.systemMessage?.terminal) {
+        let currentTurnStart = -1;
+        for (let index = existing.length - 1; index >= 0; index -= 1) {
+          if (existing[index]!.role === "user") {
+            currentTurnStart = index;
+            break;
+          }
+        }
+        const duplicateIndex = existing.findIndex((candidate, index) =>
+          index > currentTurnStart
+          && candidate.systemMessage?.terminal
+          && (candidate.agent ?? "principal") === (msg.agent ?? "principal")
+          && candidate.systemMessage.message === msg.systemMessage!.message,
+        );
+        if (duplicateIndex >= 0) {
+          return existing.map((candidate, index) => index === duplicateIndex
+            ? { ...msg, id: candidate.id }
+            : candidate);
+        }
       }
-      return [...existing, msg];
+      const next = hasStableId && existing.some((m) => m.id === msg.id)
+        ? existing.map((m) => (m.id === msg.id ? msg : m))
+        : [...existing, msg];
+      return isDelegatedFailure(msg) ? markLatestPrincipalAnswerPartial(next) : next;
     }
 
     // 修正6 — user_input_request (ask_user): interactive card. Keyed by

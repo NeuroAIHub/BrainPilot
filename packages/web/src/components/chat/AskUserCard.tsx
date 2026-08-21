@@ -85,7 +85,9 @@ export function AskUserCard({ view }: AskUserCardProps) {
         </ul>
       ) : null}
 
-      <p className="ask-user__pending">{t("chat.ask.pending")}</p>
+      <p className="ask-user__pending">
+        {t(view.allowFreeText === false ? "chat.ask.pending.optionsOnly" : "chat.ask.pending.withFreeText")}
+      </p>
     </div>
   );
 }
