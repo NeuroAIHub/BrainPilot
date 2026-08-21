@@ -22,6 +22,10 @@ import {
 /** Default debounce for the terminal active=false transition. */
 export const DEFAULT_SETTLE_MS = 900;
 
+export function isHistoricalTurnSignal(atMs: number, mountedAtMs: number, slopMs = 1_000): boolean {
+  return atMs < mountedAtMs - slopMs;
+}
+
 export interface TurnTiming {
   running: boolean;
   /** Live elapsed while running; the settled duration once finished; null if none. */
@@ -110,6 +114,11 @@ export function useTurnTimer(options: UseTurnTimerOptions): TurnTiming {
   // Feed authoritative active transitions into the reducer.
   useEffect(() => {
     if (!runActive) return;
+    // Session history replays old session_state frames during hydration. They
+    // describe prior runs and must not restart/overwrite the persisted latest
+    // timing record. Live signals (including a fresh prompt immediately after
+    // mount) carry a timestamp at or after this hook's session mount boundary.
+    if (isHistoricalTurnSignal(runActive.atMs, mountedAtRef.current)) return;
     dispatch({ type: "active", value: runActive.active, atMs: runActive.atMs });
   }, [runActive]);
 
