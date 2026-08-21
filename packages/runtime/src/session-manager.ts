@@ -129,6 +129,20 @@ interface Deferred<T> {
   reject: (reason: Error) => void;
 }
 
+interface ProviderLease {
+  sessionId: string;
+  childLane: ProviderSemaphore;
+}
+
+interface TraceSubmissionState {
+  deferred: Deferred<TraceDispatchResult>;
+  parentLease?: ProviderLease;
+  parentWaiting: boolean;
+  record?: TraceNodeRecord;
+  reportedSubmitted: boolean;
+  timer?: ReturnType<typeof setTimeout>;
+}
+
 type UserInputPhase = "queued" | "activating" | "active" | "finishing";
 
 interface UserInputEntry {
@@ -324,6 +338,8 @@ interface SessionEntry {
   workspaceOperationActive: boolean;
   /** Host-bound source record while Trace processes one durable event. */
   currentTraceRecord?: TraceNodeRecord;
+  /** In-flight record_trace acknowledgements keyed by durable notification id. */
+  traceSubmissions: Map<string, TraceSubmissionState>;
   agents: Map<string, MasAgent>;
   /**
    * #97 error path: per-agent count of CONSECUTIVE failed delivery runs. Bumped
@@ -375,6 +391,8 @@ export interface SessionManagerOptions {
   agentFactory?: AgentSessionFactory;
   /** Persist events.jsonl / tasks.json / trace.json (default true). */
   persist?: boolean;
+  /** Test override for the record_trace acknowledgement deadline (default 60s). */
+  traceAckTimeoutMs?: number;
   /** Override the external MCP bridge (default: real stdio bridge). Tests inject a fake. */
   mcpBridge?: McpBridge;
   /**
@@ -530,6 +548,7 @@ export class SessionManager {
   private readonly agentFactory: AgentSessionFactory;
   private readonly persist: boolean;
   private readonly userInputTimeoutMs: number;
+  private readonly traceAckTimeoutMs: number;
   private lastActivityAt = 0;
 
   // Active task-event delivery. A loop serially processes one target agent.
@@ -575,7 +594,7 @@ export class SessionManager {
   // (intended range ~2–6 for shared/rate-limited gateways).
   private readonly maxConcurrentAgents: number;
   private readonly providerSlots = new Map<string, ProviderSemaphore>();
-  private readonly providerLease = new AsyncLocalStorage<{ sessionId: string; childLane: ProviderSemaphore }>();
+  private readonly providerLease = new AsyncLocalStorage<ProviderLease>();
 
   // #256: max upload size in bytes (base64 + raw-stream paths). Configurable
   // via BP_UPLOAD_MAX_BYTES / opts; default 1 GiB.
@@ -607,6 +626,7 @@ export class SessionManager {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
+    this.traceAckTimeoutMs = Math.max(1, Math.trunc(opts.traceAckTimeoutMs ?? TRACE_ACK_TIMEOUT_MS));
     this.userInputTimeoutMs =
       typeof opts.userInputTimeoutMs === "number"
         && Number.isFinite(opts.userInputTimeoutMs)
@@ -1629,6 +1649,7 @@ export class SessionManager {
       checkpoints,
       workspaceOperationActive: false,
       currentTraceRecord: undefined,
+      traceSubmissions: new Map(),
       agents: new Map(),
       deliveryErrors: new Map(),
       runActive: false,
@@ -2553,9 +2574,11 @@ export class SessionManager {
         }
         return task;
       },
-      dispatchTrace: async (content) => ({
-        submissionId: (await entry.taskLedger.enqueueTrace(name, content)).id,
-      }),
+      dispatchTrace: async (content) => {
+        const notification = await entry.taskLedger.enqueueTrace(name, content);
+        this.registerTraceSubmission(entry, notification.id, this.providerLease.getStore());
+        return { submissionId: notification.id };
+      },
       awaitTraceResult: (submissionId, record) =>
         this.awaitTraceResult(entry, submissionId, record),
       ensureAgent: async (target) => {
@@ -2969,36 +2992,99 @@ export class SessionManager {
     }));
   }
 
+  private registerTraceSubmission(
+    entry: SessionEntry,
+    submissionId: string,
+    parentLease?: ProviderLease,
+  ): TraceSubmissionState {
+    const existing = entry.traceSubmissions.get(submissionId);
+    if (existing) {
+      if (parentLease?.sessionId === entry.id) existing.parentLease = parentLease;
+      return existing;
+    }
+    const state: TraceSubmissionState = {
+      deferred: makeDeferred<TraceDispatchResult>(),
+      ...(parentLease?.sessionId === entry.id ? { parentLease } : {}),
+      parentWaiting: false,
+      reportedSubmitted: false,
+    };
+    entry.traceSubmissions.set(submissionId, state);
+    return state;
+  }
+
+  private emitTraceSubmissionResult(
+    entry: SessionEntry,
+    result: TraceDispatchResult & { status: "accepted" | "rejected" },
+  ): void {
+    const accepted = result.status === "accepted";
+    const message = accepted
+      ? "Trace accepted the submitted research milestone and added it to the graph."
+      : "Trace reviewed this event and did not add a node because it was not considered a durable research milestone.";
+    entry.bus.emit(ev.systemMessage(entry.id, "info", message, {
+      agent: "trace",
+      id: `trace-result:${result.submissionId}`,
+      code: accepted ? "trace_submission_accepted" : "trace_submission_rejected",
+      details: accepted
+        ? `Submission ${result.submissionId}; node ${result.nodeId}.`
+        : `Submission ${result.submissionId}.`,
+    }));
+  }
+
+  private completeTraceSubmission(
+    entry: SessionEntry,
+    result: TraceDispatchResult & { status: "accepted" | "rejected" },
+  ): void {
+    const state = entry.traceSubmissions.get(result.submissionId);
+    // Rejections are always surfaced quietly. Accepted results only need a
+    // separate Chat update after the tool already returned submitted, or when
+    // a durable notification is recovered after a process restart.
+    if (result.status === "rejected" || state?.reportedSubmitted || !state) {
+      this.emitTraceSubmissionResult(entry, result);
+    }
+    if (!state) return;
+    if (state.timer) clearTimeout(state.timer);
+    state.parentWaiting = false;
+    state.deferred.resolve(result);
+    entry.traceSubmissions.delete(result.submissionId);
+  }
+
+  private runTraceDeliveryWithProviderCapacity<T>(
+    entry: SessionEntry,
+    submissionId: string,
+    fn: () => Promise<T>,
+  ): Promise<T> {
+    const state = entry.traceSubmissions.get(submissionId);
+    const parentLease = state?.parentWaiting ? state.parentLease : undefined;
+    if (parentLease?.sessionId === entry.id) {
+      return this.providerLease.run(
+        parentLease,
+        () => this.withProviderSlot(entry.id, fn, true),
+      );
+    }
+    return this.withProviderSlot(entry.id, fn);
+  }
+
   private async awaitTraceResult(
     entry: SessionEntry,
     submissionId: string,
     record: TraceNodeRecord,
   ): Promise<TraceDispatchResult> {
-    const deadline = Date.now() + TRACE_ACK_TIMEOUT_MS;
-    for (;;) {
-      const accepted = this.traceNodeForRecord(entry, record);
-      if (accepted) {
-        return { status: "accepted", submissionId, nodeId: accepted.id };
-      }
-      const traceBusy = entry.agents.get("trace")?.isStreaming === true
-        || this.deliveryLoops.has(`${entry.id}:trace`);
-      if (!entry.taskLedger.hasNotification(submissionId) && !traceBusy) break;
-      if (Date.now() >= deadline) {
-        return {
-          status: "submitted",
-          submissionId,
-          reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
-        };
-      }
-      await new Promise((resolve) => setTimeout(resolve, 20));
-    }
-
-    const reason = "Trace reviewed this event and did not add a node because it was not considered a durable research milestone.";
-    entry.bus.emit(ev.systemMessage(entry.id, "info", reason, {
-      agent: "trace",
-      id: `trace-rejected:${submissionId}`,
-    }));
-    return { status: "rejected", submissionId, reason };
+    const state = this.registerTraceSubmission(entry, submissionId);
+    state.record = record;
+    state.parentWaiting = true;
+    const submitted: TraceDispatchResult = {
+      status: "submitted",
+      submissionId,
+      reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
+    };
+    const timeout = new Promise<TraceDispatchResult>((resolve) => {
+      state.timer = setTimeout(() => {
+        state.reportedSubmitted = true;
+        state.parentWaiting = false;
+        resolve(submitted);
+      }, this.traceAckTimeoutMs);
+    });
+    return Promise.race([state.deferred.promise, timeout]);
   }
 
   /**
@@ -3048,8 +3134,17 @@ export class SessionManager {
           await agent.followUpAndWait(deliveryInput, { terminalErrors: false });
           ran = true;
         } else {
-          // #167: cap new provider runs across experts in this session.
-          ran = await this.withProviderSlot(sessionId, async () => {
+          // #167: cap new provider runs across experts in this session. A
+          // record_trace delivery may borrow the provider lease held by the
+          // caller that is synchronously waiting for this exact notification.
+          const runWithCapacity = name === "trace" && notifications[0]
+            ? (fn: () => Promise<boolean>) => this.runTraceDeliveryWithProviderCapacity(
+                entry,
+                notifications[0]!.id,
+                fn,
+              )
+            : (fn: () => Promise<boolean>) => this.withProviderSlot(sessionId, fn);
+          ran = await runWithCapacity(async () => {
             // Stop may have paused delivery while this run waited for a provider
             // semaphore slot. Do not start a new model call after Stop completed.
             const current = this.sessions.get(sessionId);
@@ -3122,6 +3217,24 @@ export class SessionManager {
       );
       if (!acknowledged) return;
       entry.deliveryErrors.delete(name); // clean run → reset the streak
+      if (name === "trace" && notifications[0]) {
+        const submissionId = notifications[0].id;
+        const sourceRecord = traceRecord ?? entry.traceSubmissions.get(submissionId)?.record;
+        const accepted = sourceRecord ? this.traceNodeForRecord(entry, sourceRecord) : undefined;
+        if (accepted) {
+          this.completeTraceSubmission(entry, {
+            status: "accepted",
+            submissionId,
+            nodeId: accepted.id,
+          });
+        } else {
+          this.completeTraceSubmission(entry, {
+            status: "rejected",
+            submissionId,
+            reason: "Trace reviewed this event and did not add a node because it was not considered a durable research milestone.",
+          });
+        }
+      }
     }
   }
 

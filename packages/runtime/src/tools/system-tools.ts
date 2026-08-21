@@ -582,12 +582,13 @@ export function createRecordTraceTool(deps: ToolDeps): SystemTool {
       await deps.ensureAgent("trace");
       try {
         const submission = await deps.dispatchTrace(envelope);
-        // Fire the target only after the durable queue write returns. The
-        // acknowledgement below waits for this exact notification rather than
-        // inferring success from the Trace Agent's transient running state.
+        // Register the acknowledgement before firing the delivery loop so a
+        // very fast Trace turn cannot settle before the caller starts waiting.
+        const pendingResult = deps.awaitTraceResult?.(submission.submissionId, record);
+        // Fire the target only after the durable queue write returns.
         deps.wakeAgent("trace");
-        const result = deps.awaitTraceResult
-          ? await deps.awaitTraceResult(submission.submissionId, record)
+        const result = pendingResult
+          ? await pendingResult
           : {
               status: "submitted" as const,
               submissionId: submission.submissionId,
