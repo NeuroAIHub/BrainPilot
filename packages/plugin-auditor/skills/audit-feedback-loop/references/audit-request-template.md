@@ -38,8 +38,10 @@ Target type: <expert-result | pi-draft | synthesis>
 - Representative real-data validation: <paths, or exact reason unavailable>
 - Validation run and code/config revision: <run metadata and revision identifier>
 - Baseline comparison: <path>
-- Latest corrected candidate comparison: <path and result revisions>
-- Experimentalist selection decision: <path>
+- Validated fallback: <path or none; confirm it carried no preference>
+- Frozen comparison snapshot: <path, revision, included candidates, and exclusions>
+- Final decision record: <path and referenced snapshot revision>
+- Pre-freeze exclusions and resource allocations: <evidence paths>
 - Per-group training curves and selected epochs: <paths>
 - Prediction diagnostics (counts, class coverage, entropy, confusion matrices): <paths>
 - Artifact equivalence and usability checks: <paths>

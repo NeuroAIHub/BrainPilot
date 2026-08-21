@@ -42,12 +42,20 @@ protocol's own declaration cannot prescribe the winner.
 Separate eligibility guards from ranking evidence. Passing candidate-local
 guards establishes eligibility, not preference. Every claimed challenger must
 have a predeclared observable outcome that could change the decision; otherwise
-it is not evidence of comparative selection. Verify that the submitted candidate
-is the declared rule's output on the latest valid, comparable results and that
-every correction affecting eligibility, ranking, or comparability propagated to
-a new decision. If the evidence cannot distinguish candidates for the intended
-claim, mark empirical adequacy `unverified` and require the claim to be revised
-or narrowed. Do not choose a replacement method for the team.
+it is not evidence of comparative selection. Verify that the final method was
+first designated after the final comparable evidence snapshot was frozen and is
+the declared rule's output on that frozen final comparable evidence snapshot. A
+validated fallback protects delivery continuity but carries no scientific
+preference. Determine whether any earlier preference changed candidate coverage,
+evaluation effort, pruning, or interpretation. Verify that every correction
+affecting eligibility, ranking, or comparability invalidated the snapshot and
+decision before a new revision was frozen. If the evidence cannot distinguish
+candidates for the intended claim, mark empirical adequacy `unverified` and
+require the claim to be revised or narrowed. Do not choose a replacement method
+for the team.
+
+An early designation that altered coverage, effort, pruning, or interpretation
+is invalid decision provenance and requires `REVISE`.
 
 Missing, invalid, or stale decision provenance requires `REVISE`.
 
@@ -100,9 +108,9 @@ implementation was considered when the full tool or pipeline was unsuitable.
    which one result motivates the next decision; final validation of an older
    revision cannot validate a newer candidate.
 10. For a comparative decision, verify the decision record cites the declared
-    rule and current result revisions, accounts for every eligible finalist that
-    could change the decision, and yields the submitted candidate or an honest
-    inconclusive outcome.
+    rule and frozen snapshot revision, accounts for every eligible finalist and
+    valid exclusion, and yields the submitted candidate or an honest inconclusive
+    outcome.
 11. Bound every conclusion to the alternatives, evidence, conditions, and checks
     actually completed.
 
