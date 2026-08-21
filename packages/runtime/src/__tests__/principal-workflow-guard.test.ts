@@ -114,6 +114,7 @@ describe("principal workflow guard", () => {
     expect(pi.followUps[0]).toContain("If the request involves substantive scientific execution");
     expect(pi.followUps[0]).toContain("consider dispatching a qualifying Expert task");
     expect(pi.followUps[0]).not.toContain("Do not perform or finalize");
+    expect(pi.followUps[0]).toContain("<!--NO-RENDER-->");
 
     await pi.end!({ messages: [{ role: "assistant", stopReason: "stop" }] });
     expect(pi.followUps).toHaveLength(1);

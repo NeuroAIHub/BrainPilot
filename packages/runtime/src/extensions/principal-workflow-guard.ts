@@ -109,6 +109,8 @@ const DELEGATION_REMINDER =
   "[SYSTEM-MESSAGE:workflow] If the request involves substantive scientific execution, " +
   "consider dispatching a qualifying Expert task before finalizing it. Simple questions, " +
   "document-only work, and summaries of already-validated results do not need delegation. " +
+  "This is an internal follow-up: do not repeat or revise the user-facing answer. End with exactly " +
+  "<!--NO-RENDER-->workflow reminder handled<!--/NO-RENDER--> and no text outside that wrapper. " +
   "[/SYSTEM-MESSAGE]";
 
 /**
