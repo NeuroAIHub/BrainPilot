@@ -566,6 +566,11 @@ candidate eligible, not preferred. Every challenger must have a predeclared
 observable outcome that could change the decision; otherwise label it as a
 sensitivity analysis rather than a selection candidate.
 
+Before freezing finalists or a decision rule, map each decision-critical
+assumption to existing evidence. Route a bounded diagnostic for any unresolved
+assumption that available task data can discriminate; do not exclude or commit
+to a method while such evidence is missing.
+
 Every decision-relevant diagnostic must have an outcome that can change,
 invalidate, or narrow the decision. Evidence that materially falsifies a method
 assumption or estimand cannot be reduced to a warning-only flag; revise the

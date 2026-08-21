@@ -324,6 +324,9 @@ Stale local routing rule.`;
     expect(experimentalist).toContain("latest valid, comparable results");
     expect(experimentalist).toContain("invalidates the current decision");
     expect(experimentalist).toContain("do not default to a preferred candidate");
+    expect(experimentalist).toContain("map each decision-critical assumption to existing evidence");
+    expect(experimentalist).toContain("Route a bounded diagnostic for any unresolved assumption");
+    expect(experimentalist).toContain("do not exclude or commit to a method while such evidence is missing");
 
     expect(engineer).toContain("latest comparable candidate table");
     expect(engineer).toContain("mark the affected result superseded");
@@ -341,6 +344,8 @@ Stale local routing rule.`;
     expect(normalized).toContain("fixed-method work from comparative selection");
     expect(normalized).toContain("observable outcome that could change the decision");
     expect(normalized).toContain("latest valid, comparable results");
+    expect(normalized).toContain("map each decision-critical assumption to existing evidence");
+    expect(normalized).toContain("Route a bounded diagnostic for any unresolved assumption");
   });
 
   it("injects candidate-result freshness into old Engineer overrides exactly once", () => {
