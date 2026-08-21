@@ -32,7 +32,10 @@ services:
         HTTPS_PROXY: ${HTTPS_PROXY:-}
         NPM_REGISTRY: ${NPM_REGISTRY:-}
         APT_MIRROR: ${APT_MIRROR:-}
-        VITE_KB_SETTINGS_ENABLED: ${VITE_KB_SETTINGS_ENABLED:-1}
+        # The shared main process does not yet expose a per-user KB management
+        # API. Runtime retrieval remains available inside each user sandbox,
+        # but management actions stay hidden until that control plane exists.
+        VITE_KB_SETTINGS_ENABLED: 0
     image: brainpilot-main:latest
     ports:
       - "${BP_MAIN_PORT:-9001}:${BP_MAIN_PORT:-9001}"

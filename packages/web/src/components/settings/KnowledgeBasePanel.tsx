@@ -13,7 +13,8 @@
  *     stderr / stage / msg.
  */
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertTriangle, Check, Database, Info, Loader2, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
+import { AlertTriangle, Check, Database, FilePlus2, HardDriveDownload, Info, Loader2, Play, RefreshCw, Square, Wrench, X } from "lucide-react";
+import { runtimeConfig } from "../../config";
 import { useT } from "../../i18n/useT";
 import { api, type KbEnvironment, type KbInventory, type KbInventoryIssue } from "../../utils/api";
 import {
@@ -26,6 +27,16 @@ import {
   type KbOverallKind,
   type KbReadiness,
 } from "./kbReadiness";
+import {
+  deriveKbGuidedState,
+  kbHydrateActiveJob,
+  kbPdfUploadErrorKey,
+  kbPdfUploadRecovery as recoveryForKbPdfUpload,
+  kbSetupEventNeedsProbe,
+  type KbActiveJob,
+  type KbGuideStepState,
+  type KbPdfUploadRecovery,
+} from "./kbGuidedWorkflow";
 
 type Stage = "ocr" | "extract" | "chunk" | "vectorize";
 
@@ -40,12 +51,6 @@ interface BuildEvent {
 }
 
 const STAGES: Stage[] = ["ocr", "extract", "chunk", "vectorize"];
-const STAGE_LABELS: Record<Stage, string> = {
-  ocr: "OCR",
-  extract: "Metadata",
-  chunk: "Chunking",
-  vectorize: "Vectorize",
-};
 
 interface StageState {
   /**
@@ -527,6 +532,27 @@ function SetupProgressRow({
   );
 }
 
+function GuidedStepper({
+  steps,
+  t,
+}: {
+  steps: Record<"files" | "preparing" | "ready" | "error", KbGuideStepState>;
+  t: (key: string, vars?: Record<string, string | number>) => string;
+}) {
+  return (
+    <ol className="kb-guide__steps" aria-label={t("settings.kb.guide.stepsAria")}>
+      {(["files", "preparing", "ready", "error"] as const).map((step, index) => (
+        <li className={`kb-guide__step kb-guide__step--${steps[step]}`} key={step}>
+          <span className="kb-guide__step-icon" aria-hidden>
+            {steps[step] === "complete" ? <Check size={13} /> : index + 1}
+          </span>
+          <span>{t(`settings.kb.guide.step.${step}`)}</span>
+        </li>
+      ))}
+    </ol>
+  );
+}
+
 /**
  * OCR provider presets exposed in the UI dropdown. Kept in sync with the
  * Python-side ``OCR_PRESETS`` in ``KnowledgeBase/scripts/ocr_pdfs.py`` —
@@ -592,7 +618,7 @@ export function KnowledgeBasePanel() {
    *  UI can show the right spinner / disable the right buttons.
    *  "setup-full" covers the one-click orchestration that runs venv + model
    *  download back-to-back. */
-  const [activeJob, setActiveJob] = useState<"build" | "setup-env" | "setup-full" | null>(null);
+  const [activeJob, setActiveJob] = useState<KbActiveJob>(null);
   const [error, setError] = useState<string | null>(null);
   const [env, setEnv] = useState<KbEnvironment | null>(null);
   /** Live-updating "N seconds ago" clock — needs its own tick to advance
@@ -633,6 +659,13 @@ export function KnowledgeBasePanel() {
   const [ocrKeyEditing, setOcrKeyEditing] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
   const sseRef = useRef<EventSource | null>(null);
+  const pdfInputRef = useRef<HTMLInputElement | null>(null);
+  const technicalRef = useRef<HTMLDetailsElement | null>(null);
+  const [pdfUploadBusy, setPdfUploadBusy] = useState(false);
+  const [pdfUploadError, setPdfUploadError] = useState<string | null>(null);
+  const [pdfUploadRecovery, setPdfUploadRecovery] = useState<KbPdfUploadRecovery | null>(null);
+  const [lastFailedPdfs, setLastFailedPdfs] = useState<File[]>([]);
+  const [uploadedPdfNames, setUploadedPdfNames] = useState<string[]>([]);
   /**
    * Cursor for SSE de-dup. When we open the panel mid-build we call
    * ``replayStages`` on ``/kb/status.recentEvents`` FIRST, then
@@ -691,23 +724,11 @@ export function KnowledgeBasePanel() {
           replayStages(status.recentEvents);
           replaySetupProgress(status.recentEvents);
         }
-        if (status.active) {
-          // Guess which job is running from the most recent event with a
-          // known stage. setup-env and build share the same RUN slot, so
-          // we can't ask the server directly — but the last event's
-          // `stage` is reliable enough for the UI banner.
-          const recent = status.recentEvents ?? [];
-          const last = [...recent].reverse().find(
-            (ev) => ev.stage === "setup-env" || ev.stage === "build",
-          );
-          if (last?.stage === "setup-env") {
-            setEnvBusy(true);
-            setActiveJob("setup-env");
-          } else {
-            setActive(true);
-            setActiveJob("build");
-          }
-        }
+        const hydrated = kbHydrateActiveJob(status.active, status.recentEvents ?? []);
+        setActive(hydrated.active);
+        setActiveJob(hydrated.activeJob);
+        setEnvBusy(hydrated.envBusy);
+        setModelBusy(hydrated.modelBusy);
       } catch {
         /* status fetch is best-effort */
       }
@@ -902,6 +923,52 @@ export function KnowledgeBasePanel() {
     }
   }
 
+  async function uploadPdfs(files: readonly File[]) {
+    if (files.length === 0 || pdfUploadBusy) return;
+    const pdfs = files.filter((file) => file.name.toLowerCase().endsWith(".pdf"));
+    if (pdfs.length !== files.length) {
+      setPdfUploadError(t("settings.kb.guide.upload.onlyPdf"));
+      setLastFailedPdfs([]);
+      setPdfUploadRecovery("choose");
+      return;
+    }
+    setPdfUploadBusy(true);
+    setPdfUploadError(null);
+    setPdfUploadRecovery(null);
+    setLastFailedPdfs([]);
+    const completed: string[] = [];
+    let currentIndex = 0;
+    try {
+      for (; currentIndex < pdfs.length; currentIndex += 1) {
+        const file = pdfs[currentIndex]!;
+        const result = await api.kb.uploadPdf(file);
+        if (!result.ok) {
+          const recovery = recoveryForKbPdfUpload(result.code);
+          setUploadedPdfNames((current) => [...new Set([...current, ...completed])]);
+          setLastFailedPdfs(recovery === "retry" ? pdfs.slice(currentIndex) : []);
+          setPdfUploadRecovery(recovery);
+          setPdfUploadError(t(kbPdfUploadErrorKey(result.code)));
+          if (result.error) console.warn("kb.uploadPdf failed:", result.code, result.error);
+          await refreshInventory();
+          return;
+        }
+        completed.push(result.filename ?? file.name);
+      }
+      setUploadedPdfNames((current) => [...new Set([...current, ...completed])]);
+      await Promise.all([refreshInventory(), startProbe()]);
+    } catch (err) {
+      setUploadedPdfNames((current) => [...new Set([...current, ...completed])]);
+      setLastFailedPdfs(pdfs.slice(currentIndex));
+      setPdfUploadRecovery("retry");
+      setPdfUploadError(t("settings.kb.guide.upload.failed"));
+      console.warn("kb.uploadPdf failed:", err);
+      await refreshInventory();
+    } finally {
+      setPdfUploadBusy(false);
+      if (pdfInputRef.current) pdfInputRef.current.value = "";
+    }
+  }
+
   /** Force-refresh the deps+models probe on the backend, bypassing the 60s
    *  cache. Used by the "Re-check" button — always safe to click, and the
    *  only way to see the effect of e.g. a manual `pip install` without
@@ -964,6 +1031,7 @@ export function KnowledgeBasePanel() {
       setEnvProgress((prev) => deriveSetupState(prev, ev));
       if (ev.event === "done" || ev.event === "error") {
         setEnvBusy(false);
+        setActiveJob((current) => current === "setup-env" ? null : current);
         // Re-fetch environment so the banner flips from yellow to green
         // (or stays yellow with the right error).
         void refreshEnv();
@@ -974,6 +1042,7 @@ export function KnowledgeBasePanel() {
       if (ev.event === "info" && !modelBusy) setModelBusy(true);
       if (ev.event === "done" || ev.event === "error") {
         setModelBusy(false);
+        setActiveJob((current) => current === "setup-models" ? null : current);
       }
     }
     // The whole "setup-full" umbrella job clears activeJob only when both
@@ -981,7 +1050,10 @@ export function KnowledgeBasePanel() {
     // synthetic done/error event that we key off here.
     if (ev.stage === "setup-full" && (ev.event === "done" || ev.event === "error")) {
       setActiveJob(null);
+      setEnvBusy(false);
+      setModelBusy(false);
     }
+    if (kbSetupEventNeedsProbe(ev)) void startProbe();
   }
 
   function openSse() {
@@ -1142,7 +1214,7 @@ export function KnowledgeBasePanel() {
   async function startModelSetup() {
     setError(null);
     setModelBusy(true);
-    setActiveJob((cur) => cur ?? "setup-env");
+    setActiveJob((cur) => cur ?? "setup-models");
     setModelProgress({ percent: 0, msg: "", status: "running" });
     try {
       const r = await api.kb.setupModels({
@@ -1256,6 +1328,25 @@ export function KnowledgeBasePanel() {
     if (isAutoModel) setOcrModel(defaults.model);
   }
 
+  const readiness = deriveKbReadiness(inventory, env);
+  const pdfCount = Math.max(inventory?.pdfsOnDisk ?? 0, env?.pdfsPresent ?? 0);
+  const guidedBusy = active || envBusy || modelBusy || pdfUploadBusy;
+  const hasPipelineError =
+    Boolean(error || pdfUploadError)
+    || envProgress.status === "error"
+    || modelProgress.status === "error"
+    || STAGES.some((stage) => stages[stage].status === "error");
+  const guided = deriveKbGuidedState({
+    pdfCount,
+    envReady: readiness.envReady,
+    readyToQuery: readiness.readyToQuery,
+    busy: guidedBusy,
+    hasError: hasPipelineError,
+  });
+  const needsOcrPreset = !skip.ocr && !ocrPreset;
+  const needsOcrKey = !skip.ocr && !ocrApiKey.trim() && !ocrKeySaved;
+  const needsAdvancedBuildConfig = Boolean(formInvalid && !needsOcrPreset && !needsOcrKey);
+
   return (
     <section className="settings-section">
       <div className="settings-section__header">
@@ -1265,10 +1356,144 @@ export function KnowledgeBasePanel() {
             {t("settings.kb.title")}
           </h3>
           <p>
-            {t("settings.kb.desc")}
+            {t("settings.kb.guide.intro")}
           </p>
         </div>
       </div>
+
+      <div className="kb-guide" data-action={guided.action}>
+        <GuidedStepper steps={guided.steps} t={t} />
+
+        <div className="kb-guide__card kb-guide__card--files">
+          <div className="kb-guide__card-copy">
+            <strong>{t("settings.kb.guide.addTitle")}</strong>
+            <span>{t("settings.kb.guide.addHint")}</span>
+            {pdfCount > 0 ? <small>{t("settings.kb.guide.fileCount", { count: pdfCount })}</small> : null}
+          </div>
+          <input
+            ref={pdfInputRef}
+            type="file"
+            accept="application/pdf,.pdf"
+            multiple
+            hidden
+            onChange={(event) => void uploadPdfs(Array.from(event.target.files ?? []))}
+          />
+          <button
+            className="settings-button"
+            type="button"
+            disabled={guidedBusy}
+            onClick={() => pdfInputRef.current?.click()}
+          >
+            {pdfUploadBusy ? <Loader2 size={14} className="spin" aria-hidden /> : <FilePlus2 size={14} aria-hidden />}
+            {pdfUploadBusy ? t("settings.kb.guide.uploading") : t("settings.kb.guide.addButton")}
+          </button>
+        </div>
+
+        {uploadedPdfNames.length > 0 ? (
+          <p className="kb-guide__uploaded" role="status">
+            <Check size={13} aria-hidden />
+            {t("settings.kb.guide.uploaded", { names: uploadedPdfNames.join(", ") })}
+          </p>
+        ) : null}
+
+        {hasPipelineError ? (
+          <div className="kb-guide__error" role="alert">
+            <AlertTriangle size={15} aria-hidden />
+            <div>
+              <strong>{t("settings.kb.guide.errorTitle")}</strong>
+              <p>{pdfUploadError ?? t("settings.kb.guide.errorHint")}</p>
+            </div>
+            {pdfUploadRecovery === "choose" ? (
+              <button className="settings-button settings-button--ghost" type="button" onClick={() => pdfInputRef.current?.click()} disabled={pdfUploadBusy}>
+                <FilePlus2 size={13} aria-hidden />
+                {t("settings.kb.guide.chooseAnother")}
+              </button>
+            ) : lastFailedPdfs.length > 0 ? (
+              <button className="settings-button settings-button--ghost" type="button" onClick={() => void uploadPdfs(lastFailedPdfs)} disabled={pdfUploadBusy}>
+                <RefreshCw size={13} aria-hidden />
+                {t("settings.kb.guide.retryUpload")}
+              </button>
+            ) : null}
+          </div>
+        ) : null}
+
+        {guided.action === "setup" ? (
+          <div className="kb-guide__card kb-guide__card--prepare">
+            <HardDriveDownload size={20} aria-hidden />
+            <div className="kb-guide__card-copy">
+              <strong>{t("settings.kb.guide.setupTitle")}</strong>
+              <span>{t("settings.kb.guide.setupEstimate")}</span>
+            </div>
+            <button className="settings-button" type="button" onClick={() => void startFullSetup()} disabled={guidedBusy || activeJob !== null}>
+              {envBusy || modelBusy ? <Loader2 size={14} className="spin" aria-hidden /> : <Wrench size={14} aria-hidden />}
+              {envBusy || modelBusy ? t("settings.kb.guide.preparing") : t("settings.kb.guide.setupButton")}
+            </button>
+          </div>
+        ) : null}
+
+        {guided.action === "build" ? (
+          <div className="kb-guide__card kb-guide__card--prepare">
+            <div className="kb-guide__card-copy">
+              <strong>{t("settings.kb.guide.buildTitle")}</strong>
+              <span>{t("settings.kb.guide.buildHint")}</span>
+            </div>
+            {needsOcrPreset ? (
+              <label className="settings-field kb-guide__field">
+                <span>{t("settings.kb.ocrPreset.label")}</span>
+                <select value={ocrPreset} onChange={(event) => selectOcrPreset(event.target.value)} disabled={guidedBusy}>
+                  {OCR_PRESET_OPTIONS.map((option) => (
+                    <option key={option.id} value={option.id}>{t(option.labelKey)}</option>
+                  ))}
+                </select>
+              </label>
+            ) : null}
+            {needsOcrKey ? (
+              <label className="settings-field kb-guide__field">
+                <span>{t("settings.kb.ocrKey")}</span>
+                <input
+                  type="password"
+                  value={ocrApiKey}
+                  onChange={(event) => setOcrApiKey(event.target.value)}
+                  onBlur={(event) => { if (event.target.value.trim()) void saveOcrKey(event.target.value); }}
+                  placeholder="sk-..."
+                  autoComplete="off"
+                  disabled={guidedBusy}
+                />
+              </label>
+            ) : null}
+            {needsAdvancedBuildConfig ? (
+              <button className="settings-button settings-button--ghost" type="button" onClick={() => {
+                if (technicalRef.current) technicalRef.current.open = true;
+                technicalRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+              }}>
+                {t("settings.kb.guide.openAdvanced")}
+              </button>
+            ) : (
+              <button className="settings-button" type="button" onClick={() => void startBuild()} disabled={guidedBusy || Boolean(formInvalid)}>
+                {active ? <Loader2 size={14} className="spin" aria-hidden /> : <Play size={14} aria-hidden />}
+                {active ? t("settings.kb.guide.preparing") : t("settings.kb.guide.buildButton")}
+              </button>
+            )}
+          </div>
+        ) : null}
+
+        {guided.action === "ready" ? (
+          <div className="kb-guide__ready" role="status">
+            <Check size={18} aria-hidden />
+            <div>
+              <strong>{t("settings.kb.guide.readyTitle")}</strong>
+              <p>{t("settings.kb.guide.readyHint")}</p>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      <details className="kb-technical" ref={technicalRef}>
+        <summary>
+          <span>{t("settings.kb.guide.advancedTitle")}</span>
+          <small>{t("settings.kb.guide.advancedHint")}</small>
+        </summary>
+        <div className="kb-technical__body">
 
       {/* Overall readiness — separates "ledgers agree" from "ready to
           query" so an empty/unconfigured KB never looks green-usable. */}
@@ -1370,7 +1595,7 @@ export function KnowledgeBasePanel() {
             </ul>
           </div>
 
-          <dl className="kb-env__facts">
+          {runtimeConfig.localMode ? <dl className="kb-env__facts">
             <div>
               <dt>KB_ROOT</dt>
               <dd>{env.kbRoot}</dd>
@@ -1379,7 +1604,7 @@ export function KnowledgeBasePanel() {
               <dt>Python</dt>
               <dd>{env.python}{env.pythonIsVenv ? " · venv" : ""}</dd>
             </div>
-          </dl>
+          </dl> : null}
           {!env.venvExists ? (
             <div className="kb-env__action">
               <p className="kb-env__note">{t("settings.kb.env.venvMissing")}</p>
@@ -1417,14 +1642,14 @@ export function KnowledgeBasePanel() {
                 </button>
                 {envBusy || modelBusy ? <Loader2 size={14} className="spin" aria-hidden /> : null}
               </div>
-              <details className="kb-env__fallback">
+              {runtimeConfig.localMode ? <details className="kb-env__fallback">
                 <summary>{t("settings.kb.env.cliFallback")}</summary>
                 <pre className="kb-code">
                   {`bash ${env.kbRoot}/scripts/setup_env.sh
 ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
                 </pre>
                 <p className="kb-env__note">{t("settings.kb.env.venvHint")}</p>
-              </details>
+              </details> : null}
             </div>
           ) : (
             <div className="kb-env__action">
@@ -1665,7 +1890,7 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
                     setSkip((prev) => ({ ...prev, [s]: !e.target.checked }))
                   }
                 />
-                <span>{STAGE_LABELS[s]}</span>
+                <span>{t(`settings.kb.stage.${s}`)}</span>
               </label>
             ))}
           </div>
@@ -1735,7 +1960,7 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
                     : `${Math.round(st.percent)}%`;
             return (
               <div key={s} className={`kb-progress__row kb-progress__row--${st.status}`}>
-                <strong className="kb-progress__label">{STAGE_LABELS[s]}</strong>
+                <strong className="kb-progress__label">{t(`settings.kb.stage.${s}`)}</strong>
                 <div className="kb-progress__track" aria-hidden="true">
                   <span
                     className={`kb-progress__fill kb-progress__fill--${st.status}`}
@@ -1778,6 +2003,8 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
           ))}
         </div>
       </div>
+        </div>
+      </details>
     </section>
   );
 }

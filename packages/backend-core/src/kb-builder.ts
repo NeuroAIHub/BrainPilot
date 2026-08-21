@@ -94,10 +94,17 @@ const EVENT_BUFFER_CAP = 5_000; // last N events kept for the status panel
 const SLOTS: Slots = { build: null, envSetup: null, modelSetup: null };
 const BUS: EventBus = { events: [], listeners: new Set() };
 
-/** Back-compat re-export: some diagnostic code path may still consult a
- *  "primary" run. Prefer `slotByKey` in new code. */
+/** Return a running job, ignoring completed slots retained for diagnostics. */
 function anyActiveSlot(): JobSlot | null {
-  return SLOTS.build ?? SLOTS.envSetup ?? SLOTS.modelSetup;
+  return [SLOTS.build, SLOTS.envSetup, SLOTS.modelSetup]
+    .find((slot): slot is JobSlot => slot != null && slot.doneAt == null) ?? null;
+}
+
+/** Most recently started job, used only for terminal status diagnostics. */
+function latestSlot(): JobSlot | null {
+  return [SLOTS.build, SLOTS.envSetup, SLOTS.modelSetup]
+    .filter((slot): slot is JobSlot => slot != null)
+    .sort((a, b) => b.startedAt - a.startedAt)[0] ?? null;
 }
 
 /**
@@ -135,9 +142,9 @@ function pythonBin(kbRoot?: string): string {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-function defaultBuildScript(): string {
+function defaultBuildScript(kbRoot?: string): string {
   if (process.env.BP_KB_BUILD_SCRIPT) return process.env.BP_KB_BUILD_SCRIPT;
-  return join(findKbRoot(), "scripts", "build_kb.py");
+  return join(kbRoot ? resolve(kbRoot) : findKbRoot(), "scripts", "build_kb.py");
 }
 
 function buildArgv(opts: KbBuildOptions, script: string): string[] {
@@ -592,7 +599,7 @@ export function startKbBuild(opts: KbBuildOptions = {}): StartResult {
   if (SLOTS.build && SLOTS.build.doneAt == null) {
     return { ok: false, message: "a knowledge-base build is already running" };
   }
-  const script = defaultBuildScript();
+  const script = defaultBuildScript(opts.kbRoot);
   if (!existsSync(script)) {
     return {
       ok: false,
@@ -985,13 +992,13 @@ export function findKbRoot(): string {
   return join(homedir(), ".brainpilot", "KnowledgeBase");
 }
 
-export function getKbBuildStatus(): KbBuildStatus {
-  const environment = describeKbEnvironment();
+export function getKbBuildStatus(kbRoot?: string): KbBuildStatus {
+  const environment = describeKbEnvironment(kbRoot);
   // "Active" now means "any slot is running" — build, env-setup, or model-
   // download. The frontend already fans out on ev.stage for UI display, so
   // this rollup is just used for the "reopened the panel mid-run" banner.
   const active = anyActiveSlot();
-  const primary = SLOTS.build ?? SLOTS.envSetup ?? SLOTS.modelSetup;
+  const primary = active ?? latestSlot();
   if (!primary) {
     return {
       active: false,

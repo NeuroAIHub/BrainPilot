@@ -3,12 +3,13 @@
  * Exported via the package's `./server` entry. The orchestrator's runtime is
  * started lazily on the first request that needs it; graceful shutdown stops it.
  */
+import { join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { serve, type ServerType } from "@hono/node-server";
 import { createApp, type CreateAppOptions } from "./app.js";
 import { createOrchestrator } from "./create-orchestrator.js";
 import { bootstrapEnvProvider, migrateLegacySettings } from "./config.js";
-import type { Orchestrator, OrchestratorMode } from "./orchestrator.js";
+import { resolveOrchestratorMode, type Orchestrator, type OrchestratorMode } from "./orchestrator.js";
 
 export interface StartServerOptions extends Partial<CreateAppOptions> {
   /** Backend port. Default 9001 (§11A.5 决策 D). */
@@ -56,6 +57,9 @@ export interface RunningServer {
 export function buildServerOrchestrator(
   options: StartServerOptions = {},
 ): Orchestrator {
+  const dataDir = resolve(
+    options.dataDir ?? options.env?.BP_DATA_DIR ?? process.env.BP_DATA_DIR ?? "./brainpilot",
+  );
   return (
     options.orchestrator ??
     createOrchestrator({
@@ -69,8 +73,41 @@ export function buildServerOrchestrator(
         ...(options.runtimePort !== undefined ? { port: options.runtimePort } : {}),
         ...(options.stdioInherit ? { stdioInherit: true } : {}),
       },
+      // Single-user Docker needs the same host data root that the backend
+      // uses, otherwise the runtime receives BP_KB_ROOT without a bind mount.
+      // In dynamic mode this value becomes the per-user data-root base.
+      docker: { dataDir },
     })
   );
+}
+
+/** Resolve the host-side KB root that is bind-mounted into one Docker runtime. */
+export function resolveServerKbRoot(
+  options: StartServerOptions = {},
+): string | undefined {
+  if (options.kbRoot) return options.kbRoot;
+  const runtimeEnv = options.env ?? process.env;
+  const mode = options.mode ?? resolveOrchestratorMode(runtimeEnv);
+  const dynamic = ["1", "true", "yes"].includes((runtimeEnv.BP_DYNAMIC ?? "").toLowerCase());
+  if (mode !== "docker" || dynamic) return undefined;
+  const dataDir = resolve(
+    options.dataDir ?? runtimeEnv.BP_DATA_DIR ?? "./brainpilot",
+  );
+  return join(dataDir, "KnowledgeBase");
+}
+
+/** Management is single-root today, so dynamic multi-user mode must disable it. */
+export function resolveServerKbManagementEnabled(
+  options: StartServerOptions = {},
+): boolean {
+  if (options.kbManagementEnabled !== undefined) return options.kbManagementEnabled;
+  const explicit = options.env?.BP_KB_MANAGEMENT_ENABLED
+    ?? process.env.BP_KB_MANAGEMENT_ENABLED;
+  if (explicit !== undefined && explicit.trim() !== "") {
+    return !["0", "false", "no"].includes(explicit.toLowerCase());
+  }
+  const dynamic = options.env?.BP_DYNAMIC ?? process.env.BP_DYNAMIC ?? "";
+  return !["1", "true", "yes"].includes(dynamic.toLowerCase());
 }
 
 export async function startServer(
@@ -82,10 +119,17 @@ export async function startServer(
   const hostname = options.hostname ?? process.env.BP_HOST ?? "127.0.0.1";
   const orchestrator = buildServerOrchestrator(options);
   const shutdown = new AbortController();
+  // A single Docker sandbox sees this host directory at
+  // /root/.bp-root/KnowledgeBase. Dynamic mode intentionally keeps KB
+  // management disabled until the backend has a per-user control plane.
+  const kbRoot = resolveServerKbRoot(options);
+  const kbManagementEnabled = resolveServerKbManagementEnabled(options);
 
   const app = createApp({
     orchestrator,
     dataDir: options.dataDir,
+    kbManagementEnabled,
+    ...(kbRoot ? { kbRoot } : {}),
     webRoot: options.webRoot,
     fetchFn: options.fetchFn,
     serveWeb: options.serveWeb,

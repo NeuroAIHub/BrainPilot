@@ -142,6 +142,7 @@ describe("DockerOrchestrator (stubbed dockerode)", () => {
       .createContainer.mock.calls[0]![0] as Record<string, unknown>;
     expect(createArg.Image).toBe("brainpilot-sandbox:test");
     expect((createArg.Env as string[]).some((e) => e.startsWith("BP_DATA_DIR="))).toBe(true);
+    expect(createArg.Env).toContain("BP_KB_ROOT=/root/.bp-root/KnowledgeBase");
 
     await orch.stopRuntime();
     expect(container.stop).toHaveBeenCalledTimes(1);

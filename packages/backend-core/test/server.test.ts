@@ -3,7 +3,8 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildServerOrchestrator, startServer } from "../src/server.js";
+import { buildServerOrchestrator, resolveServerKbManagementEnabled, resolveServerKbRoot, startServer } from "../src/server.js";
+import { DockerOrchestrator } from "../src/docker-orchestrator.js";
 import { LocalProcessOrchestrator } from "../src/local-orchestrator.js";
 import type { Orchestrator } from "../src/orchestrator.js";
 
@@ -35,6 +36,36 @@ describe("buildServerOrchestrator", () => {
     expect(orch).toBeInstanceOf(LocalProcessOrchestrator);
     const env = (orch as LocalProcessOrchestrator).buildEnv();
     expect(env.BP_DATA_DIR).toBe("/data/detached");
+  });
+
+  it("threads dataDir through to the single-user Docker bind mount", () => {
+    const orch = buildServerOrchestrator({
+      dataDir: "/data/docker",
+      mode: "docker",
+    });
+    expect(orch).toBeInstanceOf(DockerOrchestrator);
+    expect((orch as unknown as { dataDir?: string }).dataDir).toBe("/data/docker");
+  });
+
+  it("maps single-user Docker KB management into the mounted data root", () => {
+    expect(resolveServerKbRoot({
+      dataDir: "/data/docker",
+      mode: "docker",
+    })).toBe("/data/docker/KnowledgeBase");
+    expect(resolveServerKbRoot({
+      dataDir: "/data/docker",
+      env: { BP_DYNAMIC: "1" },
+      mode: "docker",
+    })).toBeUndefined();
+  });
+
+  it("disables KB management server-side in dynamic multi-user mode", () => {
+    expect(resolveServerKbManagementEnabled({ env: { BP_DYNAMIC: "1" } })).toBe(false);
+    expect(resolveServerKbManagementEnabled({ env: { BP_DYNAMIC: "0" } })).toBe(true);
+    expect(resolveServerKbManagementEnabled({
+      env: { BP_DYNAMIC: "1" },
+      kbManagementEnabled: true,
+    })).toBe(true);
   });
 
   it("threads runtimePort through to the local runtime env (#171)", () => {
