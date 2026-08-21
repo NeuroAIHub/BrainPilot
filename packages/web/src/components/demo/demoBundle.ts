@@ -1,4 +1,4 @@
-import type { AgentStatus, ChatMessage } from "../../contracts/backend";
+import type { AgentStatus, ChatMessage, TraceNode } from "../../contracts/backend";
 import {
   DEMO_BUNDLE_FORMAT,
   DEMO_BUNDLE_VERSION,
@@ -98,6 +98,80 @@ export function toDemoFilePath(path: string): string {
   // Unknown absolute paths and bare relative paths are workspace artifacts.
   const rel = path.replace(/^\/+/, "").replace(/^\.\//, "");
   return `/workspace/${rel}`;
+}
+
+type DemoArtifactLike = { path?: string; type?: string };
+
+/** Shared artifact gate for both bundle packing and replay. */
+export function isDemoFileArtifact(
+  artifact: DemoArtifactLike,
+): artifact is DemoArtifactLike & { path: string } {
+  const path = artifact.path?.trim();
+  return Boolean(
+    path
+    && artifact.type !== "dir"
+    && artifact.type !== "checkpoint"
+    && !path.startsWith("checkpoint:"),
+  );
+}
+
+/** Collect only real files, deduped by the canonical file-API path. */
+export function collectDemoArtifactPaths(
+  nodes: ReadonlyArray<{ artifacts?: ReadonlyArray<{ path?: string; type?: string }> }>,
+): string[] {
+  const seenCanonical = new Set<string>();
+  const paths: string[] = [];
+  for (const node of nodes) {
+    for (const artifact of node.artifacts ?? []) {
+      if (!isDemoFileArtifact(artifact)) continue;
+      const rawPath = artifact.path.trim();
+      const canonical = toDemoFilePath(rawPath);
+      if (seenCanonical.has(canonical)) continue;
+      seenCanonical.add(canonical);
+      paths.push(rawPath);
+    }
+  }
+  return paths;
+}
+
+/**
+ * Resolve Trace artifact aliases onto the exact path spelling retained in
+ * bundle.files. Pseudo artifacts and paths absent from the bundle disappear,
+ * so every replay consumer can safely use exact string identity afterwards.
+ */
+export function normalizeDemoReplayNodes(
+  nodes: readonly TraceNode[],
+  files: ReadonlyArray<Pick<DemoFile, "path">>,
+): TraceNode[] {
+  const retainedPathByCanonical = new Map(
+    files.map((file) => [toDemoFilePath(file.path), file.path]),
+  );
+  return nodes.map((node) => {
+    const seen = new Set<string>();
+    const artifacts = node.artifacts.flatMap((artifact) => {
+      if (!isDemoFileArtifact(artifact)) return [];
+      const retainedPath = retainedPathByCanonical.get(toDemoFilePath(artifact.path.trim()));
+      if (!retainedPath || seen.has(retainedPath)) return [];
+      seen.add(retainedPath);
+      return [{ ...artifact, path: retainedPath }];
+    });
+    return { ...node, artifacts };
+  });
+}
+
+/** Clean file entries produced by older v1 exporters before replay or re-export. */
+function normalizeImportedDemoFiles(files: readonly DemoFile[]): DemoFile[] {
+  const seenCanonical = new Set<string>();
+  const retained: DemoFile[] = [];
+  for (const file of files) {
+    if (!isDemoFileArtifact(file)) continue;
+    const path = file.path.trim();
+    const canonical = toDemoFilePath(path);
+    if (seenCanonical.has(canonical)) continue;
+    seenCanonical.add(canonical);
+    retained.push(path === file.path ? file : { ...file, path });
+  }
+  return retained;
 }
 
 /** Chunked base64 encode of binary data (avoids call-stack overflow). */
@@ -288,20 +362,10 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
     assertTimelineFits(events);
   }
 
-  // Collect produced-file paths from trace artifacts (dedupe, skip dirs).
-  const seen = new Set<string>();
-  const paths: string[] = [];
-  for (const node of trace.nodes) {
-    for (const artifact of node.artifacts ?? []) {
-      if (!artifact.path || artifact.type === "dir") {
-        continue;
-      }
-      if (!seen.has(artifact.path)) {
-        seen.add(artifact.path);
-        paths.push(artifact.path);
-      }
-    }
-  }
+  // Trace also carries metadata pseudo-artifacts (for example
+  // checkpoint:checkpoint_...). They are not workspace files and must never be
+  // fetched or rendered in a replay.
+  const paths = collectDemoArtifactPaths(trace.nodes);
 
   const files = await collectFiles(filesAvailable ? session.id : undefined, paths, onProgress, filesUnavailableDetail, signal);
 
@@ -346,5 +410,8 @@ export function parseDemoBundle(text: string): DemoBundle {
   if (!isDemoBundle(parsed)) {
     throw new Error("Not a valid live-demo bundle.");
   }
-  return parsed;
+  return {
+    ...parsed,
+    files: normalizeImportedDemoFiles(parsed.files),
+  };
 }

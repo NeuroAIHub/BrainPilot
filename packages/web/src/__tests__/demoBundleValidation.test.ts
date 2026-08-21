@@ -5,7 +5,7 @@ import {
   isDemoBundle,
   type DemoBundle,
 } from "../contracts/demoBundle";
-import { parseDemoBundle } from "../components/demo/demoBundle";
+import { normalizeDemoReplayNodes, parseDemoBundle } from "../components/demo/demoBundle";
 
 function validBundle(): DemoBundle {
   return {
@@ -51,6 +51,50 @@ describe("Live Demo bundle import validation", () => {
     const bundle = validBundle();
     expect(isDemoBundle(bundle)).toBe(true);
     expect(parseDemoBundle(JSON.stringify(bundle))).toEqual(bundle);
+  });
+
+  it("cleans legacy v1 file entries before replay and re-export", () => {
+    const bundle = validBundle();
+    bundle.trace.nodes[0].artifacts = [
+      { path: "checkpoint:checkpoint_123", type: "checkpoint" },
+      { path: "/workspace/report.md", type: "markdown" },
+      { path: "report.md", type: "file" },
+    ];
+    bundle.files = [
+      {
+        path: "checkpoint:checkpoint_123",
+        mime: "application/octet-stream",
+        encoding: "base64",
+        size: 0,
+        truncated: true,
+        reason: "unreadable",
+      },
+      {
+        path: "/workspace/report.md",
+        mime: "text/markdown",
+        encoding: "utf8",
+        size: 2,
+        truncated: false,
+        data: "ok",
+      },
+      {
+        path: "report.md",
+        mime: "text/markdown",
+        encoding: "utf8",
+        size: 2,
+        truncated: false,
+        data: "ok",
+      },
+    ];
+
+    const imported = parseDemoBundle(JSON.stringify(bundle));
+    const replayNodes = normalizeDemoReplayNodes(imported.trace.nodes, imported.files);
+    const reExported = JSON.parse(JSON.stringify(imported)) as DemoBundle;
+
+    expect(imported.files.map((file) => file.path)).toEqual(["/workspace/report.md"]);
+    expect(replayNodes[0].artifacts.map((artifact) => artifact.path))
+      .toEqual(["/workspace/report.md"]);
+    expect(reExported.files.map((file) => file.path)).toEqual(["/workspace/report.md"]);
   });
 
   it("rejects unsupported versions", () => {

@@ -15,7 +15,13 @@ import { getPreviewKind, isMarkdown } from "../files/filePreview";
 import { IconButton } from "../primitives/IconButton";
 import { TraceGraphView } from "../session/TraceGraphView";
 import { getNodeKindLabelKey } from "../session/traceLayout";
-import { buildDemoBundle, DemoBundleTooLargeError, PackAbortedError, parseDemoBundle } from "./demoBundle";
+import {
+  buildDemoBundle,
+  DemoBundleTooLargeError,
+  normalizeDemoReplayNodes,
+  PackAbortedError,
+  parseDemoBundle,
+} from "./demoBundle";
 import { getCachedBundle, setCachedBundle } from "./demoCache";
 import { shouldResetDemo } from "./demoReset";
 import { foldUpTo, type FoldCache } from "./foldCache";
@@ -213,7 +219,10 @@ export function DemoView({ resetSignal }: DemoViewProps = {}) {
     decoded.forEach((d) => d.objectUrl && URL.revokeObjectURL(d.objectUrl));
   }, [decoded]);
 
-  const nodes = bundle?.trace.nodes ?? [];
+  const nodes = useMemo(
+    () => normalizeDemoReplayNodes(bundle?.trace.nodes ?? [], bundle?.files ?? []),
+    [bundle],
+  );
   const episodeTitles = useMemo(
     () => new Map((bundle?.trace.episodes ?? []).map((episode) => [episode.id, episode.title])),
     [bundle?.trace.episodes],
