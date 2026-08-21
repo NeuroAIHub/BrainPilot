@@ -23,4 +23,10 @@ describe("agent execution tool contract", () => {
     expect(prompt).toContain("model training");
     expect(prompt).toContain("Monitor is for streaming observation");
   });
+
+  it("recognizes the managed background job exposed with Monitor capability", () => {
+    const prompt = withExecutionToolContract("persona", ["bash", "run_in_background", "start_monitor"]);
+    expect(prompt).toContain("must use `run_in_background`");
+    expect(prompt).not.toContain("hand it to an agent");
+  });
 });
