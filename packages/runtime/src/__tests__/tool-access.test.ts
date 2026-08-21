@@ -7,6 +7,7 @@ import {
   systemToolsForRole,
   builtinToolNamesForRole,
   createAskUserTool,
+  createCancelTaskTool,
   createDispatchTaskTool,
   createCompleteTaskTool,
   createStartMonitorTool,
@@ -30,6 +31,10 @@ function deps(name: string): ToolDeps {
     dispatchTask: async (to, content) => ({
       id: "task_000001", seq: 1, created_by: name, assigned_to: to, content,
       status: "pending", created_at: 1,
+    }),
+    cancelTask: async (taskId, reason) => ({
+      id: taskId, seq: 1, created_by: name, assigned_to: "engineer", content: "old work",
+      status: "cancelled", reply: reason, created_at: 1, completed_at: 2,
     }),
     completeTask: async (taskId, reply) => ({
       id: taskId, seq: 1, created_by: "principal", assigned_to: name, content: "work",
@@ -71,12 +76,22 @@ describe("tool access control (§9)", () => {
     expect(dispatchText).toContain("Stop this turn now");
     expect(dispatchText).toContain("do not claim completion");
     expect(dispatched).toEqual([["writer", "polish docs/report.md"]]);
+    const replacement = await dispatch.execute({
+      to: "writer",
+      content: "replacement",
+      supersedes_task_id: "task_000001",
+      supersede_reason: "requirements changed",
+    });
+    expect(replacement.isError).toBeUndefined();
     await expect(dispatch.execute({ to: "engineer", content: "self" })).resolves.toMatchObject({ isError: true });
     await expect(dispatch.execute({ to: "trace", content: "wrong" })).resolves.toMatchObject({ isError: true });
 
     const complete = createCompleteTaskTool(d);
     expect((complete.parameters.required as string[])).toEqual(["task_id", "reply"]);
     expect((await complete.execute({ task_id: "task_000001", reply: "done" })).isError).toBeUndefined();
+
+    const cancel = createCancelTaskTool(d);
+    expect((await cancel.execute({ task_id: "task_000001", reason: "no longer needed" })).isError).toBeUndefined();
   });
 
   it("ask_user validates choices and defaults free text to enabled", async () => {
@@ -173,6 +188,7 @@ describe("tool access control (§9)", () => {
       [
         "record_trace",
         "dispatch_task",
+        "cancel_task",
         "complete_task",
         "skill_search",
         "get_domain_knowledge_local",
@@ -480,6 +496,7 @@ describe("tool toggles", () => {
     const names = systemToolsForRole("principal", "principal", deps("principal"), off).map((t) => t.name).sort();
     expect(names).toEqual([
       "ask_user",
+      "cancel_task",
       "complete_task",
       "create_agent",
       "destroy_agent",

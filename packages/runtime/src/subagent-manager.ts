@@ -160,7 +160,12 @@ export class SubagentManager {
 
   list(): SubagentStatus[] { return [...this.statuses.values()]; }
 
-  hasActiveExecutions(): boolean { return this.executions.size > 0; }
+  hasActiveExecutions(): boolean {
+    return [...this.executions.keys()].some((id) => {
+      const status = this.statuses.get(id)?.status;
+      return this.active.has(id) || (status !== undefined && this.isActive(status));
+    });
+  }
 
   listForParent(parentAgent: string, childIds?: string[]): SubagentStatus[] {
     const runs = childIds
@@ -224,8 +229,8 @@ export class SubagentManager {
     const ids = this.list()
       .filter((run) => run.parentAgent === parentAgent && this.isActive(run.status))
       .map((run) => run.id);
-    for (const id of ids) this.update(id, { status: "cancelled", error: "Cancelled with parent agent." });
-    await Promise.all(ids.map((id) => this.active.get(id)?.session.abort().catch(() => {})));
+    await Promise.all(ids.map((id) => this.cancel(id, "Cancelled with parent agent.")));
+    await this.flush();
     return ids.length;
   }
 
@@ -234,13 +239,13 @@ export class SubagentManager {
     if (!status || !this.isActive(status.status)) return false;
     this.update(childId, { status: "cancelled", error: reason });
     await this.active.get(childId)?.session.abort().catch(() => {});
+    await this.flush();
     return true;
   }
 
   async cancelAll(): Promise<number> {
     const ids = this.list().filter((run) => this.isActive(run.status)).map((run) => run.id);
-    for (const id of ids) this.update(id, { status: "cancelled", error: "Session interrupted." });
-    await Promise.all(ids.map((id) => this.active.get(id)?.session.abort().catch(() => {})));
+    await Promise.all(ids.map((id) => this.cancel(id, "Session interrupted.")));
     return ids.length;
   }
 
@@ -340,6 +345,7 @@ export class SubagentManager {
       this.parentPromotions.delete(run.childId);
       if (this.executions.get(run.childId) === execution) {
         this.executions.delete(run.childId);
+        this.opts.onChanged();
       }
     });
     this.executions.set(run.childId, execution);

@@ -6,6 +6,7 @@ interface Call { tool: string; args: Record<string, unknown> }
 interface Script {
   beforePrompt?: (text: string) => Promise<void>;
   onPrompt?: (text: string) => Call | undefined;
+  onAbort?: () => Promise<void> | void;
 }
 
 function scriptedFactory(scripts: Record<string, Script>, prompts: Array<{ agent: string; text: string }>): AgentSessionFactory {
@@ -31,7 +32,7 @@ function scriptedFactory(scripts: Record<string, Script>, prompts: Array<{ agent
         emit({ type: "turn_end" });
         emit({ type: "agent_end", messages: [], willRetry: false });
       },
-      async abort() {},
+      async abort() { await scripts[agentName]?.onAbort?.(); },
       dispose() {},
     };
     return session;
@@ -47,6 +48,70 @@ async function waitFor(predicate: () => boolean, timeout = 2000): Promise<void> 
 }
 
 describe("flat task delegation", () => {
+  it("cancels a superseded pending task before dispatching its replacement", async () => {
+    const prompts: Array<{ agent: string; text: string }> = [];
+    let releaseOld!: () => void;
+    const oldMayFinish = new Promise<void>((resolve) => { releaseOld = resolve; });
+    let markOldStarted!: () => void;
+    const oldStarted = new Promise<void>((resolve) => { markOldStarted = resolve; });
+    let releaseReplacement!: () => void;
+    const replacementMayFinish = new Promise<void>((resolve) => { releaseReplacement = resolve; });
+    let markReplacementStarted!: () => void;
+    const replacementStarted = new Promise<void>((resolve) => { markReplacementStarted = resolve; });
+    let aborts = 0;
+    const manager = new SessionManager({
+      persist: false,
+      agentFactory: scriptedFactory({
+        principal: { onPrompt: (text) => {
+          if (text === "DELEGATE") return { tool: "dispatch_task", args: { to: "librarian", content: "old scope" } };
+          if (text === "REPLACE") return {
+            tool: "dispatch_task",
+            args: {
+              to: "librarian",
+              content: "new scope",
+              supersedes_task_id: "task_000001",
+              supersede_reason: "requirements changed",
+            },
+          };
+          return undefined;
+        } },
+        librarian: {
+          beforePrompt: async (text) => {
+            if (text.includes("old scope")) {
+              markOldStarted();
+              await oldMayFinish;
+            } else if (text.includes("task_000002")) {
+              markReplacementStarted();
+              await replacementMayFinish;
+            }
+          },
+          onAbort: () => {
+            aborts++;
+            releaseOld();
+          },
+        },
+      }, prompts),
+    });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "DELEGATE");
+    await oldStarted;
+    await manager.sendMessage(session.id, "REPLACE");
+    await waitFor(() => manager.listTasks(session.id).some((task) => task.id === "task_000002"));
+    expect(manager.listTasks(session.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ id: "task_000001", status: "cancelled", reply: "requirements changed" }),
+      expect.objectContaining({ id: "task_000002", status: "pending", content: "new scope" }),
+    ]));
+    await replacementStarted;
+    await manager.cancelTask(session.id, "principal", "task_000001", "requirements changed");
+    expect(aborts).toBe(1);
+    expect(manager.listAgents(session.id)).toEqual(expect.arrayContaining([
+      expect.objectContaining({ name: "librarian", status: "running" }),
+    ]));
+    releaseReplacement();
+    await waitFor(() => manager.getSessionState(session.id)?.workState.active === false);
+    manager.shutdown();
+  });
+
   it("dispatches a durable task, auto-creates the target, and emits task_state", async () => {
     const prompts: Array<{ agent: string; text: string }> = [];
     const manager = new SessionManager({

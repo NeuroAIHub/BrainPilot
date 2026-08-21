@@ -2578,6 +2578,7 @@ export class SessionManager {
         this.emitSessionState(entry);
         return task;
       },
+      cancelTask: (taskId, reason) => this.cancelTask(sessionId, name, taskId, reason),
       completeTask: async (taskId, reply) => {
         const before = entry.taskLedger.get(taskId);
         const task = await entry.taskLedger.complete(taskId, name, reply);
@@ -2619,13 +2620,13 @@ export class SessionManager {
       routerSkillsDir: this.routerSkillsDir,
       spawnSubagents: role === "expert" ? ({ context, tasks }) => entry.subagents.runBatch({
         parentAgent: name,
-        rootRunId: entry.activeRunId,
+        rootRunId: entry.agents.get(name)?.state().activeRunId ?? null,
         context,
         tasks,
       }) : undefined,
       startSubagents: role === "expert" ? ({ context, tasks }) => entry.subagents.startBatch({
         parentAgent: name,
-        rootRunId: entry.activeRunId,
+        rootRunId: entry.agents.get(name)?.state().activeRunId ?? null,
         context,
         tasks,
       }) : undefined,
@@ -2876,8 +2877,15 @@ export class SessionManager {
   async destroyAgent(sessionId: string, name: string): Promise<void> {
     const entry = this.sessions.get(sessionId);
     if (!entry) return;
+    const childrenCancelled = await entry.subagents.cancelParent(name);
     const agent = entry.agents.get(name);
-    if (!agent) return;
+    if (!agent) {
+      if (childrenCancelled > 0) {
+        this.touch(entry);
+        this.emitSessionState(entry);
+      }
+      return;
+    }
     await this.cancelUserInputs(entry, (input) => input.agent === name, "agent_destroyed", true);
     await entry.monitorManager.stopOwner(name);
     agent.stop();
@@ -2887,6 +2895,28 @@ export class SessionManager {
       entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "cancelled", task }));
       this.wakeAgent(sessionId, task.created_by);
     }
+    this.touch(entry);
+    this.emitSessionState(entry);
+  }
+
+  async cancelTask(sessionId: string, requester: string, taskId: string, reason: string): Promise<TaskRecord> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error(`session not found: ${sessionId}`);
+    const before = entry.taskLedger.get(taskId);
+    const task = await entry.taskLedger.cancel(taskId, requester, reason);
+    // Ledger cancellation is idempotent. Repeating it must not abort unrelated
+    // replacement work that the same assignee may already be processing.
+    if (before?.status === "cancelled") return task;
+    await entry.subagents.cancelParent(task.assigned_to);
+    const assignee = entry.agents.get(task.assigned_to);
+    if (assignee && (assignee.status === "running" || assignee.isStreaming || assignee.hasActiveTools())) {
+      await assignee.abort();
+    }
+    entry.bus.emit(ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, { op: "cancelled", task }));
+    this.touch(entry);
+    this.emitSessionState(entry);
+    this.wakeAgent(sessionId, task.assigned_to);
+    return task;
   }
 
   /**
@@ -3216,6 +3246,17 @@ export class SessionManager {
       // a cleanly consumed batch. Keep aborted input durable for replay after
       // the next explicit user turn resumes delivery.
       if (agent.lastRunOutcome === "aborted") {
+        // A creator may cancel/supersede a task while its assignee is already
+        // handling the durable assignment. That host-owned abort is recovery,
+        // not a user Stop: cancel() has atomically removed the stale assignment,
+        // so continue draining the cancellation/replacement events immediately.
+        // User interrupts do not change a task to cancelled and retain the
+        // existing pause-until-next-user-turn behaviour below.
+        const cancelledAssignment = notifications.some((notification) =>
+          notification.task_id !== undefined
+          && entry.taskLedger.get(notification.task_id)?.status === "cancelled",
+        );
+        if (cancelledAssignment && !entry.taskLedger.isPaused(name)) continue;
         if (!entry.taskLedger.isPaused(name)) await entry.taskLedger.pauseAgent(name);
         return;
       }

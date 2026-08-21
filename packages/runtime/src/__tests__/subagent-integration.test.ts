@@ -18,6 +18,54 @@ async function waitFor(predicate: () => boolean, timeoutMs = 5_000) {
 }
 
 describe("SessionManager subagent integration", () => {
+  it("destroying a parent cancels its running child and converges work state", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-subagent-destroy-parent-"));
+    roots.push(root);
+    let releaseChild!: () => void;
+    const childMayFinish = new Promise<void>((resolve) => { releaseChild = resolve; });
+    let markChildStarted!: () => void;
+    const childStarted = new Promise<void>((resolve) => { markChildStarted = resolve; });
+    const factory: AgentSessionFactory = async ({ sessionId, agentName, systemTools }) => {
+      const tools = new Map(systemTools.map((tool) => [tool.name, tool]));
+      const isChild = tools.has("submit_result");
+      return {
+        sessionId,
+        isStreaming: false,
+        subscribe() { return () => {}; },
+        async prompt() {
+          if (isChild) {
+            markChildStarted();
+            await childMayFinish;
+            throw new Error("aborted");
+          }
+          if (agentName === "engineer") {
+            await tools.get("spawn_subagent")!.execute({
+              wait: false,
+              tasks: [{ name: "orphan-check", profile: "code-runner", task: "keep running" }],
+            });
+          }
+        },
+        async abort() { if (isChild) releaseChild(); },
+        dispose() {},
+      } satisfies IAgentSession;
+    };
+    const manager = new SessionManager({ dataRoot: root, persist: true, agentFactory: factory });
+    const session = await manager.createSession();
+    await manager.sendMessage(session.id, "start background work", "engineer");
+    await childStarted;
+    await waitFor(() => manager.getSessionState(session.id)?.subagents?.[0]?.status === "running");
+
+    await manager.destroyAgent(session.id, "engineer");
+
+    await waitFor(() => manager.getSessionState(session.id)?.workState.active === false);
+    expect(manager.getSessionState(session.id)).toMatchObject({
+      workState: { active: false },
+      subagents: [expect.objectContaining({ parentAgent: "engineer", status: "cancelled" })],
+    });
+    expect(manager.listAgents(session.id).some((agent) => agent.name === "engineer")).toBe(false);
+    await manager.deleteSession(session.id);
+  });
+
   it("rejects checkpoint restore while a default shared background subagent is running", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-subagent-restore-gate-"));
     roots.push(root);
