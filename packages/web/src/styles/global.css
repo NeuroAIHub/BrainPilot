@@ -5245,13 +5245,13 @@ button {
   right: var(--active-file-sidebar-width, var(--file-sidebar-width));
   bottom: 0;
   z-index: 22;
-  display: grid;
+  display: flex;
   width: min(
     var(--preview-panel-width, 560px),
     calc(100vw - var(--sidebar-width) - var(--active-file-sidebar-width, var(--file-sidebar-width)))
   );
   min-width: 360px;
-  grid-template-rows: auto auto minmax(0, 1fr);
+  flex-direction: column;
   overflow: hidden;
   border-left: 1px solid var(--color-border);
   border-right: 1px solid var(--color-border);
@@ -5379,6 +5379,7 @@ button {
 
 .file-preview__body {
   display: flex;
+  flex: 1 1 auto;
   flex-direction: column;
   min-width: 0;
   min-height: 0;
