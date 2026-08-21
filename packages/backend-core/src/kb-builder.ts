@@ -142,9 +142,9 @@ function pythonBin(kbRoot?: string): string {
   return process.platform === "win32" ? "python" : "python3";
 }
 
-function defaultBuildScript(): string {
+function defaultBuildScript(kbRoot?: string): string {
   if (process.env.BP_KB_BUILD_SCRIPT) return process.env.BP_KB_BUILD_SCRIPT;
-  return join(findKbRoot(), "scripts", "build_kb.py");
+  return join(kbRoot ? resolve(kbRoot) : findKbRoot(), "scripts", "build_kb.py");
 }
 
 function buildArgv(opts: KbBuildOptions, script: string): string[] {
@@ -599,7 +599,7 @@ export function startKbBuild(opts: KbBuildOptions = {}): StartResult {
   if (SLOTS.build && SLOTS.build.doneAt == null) {
     return { ok: false, message: "a knowledge-base build is already running" };
   }
-  const script = defaultBuildScript();
+  const script = defaultBuildScript(opts.kbRoot);
   if (!existsSync(script)) {
     return {
       ok: false,

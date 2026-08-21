@@ -12,7 +12,7 @@ vi.mock("node:child_process", async (importOriginal) => {
   return { ...actual, spawn: vi.fn() };
 });
 
-import { getKbBuildStatus, startKbFullSetup } from "../src/kb-builder.js";
+import { getKbBuildStatus, startKbBuild, startKbFullSetup } from "../src/kb-builder.js";
 
 function fakeChild(): ChildProcess {
   const child = new EventEmitter() as EventEmitter & {
@@ -45,5 +45,24 @@ describe("Knowledge Base setup lifecycle", () => {
     expect(getKbBuildStatus(root).active).toBe(true);
 
     modelChild.emit("exit", 0, null);
+  });
+
+  it("runs build_kb.py from the explicitly mapped KB root", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-kb-build-root-"));
+    await mkdir(join(root, "scripts"), { recursive: true });
+    await mkdir(join(root, ".venv", "bin"), { recursive: true });
+    await writeFile(join(root, "scripts", "build_kb.py"), "# mapped build\n");
+    await writeFile(join(root, ".venv", "bin", "python"), "");
+    const child = fakeChild();
+    vi.mocked(spawn).mockClear().mockReturnValueOnce(child);
+
+    expect(startKbBuild({ kbRoot: root }).ok).toBe(true);
+    expect(vi.mocked(spawn).mock.calls[0]?.[1]).toEqual([
+      join(root, "scripts", "build_kb.py"),
+      "--json",
+      "--kb-root",
+      root,
+    ]);
+    child.emit("exit", 0, null);
   });
 });

@@ -1,10 +1,10 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
-import { ensureKbRoot, KbPdfUploadError, readKbPdfBody, saveKbPdf } from "../src/kb-pdf-upload.js";
+import { ensureKbRoot, KbPdfUploadError, readKbPdfBody, saveKbPdf, saveKbPdfStream } from "../src/kb-pdf-upload.js";
 
 const pdf = new TextEncoder().encode("%PDF-1.7\nminimal test document");
 
@@ -50,6 +50,40 @@ describe("knowledge-base PDF upload", () => {
       status: 413,
       code: "KB_PDF_TOO_LARGE",
     });
+  });
+
+  it("streams a PDF through a temp file and publishes it atomically", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-kb-stream-"));
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("%PDF-"));
+        controller.enqueue(new TextEncoder().encode("1.7\nstreamed"));
+        controller.close();
+      },
+    });
+
+    await expect(saveKbPdfStream(root, "streamed.pdf", stream)).resolves.toEqual({
+      filename: "streamed.pdf",
+      size: 17,
+    });
+    expect(await readFile(join(root, "source", "pdf", "streamed.pdf"), "utf8"))
+      .toBe("%PDF-1.7\nstreamed");
+    expect(await readdir(join(root, "source", "pdf"))).toEqual(["streamed.pdf"]);
+  });
+
+  it("removes the temp file when a streamed upload exceeds its limit", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-kb-stream-limit-"));
+    const stream = new ReadableStream<Uint8Array>({
+      start(controller) {
+        controller.enqueue(new TextEncoder().encode("%PDF-1.7"));
+        controller.close();
+      },
+    });
+
+    await expect(saveKbPdfStream(root, "large.pdf", stream, 5)).rejects.toMatchObject({
+      code: "KB_PDF_TOO_LARGE",
+    });
+    expect(await readdir(join(root, "source", "pdf"))).toEqual([]);
   });
 
   it("materializes bundled scripts into a writable persistent root", async () => {
@@ -113,5 +147,25 @@ describe("knowledge-base PDF upload", () => {
     expect(response.status).toBe(201);
     expect(await readFile(join(mappedRoot, "source", "pdf", "mapped.pdf"), "utf8"))
       .toContain("%PDF-1.7");
+  });
+
+  it("rejects KB management APIs when the deployment disables them", async () => {
+    const app = createApp({
+      serveWeb: false,
+      kbManagementEnabled: false,
+      orchestrator: {
+        ensureRuntime: async () => ({ baseUrl: "http://runtime.test" }),
+        health: async () => true,
+        stopRuntime: async () => {},
+      },
+    });
+
+    const response = await app.request("/api/kb/pdfs?filename=blocked.pdf", {
+      method: "POST",
+      headers: { "content-type": "application/pdf" },
+      body: new Blob([pdf], { type: "application/pdf" }),
+    });
+    expect(response.status).toBe(404);
+    expect(await response.json()).toMatchObject({ code: "KB_MANAGEMENT_UNAVAILABLE" });
   });
 });

@@ -1,4 +1,5 @@
-import { access, cp, mkdir, writeFile } from "node:fs/promises";
+import { randomUUID } from "node:crypto";
+import { access, cp, link, mkdir, open, unlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { resolveBundledKbDir } from "@brainpilot/runtime";
 
@@ -137,4 +138,87 @@ export async function saveKbPdf(
     throw error;
   }
   return { filename, size: bytes.byteLength };
+}
+
+/** Stream one PDF through a same-directory temp file, then publish atomically. */
+export async function saveKbPdfStream(
+  kbRoot: string,
+  rawFilename: string,
+  stream: ReadableStream<Uint8Array> | null,
+  maxBytes = KB_PDF_UPLOAD_MAX_BYTES,
+): Promise<{ filename: string; size: number }> {
+  const filename = safePdfName(rawFilename);
+  if (!stream) {
+    throw new KbPdfUploadError("The selected PDF is empty.", 400, "KB_PDF_EMPTY");
+  }
+  const pdfDir = join(kbRoot, "source", "pdf");
+  await mkdir(pdfDir, { recursive: true });
+  const destination = join(pdfDir, filename);
+  const temporary = join(pdfDir, `.upload-${randomUUID()}.tmp`);
+  const reader = stream.getReader();
+  const prefix = new Uint8Array(1024);
+  let prefixLength = 0;
+  let total = 0;
+
+  try {
+    const file = await open(temporary, "wx", 0o600);
+    try {
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+        if (!value) continue;
+        total += value.byteLength;
+        if (total > maxBytes) {
+          await reader.cancel().catch(() => {});
+          throw new KbPdfUploadError(
+            "The selected PDF exceeds the 256 MB upload limit.",
+            413,
+            "KB_PDF_TOO_LARGE",
+          );
+        }
+        if (prefixLength < prefix.length) {
+          const take = Math.min(prefix.length - prefixLength, value.byteLength);
+          prefix.set(value.subarray(0, take), prefixLength);
+          prefixLength += take;
+        }
+        let written = 0;
+        while (written < value.byteLength) {
+          const result = await file.write(value, written, value.byteLength - written);
+          if (result.bytesWritten === 0) throw new Error("Could not write the uploaded PDF.");
+          written += result.bytesWritten;
+        }
+      }
+    } finally {
+      await file.close();
+    }
+
+    if (total === 0) {
+      throw new KbPdfUploadError("The selected PDF is empty.", 400, "KB_PDF_EMPTY");
+    }
+    if (!hasPdfSignature(prefix.subarray(0, prefixLength))) {
+      throw new KbPdfUploadError(
+        "The selected file is not a valid PDF.",
+        400,
+        "KB_PDF_INVALID_CONTENT",
+      );
+    }
+    try {
+      // A hard link publishes without replacing an existing destination;
+      // temp and destination share a directory/filesystem by construction.
+      await link(temporary, destination);
+    } catch (error) {
+      if ((error as NodeJS.ErrnoException).code === "EEXIST") {
+        throw new KbPdfUploadError(
+          "A PDF with this filename already exists. Rename it and try again.",
+          409,
+          "KB_PDF_ALREADY_EXISTS",
+        );
+      }
+      throw error;
+    }
+    return { filename, size: total };
+  } finally {
+    reader.releaseLock();
+    await unlink(temporary).catch(() => {});
+  }
 }

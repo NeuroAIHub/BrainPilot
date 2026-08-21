@@ -3,7 +3,7 @@ import { once } from "node:events";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
-import { buildServerOrchestrator, resolveServerKbRoot, startServer } from "../src/server.js";
+import { buildServerOrchestrator, resolveServerKbManagementEnabled, resolveServerKbRoot, startServer } from "../src/server.js";
 import { DockerOrchestrator } from "../src/docker-orchestrator.js";
 import { LocalProcessOrchestrator } from "../src/local-orchestrator.js";
 import type { Orchestrator } from "../src/orchestrator.js";
@@ -57,6 +57,15 @@ describe("buildServerOrchestrator", () => {
       env: { BP_DYNAMIC: "1" },
       mode: "docker",
     })).toBeUndefined();
+  });
+
+  it("disables KB management server-side in dynamic multi-user mode", () => {
+    expect(resolveServerKbManagementEnabled({ env: { BP_DYNAMIC: "1" } })).toBe(false);
+    expect(resolveServerKbManagementEnabled({ env: { BP_DYNAMIC: "0" } })).toBe(true);
+    expect(resolveServerKbManagementEnabled({
+      env: { BP_DYNAMIC: "1" },
+      kbManagementEnabled: true,
+    })).toBe(true);
   });
 
   it("threads runtimePort through to the local runtime env (#171)", () => {

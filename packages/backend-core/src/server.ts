@@ -96,6 +96,20 @@ export function resolveServerKbRoot(
   return join(dataDir, "KnowledgeBase");
 }
 
+/** Management is single-root today, so dynamic multi-user mode must disable it. */
+export function resolveServerKbManagementEnabled(
+  options: StartServerOptions = {},
+): boolean {
+  if (options.kbManagementEnabled !== undefined) return options.kbManagementEnabled;
+  const explicit = options.env?.BP_KB_MANAGEMENT_ENABLED
+    ?? process.env.BP_KB_MANAGEMENT_ENABLED;
+  if (explicit !== undefined && explicit.trim() !== "") {
+    return !["0", "false", "no"].includes(explicit.toLowerCase());
+  }
+  const dynamic = options.env?.BP_DYNAMIC ?? process.env.BP_DYNAMIC ?? "";
+  return !["1", "true", "yes"].includes(dynamic.toLowerCase());
+}
+
 export async function startServer(
   options: StartServerOptions = {},
 ): Promise<RunningServer> {
@@ -109,10 +123,12 @@ export async function startServer(
   // /root/.bp-root/KnowledgeBase. Dynamic mode intentionally keeps KB
   // management disabled until the backend has a per-user control plane.
   const kbRoot = resolveServerKbRoot(options);
+  const kbManagementEnabled = resolveServerKbManagementEnabled(options);
 
   const app = createApp({
     orchestrator,
     dataDir: options.dataDir,
+    kbManagementEnabled,
     ...(kbRoot ? { kbRoot } : {}),
     webRoot: options.webRoot,
     fetchFn: options.fetchFn,

@@ -64,7 +64,7 @@ import {
   subscribeKbBuild,
 } from "./kb-builder.js";
 import { computeKbInventory } from "./kb-inventory.js";
-import { ensureKbRoot, KbPdfUploadError, KB_PDF_UPLOAD_MAX_BYTES, readKbPdfBody, saveKbPdf } from "./kb-pdf-upload.js";
+import { ensureKbRoot, KbPdfUploadError, KB_PDF_UPLOAD_MAX_BYTES, saveKbPdfStream } from "./kb-pdf-upload.js";
 import {
   installPlugin,
   importExternalPlugin,
@@ -88,6 +88,8 @@ export interface CreateAppOptions {
   orchestrator: Orchestrator;
   /** Data dir for local config routes. Default `./brainpilot`. */
   dataDir?: string;
+  /** Disable all KB management APIs when the deployment cannot isolate them. */
+  kbManagementEnabled?: boolean;
   /**
    * Host-visible Knowledge Base root owned by the management API. Docker
    * launchers set this to the directory bind-mounted into the runtime.
@@ -219,6 +221,19 @@ export function createApp(options: CreateAppOptions): Hono {
 
   const app = new Hono();
   const api = new Hono();
+
+  // Hiding the Settings tab is not an authorization boundary. Dynamic
+  // multi-user deployments must reject the shared-process management API
+  // until requests can be routed to an isolated per-user KB root and job bus.
+  api.use("/kb/*", async (c, next) => {
+    if (options.kbManagementEnabled === false) {
+      return c.json({
+        error: "Knowledge Base management is unavailable in this deployment.",
+        code: "KB_MANAGEMENT_UNAVAILABLE",
+      }, 404);
+    }
+    await next();
+  });
 
   // Catch-all error handler: any uncaught throw returns JSON, never Hono's
   // default text/plain "Internal Server Error" (which the frontend's handleJson
@@ -830,8 +845,7 @@ export function createApp(options: CreateAppOptions): Hono {
       }, 413);
     }
     try {
-      const bytes = await readKbPdfBody(c.req.raw.body);
-      const saved = await saveKbPdf(await getWritableKbRoot(), filename, bytes);
+      const saved = await saveKbPdfStream(await getWritableKbRoot(), filename, c.req.raw.body);
       return c.json({ ok: true, ...saved }, 201);
     } catch (error) {
       if (error instanceof KbPdfUploadError) {
