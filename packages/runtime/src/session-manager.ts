@@ -2327,6 +2327,11 @@ export class SessionManager {
     // to unwind. The batch already being processed may settle, but later queued
     // events remain durable for the next explicit user turn.
     if (wholeSession) await entry.taskLedger.pauseDelivery();
+    // A caller blocked inside record_trace cannot finish abort() while Trace
+    // delivery is paused. Release only the synchronous acknowledgement wait;
+    // keep the durable notification and submission state so a later resumed
+    // delivery can still converge to accepted/rejected.
+    this.releaseTraceWaitersForInterrupt(entry, agentName);
     const monitorsStopped = agentName
       ? await entry.monitorManager.stopOwner(agentName)
       : await entry.monitorManager.stopAll();
@@ -3019,7 +3024,7 @@ export class SessionManager {
     const accepted = result.status === "accepted";
     const message = accepted
       ? "Trace accepted the submitted research milestone and added it to the graph."
-      : "Trace reviewed this event and did not add a node because it was not considered a durable research milestone.";
+      : result.reason ?? "Trace processed this event but did not add a node. No durable Trace record was created.";
     entry.bus.emit(ev.systemMessage(entry.id, "info", message, {
       agent: "trace",
       id: `trace-result:${result.submissionId}`,
@@ -3064,6 +3069,27 @@ export class SessionManager {
     return this.withProviderSlot(entry.id, fn);
   }
 
+  private submittedTraceResult(submissionId: string): TraceDispatchResult {
+    return {
+      status: "submitted",
+      submissionId,
+      reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
+    };
+  }
+
+  private releaseTraceWaitersForInterrupt(entry: SessionEntry, agentName?: string): void {
+    for (const [submissionId, state] of entry.traceSubmissions) {
+      const affected = agentName === undefined
+        || agentName === "trace"
+        || state.record?.sourceAgent === agentName;
+      if (!affected || !state.parentWaiting) continue;
+      if (state.timer) clearTimeout(state.timer);
+      state.reportedSubmitted = true;
+      state.parentWaiting = false;
+      state.deferred.resolve(this.submittedTraceResult(submissionId));
+    }
+  }
+
   private async awaitTraceResult(
     entry: SessionEntry,
     submissionId: string,
@@ -3072,11 +3098,7 @@ export class SessionManager {
     const state = this.registerTraceSubmission(entry, submissionId);
     state.record = record;
     state.parentWaiting = true;
-    const submitted: TraceDispatchResult = {
-      status: "submitted",
-      submissionId,
-      reason: "Trace acceptance is still pending; do not claim that a node was recorded.",
-    };
+    const submitted = this.submittedTraceResult(submissionId);
     const timeout = new Promise<TraceDispatchResult>((resolve) => {
       state.timer = setTimeout(() => {
         state.reportedSubmitted = true;
@@ -3111,6 +3133,9 @@ export class SessionManager {
       if (notifications.length === 0 && !monitorBatch) return;
       const agent = await this.ensureAgent(sessionId, name);
       if (agent.status === "stopped") return;
+      const traceToolErrorBaseline = name === "trace"
+        ? Object.values(agent.stats().errors).reduce((total, count) => total + count, 0)
+        : undefined;
       // A task notification may be injected into an active turn below. A
       // Monitor-only delivery must wait for idle because monitor output starts
       // a fresh agent turn rather than joining the current one.
@@ -3228,10 +3253,16 @@ export class SessionManager {
             nodeId: accepted.id,
           });
         } else {
+          const traceToolErrorCount = Object.values(agent.stats().errors)
+            .reduce((total, count) => total + count, 0);
+          const traceToolFailed = traceToolErrorBaseline !== undefined
+            && traceToolErrorCount > traceToolErrorBaseline;
           this.completeTraceSubmission(entry, {
             status: "rejected",
             submissionId,
-            reason: "Trace reviewed this event and did not add a node because it was not considered a durable research milestone.",
+            reason: traceToolFailed
+              ? "Trace processed this event but could not add a node because a curation action failed validation or execution. No durable Trace record was created."
+              : "Trace processed this event but did not add a node. No durable Trace record was created.",
           });
         }
       }
