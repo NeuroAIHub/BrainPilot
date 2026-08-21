@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 
-import { deriveKbGuidedState } from "../components/settings/kbGuidedWorkflow";
+import {
+  deriveKbGuidedState,
+  kbPdfUploadErrorKey,
+  kbPdfUploadRecovery,
+  kbSetupEventNeedsProbe,
+} from "../components/settings/kbGuidedWorkflow";
 
 describe("guided Knowledge Base workflow (#486)", () => {
   it("starts with PDF upload", () => {
@@ -25,5 +30,21 @@ describe("guided Knowledge Base workflow (#486)", () => {
     expect(state.action).toBe("setup");
     expect(state.steps.error).toBe("active");
     expect(state.steps.preparing).toBe("error");
+  });
+
+  it("maps duplicate PDFs to localized re-selection instead of guaranteed-failing retry", () => {
+    expect(kbPdfUploadErrorKey("KB_PDF_ALREADY_EXISTS"))
+      .toBe("settings.kb.guide.upload.alreadyExists");
+    expect(kbPdfUploadRecovery("KB_PDF_ALREADY_EXISTS")).toBe("choose");
+    expect(kbPdfUploadRecovery(undefined)).toBe("retry");
+  });
+
+  it("re-probes readiness when model/full setup reaches a terminal event", () => {
+    const sequence = [
+      { stage: "setup-env", event: "done" },
+      { stage: "setup-models", event: "done" },
+      { stage: "setup-full", event: "done" },
+    ];
+    expect(sequence.map(kbSetupEventNeedsProbe)).toEqual([false, true, true]);
   });
 });

@@ -156,6 +156,9 @@ export class DockerOrchestrator implements Orchestrator {
     const portKey = `${this.containerPort}/tcp`;
     const envList = Object.entries({
       BP_DATA_DIR: this.containerDataDir,
+      // Retrieval and any future in-container KB maintenance use the same
+      // per-runtime persistent volume instead of the image's ephemeral tree.
+      BP_KB_ROOT: `${this.containerDataDir}/KnowledgeBase`,
       // #261: when a shared root is mounted, tell the runtime its container path
       // so it exposes the `/shared` prefix. Injected before `...this.env` so an
       // explicit caller-provided BP_SHARED_DIR still wins.

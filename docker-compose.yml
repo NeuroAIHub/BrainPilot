@@ -20,6 +20,7 @@ services:
       - PORT=${BP_SANDBOX_PORT:-8081}
       - AGENT_RUNTIME_PORT=${BP_SANDBOX_PORT:-8081}
       - BP_DATA_DIR=/root/.bp-root
+      - BP_KB_ROOT=/root/.bp-root/KnowledgeBase
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
       - ANTHROPIC_BASE_URL=${ANTHROPIC_BASE_URL:-}
       - ANTHROPIC_MODEL=${ANTHROPIC_MODEL:-}
@@ -61,6 +62,9 @@ services:
       - "${BP_MAIN_PORT:-9001}:${BP_MAIN_PORT:-9001}"
     environment:
       - PORT=${BP_MAIN_PORT:-9001}
+      # The management API and runtime must read/write the same durable KB.
+      - BP_DATA_DIR=/root/.bp-root
+      - BP_KB_ROOT=/root/.bp-root/KnowledgeBase
       # static mode is selected by BP_RUNTIME_URL being set (points main at the fixed sandbox runtime)
       - BP_RUNTIME_URL=http://sandbox:${BP_SANDBOX_PORT:-8081}
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY:-}
@@ -71,6 +75,8 @@ services:
       - BP_MODELS_JSON=${BP_MODELS_JSON:-}
       - BP_MODEL_PROVIDER=${BP_MODEL_PROVIDER:-}
       - BP_MOCK=${BP_MOCK:-}
+    volumes:
+      - ${BP_DATA_DIR:-./brainpilot}:/root/.bp-root:rw
     healthcheck:
       test: ["CMD", "curl", "-f", "http://localhost:${BP_MAIN_PORT:-9001}/api/health"]
       interval: 30s

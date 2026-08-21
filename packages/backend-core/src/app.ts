@@ -819,7 +819,10 @@ export function createApp(options: CreateAppOptions): Hono {
     const filename = c.req.query("filename") ?? "";
     const declaredSize = Number(c.req.header("content-length") ?? "0");
     if (Number.isFinite(declaredSize) && declaredSize > KB_PDF_UPLOAD_MAX_BYTES) {
-      return c.json({ error: "The selected PDF exceeds the 256 MB upload limit." }, 413);
+      return c.json({
+        error: "The selected PDF exceeds the 256 MB upload limit.",
+        code: "KB_PDF_TOO_LARGE",
+      }, 413);
     }
     try {
       const bytes = await readKbPdfBody(c.req.raw.body);
@@ -827,7 +830,7 @@ export function createApp(options: CreateAppOptions): Hono {
       return c.json({ ok: true, ...saved }, 201);
     } catch (error) {
       if (error instanceof KbPdfUploadError) {
-        return c.json({ error: error.message }, error.status);
+        return c.json({ error: error.message, code: error.code }, error.status);
       }
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 500);
     }

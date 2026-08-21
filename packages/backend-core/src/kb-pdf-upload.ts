@@ -4,8 +4,20 @@ import { resolveBundledKbDir } from "@brainpilot/runtime";
 
 export const KB_PDF_UPLOAD_MAX_BYTES = 256 * 1024 * 1024;
 
+export type KbPdfUploadErrorCode =
+  | "KB_PDF_INVALID_FILENAME"
+  | "KB_PDF_ONLY"
+  | "KB_PDF_EMPTY"
+  | "KB_PDF_TOO_LARGE"
+  | "KB_PDF_INVALID_CONTENT"
+  | "KB_PDF_ALREADY_EXISTS";
+
 export class KbPdfUploadError extends Error {
-  constructor(message: string, readonly status: 400 | 409 | 413) {
+  constructor(
+    message: string,
+    readonly status: 400 | 409 | 413,
+    readonly code: KbPdfUploadErrorCode,
+  ) {
     super(message);
   }
 }
@@ -41,7 +53,11 @@ export async function readKbPdfBody(
       total += value.byteLength;
       if (total > maxBytes) {
         await reader.cancel();
-        throw new KbPdfUploadError("The selected PDF exceeds the 256 MB upload limit.", 413);
+        throw new KbPdfUploadError(
+          "The selected PDF exceeds the 256 MB upload limit.",
+          413,
+          "KB_PDF_TOO_LARGE",
+        );
       }
       chunks.push(value);
     }
@@ -60,10 +76,18 @@ export async function readKbPdfBody(
 function safePdfName(raw: string): string {
   const name = raw.normalize("NFC").trim();
   if (!name || name.length > 240 || name.includes("/") || name.includes("\\") || name.includes("\0")) {
-    throw new KbPdfUploadError("Choose a PDF with a valid filename.", 400);
+    throw new KbPdfUploadError(
+      "Choose a PDF with a valid filename.",
+      400,
+      "KB_PDF_INVALID_FILENAME",
+    );
   }
   if (!name.toLowerCase().endsWith(".pdf")) {
-    throw new KbPdfUploadError("Only PDF files can be added to the knowledge base.", 400);
+    throw new KbPdfUploadError(
+      "Only PDF files can be added to the knowledge base.",
+      400,
+      "KB_PDF_ONLY",
+    );
   }
   return name;
 }
@@ -80,12 +104,22 @@ export async function saveKbPdf(
   bytes: Uint8Array,
 ): Promise<{ filename: string; size: number }> {
   const filename = safePdfName(rawFilename);
-  if (bytes.byteLength === 0) throw new KbPdfUploadError("The selected PDF is empty.", 400);
+  if (bytes.byteLength === 0) {
+    throw new KbPdfUploadError("The selected PDF is empty.", 400, "KB_PDF_EMPTY");
+  }
   if (bytes.byteLength > KB_PDF_UPLOAD_MAX_BYTES) {
-    throw new KbPdfUploadError("The selected PDF exceeds the 256 MB upload limit.", 413);
+    throw new KbPdfUploadError(
+      "The selected PDF exceeds the 256 MB upload limit.",
+      413,
+      "KB_PDF_TOO_LARGE",
+    );
   }
   if (!hasPdfSignature(bytes)) {
-    throw new KbPdfUploadError("The selected file is not a valid PDF.", 400);
+    throw new KbPdfUploadError(
+      "The selected file is not a valid PDF.",
+      400,
+      "KB_PDF_INVALID_CONTENT",
+    );
   }
 
   const pdfDir = join(kbRoot, "source", "pdf");
@@ -94,7 +128,11 @@ export async function saveKbPdf(
     await writeFile(join(pdfDir, filename), bytes, { flag: "wx" });
   } catch (error) {
     if ((error as NodeJS.ErrnoException).code === "EEXIST") {
-      throw new KbPdfUploadError("A PDF with this filename already exists. Rename it and try again.", 409);
+      throw new KbPdfUploadError(
+        "A PDF with this filename already exists. Rename it and try again.",
+        409,
+        "KB_PDF_ALREADY_EXISTS",
+      );
     }
     throw error;
   }

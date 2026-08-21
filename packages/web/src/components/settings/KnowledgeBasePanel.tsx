@@ -27,7 +27,14 @@ import {
   type KbOverallKind,
   type KbReadiness,
 } from "./kbReadiness";
-import { deriveKbGuidedState, type KbGuideStepState } from "./kbGuidedWorkflow";
+import {
+  deriveKbGuidedState,
+  kbPdfUploadErrorKey,
+  kbPdfUploadRecovery as recoveryForKbPdfUpload,
+  kbSetupEventNeedsProbe,
+  type KbGuideStepState,
+  type KbPdfUploadRecovery,
+} from "./kbGuidedWorkflow";
 
 type Stage = "ocr" | "extract" | "chunk" | "vectorize";
 
@@ -654,6 +661,7 @@ export function KnowledgeBasePanel() {
   const technicalRef = useRef<HTMLDetailsElement | null>(null);
   const [pdfUploadBusy, setPdfUploadBusy] = useState(false);
   const [pdfUploadError, setPdfUploadError] = useState<string | null>(null);
+  const [pdfUploadRecovery, setPdfUploadRecovery] = useState<KbPdfUploadRecovery | null>(null);
   const [lastFailedPdfs, setLastFailedPdfs] = useState<File[]>([]);
   const [uploadedPdfNames, setUploadedPdfNames] = useState<string[]>([]);
   /**
@@ -931,19 +939,28 @@ export function KnowledgeBasePanel() {
     if (pdfs.length !== files.length) {
       setPdfUploadError(t("settings.kb.guide.upload.onlyPdf"));
       setLastFailedPdfs([]);
+      setPdfUploadRecovery("choose");
       return;
     }
     setPdfUploadBusy(true);
     setPdfUploadError(null);
+    setPdfUploadRecovery(null);
     setLastFailedPdfs([]);
     const completed: string[] = [];
+    let currentIndex = 0;
     try {
-      for (let index = 0; index < pdfs.length; index += 1) {
-        const file = pdfs[index]!;
+      for (; currentIndex < pdfs.length; currentIndex += 1) {
+        const file = pdfs[currentIndex]!;
         const result = await api.kb.uploadPdf(file);
         if (!result.ok) {
-          setLastFailedPdfs(pdfs.slice(index));
-          throw new Error(result.error || t("settings.kb.guide.upload.failed"));
+          const recovery = recoveryForKbPdfUpload(result.code);
+          setUploadedPdfNames((current) => [...new Set([...current, ...completed])]);
+          setLastFailedPdfs(recovery === "retry" ? pdfs.slice(currentIndex) : []);
+          setPdfUploadRecovery(recovery);
+          setPdfUploadError(t(kbPdfUploadErrorKey(result.code)));
+          if (result.error) console.warn("kb.uploadPdf failed:", result.code, result.error);
+          await refreshInventory();
+          return;
         }
         completed.push(result.filename ?? file.name);
       }
@@ -951,7 +968,10 @@ export function KnowledgeBasePanel() {
       await Promise.all([refreshInventory(), startProbe()]);
     } catch (err) {
       setUploadedPdfNames((current) => [...new Set([...current, ...completed])]);
-      setPdfUploadError(err instanceof Error ? err.message : t("settings.kb.guide.upload.failed"));
+      setLastFailedPdfs(pdfs.slice(currentIndex));
+      setPdfUploadRecovery("retry");
+      setPdfUploadError(t("settings.kb.guide.upload.failed"));
+      console.warn("kb.uploadPdf failed:", err);
       await refreshInventory();
     } finally {
       setPdfUploadBusy(false);
@@ -1039,6 +1059,7 @@ export function KnowledgeBasePanel() {
     if (ev.stage === "setup-full" && (ev.event === "done" || ev.event === "error")) {
       setActiveJob(null);
     }
+    if (kbSetupEventNeedsProbe(ev)) void startProbe();
   }
 
   function openSse() {
@@ -1388,7 +1409,12 @@ export function KnowledgeBasePanel() {
               <strong>{t("settings.kb.guide.errorTitle")}</strong>
               <p>{pdfUploadError ?? t("settings.kb.guide.errorHint")}</p>
             </div>
-            {lastFailedPdfs.length > 0 ? (
+            {pdfUploadRecovery === "choose" ? (
+              <button className="settings-button settings-button--ghost" type="button" onClick={() => pdfInputRef.current?.click()} disabled={pdfUploadBusy}>
+                <FilePlus2 size={13} aria-hidden />
+                {t("settings.kb.guide.chooseAnother")}
+              </button>
+            ) : lastFailedPdfs.length > 0 ? (
               <button className="settings-button settings-button--ghost" type="button" onClick={() => void uploadPdfs(lastFailedPdfs)} disabled={pdfUploadBusy}>
                 <RefreshCw size={13} aria-hidden />
                 {t("settings.kb.guide.retryUpload")}
