@@ -14,6 +14,7 @@ import type {
   CompactionReason,
   CompactionStartValue,
   UserInputCancellationReason,
+  WorkspaceRestoreEventMetadata,
 } from "@brainpilot/protocol";
 import { CUSTOM_EVENT } from "@brainpilot/protocol";
 
@@ -240,7 +241,7 @@ export const ev = {
       terminal?: boolean;
       id?: string;
       code?: string;
-      metadata?: Record<string, unknown>;
+      metadata?: WorkspaceRestoreEventMetadata;
     },
   ): AgUiEvent {
     return {

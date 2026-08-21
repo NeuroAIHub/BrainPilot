@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
-import { api } from "../utils/api";
+import { ApiResponseError, api } from "../utils/api";
 import {
   normalizeProviderProfile,
   normalizeSession,
@@ -123,6 +123,30 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
       makeResponse({ contentType: "text/html", jsonThrows: true, json: "<!doctype html>" }),
     );
     await expect(api.sessions.list()).rejects.toThrow(/unexpected \(non-JSON\) response/i);
+  });
+});
+
+describe("structured restore errors", () => {
+  it("preserves status, code, and conflicts from the runtime", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      ok: false,
+      status: 409,
+      contentType: "application/json",
+      json: {
+        error: "cannot restore while an agent is active",
+        code: "SESSION_ACTIVE",
+        conflicts: [{ path: "result.md", checkpointIds: ["cp-1"], reason: "changed" }],
+      },
+    }));
+
+    const error = await api.sessions.restoreTraceCheckpoint("s1", "cp-1", "token")
+      .catch((reason) => reason);
+    expect(error).toBeInstanceOf(ApiResponseError);
+    expect(error).toMatchObject({
+      status: 409,
+      code: "SESSION_ACTIVE",
+      conflicts: [{ path: "result.md" }],
+    });
   });
 });
 

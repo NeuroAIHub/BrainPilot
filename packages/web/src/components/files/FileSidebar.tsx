@@ -38,6 +38,7 @@ import {
   findFileSidebarNode,
   type FileSidebarTreeNode,
 } from "./fileSidebarTree";
+import { restoreNoticeIsCurrent } from "./workspaceRestoreState";
 import { FilePreviewView, PreviewSource } from "./FilePreviewView";
 import { PluginPreviewHost } from "./PluginPreviewHost";
 import { matchEnabledPreviewer, type EnabledPreviewer } from "./previewerRegistry";
@@ -355,32 +356,42 @@ export function FileSidebar({
   const latestWorkspaceRestore = useMemo(() => {
     for (let index = messages.length - 1; index >= 0; index -= 1) {
       const view = messages[index].systemMessage;
-      if (view?.code === "workspace_restored" && view.workspaceRestore) return view.workspaceRestore;
+      if (view?.code === "workspace_restored" && view.workspaceRestore) {
+        return { restore: view.workspaceRestore, messageIndex: index };
+      }
     }
     return null;
   }, [messages]);
 
   useEffect(() => {
     if (!latestWorkspaceRestore) return;
-    const restoreKey = latestWorkspaceRestore.changeId
-      ?? latestWorkspaceRestore.restoredAt
-      ?? latestWorkspaceRestore.checkpointId
+    // Chat keeps the durable restore event as history. The file-preview badge
+    // is stricter: it only claims the selected bytes are restored when this is
+    // still the latest event and those bytes were successfully reloaded.
+    if (!restoreNoticeIsCurrent({
+      restoreMessageIndex: latestWorkspaceRestore.messageIndex,
+      messageCount: messages.length,
+      isDirty,
+      successfullyReloaded: true,
+    })) {
+      setRestoreNotice(null);
+      return;
+    }
+    const restore = latestWorkspaceRestore.restore;
+    const restoreKey = restore.changeId
+      ?? restore.restoredAt
+      ?? restore.checkpointId
       ?? "workspace-restore";
     if (handledRestoreRef.current === restoreKey) return;
     handledRestoreRef.current = restoreKey;
-    const notice: WorkspaceRestoreNotice = {
-      restoredAt: latestWorkspaceRestore.restoredAt ?? new Date().toISOString(),
-      checkpointId: latestWorkspaceRestore.checkpointId,
-      files: latestWorkspaceRestore.files,
-    };
-    setRestoreNotice(notice);
+    setRestoreNotice(null);
     if (!isOpen || currentSandbox?.status !== "running") return;
     void loadDirectory(WORKSPACE_ROOT_PATH);
 
     const relativePath = selectedPath ? workspaceRelativePath(selectedPath) : null;
     if (
       !relativePath
-      || !latestWorkspaceRestore.files.includes(relativePath)
+      || !restore.files.includes(relativePath)
       || !sandboxId
       || isDirty
     ) return;
@@ -389,12 +400,29 @@ export function FileSidebar({
       setDraftContent(loaded.content);
       setEditError(null);
       setConflictContent(null);
+      if (restoreNoticeIsCurrent({
+        restoreMessageIndex: latestWorkspaceRestore.messageIndex,
+        messageCount: messages.length,
+        isDirty: false,
+        successfullyReloaded: true,
+      })) {
+        setRestoreNotice({
+          restoredAt: restore.restoredAt ?? new Date().toISOString(),
+          checkpointId: restore.checkpointId,
+          files: [relativePath],
+        });
+      }
     }).catch(() => {
       setSelectedContent(null);
       setDraftContent("");
+      setRestoreNotice(null);
       setEditError(t("files.preview.restoredMissing"));
     });
-  }, [currentSandbox?.status, isDirty, isOpen, latestWorkspaceRestore, loadDirectory, sandboxId, selectedPath, t]);
+  }, [currentSandbox?.status, isDirty, isOpen, latestWorkspaceRestore, loadDirectory, messages.length, sandboxId, selectedPath, t]);
+
+  useEffect(() => {
+    if (isDirty) setRestoreNotice(null);
+  }, [isDirty]);
 
   useEffect(() => {
     if (isOpen && currentSandbox?.status === "running") {
@@ -647,6 +675,7 @@ export function FileSidebar({
 
   const refreshFiles = async () => {
     setIsRefreshing(true);
+    setRestoreNotice(null);
     try {
       const paths = Array.from(expandedPaths);
       for (const path of paths.length ? paths : [WORKSPACE_ROOT_PATH, DATA_ROOT_PATH]) {
@@ -756,6 +785,7 @@ export function FileSidebar({
     setIsEditing(false);
     setEditError(null);
     setConflictContent(null);
+    setRestoreNotice(null);
     setRequestedLine(line);
     if (!sandboxId) {
       return;
@@ -837,6 +867,7 @@ export function FileSidebar({
       const saved = await api.sandbox.uploadFile(sandboxId, selectedFile.path, blob);
       const nextContent = { path: selectedFile.path, content: draftContent, size: saved.size };
       setSelectedContent(nextContent);
+      setRestoreNotice(null);
       setConflictContent(null);
       await loadDirectory(parentPath(selectedFile.path));
       notifyFileSourcesChanged();

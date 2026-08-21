@@ -51,6 +51,7 @@ import type {
   TraceNodeRecord,
   TraceCausalParent,
   AuditReport,
+  WorkspaceRestoreEventMetadata,
 } from "@brainpilot/protocol";
 
 // Re-export the canonical protocol domain types under their existing names so
@@ -96,6 +97,7 @@ export type {
   TraceNodeRecord,
   TraceCausalParent,
   AuditReport,
+  WorkspaceRestoreEventMetadata,
 };
 
 /**
@@ -240,16 +242,7 @@ export interface ChatMessage {
 }
 
 /** View-model for a `system_message` AG-UI event (post-normalize). */
-export interface WorkspaceRestoreView {
-  mode: "checkpoint" | "causal";
-  checkpointId?: string;
-  nodeId?: string;
-  changeId?: string;
-  restoredAt?: string;
-  files: string[];
-  fileCount: number;
-  affectedNodeCount?: number;
-}
+export type WorkspaceRestoreView = WorkspaceRestoreEventMetadata;
 
 export interface SystemMessageView {
   level: "info" | "warning" | "error" | "fatal";
@@ -437,6 +430,7 @@ export interface AgUiEvent {
   message?: string;       // RUN_ERROR
   code?: string;          // RUN_ERROR
   terminal?: boolean;     // RUN_ERROR: false while an outer retry loop owns recovery
+  metadata?: WorkspaceRestoreEventMetadata | Record<string, unknown>;
   result?: unknown;       // RUN_FINISHED
   parentRunId?: string;
 

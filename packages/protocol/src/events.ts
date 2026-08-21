@@ -445,6 +445,19 @@ export type AgentStatusUpdateEvent = z.infer<typeof AgentStatusUpdateEventSchema
 export const SystemMessageLevelSchema = z.enum(["info", "warning", "error", "fatal"]);
 export type SystemMessageLevel = z.infer<typeof SystemMessageLevelSchema>;
 
+/** Typed payload for a durable workspace restore history event (#492). */
+export const WorkspaceRestoreEventMetadataSchema = z.object({
+  mode: z.enum(["checkpoint", "causal"]),
+  checkpointId: z.string().optional(),
+  nodeId: z.string().optional(),
+  changeId: z.string().optional(),
+  restoredAt: z.string().optional(),
+  files: z.array(z.string()),
+  fileCount: z.number().int().nonnegative(),
+  affectedNodeCount: z.number().int().nonnegative().optional(),
+});
+export type WorkspaceRestoreEventMetadata = z.infer<typeof WorkspaceRestoreEventMetadataSchema>;
+
 export const SystemMessageEventSchema = z
   .object({
     type: z.literal("system_message"),
@@ -462,6 +475,10 @@ export const SystemMessageEventSchema = z
     recoverable: z.boolean(),
     /** Terminal run failure; the frontend must keep this recovery card visible. */
     terminal: z.boolean().optional(),
+    /** Stable product-level message code. */
+    code: z.string().optional(),
+    /** Structured workspace-restore metadata. */
+    metadata: WorkspaceRestoreEventMetadataSchema.optional(),
   })
   .passthrough();
 export type SystemMessageEvent = z.infer<typeof SystemMessageEventSchema>;

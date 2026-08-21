@@ -51,7 +51,7 @@ export function toSystemMessageView(event: WebSocketEvent): SystemMessageView {
   const files = Array.isArray(metadata?.files)
     ? metadata.files.filter((file): file is string => typeof file === "string")
     : [];
-  const workspaceRestore = e.code === "workspace_restored"
+  const workspaceRestore: SystemMessageView["workspaceRestore"] = e.code === "workspace_restored"
     ? {
         mode,
         checkpointId: optStr(metadata?.checkpointId),

@@ -203,9 +203,21 @@ export function TraceCheckpointDetail({ node, sessionId, restoreDisabled, onRest
             files: causalPreview.files.length,
           })}</p>
           {causalPreview.conflicts.length ? (
-            <p className="trace-checkpoint__error">
-              <AlertTriangle size={13} /> {t("trace.checkpoint.causalConflicts", { count: causalPreview.conflicts.length })}
-            </p>
+            <div className="trace-checkpoint__conflicts" role="alert">
+              <p className="trace-checkpoint__error">
+                <AlertTriangle size={13} /> {t("trace.checkpoint.causalConflicts", { count: causalPreview.conflicts.length })}
+              </p>
+              <p>{t("trace.checkpoint.conflictGuidance")}</p>
+              <strong>{t("trace.checkpoint.conflictFiles")}</strong>
+              <ul>
+                {causalPreview.conflicts.map((conflict) => (
+                  <li key={`${conflict.path}:${conflict.checkpointIds.join(":")}`}>
+                    <code>{conflict.path}</code>
+                    <small>{conflict.reason}</small>
+                  </li>
+                ))}
+              </ul>
+            </div>
           ) : null}
           <div>
             <button type="button" onClick={() => setCausalPreview(null)}>{t("trace.checkpoint.cancel")}</button>

@@ -10,6 +10,7 @@ import {
   parseEvent,
   safeParseEvent,
   SystemMessageEventSchema,
+  WorkspaceRestoreEventMetadataSchema,
   UserInputRequestEventSchema,
   UserInputResponseEventSchema,
   UserInputCancelledEventSchema,
@@ -68,6 +69,31 @@ describe("AG-UI event union — NEW events", () => {
     expect(safeParseEvent({ type: "system_message", session_id: "s1", level: "info" }).success).toBe(
       false,
     );
+  });
+
+  it("owns the typed workspace restore payload", () => {
+    const event = SystemMessageEventSchema.parse({
+      type: "system_message",
+      session_id: "s1",
+      level: "info",
+      message: "restored",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      recoverable: true,
+      code: "workspace_restored",
+      metadata: {
+        mode: "checkpoint",
+        checkpointId: "checkpoint-1",
+        restoredAt: "2026-08-21T00:00:00.000Z",
+        files: ["result.md"],
+        fileCount: 1,
+      },
+    });
+    expect(event.code).toBe("workspace_restored");
+    expect(WorkspaceRestoreEventMetadataSchema.parse(event.metadata).files).toEqual(["result.md"]);
+    expect(() => SystemMessageEventSchema.parse({
+      ...event,
+      metadata: { mode: "checkpoint", files: "result.md", fileCount: 1 },
+    })).toThrow();
   });
 
   it("round-trips user_input_request with options", () => {

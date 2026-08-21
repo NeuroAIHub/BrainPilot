@@ -7331,6 +7331,44 @@ button {
   background: var(--surface-2);
 }
 
+.trace-checkpoint__conflicts {
+  display: grid;
+  gap: 6px;
+}
+
+.trace-checkpoint__conflicts p {
+  margin: 0;
+  font-size: 12px;
+}
+
+.trace-checkpoint__conflicts ul {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.trace-checkpoint__conflicts li {
+  display: grid;
+  gap: 2px;
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  background: var(--surface-1);
+  padding: 6px 8px;
+}
+
+.trace-checkpoint__conflicts code {
+  overflow-wrap: anywhere;
+  color: var(--text-primary);
+  font-size: 11px;
+}
+
+.trace-checkpoint__conflicts small {
+  color: var(--text-muted);
+  font-size: 11px;
+}
+
 
 .kb-ready__dims {
   margin: 0;

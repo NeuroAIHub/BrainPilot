@@ -16,6 +16,13 @@ describe("restore error guidance (#492)", () => {
       .toBe("trace.checkpoint.recoveryFailedGuidance");
   });
 
+  it("prefers structured runtime codes over localized error text", () => {
+    expect(restoreErrorMessage({ code: "SESSION_ACTIVE", message: "localized text" }, t))
+      .toBe("trace.checkpoint.activeGuidance");
+    expect(restoreErrorMessage({ code: "CAUSAL_CONFLICT", message: "localized text" }, t))
+      .toBe("trace.checkpoint.conflictGuidance");
+  });
+
   it("keeps an unknown failure as localized fallback detail", () => {
     expect(restoreErrorMessage(new Error("disk offline"), t))
       .toContain("trace.checkpoint.restoreFailed");
