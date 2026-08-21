@@ -34,10 +34,12 @@ describe("system_message mapping", () => {
       details: "stacktrace",
       agent: "librarian",
       recoverable: true,
+      terminal: true,
     } as WebSocketEvent);
     expect(v.recoverable).toBe(true);
     expect(v.details).toBe("stacktrace");
     expect(v.agent).toBe("librarian");
+    expect(v.terminal).toBe(true);
   });
 
   it("falls back to info for unknown level", () => {
@@ -73,6 +75,52 @@ describe("system_message mapping", () => {
     expect(msgs).toHaveLength(1);
     expect(msgs[0].id).toBe("retry-librarian-run_1");
     expect(msgs[0].content).toBe("retrying (3/3)");
+  });
+
+  it("deduplicates the same persisted system message across history and SSE replay", () => {
+    const event = {
+      type: "system_message",
+      _eventId: "event-terminal-1",
+      level: "error",
+      message: "provider failed",
+      terminal: true,
+    } as unknown as WebSocketEvent;
+    const once = reduceMessagesForEvent([], event);
+    const replayed = reduceMessagesForEvent(once, event);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.id).toBe("event-terminal-1");
+  });
+
+  it("deduplicates legacy terminal errors that predate stable event ids", () => {
+    const event = {
+      type: "system_message",
+      agent: "principal",
+      level: "error",
+      message: "legacy provider failed",
+      terminal: true,
+    } as unknown as WebSocketEvent;
+    const once = reduceMessagesForEvent([], event);
+    const replayed = reduceMessagesForEvent(once, event);
+    expect(replayed).toHaveLength(1);
+    expect(replayed[0]?.systemMessage?.terminal).toBe(true);
+  });
+
+  it("keeps the same legacy failure when it happens again on a later user turn", () => {
+    const event = {
+      type: "system_message",
+      agent: "principal",
+      level: "error",
+      message: "repeated provider failure",
+      terminal: true,
+    } as unknown as WebSocketEvent;
+    const first = reduceMessagesForEvent([
+      { id: "u1", role: "user", content: "first", createdAt: new Date().toISOString() },
+    ], event);
+    const second = reduceMessagesForEvent([
+      ...first,
+      { id: "u2", role: "user", content: "second", createdAt: new Date().toISOString() },
+    ], event);
+    expect(second.filter((message) => message.systemMessage?.terminal)).toHaveLength(2);
   });
 
   it("#167: system_messages without a stable id still append", () => {
@@ -349,7 +397,7 @@ describe("run terminators clear dangling streaming flags", () => {
     expect(out[0]!.streaming).toBe(true);
   });
 
-  it("RUN_ERROR clears streaming AND appends an error message", () => {
+  it("RUN_ERROR clears streaming AND appends a visible terminal recovery card", () => {
     const withRetry = reduceMessagesForEvent([open("principal")], {
       type: "agent_status_update",
       agentName: "principal",
@@ -365,7 +413,89 @@ describe("run terminators clear dangling streaming flags", () => {
     } as WebSocketEvent);
     expect(out[0]!.streaming).toBe(false);
     expect(out.some((m) => m.kind === "auto_retry")).toBe(false);
-    expect(out.some((m) => m.kind === "error" && m.content === "boom")).toBe(true);
+    const terminal = out.find((m) => m.systemMessage?.terminal);
+    expect(terminal?.kind).toBe("system_message");
+    expect(terminal?.content).toBe("boom");
+  });
+
+  it("RUN_ERROR promotes the preceding rich diagnostic instead of duplicating it", () => {
+    const diagnostic = reduceMessagesForEvent([
+      { id: "u", role: "user", content: "run", createdAt: new Date().toISOString() },
+    ], {
+      type: "system_message",
+      agent: "principal",
+      level: "error",
+      message: "provider rejected",
+      details: '401 {"request_id":"req-1"}',
+      recoverable: true,
+    } as WebSocketEvent);
+    const out = reduceMessagesForEvent(diagnostic, {
+      type: "RUN_ERROR",
+      agentName: "principal",
+      message: "provider rejected",
+    } as WebSocketEvent);
+    const errors = out.filter((message) => message.kind === "system_message");
+    expect(errors).toHaveLength(1);
+    expect(errors[0]?.systemMessage).toMatchObject({
+      terminal: true,
+      details: '401 {"request_id":"req-1"}',
+    });
+  });
+
+  it("does not turn a retryable delegated RUN_ERROR into a terminal or partial result", () => {
+    const user: ChatMessage = {
+      id: "u",
+      role: "user",
+      content: "run the analysis",
+      createdAt: new Date().toISOString(),
+    };
+    const diagnostic = reduceMessagesForEvent([user], {
+      type: "system_message",
+      agent: "analyst",
+      level: "error",
+      message: "503 unavailable",
+      recoverable: true,
+      terminal: false,
+    } as WebSocketEvent);
+    const afterAttempt = reduceMessagesForEvent(diagnostic, {
+      type: "RUN_ERROR",
+      agentName: "analyst",
+      message: "503 unavailable",
+      terminal: false,
+    } as WebSocketEvent);
+    const out = reduceMessagesForEvent(afterAttempt, {
+      type: "TEXT_MESSAGE_START",
+      messageId: "principal-answer",
+      agentName: "principal",
+      role: "assistant",
+    } as WebSocketEvent);
+
+    expect(afterAttempt.some((message) => message.systemMessage?.terminal)).toBe(false);
+    expect(out.find((message) => message.id === "principal-answer")?.partial).not.toBe(true);
+  });
+
+  it("marks a downstream Principal answer partial after delegated work fails", () => {
+    const user: ChatMessage = {
+      id: "u",
+      role: "user",
+      content: "run the analysis",
+      createdAt: new Date().toISOString(),
+    };
+    const failed = reduceMessagesForEvent([user], {
+      type: "system_message",
+      agent: "analyst",
+      level: "error",
+      message: "analysis failed",
+      recoverable: true,
+      terminal: true,
+    } as WebSocketEvent);
+    const out = reduceMessagesForEvent(failed, {
+      type: "TEXT_MESSAGE_START",
+      messageId: "principal-answer",
+      agentName: "principal",
+      role: "assistant",
+    } as WebSocketEvent);
+    expect(out.find((message) => message.id === "principal-answer")?.partial).toBe(true);
   });
 
   it("RUN_FINISHED removes only the terminating agent's retry card", () => {
