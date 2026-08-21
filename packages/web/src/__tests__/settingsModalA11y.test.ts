@@ -5,6 +5,7 @@ import {
   validateProviderForm,
 } from "../components/settings/providerFormValidation";
 import {
+  FOCUSABLE_SELECTOR,
   resolveEscapeLayer,
   resolveFocusTrapTarget,
 } from "../components/settings/settingsModalStack";
@@ -96,7 +97,11 @@ describe("resolveEscapeLayer (#328)", () => {
 });
 
 describe("resolveFocusTrapTarget (#487)", () => {
-  const controls = ["first", "middle", "last"] as const;
+  const controls = ["first", "summary", "last"] as const;
+
+  it("includes native details summary controls in the owned Tab order", () => {
+    expect(FOCUSABLE_SELECTOR.split(", ")).toContain("summary");
+  });
 
   it("wraps focus that lands on the dialog container", () => {
     expect(resolveFocusTrapTarget(controls, null, false)).toBe("first");
@@ -109,7 +114,7 @@ describe("resolveFocusTrapTarget (#487)", () => {
   });
 
   it("owns forward and backward movement between interior controls", () => {
-    expect(resolveFocusTrapTarget(controls, "middle", false)).toBe("last");
-    expect(resolveFocusTrapTarget(controls, "middle", true)).toBe("first");
+    expect(resolveFocusTrapTarget(controls, "summary", false)).toBe("last");
+    expect(resolveFocusTrapTarget(controls, "summary", true)).toBe("first");
   });
 });
