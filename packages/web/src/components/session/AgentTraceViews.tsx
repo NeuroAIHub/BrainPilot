@@ -159,6 +159,15 @@ export function TracePanel() {
   }, [messages]);
   const wasUserAdjustedRef = useRef(false);
   const prevNodeCountRef = useRef(0);
+
+  // A live trace_node delta can arrive before the Host attaches its checkpoint
+  // and artifact metadata. Refresh once when the user opens Trace so the detail
+  // panel never requires a second manual Refresh to expose restore controls.
+  useEffect(() => {
+    if (!currentSession) return;
+    void refreshTrace(currentSession.id);
+  }, [currentSession?.id, refreshTrace]);
+
   const formatNodeKind = (kind: string) => {
     const key = getNodeKindLabelKey(kind);
     return key ? t(key) : kind;
