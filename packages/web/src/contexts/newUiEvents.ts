@@ -44,13 +44,37 @@ export function toSystemMessageView(event: WebSocketEvent): SystemMessageView {
   // omits it.
   const recoverable =
     typeof e.recoverable === "boolean" ? e.recoverable : level !== "fatal";
+  const metadata = e.metadata && typeof e.metadata === "object"
+    ? e.metadata as Record<string, unknown>
+    : undefined;
+  const mode: "checkpoint" | "causal" = metadata?.mode === "causal" ? "causal" : "checkpoint";
+  const files = Array.isArray(metadata?.files)
+    ? metadata.files.filter((file): file is string => typeof file === "string")
+    : [];
+  const workspaceRestore: SystemMessageView["workspaceRestore"] = e.code === "workspace_restored"
+    ? {
+        mode,
+        checkpointId: optStr(metadata?.checkpointId),
+        nodeId: optStr(metadata?.nodeId),
+        changeId: optStr(metadata?.changeId),
+        restoredAt: optStr(metadata?.restoredAt),
+        files,
+        fileCount: num(metadata?.fileCount, files.length),
+        affectedNodeCount: typeof metadata?.affectedNodeCount === "number"
+          ? metadata.affectedNodeCount
+          : undefined,
+      }
+    : undefined;
   return {
     level,
     message: str(e.message),
     details: optStr(e.details),
     agent: optStr(e.agent) ?? optStr(e.agentName),
     recoverable,
+    terminal: e.terminal === true,
     timestamp: optStr(e.timestamp),
+    code: optStr(e.code),
+    workspaceRestore,
   };
 }
 
@@ -118,7 +142,8 @@ export function systemMessageToChatMessage(event: WebSocketEvent): ChatMessage {
   const view = toSystemMessageView(event);
   const e = event as Record<string, unknown>;
   return {
-    id: str(e.id ?? e.messageId) || `sysmsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    id: str(e.id ?? e.messageId ?? e._eventId ?? e._event_id)
+      || `sysmsg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
     role: "system",
     content: view.message,
     createdAt: view.timestamp ?? new Date().toISOString(),

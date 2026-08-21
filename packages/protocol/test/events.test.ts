@@ -10,6 +10,7 @@ import {
   parseEvent,
   safeParseEvent,
   SystemMessageEventSchema,
+  WorkspaceRestoreEventMetadataSchema,
   UserInputRequestEventSchema,
   UserInputResponseEventSchema,
   UserInputCancelledEventSchema,
@@ -43,10 +44,12 @@ describe("AG-UI event union — NEW events", () => {
         details: "120s",
         timestamp: "2026-06-12T00:00:00Z",
         recoverable: level !== "fatal",
+        terminal: level === "error" || level === "fatal",
       };
       const parsed = parseEvent(e);
       expect(parsed.type).toBe("system_message");
       expect(SystemMessageEventSchema.parse(e).level).toBe(level);
+      expect(SystemMessageEventSchema.parse(e).terminal).toBe(level === "error" || level === "fatal");
     }
   });
 
@@ -66,6 +69,31 @@ describe("AG-UI event union — NEW events", () => {
     expect(safeParseEvent({ type: "system_message", session_id: "s1", level: "info" }).success).toBe(
       false,
     );
+  });
+
+  it("owns the typed workspace restore payload", () => {
+    const event = SystemMessageEventSchema.parse({
+      type: "system_message",
+      session_id: "s1",
+      level: "info",
+      message: "restored",
+      timestamp: "2026-08-21T00:00:00.000Z",
+      recoverable: true,
+      code: "workspace_restored",
+      metadata: {
+        mode: "checkpoint",
+        checkpointId: "checkpoint-1",
+        restoredAt: "2026-08-21T00:00:00.000Z",
+        files: ["result.md"],
+        fileCount: 1,
+      },
+    });
+    expect(event.code).toBe("workspace_restored");
+    expect(WorkspaceRestoreEventMetadataSchema.parse(event.metadata).files).toEqual(["result.md"]);
+    expect(() => SystemMessageEventSchema.parse({
+      ...event,
+      metadata: { mode: "checkpoint", files: "result.md", fileCount: 1 },
+    })).toThrow();
   });
 
   it("round-trips user_input_request with options", () => {
@@ -151,7 +179,10 @@ describe("AG-UI event union — existing events", () => {
     expect(parseEvent({ type: "RUN_FINISHED", run_id: "r1", result: { ok: 1 } }).type).toBe(
       "RUN_FINISHED",
     );
-    expect(parseEvent({ type: "RUN_ERROR", message: "boom", code: "X" }).type).toBe("RUN_ERROR");
+    expect(parseEvent({ type: "RUN_ERROR", message: "boom", code: "X", terminal: false })).toMatchObject({
+      type: "RUN_ERROR",
+      terminal: false,
+    });
   });
 
   it("round-trips MESSAGES_SNAPSHOT with a message", () => {
