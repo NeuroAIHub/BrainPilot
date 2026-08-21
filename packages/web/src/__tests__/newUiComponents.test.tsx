@@ -103,6 +103,23 @@ describe("AskUserCard — structure", () => {
     expect(html).not.toContain("ask-user__input");
     expect(html).not.toContain("<button");
     expect(html).toContain("ask-user__pending");
+    expect(html).toContain("chat.ask.pending.withFreeText");
+  });
+
+  it("uses option-only instructions when free text is disabled", () => {
+    const html = renderToStaticMarkup(
+      <AskUserCard
+        view={{
+          requestId: "r-options",
+          agent: "principal",
+          question: "Pick",
+          options: ["A", "B"],
+          allowFreeText: false,
+        }}
+      />,
+    );
+    expect(html).toContain("chat.ask.pending.optionsOnly");
+    expect(html).not.toContain("chat.ask.pending.withFreeText");
   });
 
   it("renders the answered state once resolved", () => {
@@ -164,6 +181,10 @@ describe("AskUserComposer — takeover picker (#272)", () => {
     expect(html).toContain(">1<");
     expect(html).toContain(">2<");
     expect(html).toContain("ask-user-composer__submit");
+    expect(html).toContain('role="listbox"');
+    expect(html).toContain('role="option"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain("aria-activedescendant");
     // #272: no escape hatch — there is no "ignore/dismiss" control.
     expect(html).not.toContain("ask-user-composer__ignore");
     // Free text defaults to enabled when the tool omits the flag.

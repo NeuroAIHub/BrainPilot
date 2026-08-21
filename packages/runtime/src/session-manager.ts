@@ -919,8 +919,8 @@ export class SessionManager {
    * attached in the draft composer *before* the real session exists. They land
    * in `workspaces/local/` — but the agent's cwd is `workspaces/<sessionId>/`,
    * so without this it can't read the file the user just attached. We treat
-   * `workspaces/local/` as a staging area and drain it into the real session
-   * workspace right before the agent runs (see drainLocalUploads).
+   * `workspaces/local/` as a staging area and drain it when the real session is
+   * created (see drainLocalUploads).
    */
   private static readonly UPLOAD_STAGING_SID = "local";
   /**
@@ -1309,7 +1309,8 @@ export class SessionManager {
    * real session's workspace so the agent — whose cwd is `workspaces/<sid>/` —
    * can read files the user attached in the draft composer (when no real
    * session id existed yet, the web uploads against the literal `"local"`
-   * sandbox id). Called right before the agent runs.
+   * sandbox id). Called while the real session is created, before the first
+   * message post can fail.
    *
    * Move semantics: each staged entry is renamed into the session workspace
    * (an existing same-named entry in the session is left untouched and the
@@ -1687,6 +1688,9 @@ export class SessionManager {
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
     await subagents.restore();
+    if (!_restore) {
+      await this.drainLocalUploads(id);
+    }
     this.emitTaskSnapshot(entry);
     if (_restore) {
       for (const target of taskLedger.notificationTargets()) this.wakeAgent(id, target);
@@ -1853,10 +1857,6 @@ export class SessionManager {
       return { accepted: false };
     }
     const agent = await this.ensureAgent(sessionId, agentName);
-    // #60: pull any composer uploads staged under workspaces/local/ into this
-    // session's workspace (the agent's cwd) before it runs, so it can read the
-    // file the user just attached. No-op when nothing was staged.
-    await this.drainLocalUploads(sessionId);
 
     // Snapshot user/Bench-provided inputs before the first agent prompt. Without
     // this baseline the first record_trace diffs against Git's empty tree and

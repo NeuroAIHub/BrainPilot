@@ -3390,6 +3390,13 @@ button {
   background: var(--color-surface);
   border-color: var(--color-accent);
 }
+.ask-user-composer__option:hover:not(.is-active) {
+  background: color-mix(in srgb, var(--color-surface) 72%, transparent);
+}
+.ask-user-composer__option:focus-visible {
+  outline: 2px solid color-mix(in srgb, var(--color-accent) 55%, transparent);
+  outline-offset: 1px;
+}
 .ask-user-composer__option--free { cursor: text; }
 .ask-user-composer__num {
   flex: none;
@@ -5303,6 +5310,7 @@ button {
 }
 
 .file-preview__download,
+.file-preview__use,
 .file-preview__mode,
 .file-preview__save {
   display: inline-flex;
@@ -5328,6 +5336,12 @@ button {
   color: var(--color-accent);
 }
 
+.file-preview__use {
+  border-color: color-mix(in srgb, var(--color-accent) 52%, var(--color-border));
+  background: color-mix(in srgb, var(--color-accent) 8%, var(--color-surface));
+  color: var(--color-accent);
+}
+
 .file-preview__actions {
   display: flex;
   align-items: center;
@@ -5341,6 +5355,8 @@ button {
 
 .file-preview__download:hover,
 .file-preview__download:focus-visible,
+.file-preview__use:hover,
+.file-preview__use:focus-visible,
 .file-preview__mode:hover,
 .file-preview__mode:focus-visible,
 .file-preview__save:hover,
