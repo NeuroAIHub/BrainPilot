@@ -1,6 +1,6 @@
 {
   "name": "@brainpilot/backend-core",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "engines": {
     "node": ">=22"
   },
@@ -39,9 +39,9 @@
     "start": "node ./dist/server.js"
   },
   "dependencies": {
-    "@brainpilot/plugin-sdk": "^0.2.1",
-    "@brainpilot/protocol": "^0.2.1",
-    "@brainpilot/runtime": "^0.2.1",
+    "@brainpilot/plugin-sdk": "^0.2.2",
+    "@brainpilot/protocol": "^0.2.2",
+    "@brainpilot/runtime": "^0.2.2",
     "@hono/node-server": "^2.1.0",
     "hono": "^4.13.0"
   },

@@ -1,6 +1,6 @@
 {
   "id": "org.brainpilot.monitor",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "apiVersion": "1",
   "displayName": "Monitor",
   "description": "Start session-scoped background commands and wake the owning agent when stdout emits lines.",
@@ -8,7 +8,7 @@
     "workflow"
   ],
   "engines": {
-    "brainpilot": ">=0.2.1 <0.3.0"
+    "brainpilot": ">=0.2.2 <0.3.0"
   },
   "environments": [
     "local"
