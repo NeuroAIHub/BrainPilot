@@ -1,6 +1,6 @@
 {
   "id": "org.brainpilot.research",
-  "version": "0.2.0",
+  "version": "0.2.1",
   "apiVersion": "1",
   "displayName": "BrainPilot Research",
   "description": "Canonical research evidence and data-inventory workflows for BrainPilot experts.",
@@ -10,7 +10,7 @@
     "skills"
   ],
   "engines": {
-    "brainpilot": ">=0.2.0 <0.3.0"
+    "brainpilot": ">=0.2.1 <0.3.0"
   },
   "environments": [
     "local",

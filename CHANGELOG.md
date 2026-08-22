@@ -3,6 +3,33 @@
 This file records notable changes to the public BrainPilot release. For the complete commit
 history, follow the comparison links for each version.
 
+## [0.2.1] - 2026-08-22
+
+This patch release makes **Stop** a hard boundary for model, tool, and Trace work. In v0.2.0, an
+interrupted turn could remain in the underlying model context: the next user message was answered,
+but unfinished tools and Trace processing from the cancelled request could then resume and write
+files or append an obsolete result.
+
+### Stop and recovery
+
+- Captures the last completed model-context checkpoint before every top-level user turn.
+- After Stop fully settles, branches both the persisted Pi session and the live in-memory message
+  state back to that checkpoint, while preserving BrainPilot's visible audit history.
+- Keeps steering and follow-up queue clearing on both sides of abort settlement, so queued internal
+  reminders and partially persisted tool calls cannot survive into the recovery prompt.
+- Adds regression coverage for interrupted tool-producing turns and verifies the exact production
+  scenario with a real provider on a 208 CPU sandbox.
+
+### Upgrade
+
+```bash
+npm install -g @brainpilot/app@0.2.1
+brainpilot --version
+```
+
+Docker and hosted deployments should use the matching `0.2.1` CPU or GPU sandbox image. No manual
+user-data migration is required.
+
 ## [0.2.0] - 2026-08-22
 
 BrainPilot v0.2.0 turns the research workspace into a more capable, inspectable, and reliable
@@ -193,6 +220,7 @@ First public open-source release of BrainPilot, including the PI-led multi-agent
 workflow, Graph of Trace, the built-in scientific skills library, provider configuration, MCP
 integration, local CLI, web interface, and Docker sandbox support.
 
+[0.2.1]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.0...v0.1.1
