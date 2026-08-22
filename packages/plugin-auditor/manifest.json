@@ -1,13 +1,24 @@
 {
   "id": "org.brainpilot.auditor",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "apiVersion": "1",
   "displayName": "BrainPilot Auditor",
   "description": "Independent evidence and scientific-reliability audit feedback loop for PI and Expert results.",
-  "categories": ["analysis", "workflow", "skills"],
-  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
-  "protocols": { "agentInstructions": "1" },
-  "environments": ["local", "cloud"],
+  "categories": [
+    "analysis",
+    "workflow",
+    "skills"
+  ],
+  "engines": {
+    "brainpilot": ">=0.2.0 <0.3.0"
+  },
+  "protocols": {
+    "agentInstructions": "1"
+  },
+  "environments": [
+    "local",
+    "cloud"
+  ],
   "contributes": {
     "skills": [
       {
@@ -15,35 +26,46 @@
         "title": "Audit Feedback Loop",
         "description": "Coordinate PI and Auditor review, correction, and incremental re-review.",
         "entry": "skills/audit-feedback-loop/SKILL.md",
-        "targets": ["principal", "auditor"]
+        "targets": [
+          "principal",
+          "auditor"
+        ]
       },
       {
         "id": "audit-data-integrity",
         "title": "Audit Data Integrity",
         "description": "Audit data semantics, sample alignment, leakage, splits, and preprocessing boundaries.",
         "entry": "skills/audit-data-integrity/SKILL.md",
-        "targets": ["auditor"]
+        "targets": [
+          "auditor"
+        ]
       },
       {
         "id": "audit-model-validation",
         "title": "Audit Method Validation",
         "description": "Audit method discovery, representative validation, collapse risks, selection evidence, and claim scope.",
         "entry": "skills/audit-model-validation/SKILL.md",
-        "targets": ["auditor"]
+        "targets": [
+          "auditor"
+        ]
       },
       {
         "id": "audit-code-artifact",
         "title": "Audit Code and Artifact",
         "description": "Audit implementation correctness, export equivalence, packaging, and isolated inference.",
         "entry": "skills/audit-code-artifact/SKILL.md",
-        "targets": ["auditor"]
+        "targets": [
+          "auditor"
+        ]
       },
       {
         "id": "audit-evidence",
         "title": "Audit Evidence",
         "description": "Audit numeric, artifact, log, and citation claims against inspectable evidence.",
         "entry": "skills/audit-evidence/SKILL.md",
-        "targets": ["auditor"]
+        "targets": [
+          "auditor"
+        ]
       }
     ],
     "agentInstructions": [
@@ -51,7 +73,9 @@
         "id": "principal-audit-loop",
         "title": "PI audit orchestration",
         "entry": "prompts/principal.md",
-        "targets": ["principal"],
+        "targets": [
+          "principal"
+        ],
         "mode": "append",
         "priority": 100
       },
@@ -59,7 +83,9 @@
         "id": "auditor-role",
         "title": "Auditor role",
         "entry": "prompts/auditor.md",
-        "targets": ["auditor"],
+        "targets": [
+          "auditor"
+        ],
         "mode": "append",
         "priority": 100
       }

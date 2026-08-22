@@ -1,0 +1,26 @@
+{
+  "id": "org.brainpilot.monitor",
+  "version": "0.2.0",
+  "apiVersion": "1",
+  "displayName": "Monitor",
+  "description": "Run bounded session-scoped background commands and notify the owning agent about output and terminal status.",
+  "categories": ["workflow"],
+  "engines": { "brainpilot": ">=0.2.0 <0.3.0" },
+  "environments": ["local"],
+  "protocols": {
+    "runtimeTools": "1"
+  },
+  "permissions": [
+    "read:workspace",
+    "process:background"
+  ],
+  "contributes": {
+    "runtimeTools": [
+      {
+        "id": "monitor",
+        "capability": "builtin.monitor",
+        "targets": ["principal", "engineer", "experimentalist"]
+      }
+    ]
+  }
+}

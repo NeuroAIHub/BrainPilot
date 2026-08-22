@@ -1,7 +1,9 @@
 {
   "name": "@brainpilot/plugin-monitor",
-  "version": "0.1.2",
-  "engines": { "node": ">=22" },
+  "version": "0.2.0",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "AGPL-3.0-only",
   "description": "Official BrainPilot command monitor runtime tool",
   "type": "module",
@@ -17,5 +19,7 @@
     "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
     "directory": "packages/plugin-monitor"
   },
-  "publishConfig": { "access": "public" }
+  "publishConfig": {
+    "access": "public"
+  }
 }

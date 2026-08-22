@@ -36,7 +36,7 @@ function manifest(id: string, version: string, dependencies?: PluginManifest["de
     displayName: id,
     description: `Fixture ${id}@${version}`,
     categories: ["other"],
-    engines: { brainpilot: ">=0.1.2 <0.2.0" },
+    engines: { brainpilot: ">=0.2.0 <0.3.0" },
     ...(dependencies ? { dependencies } : {}),
     contributes: { panels: [{ id: "main", title: "Fixture", entry: "ui/index.html" }] },
   };
@@ -232,10 +232,11 @@ describe("plugin marketplace control plane", () => {
     const id = "org.brainpilot.nifti-viewer";
     const marketplace = await (await app.request("/api/plugins/marketplace")).json() as Array<{ manifest: { id: string; version: string }; releases: Array<{ version: string }> }>;
     const entry = marketplace.find((candidate) => candidate.manifest.id === id);
-    expect(entry?.manifest.version).toBe("0.1.0");
-    expect(entry?.releases.map((release) => release.version)).toEqual(["0.1.0"]);
+    expect(entry?.manifest.version).toBe("0.1.1");
+    expect(entry?.manifest.engines?.brainpilot).toBe(">=0.2.0 <0.3.0");
+    expect(entry?.releases.map((release) => release.version)).toEqual(["0.1.1", "0.1.0"]);
 
-    const asset = `/api/plugins/${id}/0.1.0/assets/ui/index.html`;
+    const asset = `/api/plugins/${id}/0.1.1/assets/ui/index.html`;
     expect((await app.request(asset)).status).toBe(404);
     expect((await app.request("/api/plugins/install", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ id }) })).status).toBe(201);
     expect((await app.request(`/api/plugins/${id}/enabled`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }) })).status).toBe(200);
@@ -268,6 +269,8 @@ describe("plugin marketplace control plane", () => {
       capabilities: ["skills"],
       executesLocalCode: true,
     }));
+    expect(entry?.manifest.version).toBe("6.2.1-bp.1");
+    expect(entry?.manifest.engines?.brainpilot).toBe(">=0.2.0 <0.3.0");
     expect(entry?.manifest.contributes?.skills).toHaveLength(14);
 
     expect((await app.request("/api/plugins/install", {
@@ -311,6 +314,8 @@ describe("plugin marketplace control plane", () => {
       capabilities: ["mcp"],
       executesLocalCode: true,
     }));
+    expect(entry?.manifest.version).toBe("0.0.79-bp.1");
+    expect(entry?.manifest.engines?.brainpilot).toBe(">=0.2.0 <0.3.0");
 
     expect((await app.request("/api/plugins/install", {
       method: "POST",
@@ -358,6 +363,11 @@ describe("plugin marketplace control plane", () => {
   it("publishes the official Monitor capability only while its plugin is enabled", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-"));
     const id = "org.brainpilot.monitor";
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false });
+    const marketplace = await (await app.request("/api/plugins/marketplace")).json() as Array<MarketplaceEntry>;
+    const entry = marketplace.find((candidate) => candidate.manifest.id === id);
+    expect(entry?.manifest.version).toBe("0.2.0");
+    expect(entry?.manifest.engines?.brainpilot).toBe(">=0.2.0 <0.3.0");
     expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
     expect((await installPlugin(dataDir, id))?.verified).toBe(true);
     await setPluginEnabled(dataDir, id, true);
