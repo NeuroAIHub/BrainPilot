@@ -1,5 +1,5 @@
 import { lazy, Suspense, useCallback, useEffect, useRef, useState } from "react";
-import { Bot, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
+import { Bot, CloudOff, FolderOpen, GitBranch, MessageSquare, RefreshCw } from "lucide-react";
 import { useAuth } from "../../contexts/AuthContext";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
@@ -12,6 +12,7 @@ import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
 import { fileRequestForScope, fileSidebarScopeKey } from "../files/fileSidebarScope";
 import { IconButton } from "../primitives/IconButton";
+import { pluginMarketplaceSurface } from "../plugins/pluginMarketplaceAvailability";
 import { SearchDialog } from "../search/SearchDialog";
 import { SettingsDialog, type SettingsTab } from "../settings/SettingsDialog";
 import { AgentsPanel, TracePanel } from "../session/AgentTraceViews";
@@ -292,7 +293,25 @@ export function DesktopShell() {
 
       {activePage === "demo" ? (
         <DemoView resetSignal={demoResetSignal} />
-      ) : activePage === "plugins" ? (
+      ) : activePage === "plugins" ? pluginMarketplaceSurface(runtimeConfig.localMode) === "cloud-unavailable" ? (
+        <main className="plugin-market" aria-labelledby="plugin-market-title">
+          <header className="plugin-market__hero">
+            <div>
+              <span className="plugin-market__eyebrow">BrainPilot Cloud</span>
+              <h1 id="plugin-market-title">{t("marketplace.title")}</h1>
+            </div>
+          </header>
+          <section className="plugin-market__catalog">
+            <div className="plugin-market__cloud-unavailable" role="status">
+              <span className="plugin-market__cloud-unavailable-icon" aria-hidden="true"><CloudOff size={20} /></span>
+              <div>
+                <h2>{t("marketplace.cloudUnavailable.title")}</h2>
+                <p>{t("marketplace.cloudUnavailable.description")}</p>
+              </div>
+            </div>
+          </section>
+        </main>
+      ) : (
         <Suspense fallback={<main className="plugin-market"><div className="plugin-market__empty"><strong>{t("marketplace.loading")}</strong></div></main>}>
           <PluginMarketplace />
         </Suspense>

@@ -11266,6 +11266,40 @@ button {
 
 .plugin-market__catalog { padding-bottom: 56px; }
 
+.plugin-market__cloud-unavailable {
+  display: flex;
+  align-items: flex-start;
+  gap: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-surface) 92%, transparent);
+  padding: 16px;
+  box-shadow: var(--shadow-sm);
+}
+
+.plugin-market__cloud-unavailable-icon {
+  display: grid;
+  width: 36px;
+  height: 36px;
+  flex: 0 0 auto;
+  place-items: center;
+  border-radius: var(--radius-sm);
+  background: var(--color-accent-soft);
+  color: var(--color-accent);
+}
+
+.plugin-market__cloud-unavailable h2 {
+  margin: 0 0 4px;
+  font-size: 14px;
+}
+
+.plugin-market__cloud-unavailable p {
+  margin: 0;
+  color: var(--color-text-muted);
+  font-size: 12px;
+  line-height: 1.6;
+}
+
 .plugin-market__toolbar {
   display: flex;
   align-items: center;
