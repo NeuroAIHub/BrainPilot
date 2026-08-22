@@ -712,6 +712,11 @@ export class MasAgent {
     // agent_end handlers may race the first clear while abort() unwinds. Fence
     // them after the prompt has fully settled as well.
     this.session.clearQueue?.();
+    // Pi persists the in-flight user/assistant/tool entries before abort
+    // settles. Clearing queues alone cannot stop those partial entries from
+    // becoming context for the next explicit user prompt (#532). Return the
+    // active Pi branch to the last completed top-level turn.
+    this.session.rollbackInterruptedTurn?.();
     this.finishDanglingTools("task_interrupted");
     this.pendingFollowUps = [];
     // Keep abortRequested true until prompt() has fully unwound so both Pi's

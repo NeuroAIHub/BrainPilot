@@ -6,6 +6,7 @@ import {
   type AgUiEvent,
 } from "@brainpilot/protocol";
 import { EventBus } from "../event-bus.js";
+import { RealAgentSession } from "../agent-factory.js";
 import { MasAgent } from "../mas-agent.js";
 import { MockAgentSession } from "../mock-agent.js";
 import { ev } from "../events.js";
@@ -17,6 +18,66 @@ import type { IAgentSession, PiAgentEvent } from "../types.js";
  * (via parseEvent) and that the expected types appear in order.
  */
 describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
+  it("branches real Pi context back before an interrupted top-level turn", async () => {
+    let leaf: string | null = "completed-turn";
+    let streaming = false;
+    let releasePrompt!: () => void;
+    const branches: string[] = [];
+    const promptLeaves: Array<string | null> = [];
+    const promptStates: unknown[][] = [];
+    let promptCount = 0;
+    const piSession = {
+      sessionId: "rollback-interrupted-turn",
+      get isStreaming() { return streaming; },
+      state: { messages: ["completed-context"] as unknown[] },
+      sessionManager: {
+        getLeafId: () => leaf,
+        branch: (entryId: string) => { branches.push(entryId); leaf = entryId; },
+        resetLeaf: () => { leaf = null; },
+        buildSessionContext: () => ({
+          messages: leaf === "completed-turn" ? ["completed-context"] : [],
+        }),
+      },
+      subscribe: () => () => {},
+      prompt: () => {
+        promptLeaves.push(leaf);
+        promptStates.push([...piSession.state.messages]);
+        promptCount += 1;
+        if (promptCount > 1) return Promise.resolve();
+        streaming = true;
+        leaf = "partial-tool-turn";
+        piSession.state.messages.push("stale interrupted tool call");
+        return new Promise<void>((resolve) => {
+          releasePrompt = () => { streaming = false; resolve(); };
+        });
+      },
+      setThinkingLevel: () => {},
+      abort: async () => releasePrompt(),
+      clearQueue: () => ({}),
+      dispose: () => {},
+    };
+    const session = new RealAgentSession(piSession, new Map());
+    const agent = new MasAgent({
+      sessionId: piSession.sessionId,
+      name: "principal",
+      role: "principal",
+      session,
+      bus: new EventBus(),
+    });
+
+    const interrupted = agent.prompt("obsolete work with tools");
+    await agent.abort();
+    await interrupted;
+    await agent.prompt("only answer recovered");
+
+    expect(branches).toEqual(["completed-turn"]);
+    expect(promptLeaves).toEqual(["completed-turn", "completed-turn"]);
+    expect(promptStates).toEqual([
+      ["completed-context"],
+      ["completed-context"],
+    ]);
+  });
+
   it("clears SDK follow-up queues on both sides of abort settlement", async () => {
     const bus = new EventBus();
     let releasePrompt!: () => void;
