@@ -15,13 +15,11 @@
     "typecheck": "fumadocs-mdx && next typegen && tsc --noEmit"
   },
   "dependencies": {
-    "@orama/orama": "3.1.18",
-    "@orama/tokenizers": "^3.1.18",
-    "fumadocs-core": "16.10.7",
-    "fumadocs-mdx": "15.0.13",
-    "fumadocs-ui": "16.10.7",
+    "fumadocs-core": "16.15.0",
+    "fumadocs-mdx": "15.3.1",
+    "fumadocs-ui": "16.15.0",
     "lucide-react": "^1.22.0",
-    "next": "16.2.11",
+    "next": "16.3.2",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
     "tailwind-merge": "^3.6.0"
@@ -32,7 +30,7 @@
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.15",
     "@types/react-dom": "^19.2.3",
-    "postcss": "^8.5.18",
+    "postcss": "^8.5.23",
     "tailwindcss": "^4.3.0",
     "typescript": "^5.7.0"
   }

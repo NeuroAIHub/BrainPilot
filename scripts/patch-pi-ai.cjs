@@ -73,9 +73,9 @@ function piCodingAgentInstalled() {
 	);
 }
 
-function patchFile(file) {
+function planPatch(file) {
 	const original = fs.readFileSync(file, "utf8");
-	if (original.includes(MARKER)) return "already-patched";
+	if (original.includes(MARKER)) return { file, output: original, status: "already-patched" };
 
 	// 1) Reasoning replay: make azure store:false safe.
 	const replay = /const reasoningItem = JSON\.parse\(block\.thinkingSignature\);\s*\n\s*output\.push\(reasoningItem\);/;
@@ -97,19 +97,23 @@ function patchFile(file) {
 	);
 
 	// 2) Tool-call item id: omit the fc_ server id for azure too (store:false).
-	const fcNeedle = 'if (isDifferentModel && itemId?.startsWith("fc_")) {';
-	const fcRepl =
-		'if ((isDifferentModel || model.api === "azure-openai-responses") && itemId?.startsWith("fc_")) {';
-	if (!out.includes(fcNeedle)) {
+	// pi 0.84 keeps the same predicate as the first clause of a broader
+	// custom-tool condition. Replace the predicate itself so the patch remains
+	// compatible with both layouts while still failing on unexpected drift.
+	const fcPredicate = /\(isDifferentModel && itemId\?\.startsWith\("fc_"\)\)/g;
+	const fcMatches = out.match(fcPredicate) ?? [];
+	if (fcMatches.length !== 1) {
 		throw new Error(`[patch-pi-ai] tool-call-id pattern not found in ${file} (pi-ai changed?)`);
 	}
-	out = out.replace(fcNeedle, fcRepl);
+	out = out.replace(
+		fcPredicate,
+		'((isDifferentModel || model.api === "azure-openai-responses") && itemId?.startsWith("fc_"))',
+	);
 
 	if (out === original || !out.includes(MARKER)) {
 		throw new Error(`[patch-pi-ai] patch produced no change in ${file}`);
 	}
-	fs.writeFileSync(file, out);
-	return "patched";
+	return { file, output: out, status: "patched" };
 }
 
 function main() {
@@ -125,9 +129,13 @@ function main() {
 		console.log("[patch-pi-ai] pi-ai not installed; nothing to patch.");
 		return;
 	}
-	for (const file of files) {
-		const status = patchFile(file);
-		console.log(`[patch-pi-ai] ${status}: ${path.relative(REPO_ROOT, file)}`);
+	// Validate every discovered install before writing any of them. If an npm
+	// layout contains more than one pi-ai copy, one drifting copy must not leave
+	// the others half-patched after postinstall fails.
+	const plans = files.map(planPatch);
+	for (const plan of plans) {
+		if (plan.status === "patched") fs.writeFileSync(plan.file, plan.output);
+		console.log(`[patch-pi-ai] ${plan.status}: ${path.relative(REPO_ROOT, plan.file)}`);
 	}
 }
 

@@ -14,20 +14,19 @@ import {
 function fakeSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
   let modelsPath: string | undefined;
   const sdk: PiProviderSdk = {
-    AuthStorage: { create: () => ({}) },
-    ModelRegistry: {
-      create: (_auth, path) => {
+    ModelRuntime: {
+      create: async ({ modelsPath: path }) => {
         modelsPath = path;
         return {
-          refresh: () => {},
           getError: () => undefined,
           // Resolve only the gateway provider + the id present in models.json.
-          find: (provider, modelId) => {
+          getModel: (provider, modelId) => {
             if (provider !== GATEWAY_PROVIDER || !path) return undefined;
             const cfg = JSON.parse(readFileSync(path, "utf8"));
             const ids = cfg.providers[GATEWAY_PROVIDER].models.map((m: { id: string }) => m.id);
             return ids.includes(modelId) ? { provider, id: modelId } : undefined;
           },
+          setRuntimeApiKey: async () => {},
         };
       },
     },
@@ -63,26 +62,26 @@ describe("resolveGatewayModel", () => {
     }
   });
 
-  it("returns {} when no custom gateway env is set (default endpoint)", () => {
+  it("returns {} when no custom gateway env is set (default endpoint)", async () => {
     const { sdk } = fakeSdk();
-    expect(resolveGatewayModel(sdk, agentDir)).toEqual({});
+    await expect(resolveGatewayModel(sdk, agentDir)).resolves.toEqual({});
   });
 
-  it("returns {} when only base url is set (model id missing)", () => {
+  it("returns {} when only base url is set (model id missing)", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/api";
     const { sdk } = fakeSdk();
-    expect(resolveGatewayModel(sdk, agentDir)).toEqual({});
+    await expect(resolveGatewayModel(sdk, agentDir)).resolves.toEqual({});
   });
 
-  it("writes models.json and resolves the gateway model when both are set", () => {
+  it("writes models.json and resolves the gateway model when both are set", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/api";
     process.env.ANTHROPIC_MODEL = "kimi-k2.6";
     const { sdk, lastPath } = fakeSdk();
 
-    const { model, modelRegistry } = resolveGatewayModel(sdk, agentDir);
+    const { model, modelRuntime } = await resolveGatewayModel(sdk, agentDir);
 
     expect(model).toEqual({ provider: GATEWAY_PROVIDER, id: "kimi-k2.6" });
-    expect(modelRegistry).toBeTruthy();
+    expect(modelRuntime).toBeTruthy();
     const path = lastPath()!;
     expect(existsSync(path)).toBe(true);
     const cfg = JSON.parse(readFileSync(path, "utf8"));
@@ -93,23 +92,23 @@ describe("resolveGatewayModel", () => {
     expect(cfg.providers[GATEWAY_PROVIDER].models[0].reasoning).toBe(true);
   });
 
-  it("removes a trailing /v1 from the Anthropic gateway base URL (#416)", () => {
+  it("removes a trailing /v1 from the Anthropic gateway base URL (#416)", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/proxy/v1/";
     process.env.ANTHROPIC_MODEL = "claude-x";
     const { sdk, lastPath } = fakeSdk();
 
-    resolveGatewayModel(sdk, agentDir);
+    await resolveGatewayModel(sdk, agentDir);
 
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers[GATEWAY_PROVIDER].baseUrl).toBe("https://gw.example/proxy");
   });
 
-  it("applies default context/token limits when env is unset", () => {
+  it("applies default context/token limits when env is unset", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/api";
     process.env.ANTHROPIC_MODEL = "kimi-k2.6";
     const { sdk, lastPath } = fakeSdk();
 
-    resolveGatewayModel(sdk, agentDir);
+    await resolveGatewayModel(sdk, agentDir);
 
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     const m = cfg.providers[GATEWAY_PROVIDER].models[0];
@@ -119,14 +118,14 @@ describe("resolveGatewayModel", () => {
     expect(m.maxTokens).toBe(32_768);
   });
 
-  it("honours ANTHROPIC_CONTEXT_WINDOW / ANTHROPIC_MAX_TOKENS overrides", () => {
+  it("honours ANTHROPIC_CONTEXT_WINDOW / ANTHROPIC_MAX_TOKENS overrides", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/api";
     process.env.ANTHROPIC_MODEL = "small-model";
     process.env.ANTHROPIC_CONTEXT_WINDOW = "32768";
     process.env.ANTHROPIC_MAX_TOKENS = "4096";
     const { sdk, lastPath } = fakeSdk();
 
-    resolveGatewayModel(sdk, agentDir);
+    await resolveGatewayModel(sdk, agentDir);
 
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     const m = cfg.providers[GATEWAY_PROVIDER].models[0];
@@ -134,19 +133,19 @@ describe("resolveGatewayModel", () => {
     expect(m.maxTokens).toBe(4096);
   });
 
-  it("ignores a non-positive context-window override (keeps default)", () => {
+  it("ignores a non-positive context-window override (keeps default)", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/api";
     process.env.ANTHROPIC_MODEL = "kimi-k2.6";
     process.env.ANTHROPIC_CONTEXT_WINDOW = "not-a-number";
     const { sdk, lastPath } = fakeSdk();
 
-    resolveGatewayModel(sdk, agentDir);
+    await resolveGatewayModel(sdk, agentDir);
 
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers[GATEWAY_PROVIDER].models[0].contextWindow).toBe(200_000);
   });
 
-  it("tier 3: uses a user-supplied models.json verbatim (first provider)", () => {
+  it("tier 3: uses a user-supplied models.json verbatim (first provider)", async () => {
     const userModels = join(agentDir, "my-models.json");
     writeFileSync(
       userModels,
@@ -165,27 +164,26 @@ describe("resolveGatewayModel", () => {
     process.env.ANTHROPIC_MODEL = "claude-x";
     // find() resolves any provider/id pair present in the file.
     const sdk: PiProviderSdk = {
-      AuthStorage: { create: () => ({}) },
-      ModelRegistry: {
-        create: (_a, path) => ({
-          refresh: () => {},
+      ModelRuntime: {
+        create: async ({ modelsPath: path }) => ({
           getError: () => undefined,
-          find: (provider, id) => {
+          getModel: (provider, id) => {
             const cfg = JSON.parse(readFileSync(path!, "utf8"));
             const p = cfg.providers[provider];
             return p?.models.some((m: { id: string }) => m.id === id)
               ? { provider, id }
               : undefined;
           },
+          setRuntimeApiKey: async () => {},
         }),
       },
     };
 
-    const { model } = resolveGatewayModel(sdk, agentDir);
+    const { model } = await resolveGatewayModel(sdk, agentDir);
     expect(model).toEqual({ provider: "my-proxy", id: "claude-x" });
   });
 
-  it("tier 3: BP_MODEL_PROVIDER selects among multiple providers", () => {
+  it("tier 3: BP_MODEL_PROVIDER selects among multiple providers", async () => {
     const userModels = join(agentDir, "multi.json");
     writeFileSync(
       userModels,
@@ -200,41 +198,43 @@ describe("resolveGatewayModel", () => {
     process.env.BP_MODEL_PROVIDER = "second";
     process.env.ANTHROPIC_MODEL = "b";
     const sdk: PiProviderSdk = {
-      AuthStorage: { create: () => ({}) },
-      ModelRegistry: {
-        create: (_a, path) => ({
-          refresh: () => {},
+      ModelRuntime: {
+        create: async ({ modelsPath: path }) => ({
           getError: () => undefined,
-          find: (provider, id) => {
+          getModel: (provider, id) => {
             const cfg = JSON.parse(readFileSync(path!, "utf8"));
             return cfg.providers[provider]?.models.some((m: { id: string }) => m.id === id)
               ? { provider, id }
               : undefined;
           },
+          setRuntimeApiKey: async () => {},
         }),
       },
     };
 
-    const { model } = resolveGatewayModel(sdk, agentDir);
+    const { model } = await resolveGatewayModel(sdk, agentDir);
     expect(model).toEqual({ provider: "second", id: "b" });
   });
 
-  it("tier 3: returns {} when BP_MODELS_JSON set but no model id", () => {
+  it("tier 3: returns {} when BP_MODELS_JSON set but no model id", async () => {
     process.env.BP_MODELS_JSON = join(agentDir, "whatever.json");
     const { sdk } = fakeSdk();
-    expect(resolveGatewayModel(sdk, agentDir)).toEqual({});
+    await expect(resolveGatewayModel(sdk, agentDir)).resolves.toEqual({});
   });
 
-  it("throws when the configured model id cannot be resolved", () => {
+  it("throws when the configured model id cannot be resolved", async () => {
     process.env.ANTHROPIC_BASE_URL = "https://gw.example/api";
     process.env.ANTHROPIC_MODEL = "kimi-k2.6";
     const badSdk: PiProviderSdk = {
-      AuthStorage: { create: () => ({}) },
-      ModelRegistry: {
-        create: () => ({ refresh: () => {}, getError: () => undefined, find: () => undefined }),
+      ModelRuntime: {
+        create: async () => ({
+          getError: () => undefined,
+          getModel: () => undefined,
+          setRuntimeApiKey: async () => {},
+        }),
       },
     };
-    expect(() => resolveGatewayModel(badSdk, agentDir)).toThrow(/model not found/);
+    await expect(resolveGatewayModel(badSdk, agentDir)).rejects.toThrow(/model not found/);
   });
 });
 
@@ -251,20 +251,19 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
   function sessionSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
     let modelsPath: string | undefined;
     const sdk: PiProviderSdk = {
-      AuthStorage: { create: () => ({}), inMemory: () => ({ setRuntimeApiKey: () => {} }) },
-      ModelRegistry: {
-        create: (_auth, path) => {
+      ModelRuntime: {
+        create: async ({ modelsPath: path }) => {
           modelsPath = path;
           return {
-            refresh: () => {},
             getError: () => undefined,
-            find: (provider, id) => {
+            getModel: (provider, id) => {
               if (!path) return undefined;
               const cfg = JSON.parse(readFileSync(path, "utf8"));
               return cfg.providers[provider]?.models.some((m: { id: string }) => m.id === id)
                 ? { provider, id }
                 : undefined;
             },
+            setRuntimeApiKey: async () => {},
           };
         },
       },
@@ -272,17 +271,19 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     return { sdk, lastPath: () => modelsPath };
   }
 
-  it("returns {} when key/baseUrl/modelId are incomplete", () => {
+  it("returns {} when key/baseUrl/modelId are incomplete", async () => {
     const { sdk } = sessionSdk();
-    expect(resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "" })).toEqual({});
-    expect(
+    await expect(
+      resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "" }),
+    ).resolves.toEqual({});
+    await expect(
       resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "k", baseUrl: "https://x" }),
-    ).toEqual({}); // modelId missing
+    ).resolves.toEqual({}); // modelId missing
   });
 
-  it("writes the selected api into models.json (azure-openai-responses)", () => {
+  it("writes the selected api into models.json (azure-openai-responses)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    const { model } = resolveSessionModel(sdk, agentDir, {
+    const { model } = await resolveSessionModel(sdk, agentDir, {
       providerId: "azure-openai",
       baseUrl: "https://my-res.openai.azure.com/openai",
       api: "azure-openai-responses",
@@ -295,10 +296,10 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(cfg.providers["azure-openai"].baseUrl).toBe("https://my-res.openai.azure.com/openai");
   });
 
-  it("uses the provider context window instead of the environment default", () => {
+  it("uses the provider context window instead of the environment default", async () => {
     process.env.ANTHROPIC_CONTEXT_WINDOW = "200000";
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "long",
       baseUrl: "https://gw.example",
       apiKey: "sk-long",
@@ -310,9 +311,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     delete process.env.ANTHROPIC_CONTEXT_WINDOW;
   });
 
-  it("writes openai-responses when selected", () => {
+  it("writes openai-responses when selected", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "oai",
       baseUrl: "https://api.openai.com/v1",
       api: "openai-responses",
@@ -323,9 +324,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(cfg.providers["oai"].api).toBe("openai-responses");
   });
 
-  it("defaults to anthropic-messages when api is omitted (back-compat)", () => {
+  it("defaults to anthropic-messages when api is omitted (back-compat)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "legacy",
       baseUrl: "https://gw.example/api",
       apiKey: "sk-legacy",
@@ -335,9 +336,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(cfg.providers["legacy"].api).toBe("anthropic-messages");
   });
 
-  it("normalizes /v1 only for anthropic-messages (#416)", () => {
+  it("normalizes /v1 only for anthropic-messages (#416)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "ant",
       baseUrl: "https://gateway.example/v1/",
       api: "anthropic-messages",
@@ -347,7 +348,7 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     let cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers.ant.baseUrl).toBe("https://gateway.example");
 
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "oai-v1",
       baseUrl: "https://gateway.example/v1/",
       api: "openai-completions",
@@ -360,9 +361,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
 
   // #68: when api is unset, the precise wire value is derived from the coarse
   // adapter family. Explicit api still wins.
-  it("derives api from the adapter when api is unset (#68)", () => {
+  it("derives api from the adapter when api is unset (#68)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "oai",
       baseUrl: "https://api.openai.com/v1",
       adapter: "openai",
@@ -372,9 +373,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["oai"].api).toBe("openai-completions");
   });
 
-  it("adapter=anthropic derives anthropic-messages (#68)", () => {
+  it("adapter=anthropic derives anthropic-messages (#68)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "ant",
       baseUrl: "https://gw/api",
       adapter: "anthropic",
@@ -384,9 +385,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["ant"].api).toBe("anthropic-messages");
   });
 
-  it("adapter=auto falls back to the default api (#68)", () => {
+  it("adapter=auto falls back to the default api (#68)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "autop",
       baseUrl: "https://gw/api",
       adapter: "auto",
@@ -396,9 +397,9 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["autop"].api).toBe("anthropic-messages");
   });
 
-  it("explicit api wins over adapter (#68)", () => {
+  it("explicit api wins over adapter (#68)", async () => {
     const { sdk, lastPath } = sessionSdk();
-    resolveSessionModel(sdk, agentDir, {
+    await resolveSessionModel(sdk, agentDir, {
       providerId: "mix",
       baseUrl: "https://gw/api",
       api: "openai-responses",

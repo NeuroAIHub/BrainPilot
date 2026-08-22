@@ -14,28 +14,9 @@ import {
 } from 'fumadocs-ui/components/dialog/search';
 import type { SharedProps } from 'fumadocs-ui/contexts/search';
 import { useDocsSearch } from 'fumadocs-core/search/client';
-import { create } from '@orama/orama';
-import { createTokenizer as createMandarinTokenizer } from '@orama/tokenizers/mandarin';
-import {
-  ORAMA_TOKENIZER,
-  DEFAULT_LANGUAGE,
-  DOCS_BASE_PATH,
-} from '@/lib/locales.mjs';
+import { DOCS_BASE_PATH } from '@/lib/locales.mjs';
 
 const STATIC_API = `${DOCS_BASE_PATH}/static.json`;
-
-function initOrama(loc?: string) {
-  const tokenizer = ORAMA_TOKENIZER[loc ?? DEFAULT_LANGUAGE] ?? 'english';
-  switch (tokenizer) {
-    case 'mandarin':
-      return create({
-        schema: { _: 'string' },
-        components: { tokenizer: createMandarinTokenizer() },
-      });
-    default:
-      return create({ schema: { _: 'string' }, language: tokenizer });
-  }
-}
 
 export default function StaticSearchDialog(props: SharedProps) {
   const { locale } = useI18n();
@@ -43,7 +24,6 @@ export default function StaticSearchDialog(props: SharedProps) {
     type: 'static',
     from: STATIC_API,
     locale,
-    initOrama,
   });
 
   return (

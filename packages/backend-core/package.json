@@ -46,7 +46,7 @@
     "hono": "^4.13.0"
   },
   "optionalDependencies": {
-    "dockerode": "^4.0.0"
+    "dockerode": "^5.0.1"
   },
   "devDependencies": {
     "@types/dockerode": "^3.3.0"
