@@ -43,9 +43,9 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ## 📰 News
 
-- **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) replaces unsupported plugin-marketplace requests in hosted Cloud with a concise availability message, while preserving the full local and self-hosted marketplace. See the [changelog](CHANGELOG.md#022---2026-08-22).
+- **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) aligns the hosted interface with currently available Cloud capabilities and removes unsupported control-plane requests. See the [changelog](CHANGELOG.md#022---2026-08-22).
 - **2026-08-22** — [BrainPilot v0.2.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.1) makes Stop a hard boundary so cancelled model, tool, file, and Trace work cannot resume after the user's next message. See the [changelog](CHANGELOG.md#021---2026-08-22).
-- **2026-08-22** — [BrainPilot v0.2.0](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.0) adds a public plugin platform, durable expert tasks and background jobs, richer research traces with workspace recovery, public neuroscience datasets, and a redesigned provider/model/reasoning workflow, with broad improvements to files, Stop/recovery, mobile layouts, and error handling. See the [changelog](CHANGELOG.md#020---2026-08-22).
+- **2026-08-22** — [BrainPilot v0.2.0](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.0) adds durable expert tasks and background jobs, richer research traces with workspace recovery, public neuroscience datasets, configurable model contexts up to 1M tokens, and a redesigned provider/model/reasoning workflow, with broad improvements to files, Stop/recovery, mobile layouts, and error handling. See the [changelog](CHANGELOG.md#020---2026-08-22).
 - **2026-07-28** — [BrainPilot v0.1.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.2) improves tool lifecycle, managed MCP BYOK, npm knowledge-base setup, math rendering, and onboarding, and adds official CPU/GPU sandbox distribution through GHCR and mainland China ACR. See the [changelog](CHANGELOG.md#012---2026-07-28).
 - **2026-07-24** — [BrainPilot v0.1.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.1) improves the reliability of queued, timeout-aware user prompts and transient provider retries, with more accurate model-health reporting. See the [changelog](CHANGELOG.md#011---2026-07-24).
 - **2026-07-18** — BrainPilot was showcased at the “Intelligence in the Physical World” Science Forum at WAIC 2026. Follow us for the latest updates.
@@ -142,6 +142,10 @@ Open **Settings → Providers** in the web UI, add a provider, then click **Use*
 supports **Anthropic Messages**, **OpenAI Completions**, **OpenAI Responses**, and
 **Azure OpenAI Responses**, so you can use Anthropic, OpenAI-compatible endpoints, Azure, or
 third-party gateways.
+
+Provider settings can use automatic, 256K, or 1M context. In 1M mode BrainPilot compacts near
+900K while preserving the latest 64K tokens. Select only a size supported by the chosen model and
+provider; this setting does not increase a model's native context limit.
 
 Prefer initializing from the command line?
 

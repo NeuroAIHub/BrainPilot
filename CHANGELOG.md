@@ -56,15 +56,15 @@ user-data migration is required.
 ## [0.2.0] - 2026-08-22
 
 BrainPilot v0.2.0 turns the research workspace into a more capable, inspectable, and reliable
-environment for real multi-agent work. The release adds a public plugin platform, durable expert
-tasks, richer research traces and workspace recovery, managed background execution, public
-neuroscience datasets, and a substantially simpler model and file workflow.
+environment for real multi-agent work. The release adds durable expert tasks, richer research
+traces and workspace recovery, managed background execution, public neuroscience datasets,
+configurable model contexts up to 1M tokens, and a substantially simpler model and file workflow.
 
 ### Highlights
 
-- Added a public plugin SDK and an in-product marketplace. BrainPilot can discover and run native
-  plugins as well as compatible Pi, Codex, and Claude Code packages, with provenance, permissions,
-  requirements, and compatibility visible before activation.
+- Added provider-level Auto, 256K, and 1M context settings. The 1M mode compacts near 900K while
+  preserving the latest 64K tokens; the usable limit still depends on the selected model and
+  provider.
 - Upgraded the research trace into a structured record of episodes, evidence, artifacts,
   checkpoints, and decisions. Users can inspect how a result was produced, preview workspace
   changes, and restore an earlier checkpoint with the restored state visible across Chat, Trace,
