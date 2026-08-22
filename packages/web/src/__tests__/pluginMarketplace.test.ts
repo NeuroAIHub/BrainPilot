@@ -14,6 +14,7 @@ import {
   shouldDismissMcpRestartPrompt,
   sourceFormatForMarketplaceEntry,
 } from "../components/plugins/PluginMarketplace";
+import { pluginMarketplaceSurface } from "../components/plugins/pluginMarketplaceAvailability";
 
 const entry = {
   manifest: {
@@ -28,6 +29,11 @@ const entry = {
 } as Parameters<typeof matchesMarketplaceQuery>[0];
 
 describe("plugin marketplace catalogue model", () => {
+  it("keeps the catalogue local and shows an unavailable state in Cloud", () => {
+    expect(pluginMarketplaceSurface(true)).toBe("marketplace");
+    expect(pluginMarketplaceSurface(false)).toBe("cloud-unavailable");
+  });
+
   it("maps plugin contribution kinds into their marketplace panels", () => {
     expect(categoryForPluginKind("skill-pack")).toBe("skills");
     expect(categoryForPluginKind("knowledge-base")).toBe("knowledge");
