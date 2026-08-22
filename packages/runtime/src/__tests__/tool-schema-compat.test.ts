@@ -1,5 +1,5 @@
 import { once } from "node:events";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { createServer, type Server } from "node:http";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -152,6 +152,18 @@ describe("OpenAI-compatible tool schemas (#452)", () => {
         }),
       ],
     });
+
+    const agentDir = process.env.PI_CODING_AGENT_DIR!;
+    const modelConfig = await readFile(
+      path.join(agentDir, "bp-session-kimi-test-models.json"),
+      "utf8",
+    );
+    const persistedAuth = await readFile(
+      path.join(agentDir, "auth-kimi-test.json"),
+      "utf8",
+    ).catch(() => "");
+    expect(modelConfig).not.toContain("test-key");
+    expect(persistedAuth).not.toContain("test-key");
 
     try {
       await session.prompt("hello");
