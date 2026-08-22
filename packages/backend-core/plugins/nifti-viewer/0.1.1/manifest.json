@@ -1,0 +1,23 @@
+{
+  "id": "org.brainpilot.nifti-viewer",
+  "version": "0.1.1",
+  "apiVersion": "1",
+  "displayName": "Neuroscience Data Viewer",
+  "description": "Read-only metadata and central axial slice previews for uncompressed NIfTI-1 neuroimaging files.",
+  "categories": ["visualization"],
+  "kind": "previewer",
+  "engines": { "brainpilot": ">=0.2.0 <0.3.0" },
+  "protocols": { "preview": "1" },
+  "environments": ["local", "cloud", "browser"],
+  "permissions": ["read:workspace"],
+  "contributes": {
+    "previewers": [{
+      "id": "nifti-central-slice",
+      "match": { "extensions": [".nii"] },
+      "priority": 100,
+      "mode": "readonly",
+      "delivery": "range",
+      "entry": "ui/index.html"
+    }]
+  }
+}

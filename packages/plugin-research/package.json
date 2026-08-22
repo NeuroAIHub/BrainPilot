@@ -1,11 +1,16 @@
 {
   "name": "@brainpilot/plugin-research",
-  "version": "0.1.2",
-  "engines": { "node": ">=22" },
+  "version": "0.2.0",
+  "engines": {
+    "node": ">=22"
+  },
   "license": "AGPL-3.0-only",
   "type": "module",
   "description": "Canonical research reports and data inventories for BrainPilot experts",
-  "files": ["manifest.json", "skills"],
+  "files": [
+    "manifest.json",
+    "skills"
+  ],
   "exports": {
     "./package.json": "./package.json",
     "./manifest.json": "./manifest.json"
@@ -15,5 +20,7 @@
     "url": "git+https://github.com/NeuroAIHub/BrainPilot.git",
     "directory": "packages/plugin-research"
   },
-  "publishConfig": { "access": "public" }
+  "publishConfig": {
+    "access": "public"
+  }
 }

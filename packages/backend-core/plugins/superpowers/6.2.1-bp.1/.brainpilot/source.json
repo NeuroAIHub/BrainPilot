@@ -1,0 +1,5 @@
+{
+  "format": "pi-package",
+  "unsupported": [],
+  "extensionPaths": [".pi/extensions/superpowers.ts"]
+}

@@ -24,19 +24,19 @@ npm 安装是最简单的单用户方案。如果你需要可复现的运行环�
 
 | 版本 | 全球（GHCR） | 中国大陆（阿里云 ACR） |
 | --- | --- | --- |
-| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2` |
-| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.1.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2` |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.0` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.0` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0` |
 
 两组地址都支持匿名拉取。中国大陆用户优先使用 ACR，其他地区优先使用 GHCR。
 
 ```bash title="全球"
-docker pull ghcr.io/neuroaihub/brainpilot-sandbox:0.1.2
-docker pull ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.1.2
+docker pull ghcr.io/neuroaihub/brainpilot-sandbox:0.2.0
+docker pull ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.0
 ```
 
 ```bash title="中国大陆"
-docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
-docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0
 ```
 
 CPU 镜像包含 Node.js、Python、pip、curl 和 BrainPilot runtime。GPU 镜像额外包含 CUDA 12.4、
@@ -69,7 +69,7 @@ docker compose ps
 沙箱的情况下启动 Compose：
 
 ```bash
-export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
 docker compose pull sandbox
 docker compose build main
 docker compose up -d --no-build
@@ -100,7 +100,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 如果使用官方预构建 GPU 沙箱：
 
 ```bash
-export BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2
+export BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml pull sandbox
 docker compose build main
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --no-build
@@ -110,7 +110,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --no-build
 
 ```bash
 docker run --rm --gpus all --entrypoint python \
-  brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2 \
+  brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0 \
   -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
 ```
 
@@ -120,7 +120,7 @@ docker run --rm --gpus all --entrypoint python \
 沙箱镜像：
 
 ```bash
-export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
 docker pull "$BP_SANDBOX_IMAGE"
 docker compose -f docker-compose.dynamic.yml up -d --build
 ```
@@ -128,8 +128,8 @@ docker compose -f docker-compose.dynamic.yml up -d --build
 BrainPilot 云端托管层可以分别指定 CPU 和 GPU 镜像：
 
 ```dotenv
-BP_SANDBOX_IMAGE_CPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
-BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.1.2
+BP_SANDBOX_IMAGE_CPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
+BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0
 ```
 
 修改后先拉取新镜像，再按云端部署流程滚动更新。根据编排器策略，已经存在的用户容器可能会继续使用
@@ -151,7 +151,7 @@ Docker 能提供实用的进程和文件系统隔离，但默认 Docker 容器�
 拉取新的固定版本标签，更新对应环境变量，再重建受影响的容器：
 
 ```bash
-docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.1.2
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
 docker compose up -d --no-build --force-recreate sandbox
 ```
 

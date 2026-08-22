@@ -1,19 +1,32 @@
 {
   "id": "org.brainpilot.got",
-  "version": "0.1.2",
+  "version": "0.2.0",
   "apiVersion": "1",
   "displayName": "BrainPilot Graph of Trace",
   "description": "Research-event curation guidance for readable Graph of Trace Episodes and direct dependencies.",
-  "categories": ["analysis", "workflow", "skills"],
-  "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
-  "environments": ["local", "cloud"],
+  "categories": [
+    "analysis",
+    "workflow",
+    "skills"
+  ],
+  "engines": {
+    "brainpilot": ">=0.2.0 <0.3.0"
+  },
+  "environments": [
+    "local",
+    "cloud"
+  ],
   "contributes": {
-    "skills": [{
-      "id": "curate-research-trace",
-      "title": "Curate Research Trace",
-      "description": "Organize research reports into Episodes, appropriately granular nodes, and direct dependencies.",
-      "entry": "skills/curate-research-trace/SKILL.md",
-      "targets": ["trace"]
-    }]
+    "skills": [
+      {
+        "id": "curate-research-trace",
+        "title": "Curate Research Trace",
+        "description": "Organize research reports into Episodes, appropriately granular nodes, and direct dependencies.",
+        "entry": "skills/curate-research-trace/SKILL.md",
+        "targets": [
+          "trace"
+        ]
+      }
+    ]
   }
 }

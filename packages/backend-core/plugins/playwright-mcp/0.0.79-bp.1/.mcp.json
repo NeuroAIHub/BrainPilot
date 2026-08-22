@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "playwright": {
+      "type": "stdio",
+      "command": "node",
+      "args": ["${BRAINPILOT_PLUGIN_ROOT}/scripts/launch.mjs"]
+    }
+  }
+}
