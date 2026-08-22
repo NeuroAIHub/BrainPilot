@@ -95,9 +95,9 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // (from providers.json) wins and isolates its key via setRuntimeApiKey;
   // otherwise fall back to the env-based gateway (Docker/static compat).
   const resolved = params.providerConfig
-    ? resolveSessionModel(sdk as unknown as PiProviderSdk, agentDir, params.providerConfig)
-    : resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir);
-  const { model, modelRegistry, authStorage } = resolved;
+    ? await resolveSessionModel(sdk as unknown as PiProviderSdk, agentDir, params.providerConfig)
+    : await resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir);
+  const { model, modelRuntime } = resolved;
 
   // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
   // per-role persona is injected through a DefaultResourceLoader. We use
@@ -205,8 +205,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     sessionManager: SessionManager.open(params.historyPath),
     thinkingLevel: params.thinkingLevel,
     ...(model ? { model } : {}),
-    ...(modelRegistry ? { modelRegistry } : {}),
-    ...(authStorage ? { authStorage } : {}),
+    ...(modelRuntime ? { modelRuntime } : {}),
   });
 
   // #365: Pi's built-in classifier intentionally excludes most HTTP 400s.
@@ -385,8 +384,7 @@ interface PiSdk {
     settingsManager?: unknown;
     sessionManager?: unknown;
     model?: unknown;
-    modelRegistry?: unknown;
-    authStorage?: unknown;
+    modelRuntime?: unknown;
     thinkingLevel?: import("@brainpilot/protocol").ThinkingLevel;
   }): Promise<{ session: PiSession }>;
   defineTool(def: {
@@ -431,15 +429,5 @@ interface PiSdk {
     extensionFactories?: unknown[];
   }) => { reload(): Promise<void> };
   getAgentDir(): string;
-  AuthStorage: {
-    create(path: string): unknown;
-    inMemory?(): { setRuntimeApiKey?(provider: string, key: string): void };
-  };
-  ModelRegistry: {
-    create(authStorage: unknown, modelsJsonPath?: string): {
-      refresh(): void;
-      getError(): string | undefined;
-      find(provider: string, modelId: string): unknown;
-    };
-  };
+  ModelRuntime: PiProviderSdk["ModelRuntime"];
 }

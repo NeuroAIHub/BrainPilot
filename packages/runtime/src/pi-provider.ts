@@ -4,7 +4,7 @@
  * Pi does NOT honour `ANTHROPIC_BASE_URL` / `ANTHROPIC_MODEL` (it only reads
  * `ANTHROPIC_API_KEY`, and otherwise hits the built-in Anthropic endpoint with
  * a built-in model). To target a third-party model we register it as a custom
- * Pi provider via a `models.json` + ModelRegistry and select its model.
+ * Pi provider via a `models.json` + ModelRuntime and select its model.
  *
  * Three configuration tiers (simplest first):
  *
@@ -17,7 +17,7 @@
  *      `compat` flags, openai-compatible APIs, …). BP_MODEL_PROVIDER picks the
  *      provider (defaults to the file's first provider key).
  *
- * Returns the resolved `{ model, modelRegistry }` to pass to
+ * Returns the resolved `{ model, modelRuntime }` to pass to
  * `createAgentSession`, or `{}` when nothing custom is configured.
  */
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
@@ -55,22 +55,19 @@ const DEFAULT_MAX_TOKENS = 32_768;
 
 /** Minimal structural surface of the Pi SDK bits this module needs. */
 export interface PiProviderSdk {
-  AuthStorage: {
-    create(path: string): PiAuthStorage;
-    inMemory?(): PiAuthStorage;
-  };
-  ModelRegistry: {
-    create(authStorage: unknown, modelsJsonPath?: string): {
-      refresh(): void;
-      getError(): string | undefined;
-      find(provider: string, modelId: string): unknown;
-    };
+  ModelRuntime: {
+    create(options: {
+      authPath?: string;
+      modelsPath?: string;
+      allowModelNetwork?: boolean;
+    }): Promise<PiModelRuntime>;
   };
 }
 
-export interface PiAuthStorage {
-  /** In-memory, non-persisted, highest-priority key override (per provider). */
-  setRuntimeApiKey?(provider: string, key: string): void;
+export interface PiModelRuntime {
+  getError(): string | undefined;
+  getModel(provider: string, modelId: string): unknown;
+  setRuntimeApiKey(provider: string, key: string): Promise<void>;
 }
 
 /** A concrete per-session provider config resolved from providers.json. */
@@ -109,9 +106,8 @@ export function resolveCompactionSettings(
 
 export interface ResolvedProvider {
   model?: unknown;
-  modelRegistry?: unknown;
-  /** Per-session AuthStorage holding the runtime key (when provider-configured). */
-  authStorage?: unknown;
+  /** Per-session Pi model/auth runtime holding non-persistent key overrides. */
+  modelRuntime?: unknown;
 }
 
 /** Parse a positive integer env var, or `undefined` if unset/invalid. */
@@ -126,7 +122,10 @@ function intEnv(name: string): number | undefined {
  * Resolve a custom model from env, or return `{}` when none is configured.
  * `agentDir` is Pi's global config dir (getAgentDir()).
  */
-export function resolveGatewayModel(sdk: PiProviderSdk, agentDir: string): ResolvedProvider {
+export async function resolveGatewayModel(
+  sdk: PiProviderSdk,
+  agentDir: string,
+): Promise<ResolvedProvider> {
   const modelId = process.env.ANTHROPIC_MODEL?.trim();
 
   // Tier 3 — advanced: user supplies their own models.json verbatim.
@@ -207,41 +206,43 @@ function resolveCustomProvider(modelsJsonPath: string): string {
 }
 
 /** Load the registry against `modelsJsonPath` and resolve `provider/modelId`. */
-function select(
+async function select(
   sdk: PiProviderSdk,
   agentDir: string,
   modelsJsonPath: string,
   provider: string,
   modelId: string,
-): ResolvedProvider {
-  const authStorage = sdk.AuthStorage.create(join(agentDir, "auth.json"));
-  const modelRegistry = sdk.ModelRegistry.create(authStorage, modelsJsonPath);
-  modelRegistry.refresh();
-  const err = modelRegistry.getError();
+): Promise<ResolvedProvider> {
+  const modelRuntime = await sdk.ModelRuntime.create({
+    authPath: join(agentDir, "auth.json"),
+    modelsPath: modelsJsonPath,
+    allowModelNetwork: false,
+  });
+  const err = modelRuntime.getError();
   if (err) throw new Error(`Pi models.json load error (${modelsJsonPath}): ${err}`);
-  const model = modelRegistry.find(provider, modelId);
+  const model = modelRuntime.getModel(provider, modelId);
   if (!model) {
     throw new Error(`model not found in ${modelsJsonPath}: ${provider}/${modelId}`);
   }
-  return { model, modelRegistry };
+  return { model, modelRuntime };
 }
 
 /**
  * Resolve a model for a PER-SESSION provider config (from providers.json),
  * isolated from process env so concurrent sessions can use different keys.
  *
- * Strategy (per the Pi SDK): build a dedicated models.json + ModelRegistry +
- * AuthStorage for this provider, then push the key via
- * `authStorage.setRuntimeApiKey` — an in-memory, non-persisted, top-priority
- * override. The models.json `apiKey` is a harmless placeholder; the runtime
- * override wins at request time. Returns `{}` when no usable config is given,
- * so the caller falls back to {@link resolveGatewayModel} (env-based).
+ * Strategy (per the Pi SDK): build a dedicated models.json + ModelRuntime for
+ * this provider, then push the key via `setRuntimeApiKey` — an in-memory,
+ * non-persisted, top-priority override. The models.json `apiKey` is a harmless
+ * placeholder; the runtime override wins at request time. Returns `{}` when no
+ * usable config is given, so the caller falls back to {@link resolveGatewayModel}
+ * (env-based).
  */
-export function resolveSessionModel(
+export async function resolveSessionModel(
   sdk: PiProviderSdk,
   agentDir: string,
   cfg: SessionProviderConfig,
-): ResolvedProvider {
+): Promise<ResolvedProvider> {
   if (!cfg.apiKey || !cfg.baseUrl || !cfg.modelId) return {};
 
   mkdirSync(agentDir, { recursive: true });
@@ -259,7 +260,7 @@ export function resolveSessionModel(
           // #63/#68: persist the selected wire protocol instead of hardcoding
           // anthropic-messages. Precedence: explicit `api` (precise, #63) →
           // derived from `adapter` (coarse family, #68) → default. Pi's
-          // ModelRegistry accepts any known api; azure-openai-responses derives
+          // ModelRuntime accepts any known api; azure-openai-responses derives
           // api-version/deployment from the Azure base URL.
           api,
           // Placeholder — the real key is injected via setRuntimeApiKey below.
@@ -288,20 +289,17 @@ export function resolveSessionModel(
   }
   if (current !== desired) writeFileSync(modelsJsonPath, desired);
 
-  // A per-session AuthStorage isolates the runtime key. Prefer inMemory()
-  // (never touches disk); fall back to a file-backed instance if unavailable.
-  const authStorage: PiAuthStorage = sdk.AuthStorage.inMemory
-    ? sdk.AuthStorage.inMemory()
-    : sdk.AuthStorage.create(join(agentDir, `auth-${sanitize(cfg.providerId)}.json`));
-  authStorage.setRuntimeApiKey?.(cfg.providerId, cfg.apiKey);
-
-  const modelRegistry = sdk.ModelRegistry.create(authStorage, modelsJsonPath);
-  modelRegistry.refresh();
-  const err = modelRegistry.getError();
+  const modelRuntime = await sdk.ModelRuntime.create({
+    authPath: join(agentDir, `auth-${sanitize(cfg.providerId)}.json`),
+    modelsPath: modelsJsonPath,
+    allowModelNetwork: false,
+  });
+  await modelRuntime.setRuntimeApiKey(cfg.providerId, cfg.apiKey);
+  const err = modelRuntime.getError();
   if (err) throw new Error(`Pi models.json load error (${modelsJsonPath}): ${err}`);
-  const model = modelRegistry.find(cfg.providerId, cfg.modelId);
+  const model = modelRuntime.getModel(cfg.providerId, cfg.modelId);
   if (!model) throw new Error(`model not found: ${cfg.providerId}/${cfg.modelId}`);
-  return { model, modelRegistry, authStorage };
+  return { model, modelRuntime };
 }
 
 /** Filesystem/JSON-key-safe form of a provider id. */

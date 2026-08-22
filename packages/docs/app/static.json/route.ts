@@ -1,27 +1,12 @@
 import { source } from '@/lib/source';
 import { createFromSource } from 'fumadocs-core/search/server';
-import { createTokenizer as createMandarinTokenizer } from '@orama/tokenizers/mandarin';
-import { ORAMA_TOKENIZER, type OramaTokenizer } from '@/lib/locales.mjs';
 
 export const revalidate = false;
 
-function oramaConfig(tokenizer: OramaTokenizer) {
-  switch (tokenizer) {
-    case 'mandarin':
-      return { components: { tokenizer: createMandarinTokenizer() } };
-    default:
-      return tokenizer;
-  }
-}
-
-const localeMap = Object.fromEntries(
-  Object.entries(ORAMA_TOKENIZER).map(([locale, tokenizer]) => [
-    locale,
-    oramaConfig(tokenizer),
-  ]),
-);
-
-const server = createFromSource(source, { localeMap });
+// Fumadocs 16.15 uses ZBSearch's multilingual tokenizer by default. It keeps
+// English and Chinese in one export and uses Intl.Segmenter for CJK word
+// boundaries, so no legacy per-locale Orama database is required.
+const server = createFromSource(source);
 
 export async function GET() {
   return server.staticGET();
