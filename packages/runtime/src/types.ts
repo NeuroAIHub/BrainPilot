@@ -53,6 +53,13 @@ export interface IAgentSession {
   abort(): Promise<void>;
   /** Drop SDK steering/follow-up messages that must not survive Stop. */
   clearQueue?(): unknown;
+  /**
+   * Remove the interrupted top-level Pi turn from the active model-context
+   * branch after abort has fully settled. BrainPilot keeps its own visible
+   * audit history; this only prevents unfinished instructions and tool calls
+   * from resuming when the user sends the next message.
+   */
+  rollbackInterruptedTurn?(): void;
   /** Cancel one locally-running tool without aborting the enclosing agent turn. */
   interruptTool?(toolCallId: string): boolean;
   /** Tear down; release resources. */

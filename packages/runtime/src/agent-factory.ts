@@ -313,7 +313,10 @@ function adaptTool(defineTool: PiSdk["defineTool"], tool: SystemTool): unknown {
 }
 
 /** Thin adapter implementing IAgentSession over the real Pi AgentSession. */
-class RealAgentSession implements IAgentSession {
+export class RealAgentSession implements IAgentSession {
+  private promptCheckpoint: string | null | undefined;
+  private retainCheckpointForAbort = false;
+
   constructor(
     private readonly s: PiSession,
     private readonly bashControllers: Map<string, AbortController>,
@@ -328,16 +331,46 @@ class RealAgentSession implements IAgentSession {
     return this.s.subscribe((e: unknown) => listener(e as PiAgentEvent));
   }
   prompt(text: string, opts?: PromptOptions): Promise<void> {
-    return this.s.prompt(text, opts);
+    // A top-level BrainPilot prompt begins a new user turn. Remember the last
+    // completed Pi leaf so Stop can branch away from any partially persisted
+    // user/assistant/tool entries. Follow-ups belong to the same turn and must
+    // never replace this checkpoint.
+    const topLevel = opts?.streamingBehavior === undefined && !this.s.isStreaming;
+    if (topLevel) {
+      this.promptCheckpoint = this.s.sessionManager.getLeafId();
+      this.retainCheckpointForAbort = false;
+    }
+    return this.s.prompt(text, opts).finally(() => {
+      if (topLevel && !this.retainCheckpointForAbort) {
+        this.promptCheckpoint = undefined;
+      }
+    });
   }
   setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void {
     this.s.setThinkingLevel(level);
   }
   abort(): Promise<void> {
+    if (this.promptCheckpoint !== undefined) this.retainCheckpointForAbort = true;
     return this.s.abort();
   }
   clearQueue(): unknown {
     return this.s.clearQueue();
+  }
+  rollbackInterruptedTurn(): void {
+    const checkpoint = this.promptCheckpoint;
+    if (checkpoint === undefined) return;
+    if (checkpoint === null) {
+      this.s.sessionManager.resetLeaf();
+    } else if (this.s.sessionManager.getLeafId() !== checkpoint) {
+      this.s.sessionManager.branch(checkpoint);
+    }
+    // AgentSession.prompt() appends to the in-memory Agent state directly; it
+    // does not rebuild that state from SessionManager on every prompt. Keep
+    // both representations on the same clean branch or stale tool calls can
+    // still execute even though the persisted leaf moved.
+    this.s.state.messages = this.s.sessionManager.buildSessionContext().messages;
+    this.promptCheckpoint = undefined;
+    this.retainCheckpointForAbort = false;
   }
   interruptTool(toolCallId: string): boolean {
     const controller = this.bashControllers.get(toolCallId);
@@ -354,6 +387,13 @@ class RealAgentSession implements IAgentSession {
 interface PiSession {
   readonly sessionId: string;
   readonly isStreaming: boolean;
+  readonly state: { messages: unknown[] };
+  readonly sessionManager: {
+    getLeafId(): string | null;
+    branch(entryId: string): void;
+    resetLeaf(): void;
+    buildSessionContext(): { messages: unknown[] };
+  };
   subscribe(listener: (e: unknown) => void): () => void;
   prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
   setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void;
