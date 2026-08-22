@@ -25,20 +25,20 @@ testing, but it can change on the next publication. The current images target `l
 
 | Variant | Global (GHCR) | Mainland China (Alibaba Cloud ACR) |
 | --- | --- | --- |
-| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.0` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0` |
-| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.0` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0` |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.1` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.1` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.1` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.1` |
 
 Both endpoints allow anonymous pulls. Mainland China users should prefer ACR; other users should
 prefer GHCR.
 
 ```bash title="Global"
-docker pull ghcr.io/neuroaihub/brainpilot-sandbox:0.2.0
-docker pull ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.0
+docker pull ghcr.io/neuroaihub/brainpilot-sandbox:0.2.1
+docker pull ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.1
 ```
 
 ```bash title="Mainland China"
-docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
-docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.1
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.1
 ```
 
 The CPU image includes Node.js, Python, pip, curl, and the BrainPilot runtime. The GPU image adds
@@ -72,7 +72,7 @@ To avoid rebuilding the CPU sandbox, set its full registry path and pull it firs
 main image, then start Compose without rebuilding the sandbox:
 
 ```bash
-export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
+export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.1
 docker compose pull sandbox
 docker compose build main
 docker compose up -d --no-build
@@ -103,7 +103,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --build
 To use the official prebuilt GPU sandbox instead:
 
 ```bash
-export BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0
+export BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.1
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml pull sandbox
 docker compose build main
 docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --no-build
@@ -113,7 +113,7 @@ Verify PyTorch can see the GPU:
 
 ```bash
 docker run --rm --gpus all --entrypoint python \
-  brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0 \
+  brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.1 \
   -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
 ```
 
@@ -123,7 +123,7 @@ Dynamic mode runs one sandbox per user through the host Docker daemon. Build the
 service and point it at a versioned sandbox image:
 
 ```bash
-export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
+export BP_SANDBOX_IMAGE=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.1
 docker pull "$BP_SANDBOX_IMAGE"
 docker compose -f docker-compose.dynamic.yml up -d --build
 ```
@@ -131,8 +131,8 @@ docker compose -f docker-compose.dynamic.yml up -d --build
 The hosted BrainPilot cloud layer supports separate CPU and GPU images:
 
 ```dotenv
-BP_SANDBOX_IMAGE_CPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
-BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.0
+BP_SANDBOX_IMAGE_CPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.1
+BP_SANDBOX_IMAGE_GPU=brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.1
 ```
 
 After changing either value, pull the new image and use the cloud deployment procedure to roll
@@ -158,7 +158,7 @@ Pull a new fixed tag, update the corresponding environment variable, and recreat
 containers:
 
 ```bash
-docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.0
+docker pull brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.1
 docker compose up -d --no-build --force-recreate sandbox
 ```
 
