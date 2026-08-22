@@ -1,6 +1,6 @@
 {
   "name": "@brainpilot/web",
-  "version": "0.2.1",
+  "version": "0.2.2",
   "engines": {
     "node": ">=22"
   },
@@ -31,8 +31,8 @@
   },
   "dependencies": {},
   "devDependencies": {
-    "@brainpilot/plugin-sdk": "^0.2.1",
-    "@brainpilot/protocol": "^0.2.1",
+    "@brainpilot/plugin-sdk": "^0.2.2",
+    "@brainpilot/protocol": "^0.2.2",
     "@fontsource-variable/geist": "^5.2.9",
     "@fontsource-variable/geist-mono": "^5.2.8",
     "@types/react": "^18.3.12",

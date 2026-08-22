@@ -409,7 +409,7 @@ describe("SessionManager (mock mode)", () => {
         id: "org.brainpilot.auditor",
         enabled: false,
         reason: "experiment-override",
-        version: "0.2.1",
+        version: "0.2.2",
       });
     } finally {
       await rm(root, { recursive: true, force: true });

@@ -3,6 +3,29 @@
 This file records notable changes to the public BrainPilot release. For the complete commit
 history, follow the comparison links for each version.
 
+## [0.2.2] - 2026-08-22
+
+This patch makes the hosted plugin experience accurately reflect Cloud availability. Hosted
+deployments previously opened the local plugin marketplace even when its Cloud control plane was
+not enabled, which exposed raw 404 responses and could make the marketplace look broken.
+
+### Cloud plugin experience
+
+- Shows a compact, localized “not yet available in Cloud” state when hosted users open Plugins.
+- Does not mount the local marketplace in hosted mode, avoiding unsupported marketplace,
+  installation, update, and MCP-status requests from that page.
+- Keeps the existing plugin marketplace unchanged for local and self-hosted installations.
+
+### Upgrade
+
+```bash
+npm install -g @brainpilot/app@0.2.2
+brainpilot --version
+```
+
+Docker and hosted deployments should use the matching `0.2.2` CPU or GPU sandbox image. No manual
+user-data migration is required.
+
 ## [0.2.1] - 2026-08-22
 
 This patch release makes **Stop** a hard boundary for model, tool, and Trace work. In v0.2.0, an
@@ -220,6 +243,7 @@ First public open-source release of BrainPilot, including the PI-led multi-agent
 workflow, Graph of Trace, the built-in scientific skills library, provider configuration, MCP
 integration, local CLI, web interface, and Docker sandbox support.
 
+[0.2.2]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.2...v0.2.0
 [0.1.2]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.1...v0.1.2
