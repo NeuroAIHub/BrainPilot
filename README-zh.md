@@ -43,9 +43,9 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ## 📰 最新动态
 
-- **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) 在云端插件功能尚未开放时显示简洁、明确的提示，不再暴露不受支持的插件市场请求；本地和自托管版本的完整插件市场保持不变。详见[更新日志](CHANGELOG.md#022---2026-08-22)。
+- **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) 让托管界面与当前已开放的 Cloud 能力保持一致，并移除不受支持的控制面请求。详见[更新日志](CHANGELOG.md#022---2026-08-22)。
 - **2026-08-22** — [BrainPilot v0.2.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.1) 将“停止”变成严格边界，已取消的模型、工具、文件和轨迹任务不会在用户提出新需求后继续执行。详见[更新日志](CHANGELOG.md#021---2026-08-22)。
-- **2026-08-22** — [BrainPilot v0.2.0](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.0) 新增公共插件平台、可持久追踪的专家任务与后台任务、支持工作区恢复的科研轨迹、公共脑科学数据集，并重新设计服务商、模型和思考强度的选择流程；同时系统性改进文件与附件、停止与恢复、移动端布局和错误处理。详见[更新日志](CHANGELOG.md#020---2026-08-22)。
+- **2026-08-22** — [BrainPilot v0.2.0](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.0) 新增可持久追踪的专家任务与后台任务、支持工作区恢复的科研轨迹、公共脑科学数据集和最高 1M token 的可配置模型上下文，并重新设计服务商、模型和思考强度的选择流程；同时系统性改进文件与附件、停止与恢复、移动端布局和错误处理。详见[更新日志](CHANGELOG.md#020---2026-08-22)。
 - **2026-07-28** — [BrainPilot v0.1.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.2) 完善工具生命周期、托管 MCP BYOK、npm 知识库脚本、数学公式渲染和新手引导，并通过 GHCR 与中国大陆 ACR 正式发布 CPU/GPU 沙箱镜像。详见[更新日志](CHANGELOG.md#012---2026-07-28)。
 - **2026-07-24** — [BrainPilot v0.1.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.1.1) 提升了排队与超时提问、模型服务临时故障重试及模型健康状态记录的可靠性。详情见[更新日志](CHANGELOG.md#011---2026-07-24)。
 - **2026-07-18** — BrainPilot 项目在 2026 世界人工智能大会（WAIC）“实体世界智能科学论坛”上展示，欢迎关注！
@@ -140,6 +140,9 @@ BP_MOCK=1 brainpilot up
 打开 Web UI 里的 **Settings → Providers（服务商）**，添加一个服务商，保存后点击 **Use（使用）**。
 BrainPilot 支持 **Anthropic Messages**、**OpenAI Completions**、**OpenAI Responses** 和
 **Azure OpenAI Responses**，可以接入 Anthropic、OpenAI 兼容端点、Azure 或第三方网关。
+
+Provider 可以选择自动、256K 或 1M 上下文。1M 模式会在约 900K 时自动整理上下文，并保留
+最近 64K token。请只选择模型和服务商实际支持的大小；这个设置不会提高模型原生的上下文上限。
 
 更想用命令行初始化？
 

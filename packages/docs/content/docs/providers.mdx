@@ -37,6 +37,14 @@ Example gateway setup:
 
 Keep real keys in your local config only. Do not commit provider keys to GitHub issues, docs, screenshots, or repository files.
 
+## Context Window
+
+Provider settings offer **Auto**, **256K**, and **1M** context. In 1M mode, BrainPilot compacts
+near 900K and preserves the latest 64K tokens so long-running tool work keeps useful recent
+context. Choose only a size supported by the model and provider: this setting controls BrainPilot's
+runtime budget, but cannot increase the model's native context limit. Start a new session after
+changing it because provider settings are frozen when a session is created.
+
 ## CLI Initialization
 
 For quick local scaffolding:
