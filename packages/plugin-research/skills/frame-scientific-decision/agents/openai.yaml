@@ -1,0 +1,4 @@
+interface:
+  display_name: "Frame Scientific Decision"
+  short_description: "Expose unresolved choices before PI delegates work"
+  default_prompt: "Use $frame-scientific-decision to map every outcome-sensitive open decision before delegating the task."

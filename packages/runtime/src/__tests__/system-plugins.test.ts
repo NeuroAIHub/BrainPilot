@@ -24,8 +24,28 @@ describe("bundled system plugins", () => {
     expect(systemPluginEnabled(snapshot, BACKGROUND_JOBS_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, RESEARCH_PLUGIN_ID)).toBe(true);
     const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
-    expect(principalSkills).toHaveLength(1);
-    expect(principalSkills[0]).toMatch(/plugin-auditor.*audit-feedback-loop/);
+    expect(principalSkills).toHaveLength(7);
+    for (const skill of [
+      "audit-feedback-loop",
+      "frame-scientific-decision",
+      "coordinate-model-selection",
+      "coordinate-data-analysis",
+      "coordinate-literature-synthesis",
+      "coordinate-study-design",
+      "coordinate-software-delivery",
+    ]) {
+      expect(principalSkills).toEqual(expect.arrayContaining([expect.stringMatching(new RegExp(skill))]));
+    }
+    const frameSkill = principalSkills.find((path) => path.endsWith("frame-scientific-decision"))!;
+    const frame = (await readFile(join(frameSkill, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
+    expect(frame).toContain("decision the user needs, not the shape of the final artifact");
+    expect(frame).toContain("Failure to find a matching local Skill increases the need for Librarian grounding");
+    expect(frame).toContain("Can change metric or claim?");
+    const modelSkill = principalSkills.find((path) => path.endsWith("coordinate-model-selection"))!;
+    const modelSelection = (await readFile(join(modelSkill, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
+    expect(modelSelection).toContain("one final class or file");
+    expect(modelSelection).toContain("Treat import checks, loss decrease, subsets, and short runs as feasibility evidence only");
+    expect(modelSelection).toContain("final held-out test");
     const auditorSkills = systemPluginSkillPaths(plugins, snapshot, "auditor");
     expect(auditorSkills).toHaveLength(5);
     for (const skill of [
@@ -57,6 +77,8 @@ describe("bundled system plugins", () => {
     expect(systemPluginSkillPaths(plugins, snapshot, "trace")[0])
       .toMatch(/plugin-got.*curate-research-trace/);
     const principalInstructions = (await systemPluginInstructions(plugins, snapshot, "principal")).join("\n");
+    expect(principalInstructions).toContain("load `frame-scientific-decision`");
+    expect(principalInstructions).toMatch(/a missing router match calls for Librarian\s+grounding/);
     expect(principalInstructions).toContain("Auditor feedback loop");
     expect(principalInstructions).toContain("never immediately claim that the");
     expect(principalInstructions).toContain("task is complete");
@@ -201,8 +223,16 @@ describe("bundled system plugins", () => {
       enabled: false,
       reason: "experiment-override",
     }));
-    expect(systemPluginSkillPaths(plugins, snapshot, "principal")).toEqual([]);
-    expect(await systemPluginInstructions(plugins, snapshot, "principal")).toEqual([]);
+    const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
+    expect(principalSkills).toHaveLength(6);
+    expect(principalSkills).toEqual(expect.arrayContaining([
+      expect.stringMatching(/plugin-research.*frame-scientific-decision/),
+      expect.stringMatching(/plugin-research.*coordinate-model-selection/),
+    ]));
+    const principalInstructions = await systemPluginInstructions(plugins, snapshot, "principal");
+    expect(principalInstructions).toHaveLength(1);
+    expect(principalInstructions[0]).toContain("frame-scientific-decision");
+    expect(principalInstructions[0]).not.toContain("Auditor feedback loop");
     expect(await systemPluginInstructions(plugins, snapshot, "auditor")).toEqual([]);
     expect(await systemPluginInstructions(plugins, snapshot, "trace")).toEqual([]);
   });

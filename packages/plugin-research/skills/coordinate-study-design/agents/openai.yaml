@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinate Study Design"
+  short_description: "Ground and review experimental study protocols"
+  default_prompt: "Use $coordinate-study-design to coordinate evidence-grounded study and protocol design."

@@ -22,6 +22,20 @@ async function tmp(): Promise<string> {
   return mkdtemp(join(tmpdir(), "bp-two-paths-"));
 }
 
+function principalWorkflowSkillMatchers() {
+  return [
+    expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+    ...[
+      "frame-scientific-decision",
+      "coordinate-model-selection",
+      "coordinate-data-analysis",
+      "coordinate-literature-synthesis",
+      "coordinate-study-design",
+      "coordinate-software-delivery",
+    ].map((skill) => expect.stringMatching(new RegExp(`plugin-research.*${skill}`))),
+  ];
+}
+
 describe("two-path skill loading", () => {
   it("materialize splits Meta-Skills into always-on and the rest into router", async () => {
     const root = await tmp();
@@ -62,7 +76,7 @@ describe("two-path skill loading", () => {
     // native Pi paths; the router is never in this list.
     expect(capturedSkillPaths).toEqual([
       join(root, "bp_template", "skills"),
-      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+      ...principalWorkflowSkillMatchers(),
     ]);
     expect(capturedSkillPaths).not.toContain(join(root, "bp_template", "skills-router"));
   });
@@ -159,12 +173,10 @@ describe("two-path skill loading", () => {
       expect(baseParams.systemTools.map((tool) => tool.name)).not.toContain(name);
       expect(fullParams.systemTools.map((tool) => tool.name)).toContain(name);
     }
-    expect(baseParams.skillPaths).toEqual([
-      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
-    ]);
+    expect(baseParams.skillPaths).toEqual(principalWorkflowSkillMatchers());
     expect(fullParams.skillPaths).toEqual([
       join(root, "bp_template", "skills"),
-      expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
+      ...principalWorkflowSkillMatchers(),
     ]);
     expect(baseParams.systemPrompt).not.toMatch(/skill_search|<available_skills>|SKILL\.md/i);
     expect(fullParams.systemPrompt).toContain("skill_search");
@@ -196,12 +208,12 @@ describe("two-path skill loading", () => {
       expect(params.systemTools.map((t) => t.name)).not.toContain("skill_search");
       // App Meta-Skills still load alongside system-plugin Skills targeted to
       // the current role, independently of the router toggle.
-      expect(params.skillPaths).toEqual([
-        join(root, "bp_template", "skills"),
-        params.agentName === "principal"
-          ? expect.stringMatching(/plugin-auditor.*audit-feedback-loop/)
-          : expect.stringMatching(/plugin-research.*source-grounded-research-report/),
-      ]);
+      expect(params.skillPaths).toEqual(params.agentName === "principal"
+        ? [join(root, "bp_template", "skills"), ...principalWorkflowSkillMatchers()]
+        : [
+            join(root, "bp_template", "skills"),
+            expect.stringMatching(/plugin-research.*source-grounded-research-report/),
+          ]);
       expect(params.systemTools.map((t) => t.name)).toContain("get_domain_knowledge_local");
       // Prompt no longer teaches skill_search / router library.
       expect(params.systemPrompt).not.toMatch(/skill_search/i);

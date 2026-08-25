@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinate Literature Synthesis"
+  short_description: "Organize source-grounded research synthesis"
+  default_prompt: "Use $coordinate-literature-synthesis to organize a source-grounded literature research workflow."
