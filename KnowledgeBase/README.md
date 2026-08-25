@@ -175,14 +175,17 @@ All failure modes (KB not built yet, sidecar can't start, model weights missing,
 
 #### `search_papers_local(title?, authors?, journal?, published_year?, keywords?, topk=5, mode=meta-data, segment=1) -> str`
 
-Filter the `KB_source.json` library by exact title / author overlap / exact journal / year prefix, rank by whole-word keyword hits across `title + abstract` (and the full `.mmd` body in `full-paper` mode).
+Filter the `KB_source.json` library by normalized title or title phrase / author overlap / exact journal / year, then rank by whole-word keyword hits. Title normalization ignores case, Unicode presentation variants, punctuation, and repeated whitespace while preserving semantic symbols.
 
-- `mode="meta-data"` → metadata + `keyword_hits`.
-- `mode="full-paper"` → adds a `~20k-char` segment of the `.mmd` and `segment_info` so long papers can be paged.
+- `mode="meta-data"` searches `title + abstract` without reading `.mmd` bodies.
+- `mode="full-paper"` also searches full text and returns a `~20k-char` segment, `full_text_status`, and `segment_info`.
+- Keyword-only searches return no zero-hit papers. With explicit metadata filters, keywords rank rather than discard the filtered set.
+- Every response includes `status`, `results`, `corpus_size`, and `matched_count`; `topk` is limited to 20.
+- Missing/unreadable full text and unavailable page numbers are reported explicitly rather than mapped to empty or repeated content.
 
 Internal fields (`mmd_path`, `extraction_status`) are stripped from every returned record.
 
-⚠️ All filters are **exact-match**: `journal="Nat Commun"` will miss "Nature Communications"; `published_year=2020` excludes any paper with an empty `published_date`. When unsure, lean on `keywords` and drop the filter.
+⚠️ Author and journal filters remain **exact-match**: `journal="Nat Commun"` will miss "Nature Communications"; `published_year=2020` excludes any paper with an empty `published_date`. When unsure, lean on `keywords` and drop the filter.
 
 ### 7. How the local model deployment works
 
@@ -427,14 +430,17 @@ python KnowledgeBase/scripts/build_kb.py --only chunk vectorize   # 只重切+�
 
 #### `search_papers_local(title?, authors?, journal?, published_year?, keywords?, topk=5, mode=meta-data, segment=1) -> str`
 
-按元数据过滤 + 关键词排序检索 `KB_source.json`：
+按元数据过滤 + 关键词排序检索 `KB_source.json`：标题支持标准化后的完整标题或连续标题短语匹配，忽略大小写、Unicode 表现差异、标点和重复空白，同时保留有语义的符号。
 
-- `mode="meta-data"` 返回 JSON 元数据列表（附 `keyword_hits`）。
-- `mode="full-paper"` 额外返回一段 mmd 全文片段（默认每段 ~20k 字符）+ `segment_info`，可用 `segment` 翻页。
+- `mode="meta-data"` 只搜索 `title + abstract`，不会读取 mmd 全文。
+- `mode="full-paper"` 同时搜索全文，并返回一段 mmd 全文、`full_text_status` 与 `segment_info`。
+- 仅使用关键词时不会返回零命中论文；存在明确元数据过滤时，关键词只对过滤结果排序。
+- 每次响应都包含 `status`、`results`、`corpus_size` 与 `matched_count`；`topk` 最大为 20。
+- 全文缺失、不可读或请求页不存在时会显式报告，不会伪装为空正文或重复最后一页。
 
 所有内部字段（`mmd_path`、`extraction_status`）都从返回结果中剥离，不会泄漏给 agent。
 
-⚠️ 注意所有过滤参数都是**完全匹配**：`journal="Nat Commun"` 不会命中 `"Nature Communications"`；`published_year=2020` 会排除掉 `published_date` 为空的条目。不确定时优先用 `keywords` 排序、把过滤参数留空。
+⚠️ 作者与期刊过滤仍是**完全匹配**：`journal="Nat Commun"` 不会命中 `"Nature Communications"`；`published_year=2020` 会排除掉 `published_date` 为空的条目。不确定时优先用 `keywords` 排序、把过滤参数留空。
 
 ### 7. 模型本地化部署细节
 
