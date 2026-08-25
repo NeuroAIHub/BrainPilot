@@ -31,6 +31,16 @@ describe("subagent profile overrides", () => {
       .toContain("asymmetric dimensions and index-distinct values");
   });
 
+  it("gives retrieval subagents adaptive shell access without widening evidence extraction", () => {
+    const profiles = new Map(builtinSubagentProfiles().map((profile) => [profile.name, profile]));
+    for (const name of ["literature-scout", "api-librarian"]) {
+      expect(profiles.get(name)?.builtinTools).toEqual(
+        expect.arrayContaining(["read", "write", "edit", "bash", "ls"]),
+      );
+    }
+    expect(profiles.get("evidence-extractor")?.builtinTools).not.toContain("bash");
+  });
+
   it("loads prompt and validated config overrides while stripping forbidden tools", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-subagent-profile-"));
     roots.push(root);

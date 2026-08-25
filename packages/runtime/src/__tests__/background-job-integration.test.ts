@@ -98,7 +98,7 @@ describe("Background Jobs runtime integration", () => {
     expect(prompts.get("engineer")).toContain("must use `run_in_background`");
 
     await manager.sendMessage(session.id, "research", "librarian");
-    expect(prompts.get("librarian")).not.toContain("Every `bash` call must explicitly set `timeout`");
+    expect(prompts.get("librarian")).toContain("Every `bash` call must explicitly set `timeout`");
     manager.shutdown();
   });
 
