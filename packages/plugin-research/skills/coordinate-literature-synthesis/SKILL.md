@@ -23,6 +23,11 @@ Do not dispatch Engineer merely to make the workflow look complete. Add
 implementation or data-analysis work only when the user's requested outcome
 actually requires it.
 
+If one search provider, MCP, index, or paywalled source fails, route an
+authorized independent discovery path and inspect accessible primary sources.
+Record the resulting coverage limit. A provider failure neither proves that no
+literature exists nor justifies filling the gap from memory.
+
 Complete only when every decision-relevant claim maps to an inspectable source
 or an explicit unresolved limitation, contradictions are synthesized, and the
 canonical report path is ready for handoff.

@@ -1,0 +1,4 @@
+interface:
+  display_name: "Manage Research Workflow"
+  short_description: "Control multi-stage research, recovery, and completion"
+  default_prompt: "Use $manage-research-workflow to coordinate a durable evidence graph through execution, recovery, audit, and handoff."

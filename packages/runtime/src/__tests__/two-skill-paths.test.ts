@@ -27,6 +27,7 @@ function principalWorkflowSkillMatchers() {
     expect.stringMatching(/plugin-auditor.*audit-feedback-loop/),
     ...[
       "frame-scientific-decision",
+      "manage-research-workflow",
       "coordinate-model-selection",
       "coordinate-data-analysis",
       "coordinate-literature-synthesis",

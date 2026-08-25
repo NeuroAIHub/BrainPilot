@@ -25,6 +25,11 @@ Do not silently turn a design request into actual participant recruitment, data
 collection, or high-impact execution. Ask the user before actions requiring new
 authority, cost, exposure, or irreversible external state.
 
+When feasibility or effect-size uncertainty is decision-critical, declare what
+a simulation or pilot can change in the protocol. Treat a convenience pilot as
+feasibility evidence, not as confirmatory evidence or an unplanned opportunity
+to optimize the final analysis.
+
 Complete only when the protocol links every important design choice to evidence
 or a stated constraint and includes operational feasibility, analysis, quality,
 stopping, limitation, and audit information.

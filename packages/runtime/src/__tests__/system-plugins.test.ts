@@ -24,10 +24,11 @@ describe("bundled system plugins", () => {
     expect(systemPluginEnabled(snapshot, BACKGROUND_JOBS_PLUGIN_ID)).toBe(true);
     expect(systemPluginEnabled(snapshot, RESEARCH_PLUGIN_ID)).toBe(true);
     const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
-    expect(principalSkills).toHaveLength(7);
+    expect(principalSkills).toHaveLength(8);
     for (const skill of [
       "audit-feedback-loop",
       "frame-scientific-decision",
+      "manage-research-workflow",
       "coordinate-model-selection",
       "coordinate-data-analysis",
       "coordinate-literature-synthesis",
@@ -41,6 +42,12 @@ describe("bundled system plugins", () => {
     expect(frame).toContain("decision the user needs, not the shape of the final artifact");
     expect(frame).toContain("Failure to find a matching local Skill increases the need for Librarian grounding");
     expect(frame).toContain("Can change metric or claim?");
+    const workflowSkill = principalSkills.find((path) => path.endsWith("manage-research-workflow"))!;
+    const workflow = (await readFile(join(workflowSkill, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
+    expect(workflow).toContain("one evidence dependency graph");
+    expect(workflow).toContain("docs/plans/research-workflow.md");
+    expect(workflow).toContain("PI inactivity is not whole-work completion");
+    expect(workflow).toContain("mark every dependent accepted node `stale`");
     const modelSkill = principalSkills.find((path) => path.endsWith("coordinate-model-selection"))!;
     const modelSelection = (await readFile(join(modelSkill, "SKILL.md"), "utf8")).replace(/\s+/g, " ");
     expect(modelSelection).toContain("one final class or file");
@@ -78,6 +85,7 @@ describe("bundled system plugins", () => {
       .toMatch(/plugin-got.*curate-research-trace/);
     const principalInstructions = (await systemPluginInstructions(plugins, snapshot, "principal")).join("\n");
     expect(principalInstructions).toContain("load `frame-scientific-decision`");
+    expect(principalInstructions).toContain("`manage-research-workflow` for multi-stage");
     expect(principalInstructions).toMatch(/a missing router match calls for Librarian\s+grounding/);
     expect(principalInstructions).toContain("Auditor feedback loop");
     expect(principalInstructions).toContain("never immediately claim that the");
@@ -224,7 +232,7 @@ describe("bundled system plugins", () => {
       reason: "experiment-override",
     }));
     const principalSkills = systemPluginSkillPaths(plugins, snapshot, "principal");
-    expect(principalSkills).toHaveLength(6);
+    expect(principalSkills).toHaveLength(7);
     expect(principalSkills).toEqual(expect.arrayContaining([
       expect.stringMatching(/plugin-research.*frame-scientific-decision/),
       expect.stringMatching(/plugin-research.*coordinate-model-selection/),

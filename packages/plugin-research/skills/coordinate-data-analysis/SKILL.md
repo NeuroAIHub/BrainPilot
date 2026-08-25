@@ -8,6 +8,11 @@ description: Coordinate analysis, quality control, statistics, visualization, or
 State the scientific question, authorized data scope, natural grouping unit,
 target outcomes, and claims the analysis must support.
 
+Classify the work as descriptive, exploratory, confirmatory, or mixed. For mixed
+work, keep exploration outputs separate, freeze confirmatory choices before
+testing them, and label post-hoc findings as exploratory rather than silently
+upgrading them to confirmatory claims.
+
 1. Dispatch Engineer to invoke `create-data-inventory`, reconcile identifiers,
    labels, shapes, missingness, split boundaries, and decision-relevant variation.
 2. Dispatch Librarian only when assumptions, measures, or method choices require
@@ -30,4 +35,5 @@ or robustness could reverse the conclusion.
 
 Complete only when the handoff names the data inventory, analysis protocol,
 executed outputs, diagnostics, sensitivity evidence, interpretation, limitations,
-and applicable audit verdict.
+and applicable audit verdict. A null or inconclusive result is complete when the
+protocol was validly executed and uncertainty and power limits are reported.
