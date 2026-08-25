@@ -9,21 +9,17 @@
  *     loopback.
  *
  *   search_papers_local
- *     Multi-criteria search over ``source/KB_source.json``. Same surface as
- *     ``tools.py:search_papers``.
+ *     Structured multi-criteria search over ``source/KB_source.json``.
  *
- * Both tools return STRINGS. Errors are returned as ``"ERROR: ..."`` strings
- * (with the tool result also marked ``isError: true`` so Pi surfaces it as
- * a failed call) — never thrown. This matches the legacy contract and lets
- * agents react to a missing KB or an unreachable sidecar by simply reading
- * the result.
+ * Both tools return strings. Domain retrieval retains the legacy
+ * ``ERROR: ...`` failure contract. Paper search returns a JSON object with an
+ * explicit status; only infrastructure failures are marked ``isError: true``.
  */
 import type { SystemTool } from "../../types.js";
 import { retrieve, type RetrievalResult } from "./retrieve.js";
 import {
   searchPapers,
-  type FullPaperResult,
-  type MetaResult,
+  type PaperSearchResponse,
   type SearchMode,
 } from "./search-papers.js";
 import { isKbReady, resolveKbPaths } from "./paths.js";
@@ -37,6 +33,13 @@ function fail(text: string): {
   isError: true;
 } {
   return { ...ok(`ERROR: ${text}`), isError: true as const };
+}
+
+function paperSearchFailure(payload: PaperSearchResponse): {
+  content: [{ type: "text"; text: string }];
+  isError: true;
+} {
+  return { ...ok(JSON.stringify(payload, null, 2)), isError: true as const };
 }
 
 function formatResults(results: RetrievalResult[], reloadNote?: string): string {
@@ -165,18 +168,18 @@ export function createSearchPapersLocalTool(): SystemTool {
     name: "search_papers_local",
     description:
       "Multi-criteria search over the LOCAL paper library (source/KB_source.json " +
-      "produced by KnowledgeBase/scripts/extract_meta.py). Filter by exact title, " +
+      "produced by KnowledgeBase/scripts/extract_meta.py). Filter by normalized exact/phrase title, " +
       "author overlap, exact journal, or publication year; rank by keyword hit " +
-      "count against title+abstract (+full mmd content in full-paper mode). " +
-      "mode='meta-data' returns metadata only; mode='full-paper' returns metadata " +
-      "+ a paged segment of the full text. Internal fields (mmd_path, " +
-      "extraction_status) are stripped. ⚠️ All filters are EXACT-MATCH and " +
-      "papers with empty year/journal/authors will silently miss the filter — " +
-      "lean on keyword ranking when unsure.",
+      "count against title+abstract, plus full text in full-paper mode. " +
+      "Responses include status, results, corpus_size, and matched_count. " +
+      "Internal fields (mmd_path, extraction_status) are stripped.",
     parameters: {
       type: "object",
       properties: {
-        title: { type: "string", description: "Exact title to match (case-sensitive)." },
+        title: {
+          type: "string",
+          description: "Title or contiguous title phrase; matching normalizes case, Unicode, punctuation, and whitespace.",
+        },
         authors: {
           oneOf: [
             { type: "array", items: { type: "string" } },
@@ -187,17 +190,23 @@ export function createSearchPapersLocalTool(): SystemTool {
             "or a comma-separated string.",
         },
         journal: { type: "string", description: "Exact journal/venue name." },
-        published_year: { type: "integer", description: "Four-digit year." },
+        published_year: {
+          type: "integer",
+          minimum: 1000,
+          maximum: 9999,
+          description: "Four-digit year.",
+        },
         keywords: {
           oneOf: [
             { type: "array", items: { type: "string" } },
             { type: "string" },
           ],
           description:
-            "Whole-word keyword matching for ranking (case-insensitive). " +
+            "Whole-word keyword matching (case-insensitive). Keyword-only searches drop zero-hit papers; " +
+            "with explicit metadata filters, keywords rank the filtered set. " +
             "Accepts a list or comma-separated string.",
         },
-        topk: { type: "integer", description: "Max results (default 5)." },
+        topk: { type: "integer", minimum: 1, maximum: 20, description: "Max results (default 5, maximum 20)." },
         mode: {
           type: "string",
           enum: ["meta-data", "full-paper"],
@@ -207,6 +216,7 @@ export function createSearchPapersLocalTool(): SystemTool {
         },
         segment: {
           type: "integer",
+          minimum: 1,
           description:
             "(full-paper mode) 1-indexed segment number; each segment is ~20000 chars. " +
             "Check segment_info.has_more to page through.",
@@ -216,10 +226,7 @@ export function createSearchPapersLocalTool(): SystemTool {
     execute: async (params: Record<string, unknown>) => {
       try {
         const mode = (params.mode as SearchMode | undefined) ?? "meta-data";
-        if (mode !== "meta-data" && mode !== "full-paper") {
-          return fail(`mode must be 'meta-data' or 'full-paper', got '${String(mode)}'`);
-        }
-        const results = (await searchPapers({
+        const response = await searchPapers({
           title: typeof params.title === "string" ? params.title : undefined,
           authors: params.authors as string | string[] | undefined,
           journal: typeof params.journal === "string" ? params.journal : undefined,
@@ -229,12 +236,16 @@ export function createSearchPapersLocalTool(): SystemTool {
           topk: typeof params.topk === "number" ? params.topk : undefined,
           mode,
           segment: typeof params.segment === "number" ? params.segment : undefined,
-        })) as MetaResult[] | FullPaperResult[];
-        // The legacy Python tool returns str(list[dict]); we serialize as
-        // JSON instead — it's the same shape but cleaner for the model.
-        return ok(JSON.stringify(results, null, 2));
+        });
+        return ok(JSON.stringify(response, null, 2));
       } catch (err) {
-        return fail(`search_papers_local failed: ${(err as Error).message}`);
+        return paperSearchFailure({
+          status: "infrastructure_error",
+          results: [],
+          corpus_size: 0,
+          matched_count: 0,
+          message: `search_papers_local failed: ${(err as Error).message}`,
+        });
       }
     },
   };
