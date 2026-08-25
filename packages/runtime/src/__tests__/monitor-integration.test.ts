@@ -46,13 +46,13 @@ describe("Monitor runtime integration", () => {
     manager.shutdown();
   });
 
-  it("omits Monitor tools when the marketplace capability is disabled", async () => {
+  it("omits Monitor tools by default and exposes them after explicit enablement", async () => {
     const toolNames: string[][] = [];
     const factory: AgentSessionFactory = async (params) => {
       toolNames.push(params.systemTools.map((tool) => tool.name));
       return mockAgentFactory(params);
     };
-    const manager = new SessionManager({ persist: false, agentFactory: factory, runtimeCapabilities: [] });
+    const manager = new SessionManager({ persist: false, agentFactory: factory });
     const session = await manager.createSession();
     await manager.sendMessage(session.id, "hello");
     await waitFor(() => toolNames.length > 0);
