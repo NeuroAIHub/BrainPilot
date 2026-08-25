@@ -1208,8 +1208,8 @@ export const BUILTIN_TOOL_CONFIG: Record<string, string[]> = {
 };
 
 /**
- * Per-agent-name builtin overrides, keyed by name (not role). Authoring agents
- * need write/edit + a shell; the research specialist keeps a lean no-shell set.
+ * Per-agent-name builtin overrides, keyed by name (not role). Authoring and
+ * retrieval agents need write/edit + a shell; other experts keep a lean set.
  * Falls through to BUILTIN_TOOL_CONFIG by role when a name has no entry.
  */
 export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
@@ -1217,7 +1217,7 @@ export const BUILTIN_TOOL_CONFIG_BY_NAME: Record<string, string[]> = {
   "autoresearch-worker": ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   experimentalist: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   writer: ["read", "write", "edit", "grep", "find", "glob", "ls"],
-  librarian: ["read", "write", "grep", "find", "glob"],
+  librarian: ["read", "write", "edit", "bash", "grep", "find", "glob", "ls"],
   // Auditor evidence inspection remains read-only. `write` is limited by the
   // plugin contract to creating versioned reports under docs/audits/; there is
   // no general edit permission or separate report-submission tool.

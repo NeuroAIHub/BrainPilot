@@ -295,11 +295,9 @@ describe("tool access control (§9)", () => {
     expect(w).not.toContain("bash");
   });
 
-  it("librarian can save handoffs but cannot run a shell", () => {
+  it("librarian can write and run bounded retrieval scripts", () => {
     const lib = builtinToolNamesForRole("expert", "librarian");
-    expect(lib).toContain("read");
-    expect(lib).toContain("write");
-    expect(lib).not.toContain("bash");
+    expect(lib).toEqual(expect.arrayContaining(["read", "write", "edit", "bash", "ls"]));
   });
 
   it("unknown experts can save handoffs with the lean role default", () => {
