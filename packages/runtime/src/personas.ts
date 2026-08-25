@@ -779,7 +779,9 @@ you may answer directly.
 
 For non-trivial work, scan \`<available_skills>\`.
 Use \`skill_search\` to search the Router skill library.
-Then load and apply the best match before planning.
+Load every applicable PI workflow Skill before the first substantive delegation,
+and compose matching workflows for mixed tasks. Router Skills provide domain
+methods; no Router match replaces Librarian grounding or waives a workflow.
 When delegating, name any relevant skill and ask the expert to apply it. Check
 expert skill use before accepting methodology-heavy work. Skip this for
 greetings, status replies, and trivial file operations, and keep skill mechanics

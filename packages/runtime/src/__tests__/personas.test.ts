@@ -59,6 +59,8 @@ describe("personas", () => {
 
   it("PI and methodology agents enforce skills-first preflight", () => {
     expect(PERSONAS.principal!).toContain("Skills-first preflight");
+    expect(PERSONAS.principal!).toContain("every applicable PI workflow Skill");
+    expect(PERSONAS.principal!).toContain("no Router match replaces Librarian grounding");
     expect(PERSONAS.principal!).toMatch(/Check\s+expert skill use/);
     expect(PERSONAS.experimentalist!).toContain("skills are not");
     expect(PERSONAS.experimentalist!).toContain("Find relevant skills first");

@@ -6,9 +6,64 @@
   "description": "Canonical research evidence and data-inventory workflows for BrainPilot experts.",
   "categories": ["analysis", "workflow", "skills"],
   "engines": { "brainpilot": ">=0.1.2 <0.2.0" },
+  "protocols": { "agentInstructions": "1" },
   "environments": ["local", "cloud"],
   "contributes": {
     "skills": [
+      {
+        "id": "frame-scientific-decision",
+        "title": "Frame Scientific Decision",
+        "description": "Expose unresolved outcome-sensitive choices before the Principal delegates scientific work.",
+        "entry": "skills/frame-scientific-decision/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
+      {
+        "id": "coordinate-model-selection",
+        "title": "Coordinate Model Selection",
+        "description": "Coordinate grounded comparison and selection when a model or method choice affects the outcome.",
+        "entry": "skills/coordinate-model-selection/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
+      {
+        "id": "coordinate-data-analysis",
+        "title": "Coordinate Data Analysis",
+        "description": "Coordinate reproducible analysis from data inventory through interpretation and audit.",
+        "entry": "skills/coordinate-data-analysis/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
+      {
+        "id": "coordinate-literature-synthesis",
+        "title": "Coordinate Literature Synthesis",
+        "description": "Coordinate source-grounded factual or literature research without unnecessary execution work.",
+        "entry": "skills/coordinate-literature-synthesis/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
+      {
+        "id": "coordinate-study-design",
+        "title": "Coordinate Study Design",
+        "description": "Coordinate evidence-grounded experimental, observational, or protocol design.",
+        "entry": "skills/coordinate-study-design/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
+      {
+        "id": "coordinate-software-delivery",
+        "title": "Coordinate Software Delivery",
+        "description": "Coordinate implementation and debugging without expanding ordinary engineering into a research workflow.",
+        "entry": "skills/coordinate-software-delivery/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
       {
         "id": "source-grounded-research-report",
         "title": "Source-Grounded Research Report",
@@ -22,6 +77,16 @@
         "description": "Inspect task-relevant research data and write the canonical Markdown inventory before downstream design or execution.",
         "entry": "skills/create-data-inventory/SKILL.md",
         "targets": ["engineer"]
+      }
+    ],
+    "agentInstructions": [
+      {
+        "id": "principal-research-workflows",
+        "title": "PI research workflow skills",
+        "entry": "prompts/principal.md",
+        "targets": ["principal"],
+        "mode": "append",
+        "priority": 50
       }
     ]
   }

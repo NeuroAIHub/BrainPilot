@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinate Software Delivery"
+  short_description: "Route implementation and debugging without research sprawl"
+  default_prompt: "Use $coordinate-software-delivery to plan an efficient implementation, debugging, and verification workflow."

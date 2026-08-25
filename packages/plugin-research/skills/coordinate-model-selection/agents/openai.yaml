@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinate Model Selection"
+  short_description: "Compare candidate methods before model delivery"
+  default_prompt: "Use $coordinate-model-selection to plan a grounded candidate comparison and final model decision."

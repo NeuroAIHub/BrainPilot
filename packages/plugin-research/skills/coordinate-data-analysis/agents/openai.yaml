@@ -1,0 +1,4 @@
+interface:
+  display_name: "Coordinate Data Analysis"
+  short_description: "Plan valid data analysis and interpretation"
+  default_prompt: "Use $coordinate-data-analysis to organize a reproducible analysis from data inventory through interpretation."
