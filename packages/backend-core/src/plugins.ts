@@ -188,9 +188,9 @@ const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
   },
 ];
 const TEST_PLUGIN_SOURCES = new Set<string>();
-const DEFAULT_RUNTIME_TOOL_PLUGINS = [
-  { id: "org.brainpilot.monitor", capability: "builtin.monitor" },
-  { id: "org.brainpilot.background-jobs", capability: "builtin.backgroundJobs" },
+const BUNDLED_RUNTIME_TOOL_PLUGINS = [
+  { id: "org.brainpilot.monitor", capability: "builtin.monitor", defaultEnabled: false },
+  { id: "org.brainpilot.background-jobs", capability: "builtin.backgroundJobs", defaultEnabled: true },
 ] as const;
 
 export function pluginsDir(dataDir: string): string {
@@ -564,10 +564,12 @@ export async function listInstalledPlugins(dataDir: string): Promise<InstalledPl
 export async function listEnabledRuntimeTools(dataDir: string): Promise<string[]> {
   const installed = await listInstalledPlugins(dataDir);
   const capabilities = new Set<string>();
-  for (const defaultPlugin of DEFAULT_RUNTIME_TOOL_PLUGINS) {
-    const override = installed.find((plugin) => plugin.manifest.id === defaultPlugin.id);
-    if (!override || (override.enabled && override.compatibility?.compatible !== false)) {
-      capabilities.add(defaultPlugin.capability);
+  for (const bundledPlugin of BUNDLED_RUNTIME_TOOL_PLUGINS) {
+    const override = installed.find((plugin) => plugin.manifest.id === bundledPlugin.id);
+    if (override
+      ? override.enabled && override.compatibility?.compatible !== false
+      : bundledPlugin.defaultEnabled) {
+      capabilities.add(bundledPlugin.capability);
     }
   }
   for (const plugin of installed) {
@@ -1087,7 +1089,7 @@ export async function installPlugin(dataDir: string, id: string, requestedVersio
       manifest: release.manifest,
       publisher: entry.publisher,
       verified: entry.verified === true,
-      enabled: DEFAULT_RUNTIME_TOOL_PLUGINS.some((plugin) => plugin.id === release.manifest.id),
+      enabled: BUNDLED_RUNTIME_TOOL_PLUGINS.find((plugin) => plugin.id === release.manifest.id)?.defaultEnabled ?? false,
       installedAt: new Date().toISOString(),
       activeVersion: release.version,
       sourceFormat: entry.sourceFormat ?? "brainpilot",

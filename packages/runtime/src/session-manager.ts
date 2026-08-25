@@ -637,7 +637,7 @@ export class SessionManager {
       opts.routerSkillsDir ?? join(this.dataRoot, "bp_template", "skills-router");
     this.bundledSystemPlugins = loadBundledSystemPlugins(opts.systemPluginEnv ?? process.env);
     this.defaultSystemPlugins = snapshotSystemPlugins(this.bundledSystemPlugins);
-    for (const capability of opts.runtimeCapabilities ?? ["builtin.monitor", "builtin.backgroundJobs"]) {
+    for (const capability of opts.runtimeCapabilities ?? ["builtin.backgroundJobs"]) {
       this.runtimeCapabilities.add(capability);
     }
     this.runtimeExtensions = [...(opts.runtimeExtensions ?? [])];

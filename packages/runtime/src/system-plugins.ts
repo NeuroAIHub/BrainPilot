@@ -41,7 +41,7 @@ interface SystemPluginSpec {
 const SPECS: readonly SystemPluginSpec[] = [
   { packageName: "@brainpilot/plugin-auditor", defaultEnabled: true },
   { packageName: "@brainpilot/plugin-got", defaultEnabled: true },
-  { packageName: "@brainpilot/plugin-monitor", defaultEnabled: true },
+  { packageName: "@brainpilot/plugin-monitor", defaultEnabled: false },
   { packageName: "@brainpilot/plugin-background-jobs", defaultEnabled: true },
   { packageName: "@brainpilot/plugin-research", defaultEnabled: true },
 ];

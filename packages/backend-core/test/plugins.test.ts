@@ -365,7 +365,7 @@ describe("plugin marketplace control plane", () => {
   it("publishes the official Monitor capability only while its plugin is enabled", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-"));
     const id = "org.brainpilot.monitor";
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor", "builtin.backgroundJobs"]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.backgroundJobs"]);
     expect((await installPlugin(dataDir, id))?.verified).toBe(true);
     await setPluginEnabled(dataDir, id, true);
     expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor", "builtin.backgroundJobs"]);
@@ -378,9 +378,9 @@ describe("plugin marketplace control plane", () => {
     const id = "org.brainpilot.background-jobs";
     expect((await installPlugin(dataDir, id))?.verified).toBe(true);
     await setPluginEnabled(dataDir, id, true);
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor", "builtin.backgroundJobs"]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.backgroundJobs"]);
     await setPluginEnabled(dataDir, id, false);
-    expect(await listEnabledRuntimeTools(dataDir)).toEqual(["builtin.monitor"]);
+    expect(await listEnabledRuntimeTools(dataDir)).toEqual([]);
   });
   it("requires per-version trust before enabling executable Autoresearch", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-autoresearch-"));
@@ -415,7 +415,7 @@ describe("plugin marketplace control plane", () => {
       body: "{}",
     });
     expect(calls.find((call) => call.url.endsWith("/runtime/capabilities"))?.body)
-      .toBe('{"capabilities":["builtin.monitor","builtin.backgroundJobs"]}');
+      .toBe('{"capabilities":["builtin.backgroundJobs"]}');
 
     const id = "org.brainpilot.monitor";
     await app.request("/api/plugins/install", {
