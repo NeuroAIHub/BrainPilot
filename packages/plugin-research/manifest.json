@@ -20,6 +20,15 @@
         ]
       },
       {
+        "id": "manage-research-workflow",
+        "title": "Manage Research Workflow",
+        "description": "Control multi-stage research execution, recovery, invalidation, audit, and completion.",
+        "entry": "skills/manage-research-workflow/SKILL.md",
+        "targets": [
+          "principal"
+        ]
+      },
+      {
         "id": "coordinate-model-selection",
         "title": "Coordinate Model Selection",
         "description": "Coordinate grounded comparison and selection when a model or method choice affects the outcome.",

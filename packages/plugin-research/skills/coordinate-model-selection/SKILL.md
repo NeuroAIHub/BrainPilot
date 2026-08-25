@@ -9,6 +9,20 @@ Define the target claim, primary metric, natural generalization unit, constraint
 and available comparison data. Separate externally fixed requirements from hints
 that still leave a method choice.
 
+Choose the evidence mode before planning candidates:
+
+- **Prescribed implementation:** an independent requirement fixes the method;
+  validate conformance and effectiveness without pretending to select it.
+- **Empirical selection:** authorized representative data can compare open
+  choices; use the full workflow below.
+- **Evidence-limited recommendation:** fitting or comparison is unauthorized or
+  genuinely infeasible; combine task-specific data diagnostics with external
+  evidence, preserve a validated fallback when possible, and narrow the claim.
+
+The absence of permission to inspect a private final test does not force the
+third mode. A prohibition on training or fitting does; obey it and do not imply
+that literature alone established performance on the user's data.
+
 Coordinate the evidence chain:
 
 1. Dispatch Engineer to create the data inventory, inspect representative real
@@ -36,4 +50,6 @@ validated fallback and report the result as empirically unresolved.
 
 Complete only when the handoff names the data contract, method survey, protocol,
 baseline, candidate results including failures, decision record, selected
-artifact, and final audit verdict.
+artifact, and final audit verdict. In evidence-limited mode, replace unavailable
+candidate results with the exact diagnostics and external evidence used, and
+label empirical superiority unresolved.

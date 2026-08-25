@@ -215,9 +215,11 @@ Stale local routing rule.`;
     expect(pi).toContain("Mandatory workflow for complete research tasks");
     expect(pi).toContain("MUST coordinate Experts and MUST");
     expect(pi).toContain("NOT perform the scientific execution yourself");
-    expect(pi).toContain("engineer` invokes its `create-data-inventory` skill");
-    expect(pi).toContain("librarian` surveys credible alternatives");
-    expect(pi).toContain("experimentalist` reads the contract");
+    expect(pi).toContain("PI workflow Skills as the procedural source of truth");
+    expect(pi).toMatch(/invalidate and rebuild the\s+affected descendants/);
+    expect(pi).toMatch(/`engineer` invokes its\s+`create-data-inventory` skill/);
+    expect(pi).toMatch(/Open method choices require `librarian`\s+evidence/);
+    expect(pi).toContain("an `experimentalist` protocol");
     expect(pi).toContain("Delegated task results are");
     expect(pi).toContain("Do not use `sleep`, polling loops");
     expect(pi).toContain("never for Agent coordination");
@@ -230,8 +232,7 @@ Stale local routing rule.`;
   });
 
   it("requires data contracts, protocols, and targeted result review", () => {
-    expect(PERSONAS.principal).toContain("invokes its `create-data-inventory` skill");
-    expect(PERSONAS.principal).toMatch(/canonical inventory as the\s+data-contract artifact/);
+    expect(PERSONAS.principal).toMatch(/invokes its\s+`create-data-inventory` skill/);
     expect(PERSONAS.engineer).toContain("Research execution gate");
     expect(PERSONAS.engineer).toMatch(/start full training,\s+model search/);
     expect(PERSONAS.engineer).toContain("exported predictions match");
@@ -296,11 +297,8 @@ Stale local routing rule.`;
     }
 
     const pi = PERSONAS.principal!.replace(/\s+/g, " ");
-    expect(pi).toContain("synthesize their canonical artifacts before commissioning a binding protocol");
-    expect(pi).toContain("route bounded follow-up research");
-    expect(pi).toContain("complete-looking first report is not a commitment point");
-    expect(pi).toContain("Before routing binding implementation, verify the provenance");
-    expect(pi).toContain("otherwise require current selection evidence");
+    expect(pi).toContain("Accept canonical artifacts against observable checks");
+    expect(pi).toContain("invalidate and rebuild the affected descendants");
 
     const experimentalist = PERSONAS.experimentalist!.replace(/\s+/g, " ");
     expect(experimentalist).toContain("Every decision-relevant diagnostic must have an outcome");
@@ -309,8 +307,8 @@ Stale local routing rule.`;
     const oldLibrarian = withCoreCoordinationProtocols("# Old Librarian", "librarian", "expert").replace(/\s+/g, " ");
     expect(oldLibrarian).toContain("address material counterevidence");
     const oldPi = withCoreCoordinationProtocols("# Old PI", "principal", "principal").replace(/\s+/g, " ");
-    expect(oldPi).toContain("synthesize their canonical artifacts before commissioning a binding protocol");
-    expect(oldPi).toContain("Before routing binding implementation, verify the provenance");
+    expect(oldPi).toContain("Accept canonical artifacts against observable checks");
+    expect(oldPi).toContain("invalidate and rebuild the affected descendants");
     const oldExperimentalist = withCoreCoordinationProtocols("# Old Experimentalist", "experimentalist", "expert").replace(/\s+/g, " ");
     expect(oldExperimentalist).toContain("cannot be reduced to a warning-only flag");
   });
@@ -320,9 +318,8 @@ Stale local routing rule.`;
     const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
     const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
 
-    expect(pi).toContain("freeze the selection rule rather than a candidate identity");
-    expect(pi).toContain("candidate-local guards do not establish preference");
-    expect(pi).toContain("final comparable evidence snapshot");
+    expect(pi).toContain("final decision uses one frozen comparable evidence snapshot");
+    expect(pi).toContain("predeclared rule");
 
     expect(experimentalist).toContain("independent prescribing constraint or a decision rule");
     expect(experimentalist).toContain("user, task, or external scientific requirement independently determines");
@@ -347,10 +344,7 @@ Stale local routing rule.`;
     const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
     const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
 
-    expect(pi).toContain("baseline or validated fallback carries no scientific preference");
-    expect(pi).toContain("Before the final decision checkpoint");
-    expect(pi).toContain("do not designate, endorse, or freeze a preferred candidate");
-    expect(pi).toContain("Freeze one final comparable evidence snapshot before selection");
+    expect(pi).toContain("Do not designate a preferred candidate before that final snapshot");
 
     expect(experimentalist).toContain("During exploration, maintain candidate eligibility and evidence needs without naming a winner");
     expect(experimentalist).toContain("A current lead alone is insufficient justification");
@@ -367,8 +361,8 @@ Stale local routing rule.`;
     const experimentalist = personaFor("experimentalist", "expert").replace(/\s+/g, " ");
     const engineer = PERSONAS.engineer!.replace(/\s+/g, " ");
 
-    expect(pi).toContain("material choice among alternatives depends on empirical evidence");
-    expect(pi).toContain("evaluation-validity record");
+    expect(pi).toContain("Open method choices require `librarian` evidence");
+    expect(pi).toContain("an `experimentalist` protocol before binding implementation");
 
     expect(experimentalist).toContain("decision claim, target conditions, evidence conditions, decision criterion");
     expect(experimentalist).toContain("evidence-backed mismatch that could plausibly reverse the choice");

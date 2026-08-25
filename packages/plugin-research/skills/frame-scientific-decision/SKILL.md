@@ -39,7 +39,12 @@ Route each unresolved choice to the applicable workflow Skill:
 - implementation or debugging with fixed behavior →
   `coordinate-software-delivery`.
 
-Compose workflows for mixed tasks in evidence-dependency order. Complete the
-frame only when every outcome-sensitive choice has an owner, evidence source,
-and checkable resolution or stopping rule. Then dispatch the first upstream task
-and stop the turn.
+Compose workflows for mixed tasks in evidence-dependency order. Common shapes
+include literature → study protocol → feasibility software; data inventory and
+method survey → model protocol → comparison; and software reproduction → data
+analysis → interpretation. Load `manage-research-workflow` when the composed
+graph has multiple handoffs, branches, long execution, resumption, or recovery.
+
+Complete the frame only when every outcome-sensitive choice has an owner,
+evidence source, and checkable resolution or stopping rule. Then dispatch only
+the upstream work whose inputs are ready and stop the turn.
