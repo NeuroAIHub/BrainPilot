@@ -82,8 +82,58 @@ export function protectCurrencyDollars(markdown: string): string {
     .join("\n");
 }
 
+/**
+ * GFM math treats `$$...$$` on a single line as a display equation, but
+ * remark-math only recognizes display math when the `$$` delimiters sit on
+ * their own lines, so a single-line `$$...$$` is parsed as *text* math.
+ * KaTeX then rejects display-only commands such as `\tag{1}` and renders the
+ * raw TeX in red (`.katex-error`). Promote lines that are exactly `$$...$$`
+ * (outside code fences, with up to three spaces of indentation) to
+ * newline-delimited display math so the two parsers agree with GFM.
+ */
+export function promoteSingleLineDisplayMath(markdown: string): string {
+  let fence: FenceState | null = null;
+
+  return markdown
+    .split("\n")
+    .map((line) => {
+      const fenceMatch = line.match(fencePattern);
+      if (fenceMatch) {
+        const markers = fenceMatch[2]!;
+        const marker = markers[0] as "`" | "~";
+
+        if (!fence) {
+          fence = { marker, length: markers.length };
+        } else if (
+          fence.marker === marker &&
+          markers.length >= fence.length &&
+          line.slice(fenceMatch[0].length).trim() === ""
+        ) {
+          fence = null;
+        }
+        return line;
+      }
+
+      if (fence) return line;
+
+      const indentation = line.match(/^ */)?.[0] ?? "";
+      if (indentation.length > 3) return line;
+
+      const trimmed = line.trim();
+      if (!trimmed.startsWith("$$") || !trimmed.endsWith("$$") || trimmed.length <= 4) {
+        return line;
+      }
+
+      const inner = trimmed.slice(2, -2);
+      if (inner.includes("$$")) return line;
+
+      return `${indentation}$$\n${indentation}${inner}\n${indentation}$$`;
+    })
+    .join("\n");
+}
+
 export function normalizeMarkdownForRendering(markdown: string): string {
-  return protectCurrencyDollars(normalizeMarkdownTables(markdown));
+  return protectCurrencyDollars(normalizeMarkdownTables(promoteSingleLineDisplayMath(markdown)));
 }
 
 function repairCollapsedTableLine(line: string): string {

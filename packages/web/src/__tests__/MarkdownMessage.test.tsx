@@ -4,6 +4,7 @@ import { describe, expect, it } from "vitest";
 import { MarkdownMessage } from "../components/chat/MarkdownMessage";
 import {
   normalizeMarkdownTables,
+  promoteSingleLineDisplayMath,
   protectCurrencyDollars,
 } from "../components/chat/normalizeMarkdown";
 
@@ -22,6 +23,15 @@ describe("MarkdownMessage", () => {
 
     expect(html).not.toContain('class="katex"');
     expect(html).toContain("$E = mc^2$");
+  });
+
+  it("renders single-line $$..$$ math as a display equation", () => {
+    const html = render(
+      "$$y_t \\sim \\text{Poisson}(\\Delta t \\lambda_t), \\qquad \\lambda_t = \\text{softplus}(C z_t + d_t) \\tag{1}$$",
+    );
+
+    expect(html).toContain('class="katex-display"');
+    expect(html).not.toContain("katex-error");
   });
 
   it("renders a collapsed model-generated table", () => {
@@ -95,6 +105,26 @@ describe("normalizeMarkdownTables", () => {
   it("leaves ambiguous pipe-delimited prose untouched", () => {
     const prose = "Compare A | B ||---|---| without treating this as a table.";
     expect(normalizeMarkdownTables(prose)).toBe(prose);
+  });
+});
+
+describe("promoteSingleLineDisplayMath", () => {
+  it("promotes a single-line $$..$$ equation to flow math", () => {
+    expect(promoteSingleLineDisplayMath("$$x \\tag{1}$$")).toBe("$$\nx \\tag{1}\n$$");
+  });
+
+  it("leaves delimiters on separate lines unchanged", () => {
+    const markdown = "$$\nx \\tag{1}\n$$";
+    expect(promoteSingleLineDisplayMath(markdown)).toBe(markdown);
+  });
+
+  it("leaves mid-paragraph math, inline code, and fenced code untouched", () => {
+    const markdown = "成本 $$5\\text{元}$$ 左右\n\n`$$not math$$`\n\n```tex\n$$not math$$\n```";
+    expect(promoteSingleLineDisplayMath(markdown)).toBe(markdown);
+  });
+
+  it("leaves multiple math pairs on one line untouched", () => {
+    expect(promoteSingleLineDisplayMath("$$a$$ and $$b$$")).toBe("$$a$$ and $$b$$");
   });
 });
 
