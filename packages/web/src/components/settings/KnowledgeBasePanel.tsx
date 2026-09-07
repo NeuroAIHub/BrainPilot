@@ -658,6 +658,11 @@ export function KnowledgeBasePanel() {
   const [ocrKeyPreview, setOcrKeyPreview] = useState("");
   const [ocrKeyEditing, setOcrKeyEditing] = useState(false);
   const logRef = useRef<HTMLDivElement | null>(null);
+  const followLogRef = useRef(true);
+  const [logQuery, setLogQuery] = useState("");
+  const [logProblemsOnly, setLogProblemsOnly] = useState(false);
+  const [followingLog, setFollowingLog] = useState(true);
+  const shownEvents = useMemo(() => events.filter((event) => (!logProblemsOnly || ["warn", "warning", "error"].includes(event.event)) && `${event.stage} ${event.msg}`.toLowerCase().includes(logQuery.trim().toLowerCase())), [events, logProblemsOnly, logQuery]);
   const sseRef = useRef<EventSource | null>(null);
   const pdfInputRef = useRef<HTMLInputElement | null>(null);
   const technicalRef = useRef<HTMLDetailsElement | null>(null);
@@ -747,12 +752,12 @@ export function KnowledgeBasePanel() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  // Auto-scroll the log to the bottom on new events.
+  // Follow new events only while the reader is at the bottom.
   useEffect(() => {
     const el = logRef.current;
-    if (!el) return;
+    if (!el || !followLogRef.current) return;
     el.scrollTop = el.scrollHeight;
-  }, [events.length]);
+  }, [events]);
 
   function replayStages(history: BuildEvent[]) {
     // Reset each stage to a fresh copy — the initial constant is shared,
@@ -1993,10 +1998,20 @@ ${env.kbRoot}/.venv/bin/python ${env.kbRoot}/scripts/setup_models.py`}
 
       <div className="kb-block">
         <h4 className="kb-block__title">{t("settings.kb.log")}</h4>
-        <div ref={logRef} className="kb-log">
-          {events.length === 0 ? (
-            <span className="kb-log__empty">{t("settings.kb.logEmpty")}</span>
-          ) : events.map((ev, i) => (
+        <div className="kb-log-controls">
+          <input type="search" aria-label={t("settings.kb.logSearch")} placeholder={t("settings.kb.logSearch")} value={logQuery} onChange={(event) => setLogQuery(event.target.value)} />
+          <label><input type="checkbox" checked={logProblemsOnly} onChange={(event) => setLogProblemsOnly(event.target.checked)} />{t("settings.kb.logProblems")}</label>
+          <button className="settings-button" type="button" onClick={() => { followLogRef.current = true; setFollowingLog(true); if (logRef.current) logRef.current.scrollTop = logRef.current.scrollHeight; }}>{t(followingLog ? "settings.kb.logFollowing" : "settings.kb.logLatest")}</button>
+          <span role="status">{shownEvents.length} / {events.length}</span>
+        </div>
+        <div ref={logRef} className="kb-log" tabIndex={0} role="region" aria-label={t("settings.kb.log")} onScroll={(event) => {
+          const el = event.currentTarget;
+          followLogRef.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+          setFollowingLog(followLogRef.current);
+        }}>
+          {shownEvents.length === 0 ? (
+            <span className="kb-log__empty">{t(events.length ? "settings.kb.logNoMatch" : "settings.kb.logEmpty")}</span>
+          ) : shownEvents.map((ev, i) => (
             <div key={i} className={`kb-log__line kb-log__line--${ev.event}`}>
               [{ev.stage}:{ev.event}] {ev.msg}
             </div>

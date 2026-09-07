@@ -83,6 +83,10 @@ export interface DatasetCatalogEntry {
   id: string;
   name: string;
   summary: string;
+  summaryZh?: string;
+  domains?: string[];
+  species?: string;
+  researchQuestions?: Array<{ en: string; zh: string }>;
   description: string;
   provider: string;
   modalities: string[];
@@ -91,18 +95,28 @@ export interface DatasetCatalogEntry {
   license: string;
   access: "direct" | "credentials" | "application";
   accessNote: string;
+  accessNoteZh?: string;
   homepage: string;
   citation?: string;
+  version?: string;
+  formats?: string[];
+  tasks?: string[];
+  reviewedAt?: string;
+  checksumUrl?: string;
   credentialFields?: Array<{ id: string; label: string; secret?: boolean; required?: boolean; help?: string }>;
   tool?: string;
   downloadAvailable?: boolean;
+  downloadReviewRequired?: boolean;
   downloadCommand?: string;
+  downloadOptions?: Array<{ id: string; label: string; labelZh: string; description: string; descriptionZh: string; tool?: string }>;
 }
 export interface DatasetDownloadJob {
   id: string;
   datasetId: string;
   datasetName: string;
-  status: "queued" | "downloading" | "completed" | "failed";
+  selectionId?: string;
+  selectionLabel?: string;
+  status: "queued" | "downloading" | "completed" | "failed" | "cancelled";
   targetDir: string;
   startedAt: string;
   finishedAt?: string;
@@ -1251,11 +1265,14 @@ export const api = {
       if (runtimeConfig.useMockBackend) return [];
       return handleJson(await apiFetch(`${API_BASE}/datasets/downloads`, { headers: authHeaders() }));
     },
-    async download(id: string, credentials: Record<string, string>): Promise<DatasetDownloadJob> {
+    async cancel(id: string): Promise<DatasetDownloadJob> {
+      return handleJson(await apiFetch(`${API_BASE}/datasets/downloads/${encodeURIComponent(id)}/cancel`, { method: "POST", headers: authHeaders() }));
+    },
+    async download(id: string, credentials: Record<string, string>, selectionId = "full"): Promise<DatasetDownloadJob> {
       return handleJson(await apiFetch(`${API_BASE}/datasets/${encodeURIComponent(id)}/download`, {
         method: "POST",
         headers: authHeaders(),
-        body: JSON.stringify({ credentials }),
+        body: JSON.stringify({ credentials, ...(selectionId === "full" ? {} : { selectionId }) }),
       }));
     },
   },

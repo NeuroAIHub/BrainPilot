@@ -8,7 +8,6 @@ import { useT } from "../../i18n/useT";
 import { runtimeConfig } from "../../config";
 import { appendFileReference } from "../chat/mentionLogic";
 import { PromptComposer } from "../chat/PromptComposer";
-import { DemoView } from "../demo/DemoView";
 import { FileSidebar } from "../files/FileSidebar";
 import { fileRequestForScope, fileSidebarScopeKey } from "../files/fileSidebarScope";
 import { IconButton } from "../primitives/IconButton";
@@ -30,6 +29,7 @@ import {
   type WorkspaceFileTarget,
 } from "../chat/workspaceFileLink";
 
+const DemoView = lazy(() => import("../demo/DemoView").then((module) => ({ default: module.DemoView })));
 const PluginMarketplace = lazy(() => import("../plugins/PluginMarketplace").then((module) => ({ default: module.PluginMarketplace })));
 
 export function DesktopShell() {
@@ -292,7 +292,9 @@ export function DesktopShell() {
       />
 
       {activePage === "demo" ? (
-        <DemoView resetSignal={demoResetSignal} />
+        <Suspense fallback={<main className="plugin-market__empty" role="status">{t("sidebar.loading")}</main>}>
+          <DemoView resetSignal={demoResetSignal} />
+        </Suspense>
       ) : activePage === "plugins" ? pluginMarketplaceSurface(runtimeConfig.localMode) === "cloud-unavailable" ? (
         <main className="plugin-market" aria-labelledby="plugin-market-title">
           <header className="plugin-market__hero">

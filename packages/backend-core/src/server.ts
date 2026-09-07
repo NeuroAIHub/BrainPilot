@@ -1,3 +1,4 @@
+import { stopDatasetDownloads } from "./datasets.js";
 /**
  * server.ts — boots the Hono app via @hono/node-server (§11A.3 / §11A.4 step 4).
  * Exported via the package's `./server` entry. The orchestrator's runtime is
@@ -187,6 +188,7 @@ export async function startServer(
       } finally {
         clearTimeout(forceTimer);
       }
+      await stopDatasetDownloads(providerDataDir);
       await orchestrator.stopRuntime();
     })();
     return stopPromise;

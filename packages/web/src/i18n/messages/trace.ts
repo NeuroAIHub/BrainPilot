@@ -9,6 +9,8 @@ export default defineMessages(
     // TracePanel
     "trace.eyebrow": "推理轨迹",
     "trace.title": "轨迹",
+    "trace.fitGraph": "适应视图",
+    "trace.resetFilters": "清除轨迹筛选",
     "trace.loadFailed": "加载轨迹失败",
     "trace.aria.layoutDir": "轨迹布局方向",
       "trace.aria.refreshControls": "轨迹刷新控制",
@@ -162,6 +164,8 @@ export default defineMessages(
     "trace.agents.emptyNoEvents": "No agent status events in this session yet.",
     "trace.eyebrow": "Reasoning trace",
     "trace.title": "Trace",
+    "trace.fitGraph": "Fit graph",
+    "trace.resetFilters": "Clear trace filters",
     "trace.loadFailed": "Failed to load trace",
     "trace.aria.layoutDir": "Trace layout direction",
       "trace.aria.refreshControls": "Trace refresh controls",
