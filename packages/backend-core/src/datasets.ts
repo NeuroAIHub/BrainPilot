@@ -103,6 +103,12 @@ export async function cancelDatasetDownload(dataDir: string, id: string): Promis
 
 function sanitizedEnvironment(recipe: Extract<DownloadRecipe, { type: "command" }>, credentials: Record<string, string>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG };
+  // git-annex creates local bookkeeping commits even for read-only downloads.
+  // Supply a cache identity per invocation; never write the user's Git config.
+  if (recipe.command === "datalad" || recipe.command === "git") {
+    env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = "BrainPilot dataset cache";
+    env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = "datasets@brainpilot.invalid";
+  }
   for (const [key, credentialId] of Object.entries(recipe.env ?? {})) env[key] = credentialId === "__stdin__" ? "/dev/stdin" : credentials[credentialId];
   return env;
 }

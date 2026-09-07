@@ -240,7 +240,7 @@ describe("dataset marketplace", () => {
   it.skipIf(process.platform === "win32")("pins a DataLad revision before fetching only the selected participant", async () => {
     const root = await mkdtemp(path.join(tmpdir(), "bp-datalad-scope-"));
     const bin = path.join(root, "bin"); await mkdir(bin);
-    const script = `#!${process.execPath}\nrequire("node:fs").appendFileSync("commands.jsonl", JSON.stringify([require("node:path").basename(process.argv[1]), ...process.argv.slice(2)]) + "\\n");`;
+    const script = `#!${process.execPath}\nrequire("node:fs").writeFileSync("cache-identity.json", JSON.stringify({name: process.env.GIT_AUTHOR_NAME, email: process.env.GIT_AUTHOR_EMAIL, committer: process.env.GIT_COMMITTER_NAME})); require("node:fs").appendFileSync("commands.jsonl", JSON.stringify([require("node:path").basename(process.argv[1]), ...process.argv.slice(2)]) + "\\n");`;
     for (const command of ["datalad", "git"]) await writeFile(path.join(bin, command), script, { mode: 0o755 });
     vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
     try {
@@ -250,6 +250,7 @@ describe("dataset marketplace", () => {
       expect(commands[0]).toEqual(["datalad", "install", "-r", "-s", "https://github.com/OpenNeuroDatasets/ds000001.git", "."]);
       expect(commands[1]).toEqual(["git", "checkout", "--detach", "f8e27ac909e50b5b5e311f6be271f0b1757ebb7b"]);
       expect(commands[2]).toEqual(["datalad", "get", "-r", "--", "sub-01"]);
+      expect(JSON.parse(await readFile(path.join(job.targetDir, "cache-identity.json"), "utf8"))).toEqual({ name: "BrainPilot dataset cache", email: "datasets@brainpilot.invalid", committer: "BrainPilot dataset cache" });
     } finally { vi.unstubAllEnvs(); }
   });
 
