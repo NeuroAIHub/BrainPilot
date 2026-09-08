@@ -175,7 +175,13 @@ async function verifyFileChecksum(file: string, checksum?: FileChecksum, signal?
   if (!checksum) return;
   const hash = createHash(checksum.algorithm);
   for await (const chunk of createReadStream(file)) { signal?.throwIfAborted(); hash.update(chunk); }
-  if (hash.digest("hex") !== checksum.value.toLowerCase()) throw new Error("Dataset checksum mismatch; remove the corrupt file before retrying");
+  signal?.throwIfAborted();
+  if (hash.digest("hex") !== checksum.value.toLowerCase()) {
+    // Preserve unverified bytes, but keep them out of final-file reuse and Range retries.
+    const preserved = `${file}.corrupt-${randomUUID()}`;
+    await rename(file, preserved);
+    throw new Error(`Dataset checksum mismatch; unverified file preserved as ${path.basename(preserved)}. Retry to download a fresh copy.`);
+  }
 }
 
 export async function downloadHttpFile(

@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, writeFile } from "node:fs/promises";
 import { readFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -181,12 +181,98 @@ describe("dataset marketplace", () => {
     const checksum = { algorithm: "md5" as const, value: "8d777f385d3dfec8815d20f7496026dc" };
     const fetchFn = vi.fn(async () => new Response("data"));
     await downloadHttpFile("https://data.test/file", destination, { checksum, fetchFn });
+    expect((await downloadHttpFile("https://data.test/file", destination, { checksum, fetchFn })).reused).toBe(true);
+    expect(fetchFn).toHaveBeenCalledTimes(1);
     await writeFile(destination, "corrupt");
     await expect(downloadHttpFile("https://data.test/file", destination, { checksum, fetchFn })).rejects.toThrow("checksum mismatch");
     await expect(downloadHttpFile("https://data.test/file", path.join(root, "bad.bin"), {
       checksum, fetchFn: vi.fn(async () => new Response("corrupt")),
     })).rejects.toThrow("checksum mismatch");
     await expect(readFile(path.join(root, "bad.bin"))).rejects.toMatchObject({ code: "ENOENT" });
+  });
+
+  it.each(["final", "complete partial", "resumed partial", "fresh download"])("recovers on retry after a checksum mismatch in a %s", async (source) => {
+    const root = await mkdtemp(path.join(tmpdir(), "bp-dataset-checksum-retry-"));
+    const destination = path.join(root, "data.bin");
+    const body = Buffer.from("data");
+    const checksum = { algorithm: "md5" as const, value: "8d777f385d3dfec8815d20f7496026dc" };
+    if (source === "final") await writeFile(destination, "xxxx");
+    if (source === "complete partial") await writeFile(`${destination}.part`, "xxxx");
+    if (source === "resumed partial") await writeFile(`${destination}.part`, "x");
+    const ranges: Array<string | undefined> = [];
+    const server = createServer((request, response) => {
+      const range = request.headers.range;
+      ranges.push(range);
+      const start = Number(range?.match(/^bytes=(\d+)-$/)?.[1] ?? 0);
+      if (start === body.length) {
+        response.writeHead(416, { "content-range": `bytes */${body.length}` });
+        response.end();
+        return;
+      }
+      response.writeHead(start > 0 ? 206 : 200, {
+        "content-length": body.length - start,
+        ...(start > 0 ? { "content-range": `bytes ${start}-${body.length - 1}/${body.length}` } : {}),
+      });
+      response.end(source === "fresh download" && ranges.length === 1 ? Buffer.from("xxxx") : body.subarray(start));
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    try {
+      const address = server.address();
+      if (!address || typeof address === "string") throw new Error("test server did not bind");
+      const url = `http://127.0.0.1:${address.port}/data.bin`;
+      await expect(downloadHttpFile(url, destination, { checksum })).rejects.toThrow("Retry to download a fresh copy");
+      await expect(readFile(destination)).rejects.toMatchObject({ code: "ENOENT" });
+      await expect(readFile(`${destination}.part`)).rejects.toMatchObject({ code: "ENOENT" });
+      const preserved = await readdir(root);
+      expect(preserved).toHaveLength(1);
+      expect(preserved[0]).toMatch(/^data\.bin(?:\.part)?\.corrupt-/);
+      const corruptBytes = source === "resumed partial" ? "xata" : "xxxx";
+      expect(await readFile(path.join(root, preserved[0]), "utf8")).toBe(corruptBytes);
+
+      const result = await downloadHttpFile(url, destination, { checksum });
+      expect(result).toEqual({ bytesDownloaded: body.length, totalBytes: body.length, reused: false });
+      expect(await readFile(destination)).toEqual(body);
+      expect(ranges).toEqual(source === "final" ? [undefined]
+        : [source === "complete partial" ? "bytes=4-" : source === "resumed partial" ? "bytes=1-" : undefined, undefined]);
+      expect(await readFile(path.join(root, preserved[0]), "utf8")).toBe(corruptBytes);
+    } finally {
+      await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve()));
+    }
+  });
+
+  it("stops after each bad response and preserves distinct copies across explicit retries", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "bp-dataset-bad-provider-"));
+    const destination = path.join(root, "data.bin");
+    const checksum = { algorithm: "md5" as const, value: "8d777f385d3dfec8815d20f7496026dc" };
+    const fetchFn = vi.fn<typeof fetch>(async () => new Response("corrupt"));
+    for (let attempt = 1; attempt <= 2; attempt++) {
+      await expect(downloadHttpFile("https://data.test/file", destination, { checksum, fetchFn })).rejects.toThrow("checksum mismatch");
+      expect(fetchFn).toHaveBeenCalledTimes(attempt);
+    }
+    const preserved = await readdir(root);
+    expect(preserved).toHaveLength(2);
+    for (const file of preserved) {
+      expect(file).toMatch(/^data\.bin\.part\.corrupt-/);
+      expect(await readFile(path.join(root, file), "utf8")).toBe("corrupt");
+    }
+    for (const [, init] of fetchFn.mock.calls) {
+      expect(new Headers(init?.headers).has("Range")).toBe(false);
+    }
+  });
+
+  it("does not quarantine an existing file when checksum verification is cancelled", async () => {
+    const root = await mkdtemp(path.join(tmpdir(), "bp-dataset-checksum-cancel-"));
+    const destination = path.join(root, "data.bin");
+    await writeFile(destination, "corrupt");
+    const controller = new AbortController();
+    const download = downloadHttpFile("https://data.test/file", destination, {
+      checksum: { algorithm: "md5", value: "8d777f385d3dfec8815d20f7496026dc" }, signal: controller.signal,
+    });
+    // The synchronous preflight has passed; cancellation is observed during verification.
+    controller.abort();
+    await expect(download).rejects.toMatchObject({ name: "AbortError" });
+    expect(await readdir(root)).toEqual(["data.bin"]);
+    expect(await readFile(destination, "utf8")).toBe("corrupt");
   });
 
   it("deduplicates concurrent starts before creating the directory", async () => {
