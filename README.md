@@ -43,6 +43,8 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ## 📰 News
 
+- **2026-09-08** — [BrainPilot v0.2.3](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.3) expands research datasets, connects desktop data and evidence workflows, and updates bilingual guides. See the [changelog](CHANGELOG.md#023---2026-09-08).
+
 - **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) aligns the hosted interface with currently available Cloud capabilities and removes unsupported control-plane requests. See the [changelog](CHANGELOG.md#022---2026-08-22).
 - **2026-08-22** — [BrainPilot v0.2.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.1) makes Stop a hard boundary so cancelled model, tool, file, and Trace work cannot resume after the user's next message. See the [changelog](CHANGELOG.md#021---2026-08-22).
 - **2026-08-22** — [BrainPilot v0.2.0](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.0) adds durable expert tasks and background jobs, richer research traces with workspace recovery, public neuroscience datasets, configurable model contexts up to 1M tokens, and a redesigned provider/model/reasoning workflow, with broad improvements to files, Stop/recovery, mobile layouts, and error handling. See the [changelog](CHANGELOG.md#020---2026-08-22).
@@ -123,7 +125,7 @@ This is the recommended way to get started.
 ### 1. Install and launch
 
 ```bash
-npm install -g @brainpilot/app@0.2.2
+npm install -g @brainpilot/app@0.2.3
 brainpilot up
 ```
 
@@ -480,8 +482,8 @@ production; `latest` follows the newest release.
 
 | Variant | Global | Mainland China |
 | --- | --- | --- |
-| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.2` |
-| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.2` |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.3` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.3` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.3` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.3` |
 
 These are runtime sandbox images, not standalone web applications. Use them with the BrainPilot
 main process or hosted cloud layer. See the bilingual [Docker deployment guide](packages/docs/content/docs/docker.mdx)

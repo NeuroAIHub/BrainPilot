@@ -3,7 +3,7 @@
 This file records notable changes to the public BrainPilot release. For the complete commit
 history, follow the comparison links for each version.
 
-## Unreleased
+## [0.2.3] - 2026-09-08
 
 - Expand dataset discovery to 48 entries across 15 overlapping research topics, including smaller selections where available and bilingual research questions/access metadata.
 - Add durable, bounded download jobs, cancellation/resume, tool checks and safe checksum recovery that preserves invalid files before a fresh explicit retry.
@@ -11,6 +11,12 @@ history, follow the comparison links for each version.
 - Connect the knowledge-resource market to guided PDF upload/indexing and improve build-log inspection.
 - Correct custom Chat Completions gateway system-role compatibility and DataLad cache identity in clean environments; update compatible dependencies.
 - Add bilingual dataset/workspace guides and refresh installation, KB, Docker, troubleshooting and maintainer documentation.
+
+### Packaging and upgrade
+
+- Exclude generated documentation caches from Docker builds and use the verified Python 3 GPU check.
+- Upgrade with `npm install -g @brainpilot/app@0.2.3`, then restart with the same data and knowledge-base roots. Use matching 0.2.3 sandbox images.
+- Cloud is released separately; local dataset/KB management remains disabled in hosted mode. Download completion is not scientific validation.
 
 ## [0.2.2] - 2026-08-22
 
@@ -252,6 +258,7 @@ First public open-source release of BrainPilot, including the PI-led multi-agent
 workflow, Graph of Trace, the built-in scientific skills library, provider configuration, MCP
 integration, local CLI, web interface, and Docker sandbox support.
 
+[0.2.3]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/NeuroAIHub/BrainPilot/compare/v0.1.2...v0.2.0

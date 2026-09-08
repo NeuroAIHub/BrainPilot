@@ -43,6 +43,8 @@ BrainPilot 是一个开源、人在回路的脑科学智能体研究系统。它
 
 ## 📰 最新动态
 
+- **2026-09-08** — [BrainPilot v0.2.3](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.3) 扩展研究数据集，打通桌面端数据与证据工作流，并更新中英文指南。详见[更新日志](CHANGELOG.md#023---2026-09-08)。
+
 - **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) 让托管界面与当前已开放的 Cloud 能力保持一致，并移除不受支持的控制面请求。详见[更新日志](CHANGELOG.md#022---2026-08-22)。
 - **2026-08-22** — [BrainPilot v0.2.1](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.1) 将“停止”变成严格边界，已取消的模型、工具、文件和轨迹任务不会在用户提出新需求后继续执行。详见[更新日志](CHANGELOG.md#021---2026-08-22)。
 - **2026-08-22** — [BrainPilot v0.2.0](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.0) 新增可持久追踪的专家任务与后台任务、支持工作区恢复的科研轨迹、公共脑科学数据集和最高 1M token 的可配置模型上下文，并重新设计服务商、模型和思考强度的选择流程；同时系统性改进文件与附件、停止与恢复、移动端布局和错误处理。详见[更新日志](CHANGELOG.md#020---2026-08-22)。
@@ -123,7 +125,7 @@ BrainPilot 通过 **`@brainpilot/app`** 以本地进程方式运行 —— 无�
 ### 1. 安装并启动
 
 ```bash
-npm install -g @brainpilot/app@0.2.2
+npm install -g @brainpilot/app@0.2.3
 brainpilot up
 ```
 
@@ -446,8 +448,8 @@ NVIDIA GPU、驱动和 NVIDIA Container Toolkit。
 
 | 版本 | 全球 | 中国大陆 |
 | --- | --- | --- |
-| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.2` |
-| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.2` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.2` |
+| CPU | `ghcr.io/neuroaihub/brainpilot-sandbox:0.2.3` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox:0.2.3` |
+| GPU | `ghcr.io/neuroaihub/brainpilot-sandbox-gpu:0.2.3` | `brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.3` |
 
 这些是 runtime 沙箱镜像，不是独立的 Web 应用，需要配合 BrainPilot main 进程或云端托管层使用。
 预构建镜像的 Compose 命令、GPU 验证、动态/云端配置、升级方式和 Docker 安全边界，详见双语
