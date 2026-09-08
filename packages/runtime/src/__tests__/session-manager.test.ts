@@ -393,6 +393,9 @@ describe("SessionManager (mock mode)", () => {
   it("persists the frozen plugin assignment and resolved installed version", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-system-plugin-meta-"));
     try {
+      const bundledAuditor = JSON.parse(await readFile(
+        new URL("../../../plugin-auditor/manifest.json", import.meta.url), "utf8",
+      )) as { version: string };
       const manager = new SessionManager({
         dataRoot: root,
         persist: true,
@@ -409,7 +412,7 @@ describe("SessionManager (mock mode)", () => {
         id: "org.brainpilot.auditor",
         enabled: false,
         reason: "experiment-override",
-        version: "0.2.2",
+        version: bundledAuditor.version,
       });
     } finally {
       await rm(root, { recursive: true, force: true });
