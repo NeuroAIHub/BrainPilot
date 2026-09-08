@@ -3,6 +3,15 @@
 This file records notable changes to the public BrainPilot release. For the complete commit
 history, follow the comparison links for each version.
 
+## Unreleased
+
+- Expand dataset discovery to 48 entries across 15 overlapping research topics, including smaller selections where available and bilingual research questions/access metadata.
+- Add durable, bounded download jobs, cancellation/resume, tool checks and safe checksum recovery that preserves invalid files before a fresh explicit retry.
+- Connect downloaded data to persistent files and new research drafts; retain market navigation and open saved outputs from live Trace.
+- Connect the knowledge-resource market to guided PDF upload/indexing and improve build-log inspection.
+- Correct custom Chat Completions gateway system-role compatibility and DataLad cache identity in clean environments; update compatible dependencies.
+- Add bilingual dataset/workspace guides and refresh installation, KB, Docker, troubleshooting and maintainer documentation.
+
 ## [0.2.2] - 2026-08-22
 
 This patch makes the hosted plugin experience accurately reflect Cloud availability. Hosted

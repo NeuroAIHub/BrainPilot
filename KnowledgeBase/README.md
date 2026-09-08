@@ -36,17 +36,18 @@ An end-to-end toolkit for building a **local** RAG domain knowledge base for Bra
 
 Each of the four stages is **independent and idempotent** — a PDF already in `OCRed_pdf.json` is never re-OCR'd, an `.mmd` already in `chunks.json` is never re-chunked, a `chunk_id` already in `index.json` is never re-embedded. Every path is rooted at `KB_ROOT` (defaults to this directory).
 
-### 2. One-button build (web UI)
+### 2. Guided setup and build (web UI)
 
-The simplest entry point is the BrainPilot main UI: **Settings → Knowledge Base**.
+Open **Settings → Knowledge Base**, or use **My knowledge base / Add papers** in the local knowledge-resource market.
 
-1. Copy your PDFs into `KnowledgeBase/source/pdf/` (the panel reminds you of the exact path).
-2. Enter the **SiliconFlow OCR API key** (required for OCR).
-3. Metadata extraction defaults to *"Reuse the agent's active LLM key"*; uncheck it to provide a separate `base URL / model / key` triple.
-4. Choose which stages to run (all four by default).
-5. Click **Build Knowledge Base**.
+1. Select **Choose PDFs**. Uploads must be valid, nonempty PDFs up to 256 MB each. Rename duplicate filenames if you want to preserve both versions.
+2. Select **Start preparing** if the environment or models are not ready. The guided setup prepares both; advanced controls allow individual setup steps.
+3. Configure the OCR provider and metadata extraction in **Advanced and troubleshooting**. Metadata extraction can reuse the active agent provider when compatible. OCR and metadata processing can send paper content to those services.
+4. Select **Prepare search** and wait for the searchable state. Adding a file alone does not index it. Logs show the processing stages; scroll up to inspect history and use **Jump to latest logs** to follow again.
 
-A stage-by-stage progress strip and a live log stream from the backend over SSE; OCR failures, metadata fallback rows, and failed vectorize batches all show up colour-coded. **Cancel build** sends SIGTERM to the orchestrator; all on-disk artefacts (`OCRed_pdf.json`, `KB_source.json`, `chunks.json`, `vectorstore/`) are written atomically, so the next run resumes cleanly.
+The advanced panel displays the actual knowledge-base root. npm installations normally materialize it under `~/.brainpilot/KnowledgeBase/`; `BP_KB_ROOT` overrides this. Source-mode users can still place PDFs directly in that root's `source/pdf/`. The Python commands below assume the repository-root `KnowledgeBase/` location; substitute the detected root in an npm installation.
+
+**Cancel build** stops the current build; pausing log following does not. Retain completed on-disk stages when retrying. Hosted Cloud does not expose this local management workflow.
 
 ### 3. Python environment (do this once, the web button needs it too)
 
@@ -56,16 +57,7 @@ FlagEmbedding). There are two ways to create it.
 
 #### 3a. From the web UI (recommended)
 
-Open **Settings → Knowledge Base**. If the venv doesn't exist yet, the
-panel shows a yellow banner with a **"Set up Python environment"** button.
-Click it — the backend spawns `scripts/setup_env.py` (stdlib only, runs
-on whatever Python is on PATH), creates `KnowledgeBase/.venv`, and streams
-pip's progress to the same live log you'd see during a build. Two to five
-minutes later the banner turns green and the **Build Knowledge Base**
-button enables itself.
-
-The same panel also shows a smaller **"Reinstall venv"** button after the
-venv exists, in case a dependency upgrade gets stuck.
+Open **Settings → Knowledge Base** and select **Start preparing**. The guided action prepares the environment and models. To run only the Python setup or reinstall an existing environment, expand **Advanced and troubleshooting** and use its environment controls. The backend runs `scripts/setup_env.py`, creates `<KB_ROOT>/.venv`, and streams setup output into the panel. Duration depends on the selected package source and machine; wait for a successful environment check before indexing.
 
 #### 3b. From the command line
 
@@ -242,7 +234,7 @@ KnowledgeBase/
 ### 9. FAQ
 
 **Q: Where does the Python virtual environment go, and how do I switch interpreters?**
-The simplest path is the **Settings → Knowledge Base → "Set up Python environment"** button — it calls `scripts/setup_env.py` (stdlib only), creates `KnowledgeBase/.venv`, and streams pip's output to the same live log used during a build. Both the CLI (`build_kb.py`) and the web build button auto-detect that venv afterwards. To use a different interpreter (e.g. a conda env you already maintain), set `BP_KB_PYTHON=/abs/path/to/python` before launching BrainPilot — that overrides the auto-detection entirely. To rebuild the venv from scratch click **"Reinstall venv"** (or `bash KnowledgeBase/scripts/setup_env.sh --reinstall`).
+The simplest path is **Settings → Knowledge Base → Start preparing** (or the environment-only control under **Advanced and troubleshooting**) — it calls `scripts/setup_env.py` (stdlib only), creates `KnowledgeBase/.venv`, and streams pip's output to the same live log used during a build. Both the CLI (`build_kb.py`) and the web build button auto-detect that venv afterwards. To use a different interpreter (e.g. a conda env you already maintain), set `BP_KB_PYTHON=/abs/path/to/python` before launching BrainPilot — that overrides the auto-detection entirely. To rebuild the venv from scratch click **"Reinstall venv"** (or `bash KnowledgeBase/scripts/setup_env.sh --reinstall`).
 
 **Q: OCR keeps hitting 429 / TPM cap.**
 Drop `--ocr-concurrency 2` (or even 1). The script has a process-wide rate-limit gate that already pauses every worker for 70 s after any 429, so further retries succeed without dropping the page.
@@ -293,17 +285,18 @@ bge-m3 + reranker take ~2.5 GB on GPU (fp16), ~4–5 GB on CPU (fp32). The sidec
 
 四个阶段相互独立、且都**可重入**：同一份 PDF 不会重 OCR、同一篇 mmd 不会重新切块、同一个 chunk_id 不会重新嵌入。所有路径都以 `KB_ROOT`（默认就是本目录）为根。
 
-### 2. 一键构建（前端按钮版）
+### 2. 引导式准备与构建（前端）
 
-最简单的入口是 BrainPilot 主界面的 **Settings → 知识库（Knowledge Base）**：
+打开**设置 → 知识库**，或从本地知识库资源市场点**我的知识库 / 上传论文**。
 
-1. 把 PDF 拷到 `KnowledgeBase/source/pdf/`（面板里会写明路径）。
-2. 填 **SiliconFlow OCR API Key**（必填，OCR 阶段使用）。
-3. 元数据抽取默认勾选「复用 agent 当前的 LLM key」，会走 BrainPilot 已配置好的 provider。如要用另外的模型，取消勾选后填 `base URL / model / key`。
-4. 选择要运行的阶段（默认四个全选）。
-5. 点 **构建知识库 / Build Knowledge Base**。
+1. 点**选择 PDF**。每个文件必须是有效、非空的 PDF，最多 256 MB；需要同时保留同名版本时先重命名。
+2. 环境或模型尚未准备好时，点**开始准备**，引导流程会准备两者；高级区域也可单独运行各准备步骤。
+3. 在**高级与故障排查**配置 OCR 服务商及元数据抽取。元数据可复用兼容的当前 agent 服务商；这些处理阶段可能向所选服务发送论文内容。
+4. 点**准备搜索**，等待可搜索状态。上传本身不会建立索引。日志显示处理阶段；向上滚动查看历史，点**回到最新日志**恢复跟随。
 
-构建过程中阶段进度条与实时日志通过 SSE 持续推到前端；OCR 失败页、metadata fallback、向量化失败 batch 都会高亮显示。**Cancel build** 会向构建进程发 SIGTERM；磁盘上的 `OCRed_pdf.json` / `KB_source.json` / `chunks.json` / `vectorstore/` 都是原子写入的，下次启动可以无缝续跑。
+高级面板显示实际知识库根目录。npm 安装通常准备在 `~/.brainpilot/KnowledgeBase/`，`BP_KB_ROOT` 可覆盖该位置。源码模式仍可直接把 PDF 放到该根目录的 `source/pdf/`。下文 Python 命令以仓库根目录的 `KnowledgeBase/` 为例；npm 安装应替换为检测到的根目录。
+
+**取消构建**停止当前构建，暂停日志跟随不会。重试时保留已经完成的落盘阶段。托管 Cloud 不提供这个本地管理流程。
 
 ### 3. Python 虚拟环境（只需配置一次，前端按钮也依赖它）
 
@@ -312,12 +305,7 @@ bge-m3 + reranker take ~2.5 GB on GPU (fp16), ~4–5 GB on CPU (fp32). The sidec
 
 #### 3a. 前端按钮（推荐）
 
-打开 **Settings → 知识库**。如果 `.venv` 还不存在，面板顶部会显示黄色提示条和
-**「一键配置 Python 环境」** 按钮。点一下，后端会 spawn `scripts/setup_env.py`
-（纯 stdlib，能跑在任何 PATH 上的 Python），在 `KnowledgeBase/.venv` 创建虚拟环境，
-并把 pip 的实时进度推到下方日志面板。2-5 分钟后提示条变绿，**「构建知识库」** 按钮自动可点。
-
-venv 存在后面板里还有一个小一点的 **「重建虚拟环境」** 按钮，依赖升级卡住时可以用。
+打开**设置 → 知识库**，点**开始准备**，引导操作会准备环境及模型。只需安装 Python 环境或重建已有环境时，可展开**高级与故障排查**使用环境控件。后端调用 `scripts/setup_env.py`，在 `<KB_ROOT>/.venv` 创建虚拟环境并展示日志。耗时取决于软件源和机器；环境检查成功后再建立索引。
 
 #### 3b. 命令行
 

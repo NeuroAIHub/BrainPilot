@@ -3,6 +3,8 @@
   "pages": [
     "getting-started",
     "installation",
+    "datasets",
+    "research-workspace",
     "docker",
     "providers",
     "mcp",

@@ -33,7 +33,8 @@ Run these before opening a PR:
 ```bash
 npm run typecheck
 BP_MOCK=1 npm test
-cd packages/web && npm test && npm run build
+npm test -w @brainpilot/web
+npm run build -w @brainpilot/web
 ```
 
 Build the docs:
@@ -71,3 +72,14 @@ Do not put real provider keys, MCP tokens, or internal-only endpoints in public 
 ## Pull Requests
 
 Documentation-only changes can be opened directly as PRs. New features or architecture changes should start with an issue or discussion before implementation.
+
+## Dataset checks and documentation parity
+
+```bash
+BP_MOCK=1 npm test -- packages/backend-core/test/datasets.test.ts packages/backend-core/test/datasetJobs.test.ts
+npm test -w @brainpilot/web -- src/__tests__/datasetMarketplace.test.ts src/__tests__/datasetFeedback.test.ts
+```
+
+The backend suite includes local HTTP recovery fixtures and does not need a large public-data transfer. The separate `npm run test:datasets` command downloads public files; review its script and disk/network budget before running it.
+
+Keep the English and Chinese pages and both `meta*.json` navigation files aligned. Cloud vendors the documentation content at an exact upstream commit and renders it in its own SPA; a successful standalone docs build does not prove that the hosted copy is current. A release should verify both builds and the hosted routes.

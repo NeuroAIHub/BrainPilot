@@ -167,3 +167,9 @@ docker compose up -d --no-build --force-recreate sandbox
 - **main 无法连接 sandbox**：检查 `docker compose ps` 和 `docker compose logs sandbox`，确认
   runtime 的 8081 端口健康检查正常。
 - **中国大陆拉取缓慢**：用 ACR 地址替换 GHCR 地址。
+
+## 持久数据集与知识库文件
+
+数据集下载器运行在 main／后端进程。静态 Compose 部署应在 main 镜像中提供所需下载工具，并通过配置的持久数据挂载，让 main 和 sandbox 都能访问数据集目录。只在运行时沙箱安装工具，不能满足 main 的下载检测。
+
+两个进程的 `BP_KB_ROOT` 应与各自挂载的知识库位置一致。替换镜像前备份宿主数据目录及独立知识库目录；普通升级不要执行 `docker compose down -v`。托管 Cloud 会关闭本地数据集和知识库管理，仅更换运行时镜像不会启用这些 API。

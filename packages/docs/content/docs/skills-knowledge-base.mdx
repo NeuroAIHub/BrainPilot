@@ -60,7 +60,22 @@ The skills in the demo are extracted from paper and methodology libraries. You c
 
 The resulting folders should follow the normal `<category>/<skill-name>/SKILL.md` structure. Restart BrainPilot or start a new session after adding skills.
 
-## Knowledge Base Strategy
+## Add and index your own PDFs
+
+Open **Settings → Knowledge Base**, or **Plugins → Knowledge Base → My knowledge base / Add papers** in a local installation.
+
+1. Select **Choose PDFs** and upload one or more papers. Each PDF must be nonempty, valid, and no larger than 256 MB. A duplicate filename is rejected; rename it if you intend to keep both versions.
+2. Select **Start preparing** to install the local search environment and embedding/reranker models. The UI estimates about 2.5 GB of downloads and at least 3 GB of free space; duration depends on the network and machine.
+3. Configure OCR and metadata extraction under **Advanced and troubleshooting**, then start indexing. These stages can send document content to the selected external services; embedding and reranking run locally.
+4. Wait until the knowledge base reports it is searchable. Add more PDFs and run indexing again when needed; upload completion alone does not mean a paper has been indexed.
+
+The advanced area shows setup/build stages and logs. Scroll up to read earlier output without following new lines, then select **Jump to latest logs** to resume following; scrolling the log does not cancel the build. A failed step can be retried after correcting its configuration.
+
+npm installations materialize the bundled pipeline under `~/.brainpilot/KnowledgeBase/`. `BP_KB_ROOT` overrides that location. For source and container deployments, consult the detected path in the advanced panel. Back up the actual knowledge-base root as well as the BrainPilot data directory if they are separate. See [Docker deployment](./docker) for sharing the root between backend and runtime.
+
+The local management UI is disabled in hosted Cloud. Availability of preconfigured hosted retrieval is controlled by the service.
+
+## Connect a retrieval service
 
 BrainPilot does not ship a hosted public knowledge base inside the open-source package. Instead, connect your own retrieval services through MCP:
 

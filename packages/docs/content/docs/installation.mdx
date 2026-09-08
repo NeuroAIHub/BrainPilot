@@ -14,23 +14,25 @@ brainpilot up
 
 The package includes the CLI, backend, runtime, web UI, and built-in skills needed for a local browser session.
 
-## Update
+## Update and preserve your data
 
-To update to the latest published version:
+Finish or cancel active work and stop the old process before upgrading. For detached mode, pass the same data directory used when starting it:
+
+```bash
+brainpilot down --dir ./my-brainpilot-data
+```
+
+Back up that directory while the service is stopped. Also back up the detected knowledge-base root if it is outside the data directory. Then install the selected published version and restart using the same path:
 
 ```bash
 npm install -g @brainpilot/app@latest
 brainpilot --version
+brainpilot up --dir ./my-brainpilot-data
 ```
 
-Then restart BrainPilot:
+For a reproducible upgrade, replace `latest` with the approved published version. Foreground users stop the old process with `Ctrl-C`. Verify saved conversations, provider configuration, persistent files, and download history after restart. Interrupted downloads require explicit retry; upgrading does not move your data automatically.
 
-```bash
-brainpilot down
-brainpilot up
-```
-
-If you normally run in foreground mode, stop the old process with `Ctrl-C` before starting the new one.
+To return to a previous package version, stop the service, reinstall that known working version, and restart with the retained data directory. Do not delete data or overwrite a backup as part of a package rollback. Older versions may not display newer metadata.
 
 ## Uninstall
 
@@ -63,6 +65,9 @@ brainpilot/
     mcp_servers.json
     settings.json
     skills/
+  data/
+    datasets/
+      .jobs.json
   workspaces/
   .bp/
   .runtime/

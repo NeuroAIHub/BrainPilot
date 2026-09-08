@@ -175,3 +175,9 @@ volumes.
 - **Main cannot reach sandbox** — check `docker compose ps`, then inspect `docker compose logs
   sandbox` and confirm the runtime health check reaches port 8081.
 - **Pulls are slow in mainland China** — use the ACR endpoint instead of GHCR.
+
+## Persistent datasets and knowledge-base files
+
+The dataset downloader runs in the main/backend process. In a static Compose deployment, install its required download tools in the main image, and keep the dataset directory accessible to both main and sandbox through the configured persistent data mount. Installing a tool only in the runtime sandbox does not satisfy the main process's download check.
+
+Keep `BP_KB_ROOT` consistent with the mounted knowledge-base location in both processes. Back up the host data directory and any separate knowledge-base root before replacing images. Never use `docker compose down -v` for a normal upgrade. Hosted Cloud intentionally disables local dataset and KB management; the runtime image alone does not enable those APIs.

@@ -1,0 +1,66 @@
+---
+title: Research datasets
+description: Find a dataset for your research question, download a small selection, and use it in a new task.
+---
+
+The expanded catalog and workflow below require BrainPilot 0.2.3 or later, or the corresponding source revision. Open **Plugins → Datasets** in a local installation. The hosted Cloud application does not expose this local download manager.
+
+## Find suitable data
+
+Search by research question, dataset name, modality, or format. Combine topic, modality, and access filters, or compare up to three datasets. The catalog covers 48 datasets across 15 overlapping research topics, from cognition and clinical neuroscience to neural circuits, cell atlases, physiology, and analysis methods.
+
+Each detail view lists the provider, access conditions, license, and available provenance. Read the original provider page before choosing a dataset: a catalog entry does not grant access, establish suitability for your study, or replace the provider's citation instructions. A topic count can overlap with other topics.
+
+| Access | Next step |
+| --- | --- |
+| Direct download | Check the available selection and start the download |
+| Select files at provider | Open the provider and choose files there |
+| Credentials required | Obtain provider access and enter the requested credentials for this download |
+| Application required | Complete the provider's application process before using the data |
+
+## Start with a small selection
+
+1. Open a dataset's details. When offered, choose a participant or sample selection before the full dataset.
+2. Review **Download preparation**. Install missing executables on the machine running the BrainPilot backend, then select **Check again**. Restart BrainPilot if its inherited `PATH` changed.
+3. Check the selected size and free disk space. Catalog sizes are estimates; a full collection can be much larger than a sample.
+4. Enter any required provider credentials and select **Start download**. Credentials are not stored in download history and must be entered again when required for a retry.
+5. Follow **My downloads**. At most two jobs run together; the service accepts up to 32 queued and active jobs and retains the latest 100 terminal records plus active jobs.
+
+HTTP selections use the built-in downloader. Other selections may require `wget`, DataLad with `git` and `git-annex`, or another named provider tool. Availability depends on the selected recipe; installing a model provider is unrelated to these executables.
+
+## Cancel, retry, and verify
+
+Cancellation stops the active transfer; a normal interrupted HTTP file remains as `.part` for a later resume. After a server restart, interrupted jobs are marked failed and need an explicit retry. **Retry** opens the same dataset selection; check its settings and choose **Start download** to submit it again.
+
+Where a provider checksum is included, BrainPilot verifies the file before marking it complete. A checksum-invalid final file or `.part` is preserved beside it with a unique `.corrupt-…` suffix. The next explicit retry fetches a fresh copy of that file. These preserved files still occupy disk space and are not verified research inputs. A repeatedly incorrect provider response still fails; the downloader does not retry indefinitely.
+
+Resume and checksum verification depend on the recipe and the provider. A successful download alone does not validate the dataset scientifically. Inspect file headers, shapes, units, participant coverage, and provider citations before analysis.
+
+## Use downloaded files
+
+After completion, select **Open data** to browse the dataset, or **Use in new research** to put its path into a new draft. Review the draft and add your research question before sending; this action does not start an analysis automatically.
+
+The persistent library is available before the first message in a local draft. You can also mention an input with `@`. See [Research workspace](./research-workspace) for files and Trace evidence.
+
+Files are stored on the BrainPilot machine, not in the browser's Downloads folder:
+
+```text
+<BP_DATA_DIR>/data/datasets/
+  <dataset-id>/                    # full selection
+  <dataset-id>--<selection-id>/     # sample or participant selection
+  .jobs.json                      # download history, not input data
+```
+
+The corresponding runtime path is `/data/datasets/<dataset-id>` (or the selection-specific path). Keep the same data directory when upgrading. **Copy folder path** copies the backend's host path; it may differ from a path on your browser's computer.
+
+## Common download problems
+
+| Symptom | Recovery |
+| --- | --- |
+| Missing download tool | Install the named tool on the backend machine and check again |
+| Network interruption | Check connectivity, retry the same selection, and let supported HTTP files resume |
+| Checksum failure | Retry to fetch a fresh file; keep the `.corrupt-…` copy only if needed for diagnosis |
+| Insufficient space | Free space or choose a smaller selection; account for retained partial and corrupt files |
+| 401/403 or access denied | Check provider approval and credentials; public metadata can describe restricted data |
+| Queue full | Wait for an active job to finish or cancel an unneeded job |
+| Cloud shows unavailable functionality | Use a local installation for this downloader; Cloud has separate data and contribution workflows |

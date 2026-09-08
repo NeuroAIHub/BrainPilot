@@ -1,0 +1,32 @@
+---
+title: Research workspace
+description: Move from data and papers to a research draft, then inspect files and Trace evidence.
+---
+
+## Start from an input
+
+In a local installation, **Plugins → Datasets** provides research data, while **Plugins → Knowledge Base → My knowledge base / Add papers** opens your local paper workflow. These entries serve different purposes: datasets become analysis inputs; indexed papers become retrieval sources.
+
+After a dataset download completes, **Use in new research** adds the selected data path to a draft. Review the path, choose a provider and model, describe the expected output, then send. Starting a draft does not run the model or the analysis. Read [Research datasets](./datasets) for access and download requirements.
+
+## Session files and persistent files
+
+Session files live under `<BP_DATA_DIR>/workspaces/<session-id>/`. Reusable inputs live under `<BP_DATA_DIR>/data/` and are presented to the runtime through `/data/…`. In a local draft, the Files panel can show this persistent library before a session has been created. Use `@` to select a file instead of guessing its path.
+
+Opening a downloaded dataset selects its folder in Files. It does not copy the full dataset into every conversation. For remote installations, the files belong to the server's data directory.
+
+## Inspect the result
+
+Open **Trace**, select a step, and use a file action to open the associated output in Files. This connects the recorded action to its saved artifact. Internal recovery checkpoints are kept separate from the user artifact count.
+
+Check that the file contains the expected output and that reported numbers match it. A recorded action, a completed task, or a downloadable result is not scientific approval. If a file has been moved or removed since the Trace event, recover it from your retained files or rerun the necessary step; the event itself is not a replacement for the artifact.
+
+## Stop and return later
+
+Use **Stop** to interrupt the current model/tool work. Wait for cancellation to settle before sending a revised request. Reopen the conversation to inspect its saved history and files; retain the same BrainPilot data directory across restarts and upgrades.
+
+Dataset category, search, filters, detail selection, and scope are stored in the page URL so refresh and browser Back/Forward can return to the same view. Compare selections and temporary credentials are not a saved analysis configuration.
+
+## Local and Cloud availability
+
+The local dataset downloader and local knowledge-base setup require backend filesystem and tool access. Hosted Cloud hides these management controls. Cloud account, sandbox, and BrainPilotBench contribution features are provided by the hosted service and have their own access controls.

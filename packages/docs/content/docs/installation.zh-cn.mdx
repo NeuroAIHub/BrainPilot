@@ -14,23 +14,25 @@ brainpilot up
 
 这个包包含 CLI、后端、运行时、Web UI 和内置技能库，本机启动后即可在浏览器使用。
 
-## 更新
+## 更新并保留数据
 
-更新到最新发布版本：
+先完成或取消活动任务，再停止旧进程。后台模式请指定启动时使用的同一数据目录：
+
+```bash
+brainpilot down --dir ./my-brainpilot-data
+```
+
+服务停止后备份该目录；如果检测到的知识库根目录在数据目录之外，也应单独备份。然后安装选定的已发布版本，并使用原路径重启：
 
 ```bash
 npm install -g @brainpilot/app@latest
 brainpilot --version
+brainpilot up --dir ./my-brainpilot-data
 ```
 
-然后重启 BrainPilot：
+要固定升级结果，请把 `latest` 换成确认过的已发布版本。前台模式先按 `Ctrl-C` 停止。重启后检查历史会话、模型配置、持久文件和下载记录；中断的下载需要手动重试。升级不会自动搬迁数据。
 
-```bash
-brainpilot down
-brainpilot up
-```
-
-如果你是前台运行，先在旧进程里按 `Ctrl-C` 停止，再重新启动。
+回退软件包时，先停止服务，重新安装已知可用的旧版本，再用保留的数据目录启动。不要在软件包回退时删除数据或覆盖备份；旧版本可能无法显示新版本的元数据。
 
 ## 卸载
 
@@ -63,6 +65,9 @@ brainpilot/
     mcp_servers.json
     settings.json
     skills/
+  data/
+    datasets/
+      .jobs.json
   workspaces/
   .bp/
   .runtime/
