@@ -11,13 +11,13 @@ Confirm the package is installed globally:
 npm list -g @brainpilot/app --depth=0
 ```
 
-If it is installed but the command is missing, check your npm global bin directory:
+If it is installed but the command is missing, check your npm global installation prefix:
 
 ```bash
-npm bin -g
+npm prefix -g
 ```
 
-Make sure that directory is on your `PATH`.
+On macOS/Linux, add the prefix's `bin` subdirectory to `PATH`; on Windows, add the prefix itself.
 
 ## Node Version Is Too Old
 
@@ -91,3 +91,13 @@ BP_MOCK=1 brainpilot up --dir ./bp-smoke-test --port 9011
 ```
 
 If mock mode works, focus on provider or MCP configuration.
+
+## Dataset download failed
+
+Use [Research datasets](./datasets) to check the selected download tools, access requirements, and retry flow. Tools must be installed on the machine running the backend. For an interrupted HTTP transfer, retain the `.part` file. A checksum-invalid file is preserved under a unique `.corrupt-…` name so the next retry can fetch fresh data. Check disk space before retaining large diagnostic copies.
+
+If a completed dataset is missing files, reopen its details and rerun the same selection. Existing HTTP files are reused (and checked when a checksum is available); absent files can be fetched again. Provider-specific command downloads follow their tool's behavior.
+
+## Local knowledge base is not ready
+
+Uploading a PDF and preparing a searchable index are separate steps. Check **Settings → Knowledge Base** for missing environment/model setup, OCR or metadata credentials, and a failed indexing stage. The advanced log area shows technical details. Pausing log following does not stop an active build. See [Skills and Knowledge Base](./skills-knowledge-base).

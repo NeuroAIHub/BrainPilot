@@ -33,7 +33,8 @@ BP_MOCK=1 npm run bp -- up
 ```bash
 npm run typecheck
 BP_MOCK=1 npm test
-cd packages/web && npm test && npm run build
+npm test -w @brainpilot/web
+npm run build -w @brainpilot/web
 ```
 
 构建文档：
@@ -71,3 +72,14 @@ packages/docs/content/docs/
 ## Pull Request
 
 纯文档改动可以直接开 PR。新功能或架构改动建议先开 issue 或 discussion，再进入实现。
+
+## 数据集检查与文档一致性
+
+```bash
+BP_MOCK=1 npm test -- packages/backend-core/test/datasets.test.ts packages/backend-core/test/datasetJobs.test.ts
+npm test -w @brainpilot/web -- src/__tests__/datasetMarketplace.test.ts src/__tests__/datasetFeedback.test.ts
+```
+
+后端测试包含本地 HTTP 恢复用例，不需要下载大型公开数据。单独的 `npm run test:datasets` 会下载公开文件，运行前查看脚本并核对磁盘与网络预算。
+
+中英文页面与两份 `meta*.json` 导航应保持一致。Cloud 按精确上游提交同步文档正文，在自己的 SPA 中展示；独立文档站构建通过，不代表在线副本已更新。发布时应核对两种构建和在线路由。

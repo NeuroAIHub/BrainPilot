@@ -14,3 +14,11 @@ a locale prefix, for example `/docs/getting-started`; Simplified Chinese is serv
 
 Do not commit real provider keys, MCP tokens, or internal-only endpoints in this package.
 Use placeholders such as `<your-api-key>` in public docs.
+
+
+New pages require matching English/Chinese MDX files and entries in both `meta*.json` files.
+The English export uses explicit routes under `app/(en)/(docs)/<slug>/page.tsx`; add a route
+using the existing `StaticDocsPage` wrapper. Chinese routes are generated from the content.
+Add both exported paths to `scripts/postexport.mjs` and verify their HTML exists after build.
+Cloud vendors only `content/` and has its own rendering/build step; see the release checklist
+in [RELEASING.md](../../RELEASING.md).

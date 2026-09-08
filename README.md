@@ -328,6 +328,20 @@ For the full workflow and examples, see
 > may contain errors — **verify parameters and citations before relying on them in real
 > research.**
 
+### Research datasets and workspace
+
+In local installations, open **Plugins → Datasets** to search by research question, topic,
+modality, and access requirements. The expanded catalog contains 48 entries across 15
+intersecting topics, with sample or participant selections where available. Check provider
+access and the required download tools before starting; watch, cancel, and retry jobs in
+**My downloads**. After completion, **Open data** browses the persistent files and **Use in
+new research** prepares a draft without starting an analysis.
+
+See **[Research datasets](https://brainpilot.chat/docs/datasets)** for checksum recovery,
+resumable files and storage paths, and **[Research workspace](https://brainpilot.chat/docs/research-workspace)**
+for persistent inputs and opening evidence from Trace. The expanded workflow requires 0.2.3
+or its source revision; hosted Cloud does not provide this local download manager.
+
 ### Knowledge & paper base
 
 The hosted BrainPilot service uses a curated, authorized neuroscience corpus that is not
@@ -347,10 +361,10 @@ tools you provide:
 #### 🧪 Build your own knowledge base with the bundled pipeline
 
 BrainPilot now ships an end-to-end ingestion pipeline under
-[`KnowledgeBase/`](./KnowledgeBase/README.md). Drop your PDFs into
-`KnowledgeBase/source/pdf/`, click **Settings → Knowledge Base → Build Knowledge Base**
-(or run `python KnowledgeBase/scripts/build_kb.py` from a shell), and the agent gets two
-new built-in tools:
+[`KnowledgeBase/`](./KnowledgeBase/README.md). Open **Settings → Knowledge Base**, choose
+PDFs, prepare the local search environment, configure OCR/metadata extraction, and select
+**Prepare search**. The advanced panel shows the actual root and processing logs. After
+indexing succeeds, the agent can retrieve the papers through two built-in tools:
 
 - **`get_domain_knowledge_local`** — bge-m3 embedding retrieval + bge-reranker-v2-m3 rerank
   over your local vector store.

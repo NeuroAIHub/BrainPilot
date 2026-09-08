@@ -311,6 +311,17 @@ repo-to-skill、批量提取流水线和公开技能合集。
 > ⚠️ 其中有些技能是 AI 生成的（从文献或代码库中提取），可能存在错误 —— **在真实研究中依赖之前，请
 > 先核验参数与引用。**
 
+### 研究数据集与工作区
+
+本地安装中打开**插件 → 数据集**，按研究问题、主题、数据类型和访问条件筛选。
+扩展目录包含 48 个数据集和 15 个交叉主题，部分提供样本或参与者范围。开始前核对
+数据源访问条件和下载工具，在**我的下载**查看进度、取消或重试。完成后可**打开数据**，
+或**用于新研究**准备草稿；不会自动启动分析。
+
+[研究数据集指南](https://brainpilot.chat/docs/zh-cn/datasets)说明校验恢复、断点续传和
+保存位置；[研究工作区指南](https://brainpilot.chat/docs/zh-cn/research-workspace)说明持久输入
+与从轨迹打开证据。扩展工作流需要 0.2.3 或对应源码版本；托管 Cloud 不提供本机下载管理器。
+
 ### 知识库与论文库
 
 BrainPilot 托管服务使用一套经过筛选和授权的脑科学语料。该语料不随开源包分发；本地部署可以自行
@@ -326,9 +337,9 @@ BrainPilot 托管服务使用一套经过筛选和授权的脑科学语料。该
 #### 🧪 用我们自带的同款流水线构建你自己的知识库
 
 BrainPilot 现已自带一套端到端的入库流水线，位于
-[`KnowledgeBase/`](./KnowledgeBase/README.md) 目录。把 PDF 拷到 `KnowledgeBase/source/pdf/`，
-点击 **设置 → 知识库 → 构建知识库**（或者命令行执行 `python KnowledgeBase/scripts/build_kb.py`），
-agent 就会立刻获得两个内置工具：
+[`KnowledgeBase/`](./KnowledgeBase/README.md) 目录。打开**设置 → 知识库**，选择 PDF、准备
+本地搜索环境、配置 OCR／元数据抽取，再点**准备搜索**。高级区域显示实际根目录和处理日志。
+建立索引后，智能体可以通过两个内置工具检索论文：
 
 - **`get_domain_knowledge_local`** —— 基于 bge-m3 召回 + bge-reranker-v2-m3 精排的本地向量检索。
 - **`search_papers_local`** —— 针对 `KB_source.json` 论文库的多条件元数据过滤 + 关键词排序检索。
