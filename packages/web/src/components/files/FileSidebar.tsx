@@ -150,7 +150,7 @@ function removeNestedSelections(paths: string[]): string[] {
 
 /** #307: roots shown as tiers — never deletable from the file tree UI. */
 export function isProtectedRoot(path: string): boolean {
-  return path === WORKSPACE_ROOT_PATH || path === DATA_ROOT_PATH;
+  return path === WORKSPACE_ROOT_PATH || path === DATA_ROOT_PATH || path === "/data/datasets/.jobs.json";
 }
 
 /** True when `path` is `deleted` or a descendant of it. */
@@ -251,7 +251,8 @@ export function FileSidebar({
   // variable name stays `sandboxId` only because the call sites/sub-component
   // prop are named that way — it has always carried the session id in local
   // mode. A full rename rides with the planned session-management cleanup.
-  const sandboxId = currentSession?.id ?? null;
+  // Local /data is independent of a session, just like the composer's @ picker.
+  const sandboxId = currentSession?.id ?? (runtimeConfig.localMode ? currentSandbox?.id : null) ?? null;
   const t = useT();
   const [tree, setTree] = useState<FileNode>(createFileSidebarRoot);
   // Both roots start expanded so the two tiers are visible at a glance.
@@ -350,6 +351,10 @@ export function FileSidebar({
 
   const loadDirectory = useCallback(
     async (path: string) => {
+      if (!currentSession && path === WORKSPACE_ROOT_PATH) {
+        setTree(applyDirectoryListing(path, []));
+        return;
+      }
       if (!currentSandbox || currentSandbox.status !== "running" || !sandboxId) {
         // #193 diagnostics: distinguish "panel gated off" from "listed but empty".
         // Logs the exact reason the gate blocked the load so a user (esp. on
@@ -379,7 +384,7 @@ export function FileSidebar({
         setError(err instanceof Error ? err.message : t("files.error.loadFailed"));
       }
     },
-    [currentSandbox, sandboxId, t],
+    [currentSandbox, currentSession, sandboxId, t],
   );
 
   const selectedNode = useMemo(() => findFileSidebarNode(tree, selectedPath), [selectedPath, tree]);
@@ -917,6 +922,11 @@ export function FileSidebar({
           const child = children.find((entry) => entry.name === parts[index]);
           if (!child) throw new Error(t("files.error.linkNotFound"));
           if (index === parts.length - 1) {
+            if (child.type === "folder" || child.type === "symlink") {
+              await loadDirectory(child.path);
+              if (!cancelled) setExpandedPaths((current) => new Set([...current, ...expanded, child.path]));
+              return;
+            }
             if (child.type !== "file") throw new Error(t("files.error.linkNotFile"));
             setExpandedPaths((current) => new Set([...current, ...expanded]));
             await selectFile(child, openFileRequest.line, true);
@@ -1029,7 +1039,7 @@ export function FileSidebar({
           </div>
         ) : null}
         <p className="file-tier__hint">
-          {isWorkspace ? t("files.tier.workspaceHint") : t("files.tier.dataHint")}
+          {isWorkspace ? t(currentSession ? "files.tier.workspaceHint" : "files.tier.draftHint") : t("files.tier.dataHint")}
         </p>
         {isExpanded ? (
           children.length > 0 ? (
@@ -1043,6 +1053,7 @@ export function FileSidebar({
   };
 
   const renderNode = (node: FileNode, depth = 0) => {
+    if (node.path === "/data/datasets/.jobs.json") return null;
     const isFolder = node.type === "folder" || node.type === "symlink";
     const isExpanded = expandedPaths.has(node.path);
     const isSelected = selectedPath === node.path;

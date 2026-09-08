@@ -21,9 +21,11 @@ import { Sidebar } from "../sidebar/Sidebar";
 import { DiskQuotaWarningDialog } from "../quota/DiskQuotaWarningDialog";
 import { DiskQuotaCriticalDialog } from "../quota/DiskQuotaCriticalDialog";
 import { DEFAULT_SIDEBAR_WIDTH, resolveResize } from "./sidebarResize";
+import { navigateWorkspace, useWorkspaceLocation, workspacePage, writeWorkspaceLocation } from "./workspaceNavigation";
 import {
   buildWorkspaceFileDeepLink,
   parseWorkspaceFileLocation,
+  parseWorkspaceFileHref,
   resolveWorkspaceFileSession,
   shouldResetWorkspaceFileLocation,
   type WorkspaceFileTarget,
@@ -44,6 +46,7 @@ export function DesktopShell() {
     isRefreshingMessages,
     refreshMessages,
     selectSession,
+    startDraftSession,
     setCurrentView,
     traceUnread,
     hiddenErrorsUnread,
@@ -56,7 +59,9 @@ export function DesktopShell() {
   const [userCollapsed, setUserCollapsed] = useState<boolean | null>(null);
   const [isNarrow, setIsNarrow] = useState(false);
   const isSidebarCollapsed = userCollapsed ?? isNarrow;
-  const [activePage, setActivePage] = useState<"workspace" | "demo" | "plugins">("workspace");
+  const location = useWorkspaceLocation();
+  const activePage = workspacePage(location);
+  const setActivePage = navigateWorkspace;
   // Bumped on every sidebar "Live Demo" click so DemoView returns to its
   // session-selection landing even when the demo page is already open (#111).
   const [demoResetSignal, setDemoResetSignal] = useState(0);
@@ -86,7 +91,7 @@ export function DesktopShell() {
   const [isWarningOpen, setIsWarningOpen] = useState(false);
   const hasWarnedRef = useRef(false);
   const initialWorkspaceFileTargetRef = useRef(
-    typeof window === "undefined" ? null : parseWorkspaceFileLocation(window.location),
+    typeof window === "undefined" || activePage !== "workspace" ? null : parseWorkspaceFileLocation(window.location),
   );
   const deepLinkHandledRef = useRef(false);
   const previousSessionIdRef = useRef<string | null | undefined>(currentSession?.id);
@@ -97,7 +102,7 @@ export function DesktopShell() {
     [hasUnsavedFileChanges, t],
   );
   const openWorkspaceFile = useCallback((target: WorkspaceFileTarget) => {
-    if (!currentSession?.id) return;
+    if (!currentSession?.id && (!runtimeConfig.localMode || !target.path.startsWith("/data/"))) return;
     setIsFilesOpen(true);
     openFileRequestIdRef.current += 1;
     setOpenFileRequest({
@@ -105,11 +110,7 @@ export function DesktopShell() {
       requestId: openFileRequestIdRef.current,
       scopeKey: fileSidebarScopeKey(currentSession?.id),
     });
-    window.history.replaceState(
-      window.history.state,
-      "",
-      buildWorkspaceFileDeepLink(currentSession.id, target),
-    );
+    if (currentSession?.id) writeWorkspaceLocation(buildWorkspaceFileDeepLink(currentSession.id, target), true);
   }, [currentSession?.id]);
 
   useEffect(() => {
@@ -124,7 +125,7 @@ export function DesktopShell() {
       initialTargetHandled: deepLinkHandledRef.current,
     })) return;
     setOpenFileRequest(null);
-    window.history.replaceState(window.history.state, "", "/app");
+    writeWorkspaceLocation(runtimeConfig.localMode ? "/" : "/app", true);
   }, [currentSession?.id]);
 
   const useFileInConversation = useCallback((path: string) => {
@@ -144,6 +145,16 @@ export function DesktopShell() {
       input.setSelectionRange(input.value.length, input.value.length);
     });
   }, [currentSession?.id, isDraft, setCurrentView]);
+
+  const useDataset = (path: string) => {
+    if (!confirmFileNavigation()) return;
+    draftStore.set(DRAFT_SESSION_ID, appendFileReference(draftStore.get(DRAFT_SESSION_ID), path));
+    startDraftSession();
+    setIsFilesOpen(false);
+    setOpenFileRequest(null);
+    setActivePage("workspace");
+    requestAnimationFrame(() => document.getElementById("prompt-input")?.focus());
+  };
 
   useEffect(() => {
     const initialTarget = initialWorkspaceFileTargetRef.current;
@@ -315,7 +326,15 @@ export function DesktopShell() {
         </main>
       ) : (
         <Suspense fallback={<main className="plugin-market"><div className="plugin-market__empty"><strong>{t("marketplace.loading")}</strong></div></main>}>
-          <PluginMarketplace />
+          <PluginMarketplace
+            onOpenKnowledgeBase={runtimeConfig.knowledgeBaseSettingsEnabled ? (trigger) => openSettings("knowledgeBase", trigger) : undefined}
+            onUseDataset={useDataset}
+            onOpenDataset={(path) => {
+              if (!confirmFileNavigation()) return;
+              setActivePage("workspace");
+              openWorkspaceFile({ path });
+            }}
+          />
         </Suspense>
       ) : (
       <main
@@ -391,7 +410,10 @@ export function DesktopShell() {
           />
         ) : null}
         {currentView === "agents" ? <AgentsPanel /> : null}
-        {currentView === "trace" ? <TracePanel /> : null}
+        {currentView === "trace" ? <TracePanel onSelectArtifact={(path) => {
+          const target = parseWorkspaceFileHref(path);
+          if (target && confirmFileNavigation()) openWorkspaceFile(target);
+        }} /> : null}
         <FileSidebar
           // #403: session-owned tree/selection/preview state must never cross
           // chat boundaries. Remounting invalidates late async state writes

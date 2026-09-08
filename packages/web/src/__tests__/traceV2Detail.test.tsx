@@ -27,6 +27,14 @@ const graph: TraceGraph = {
 };
 
 describe("TraceNodeDetail V2 sections", () => {
+  it("opens user artifacts through the provided handler and excludes recovery checkpoints", () => {
+    const node = { ...a, artifacts: [{ path: "/data/evidence.csv", type: "data" }, { path: "checkpoint:internal", type: "checkpoint" }] };
+    const html = renderToStaticMarkup(<TraceNodeDetail node={node} onSelectNode={() => {}} onSelectArtifact={() => {}} t={(key, vars) => key === "trace.node.artifacts" ? `${vars?.count} artifacts` : key} />);
+    expect(html).toContain("trace-artifact-row");
+    expect(html).toContain('title="/data/evidence.csv"');
+    expect(html).toContain("1 artifacts");
+    expect(html).not.toContain("checkpoint:internal");
+  });
   it("separates official/candidate/episode data and exposes decisions", () => {
     const html = renderToStaticMarkup(
       <TraceNodeDetail

@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import { createApp } from "../src/app.js";
-import { downloadHttpFile, listDatasetJobs, listDatasets, startDatasetDownload, cancelDatasetDownload } from "../src/datasets.js";
+import { downloadHttpFile, listDatasetJobs, listDatasets, startDatasetDownload, cancelDatasetDownload, datasetDownloadRequirements } from "../src/datasets.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
 
 function orchestrator(): Orchestrator {
@@ -17,6 +17,34 @@ function orchestrator(): Orchestrator {
 }
 
 describe("dataset marketplace", () => {
+  it("checks the selected recipe, including git-annex, without launching downloads", async () => {
+    const bin = await mkdtemp(path.join(tmpdir(), "bp-tools-"));
+    const executable = (name: string) => path.join(bin, name + (process.platform === "win32" ? ".EXE" : ""));
+    await writeFile(executable("datalad"), "unused test executable", { mode: 0o755 });
+    await writeFile(executable("git"), "unused test executable", { mode: 0o755 });
+    const env = { PATH: bin, PATHEXT: ".EXE" };
+    expect(await datasetDownloadRequirements("openneuro-ds000001", "first-participant", env)).toEqual({ tools: ["datalad", "git", "git-annex"], missing: ["git-annex"] });
+    await writeFile(executable("git-annex"), "unused test executable", { mode: 0o755 });
+    expect((await datasetDownloadRequirements("openneuro-ds000001", "first-participant", env)).missing).toEqual([]);
+    expect(await datasetDownloadRequirements("physionet-eegmat", "sample", { PATH: "" })).toEqual({ tools: [], missing: [] });
+    expect((await datasetDownloadRequirements("physionet-eegmat", "full", { PATH: "" })).missing).toEqual(["wget"]);
+    await expect(datasetDownloadRequirements("physionet-eegmat", "unknown", env)).rejects.toThrow("not available");
+  });
+
+  it("does not create failed history entries for missing tools or expose checks in hosted mode", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-tools-route-"));
+    vi.stubEnv("PATH", "");
+    try {
+      const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false });
+      const check = await app.request("/api/datasets/openneuro-ds000001/requirements?selectionId=first-participant");
+      expect((await check.json()).missing).toEqual(["datalad", "git", "git-annex"]);
+      const start = await app.request("/api/datasets/openneuro-ds000001/download", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ selectionId: "first-participant" }) });
+      expect(start.status).toBe(400);
+      expect(await listDatasetJobs(dataDir)).toEqual([]);
+      const hosted = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false, env: { BP_LOCAL_MODE: "0" } });
+      expect((await hosted.request("/api/datasets/openneuro-ds000001/requirements")).status).toBe(403);
+    } finally { vi.unstubAllEnvs(); }
+  });
   it("ships every downloader used by automatic recipes in the main image (#466)", () => {
     const dockerfile = readFileSync(
       new URL("../../../docker/main/Dockerfile", import.meta.url),
@@ -241,7 +269,7 @@ describe("dataset marketplace", () => {
     const root = await mkdtemp(path.join(tmpdir(), "bp-datalad-scope-"));
     const bin = path.join(root, "bin"); await mkdir(bin);
     const script = `#!${process.execPath}\nrequire("node:fs").writeFileSync("cache-identity.json", JSON.stringify({name: process.env.GIT_AUTHOR_NAME, email: process.env.GIT_AUTHOR_EMAIL, committer: process.env.GIT_COMMITTER_NAME})); require("node:fs").appendFileSync("commands.jsonl", JSON.stringify([require("node:path").basename(process.argv[1]), ...process.argv.slice(2)]) + "\\n");`;
-    for (const command of ["datalad", "git"]) await writeFile(path.join(bin, command), script, { mode: 0o755 });
+    for (const command of ["datalad", "git", "git-annex"]) await writeFile(path.join(bin, command), script, { mode: 0o755 });
     vi.stubEnv("PATH", `${bin}${path.delimiter}${process.env.PATH}`);
     try {
       const job = await startDatasetDownload(root, "openneuro-ds000001", {}, "first-participant");

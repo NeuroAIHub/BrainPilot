@@ -41,6 +41,7 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
     return <p>{t("trace.node.noneSelected")}</p>;
   }
   const statusKey = getStatusLabelKey(node.status);
+  const artifacts = node.artifacts.filter((artifact) => artifact.path.trim() && artifact.type !== "checkpoint" && !artifact.path.startsWith("checkpoint:"));
   const nodeById = new Map((nodes ?? []).map((item) => [item.id, item]));
   const kind = getNodeKind(node);
   const isSessionStart = kind === "session_start";
@@ -102,8 +103,8 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
     node.toolCalls.length > 0
       ? { key: "tools", icon: <Wrench size={13} />, label: t("trace.node.tools", { count: node.toolCalls.length }) }
       : null,
-    node.artifacts.length > 0
-      ? { key: "artifacts", icon: <Box size={13} />, label: t("trace.node.artifacts", { count: node.artifacts.length }) }
+    artifacts.length > 0
+      ? { key: "artifacts", icon: <Box size={13} />, label: t("trace.node.artifacts", { count: artifacts.length }) }
       : null,
   ].filter((item): item is { key: string; icon: JSX.Element; label: string } => item !== null);
 
@@ -223,11 +224,11 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
           <p>{node.errorMessage}</p>
         </section>
       ) : null}
-      {node.artifacts.length > 0 ? (
+      {artifacts.length > 0 ? (
         <section className="trace-detail__section">
           <h4><Box size={13} /> {t("trace.node.artifactsTitle")}</h4>
           <div className="trace-artifact-list">
-            {node.artifacts.map((artifact) => {
+            {artifacts.map((artifact) => {
               const label = artifactLabel(artifact.type);
               const name = artifact.path.split("/").pop() || artifact.path;
               if (onSelectArtifact) {

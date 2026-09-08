@@ -133,7 +133,7 @@ export function AgentsPanel() {
   );
 }
 
-export function TracePanel() {
+export function TracePanel({ onSelectArtifact }: { onSelectArtifact?: (path: string) => void } = {}) {
   // #79: trace is now live — seeded + kept current by SessionContext via SSE
   // (CUSTOM:trace_node), so this panel reads it instead of polling.
   const { currentSession, currentTrace, refreshTrace, workActive, messages } = useSessions();
@@ -504,6 +504,7 @@ export function TracePanel() {
                   nodes={allNodes}
                   graph={trace}
                   onSelectNode={setSelectedNodeId}
+                  onSelectArtifact={onSelectArtifact}
                   formatKind={formatNodeKind}
                   t={t}
                   sessionId={currentSession?.id}

@@ -1257,6 +1257,11 @@ export const api = {
   },
 
   datasets: {
+    async requirements(id: string, selectionId: string): Promise<{ tools: string[]; missing: string[] }> {
+      if (runtimeConfig.useMockBackend) return { tools: [], missing: [] };
+      const params = new URLSearchParams({ selectionId });
+      return handleJson(await apiFetch(`${API_BASE}/datasets/${encodeURIComponent(id)}/requirements?${params}`, { headers: authHeaders() }));
+    },
     async catalog(): Promise<DatasetCatalogEntry[]> {
       if (runtimeConfig.useMockBackend) return [];
       return handleJson(await apiFetch(`${API_BASE}/datasets`, { headers: authHeaders() }));

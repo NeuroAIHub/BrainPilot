@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
-import { createReadStream, createWriteStream } from "node:fs";
-import { mkdir, rename, stat, statfs } from "node:fs/promises";
+import { constants, createReadStream, createWriteStream } from "node:fs";
+import { access, mkdir, rename, stat, statfs } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -92,6 +92,30 @@ export function listDatasets(): DatasetCatalogEntry[] {
     ...entry, downloadAvailable: Boolean(recipe),
     ...(downloadOptions ? { downloadOptions: downloadOptions.map(({ recipe: optionRecipe, ...option }) => ({ ...option, tool: optionRecipe?.type === "datalad" ? "DataLad" : optionRecipe?.type === "http-files" ? "BrainPilot HTTP downloader" : entry.tool })) } : {}),
   }));
+}
+
+/** Check executable availability only; do not install tools or inspect credentials. */
+export async function datasetDownloadRequirements(datasetId: string, selectionId = "full", env: NodeJS.ProcessEnv = process.env) {
+  const dataset = DATASET_CATALOG.find((entry) => entry.id === datasetId);
+  const recipe = selectionId === "full" ? dataset?.recipe : dataset?.downloadOptions?.find((option) => option.id === selectionId)?.recipe;
+  if (!recipe) throw new Error("This download selection is not available. Open the provider to select data.");
+  const tools = recipe.type === "datalad" ? ["datalad", "git", "git-annex"] : recipe.type === "command" ? [recipe.command] : [];
+  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  const directories = (env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const found = await Promise.all(tools.map(async (tool) => {
+    for (const directory of directories) {
+      for (const extension of extensions) {
+        const executable = path.join(directory, tool + extension);
+        try {
+          if (!(await stat(executable)).isFile()) continue;
+          await access(executable, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+          return true;
+        } catch { /* Try the next PATH entry. */ }
+      }
+    }
+    return false;
+  }));
+  return { tools, missing: tools.filter((_, index) => !found[index]) };
 }
 export async function listDatasetJobs(dataDir: string): Promise<DatasetDownloadJob[]> { return (await jobStore(dataDir)).list(); }
 export async function stopDatasetDownloads(dataDir: string): Promise<void> {
@@ -257,6 +281,8 @@ export async function startDatasetDownload(dataDir: string, datasetId: string, c
     if (field.required && !credentials[field.id]?.trim()) throw new Error(`${field.label} is required`);
   }
   if (Object.values(credentials).some((value) => /[\r\n\0]/.test(value))) throw new Error("Credentials must not contain line breaks or null bytes");
+  const requirements = await datasetDownloadRequirements(datasetId, selectionId);
+  if (requirements.missing.length) throw new Error(`Missing download tools: ${requirements.missing.join(", ")}`);
   const root = path.resolve(dataDir, "data", "datasets");
   const targetDir = selectionId === "full" ? path.join(root, dataset.id) : path.join(root, `${dataset.id}--${selectionId}`);
   if (!targetDir.startsWith(`${root}${path.sep}`)) throw new Error("invalid dataset target");

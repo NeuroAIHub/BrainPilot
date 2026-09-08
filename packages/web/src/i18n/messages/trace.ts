@@ -28,7 +28,7 @@ export default defineMessages(
       "trace.node.dependencies": "相关步骤",
       "trace.node.toolCalls": "使用的工具",
       "trace.node.error": "错误",
-      "trace.node.artifactsTitle": "生成的文件和结果",
+      "trace.node.artifactsTitle": "相关文件和结果",
       "trace.node.timeline": "时间线",
       "trace.node.created": "创建",
       "trace.node.children": "后续任务",
