@@ -1,13 +1,13 @@
 import { spawn } from "node:child_process";
-import { createWriteStream } from "node:fs";
-import { mkdir, rename, rm, stat } from "node:fs/promises";
+import { constants, createReadStream, createWriteStream } from "node:fs";
+import { access, mkdir, rename, stat, statfs } from "node:fs/promises";
 import path from "node:path";
 import { Readable, Transform } from "node:stream";
 import { pipeline } from "node:stream/promises";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 
 export type DatasetAccess = "direct" | "credentials" | "application";
-export type DatasetModality = "EEG" | "fMRI" | "MRI" | "Neuropixels" | "NWB" | "Genomics" | "Clinical";
+export type DatasetModality = "EEG" | "MEG" | "EOG" | "EMG" | "fMRI" | "MRI" | "Neuropixels" | "NWB" | "Microscopy" | "Genomics" | "Clinical" | "Behavior" | "fNIRS" | "ECoG" | "ECG" | "EDA" | "Calcium";
 
 export interface DatasetCredentialField {
   id: string;
@@ -17,15 +17,22 @@ export interface DatasetCredentialField {
   help?: string;
 }
 
-type DownloadRecipe =
-  | { type: "http"; url: string; fileName: string; basicAuth?: { username: string; password: string } }
+export type FileChecksum = { algorithm: "sha256" | "md5"; value: string };
+
+export type DownloadRecipe =
+  | { type: "http"; url: string; fileName: string; checksum?: FileChecksum; basicAuth?: { username: string; password: string } }
   | { type: "command"; command: string; args: string[]; env?: Record<string, string>; stdin?: string }
-  | { type: "datalad"; repository: string };
+  | { type: "datalad"; repository: string; revision?: string; paths?: string[] }
+  | { type: "http-files"; files: Array<{ url: string; fileName: string; checksum?: FileChecksum }> };
 
 export interface DatasetCatalogEntry {
   id: string;
   name: string;
   summary: string;
+  summaryZh?: string;
+  domains?: string[];
+  species?: string;
+  researchQuestions?: Array<{ en: string; zh: string }>;
   description: string;
   provider: string;
   modalities: DatasetModality[];
@@ -34,12 +41,20 @@ export interface DatasetCatalogEntry {
   license: string;
   access: DatasetAccess;
   accessNote: string;
+  accessNoteZh?: string;
   homepage: string;
   citation?: string;
+  version?: string;
+  formats?: string[];
+  tasks?: string[];
+  reviewedAt?: string;
+  checksumUrl?: string;
   credentialFields?: DatasetCredentialField[];
   tool?: string;
   downloadAvailable?: boolean;
+  downloadReviewRequired?: boolean;
   downloadCommand?: string;
+  downloadOptions?: Array<{ id: string; label: string; labelZh: string; description: string; descriptionZh: string; tool?: string; recipe?: DownloadRecipe }>;
   recipe?: DownloadRecipe;
 }
 
@@ -47,7 +62,9 @@ export interface DatasetDownloadJob {
   id: string;
   datasetId: string;
   datasetName: string;
-  status: "queued" | "downloading" | "completed" | "failed";
+  selectionId?: string;
+  selectionLabel?: string;
+  status: "queued" | "downloading" | "completed" | "failed" | "cancelled";
   targetDir: string;
   startedAt: string;
   finishedAt?: string;
@@ -56,128 +73,66 @@ export interface DatasetDownloadJob {
   totalBytes?: number;
 }
 
-// The catalogue intentionally stores metadata and recipes only. Credentials are
-// accepted for a single launch and passed directly to the downloader process;
-// they are never returned, logged, or persisted.
-export const DATASET_CATALOG: readonly DatasetCatalogEntry[] = [
-  {
-    id: "openneuro-ds000030", name: "OpenNeuro ds000030", provider: "OpenNeuro", modalities: ["fMRI", "MRI"], subjects: "272 participants", size: "~80 GB",
-    summary: "UCLA Consortium for Neuropsychiatric Phenomics dataset in BIDS format.",
-    description: "Structural, functional and phenotypic data spanning healthy controls and several neuropsychiatric cohorts. A useful public benchmark for BIDS/fMRI workflows.",
-    license: "CC0", access: "direct", accessNote: "Public. DataLad is used so interrupted downloads can resume.", homepage: "https://openneuro.org/datasets/ds000030",
-    citation: "Poldrack et al., Scientific Data (2016)", tool: "datalad",
-    downloadCommand: "datalad install -r -g -s https://github.com/OpenNeuroDatasets/ds000030.git .",
-    recipe: { type: "datalad", repository: "https://github.com/OpenNeuroDatasets/ds000030.git" },
-  },
-  {
-    id: "openneuro-ds000114", name: "OpenNeuro ds000114", provider: "OpenNeuro", modalities: ["fMRI", "MRI"], subjects: "10 participants", size: "~7 GB",
-    summary: "Test-retest motor, language and emotion task fMRI dataset.",
-    description: "A compact BIDS dataset commonly used to test preprocessing and reproducibility pipelines across repeated acquisitions.",
-    license: "CC0", access: "direct", accessNote: "Public. Requires DataLad.", homepage: "https://openneuro.org/datasets/ds000114", tool: "datalad",
-    downloadCommand: "datalad install -r -g -s https://github.com/OpenNeuroDatasets/ds000114.git .",
-    recipe: { type: "datalad", repository: "https://github.com/OpenNeuroDatasets/ds000114.git" },
-  },
-  {
-    id: "dandi-000026", name: "DANDI 000026", provider: "DANDI Archive", modalities: ["NWB", "Neuropixels"], size: "~70 GB",
-    summary: "Allen Institute Visual Coding Neuropixels recordings in NWB format.",
-    description: "Public extracellular electrophysiology recordings from mouse visual areas, packaged as standards-compliant NWB assets.",
-    license: "CC BY 4.0", access: "direct", accessNote: "Public. Requires the dandi CLI.", homepage: "https://dandiarchive.org/dandiset/000026", tool: "dandi",
-    downloadCommand: "dandi download --format PYOUT --path-type EXACT --existing REFRESH --output-dir . DANDI:000026",
-    recipe: { type: "command", command: "dandi", args: ["download", "--format", "PYOUT", "--path-type", "EXACT", "--existing", "REFRESH", "--output-dir", ".", "DANDI:000026"] },
-  },
-  {
-    id: "physionet-eegmmidb", name: "EEG Motor Movement/Imagery", provider: "PhysioNet", modalities: ["EEG"], subjects: "109 participants", size: "~3.4 GB",
-    summary: "64-channel EEG recorded during motor execution and motor imagery tasks.",
-    description: "A widely used EEG benchmark with more than 1,500 recordings and standardized EDF files.",
-    license: "ODC-By 1.0", access: "direct", accessNote: "Public. Requires wget for recursive, resumable download.", homepage: "https://physionet.org/content/eegmmidb/1.0.0/", tool: "wget",
-    downloadCommand: "wget -r -N -c -np --cut-dirs=3 https://physionet.org/files/eegmmidb/1.0.0/",
-    recipe: { type: "command", command: "wget", args: ["-r", "-N", "-c", "-np", "--cut-dirs=3", "https://physionet.org/files/eegmmidb/1.0.0/"] },
-  },
-  {
-    id: "bci-competition-iv-2a", name: "BCI Competition IV 2a", provider: "BCI Competition", modalities: ["EEG"], subjects: "9 participants", size: "~420 MB",
-    summary: "Four-class motor-imagery EEG benchmark distributed as a GDF archive.",
-    description: "The canonical 22-channel motor imagery signal archive used to compare EEG decoding algorithms.",
-    license: "Competition terms", access: "direct", accessNote: "Public archive; review the competition terms before publication.", homepage: "https://www.bbci.de/competition/iv/",
-    tool: "BrainPilot HTTP downloader", downloadCommand: "curl -fL -C - -o BCICIV_2a_gdf.zip https://www.bbci.de/competition/download/competition_iv/BCICIV_2a_gdf.zip",
-    recipe: { type: "http", url: "https://www.bbci.de/competition/download/competition_iv/BCICIV_2a_gdf.zip", fileName: "BCICIV_2a_gdf.zip" },
-  },
-  {
-    id: "hcp-young-adult", name: "Human Connectome Project — Young Adult", provider: "ConnectomeDB", modalities: ["fMRI", "MRI"], subjects: "1,200 participants", size: ">80 TB",
-    summary: "High-resolution structural, resting-state, task-fMRI and diffusion MRI.",
-    description: "The flagship HCP young-adult release. Users must accept the HCP data-use terms before obtaining S3 credentials.",
-    license: "HCP Open Access Data Use Terms", access: "application", accessNote: "Approval and terms acceptance are required. After approval, AWS credentials can drive an automatic S3 sync.", homepage: "https://www.humanconnectome.org/study/hcp-young-adult/document/1200-subjects-data-release",
-    tool: "aws", credentialFields: [
-      { id: "awsAccessKeyId", label: "AWS access key ID", required: true },
-      { id: "awsSecretAccessKey", label: "AWS secret access key", secret: true, required: true },
-      { id: "awsSessionToken", label: "AWS session token (if issued)", secret: true },
-      { id: "subject", label: "HCP subject ID", required: true, help: "For example: 100206" },
-    ],
-    recipe: { type: "command", command: "aws", args: ["s3", "sync", "s3://hcp-openaccess/HCP_1200/{{subject}}", "."], env: { AWS_ACCESS_KEY_ID: "awsAccessKeyId", AWS_SECRET_ACCESS_KEY: "awsSecretAccessKey", AWS_SESSION_TOKEN: "awsSessionToken" } },
-  },
-  {
-    id: "mimic-iv", name: "MIMIC-IV", provider: "PhysioNet", modalities: ["Clinical"], subjects: ">300,000 patients", size: "~120 GB",
-    summary: "Deidentified hospital and ICU electronic health records.",
-    description: "A major clinical benchmark. Credentialed access requires CITI training, a data-use agreement and approval on PhysioNet.",
-    license: "PhysioNet Credentialed Health Data License", access: "application", accessNote: "Complete PhysioNet credentialing first; then enter the approved account credentials.", homepage: "https://physionet.org/content/mimiciv/3.1/",
-    tool: "wget", credentialFields: [{ id: "username", label: "PhysioNet username", required: true }, { id: "password", label: "PhysioNet password", secret: true, required: true }],
-    recipe: { type: "command", command: "wget", args: ["-r", "-N", "-c", "-np", "--cut-dirs=3", "https://physionet.org/files/mimiciv/3.1/"], env: { WGETRC: "__stdin__" }, stdin: "user={{username}}\npassword={{password}}\n" },
-  },
-  {
-    id: "kaggle-hms", name: "HMS Harmful Brain Activity", provider: "Kaggle", modalities: ["EEG"], size: "~28 GB",
-    summary: "EEG spectrograms labeled for seizures and other harmful brain activity.",
-    description: "Competition dataset for classifying seizures, generalized periodic discharges and related EEG patterns.",
-    license: "Kaggle competition rules", access: "credentials", accessNote: "Accept the competition rules on Kaggle, then provide an API username and token.", homepage: "https://www.kaggle.com/competitions/hms-harmful-brain-activity-classification/data", tool: "kaggle",
-    credentialFields: [{ id: "username", label: "Kaggle username", required: true }, { id: "token", label: "Kaggle API token", secret: true, required: true }],
-    recipe: { type: "command", command: "kaggle", args: ["competitions", "download", "-c", "hms-harmful-brain-activity-classification", "-p", "."], env: { KAGGLE_USERNAME: "username", KAGGLE_KEY: "token" } },
-  },
-  {
-    id: "adni", name: "Alzheimer's Disease Neuroimaging Initiative", provider: "LONI IDA", modalities: ["MRI", "Genomics", "Clinical"], subjects: ">2,500 participants", size: "Multi-terabyte",
-    summary: "Longitudinal imaging, biomarkers, genetics and clinical assessments for AD.",
-    description: "A foundational Alzheimer's disease cohort. Access is governed through LONI IDA and dataset-specific use agreements.",
-    license: "ADNI Data Use Agreement", access: "application", accessNote: "Application approval is required. LONI does not expose a stable unattended bulk-download API, so downloads remain provider-managed.", homepage: "https://adni.loni.usc.edu/data-samples/",
-  },
-  {
-    id: "uk-biobank-imaging", name: "UK Biobank Imaging", provider: "UK Biobank", modalities: ["fMRI", "MRI", "Genomics", "Clinical"], subjects: ">100,000 imaged participants", size: "Petabyte scale",
-    summary: "Population-scale multimodal imaging linked to genetics and phenotypes.",
-    description: "A uniquely broad longitudinal resource available only to approved research projects through the UK Biobank RAP.",
-    license: "UK Biobank Material Transfer Agreement", access: "application", accessNote: "A paid, approved research application and RAP access are required; downloading outside RAP may be restricted.", homepage: "https://www.ukbiobank.ac.uk/enable-your-research/apply-for-access",
-  },
-  {
-    id: "abcd", name: "ABCD Study", provider: "NIMH Data Archive", modalities: ["fMRI", "MRI", "Genomics", "Clinical"], subjects: "~12,000 participants", size: "Multi-terabyte",
-    summary: "Longitudinal adolescent brain, behavior, environment and health data.",
-    description: "A major US developmental cohort with multimodal imaging and extensive phenotyping.",
-    license: "NDA Data Use Certification", access: "application", accessNote: "NDA account, institutional sponsorship and an approved Data Use Certification are required.", homepage: "https://nda.nih.gov/abcd",
-  },
-  {
-    id: "allen-cell-types", name: "Allen Cell Types Database", provider: "Allen Institute", modalities: ["NWB", "Genomics"], size: "Varies by selection",
-    summary: "Morphology, electrophysiology and transcriptomics from human and mouse cells.",
-    description: "Public single-cell characterization data suitable for cell taxonomy and biophysical modeling.",
-    license: "Allen Institute Terms of Use", access: "direct", accessNote: "Public. Use the AllenSDK/API to select cells; there is no single canonical archive to fetch safely.", homepage: "https://celltypes.brain-map.org/",
-  },
-];
+import { DatasetJobRegistry } from "./datasetJobs.js";
+import { DATASET_CATALOG } from "./datasetCatalog.js";
+export { DATASET_CATALOG } from "./datasetCatalog.js";
 
-const jobsByDataRoot = new Map<string, Map<string, DatasetDownloadJob>>();
-
-function jobStore(dataDir: string): Map<string, DatasetDownloadJob> {
+const registries = new Map<string, Promise<DatasetJobRegistry>>();
+function jobStore(dataDir: string): Promise<DatasetJobRegistry> {
   const root = path.resolve(dataDir);
-  let store = jobsByDataRoot.get(root);
-  if (!store) {
-    store = new Map();
-    jobsByDataRoot.set(root, store);
+  let registry = registries.get(root);
+  if (!registry) {
+    registry = DatasetJobRegistry.open(root).catch((error) => { registries.delete(root); throw error; });
+    registries.set(root, registry);
   }
-  return store;
+  return registry;
 }
-
 export function listDatasets(): DatasetCatalogEntry[] {
-  return DATASET_CATALOG.map(({ recipe, ...entry }) => ({ ...entry, downloadAvailable: Boolean(recipe) }));
+  return DATASET_CATALOG.map(({ recipe, downloadOptions, ...entry }) => ({
+    ...entry, downloadAvailable: Boolean(recipe),
+    ...(downloadOptions ? { downloadOptions: downloadOptions.map(({ recipe: optionRecipe, ...option }) => ({ ...option, tool: optionRecipe?.type === "datalad" ? "DataLad" : optionRecipe?.type === "http-files" ? "BrainPilot HTTP downloader" : entry.tool })) } : {}),
+  }));
 }
 
-export function listDatasetJobs(dataDir: string): DatasetDownloadJob[] {
-  return [...jobStore(dataDir).values()].sort((a, b) => b.startedAt.localeCompare(a.startedAt));
+/** Check executable availability only; do not install tools or inspect credentials. */
+export async function datasetDownloadRequirements(datasetId: string, selectionId = "full", env: NodeJS.ProcessEnv = process.env) {
+  const dataset = DATASET_CATALOG.find((entry) => entry.id === datasetId);
+  const recipe = selectionId === "full" ? dataset?.recipe : dataset?.downloadOptions?.find((option) => option.id === selectionId)?.recipe;
+  if (!recipe) throw new Error("This download selection is not available. Open the provider to select data.");
+  const tools = recipe.type === "datalad" ? ["datalad", "git", "git-annex"] : recipe.type === "command" ? [recipe.command] : [];
+  const extensions = process.platform === "win32" ? (env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";") : [""];
+  const directories = (env.PATH ?? "").split(path.delimiter).filter(Boolean);
+  const found = await Promise.all(tools.map(async (tool) => {
+    for (const directory of directories) {
+      for (const extension of extensions) {
+        const executable = path.join(directory, tool + extension);
+        try {
+          if (!(await stat(executable)).isFile()) continue;
+          await access(executable, process.platform === "win32" ? constants.F_OK : constants.X_OK);
+          return true;
+        } catch { /* Try the next PATH entry. */ }
+      }
+    }
+    return false;
+  }));
+  return { tools, missing: tools.filter((_, index) => !found[index]) };
 }
+export async function listDatasetJobs(dataDir: string): Promise<DatasetDownloadJob[]> { return (await jobStore(dataDir)).list(); }
+export async function stopDatasetDownloads(dataDir: string): Promise<void> {
+  const root = path.resolve(dataDir);
+  const registry = registries.get(root);
+  if (registry) { await (await registry).shutdown(); registries.delete(root); }
+}
+export async function cancelDatasetDownload(dataDir: string, id: string): Promise<DatasetDownloadJob> { return (await jobStore(dataDir)).cancel(id); }
 
 function sanitizedEnvironment(recipe: Extract<DownloadRecipe, { type: "command" }>, credentials: Record<string, string>): NodeJS.ProcessEnv {
   const env: NodeJS.ProcessEnv = { PATH: process.env.PATH, HOME: process.env.HOME, LANG: process.env.LANG };
+  // git-annex creates local bookkeeping commits even for read-only downloads.
+  // Supply a cache identity per invocation; never write the user's Git config.
+  if (recipe.command === "datalad" || recipe.command === "git") {
+    env.GIT_AUTHOR_NAME = env.GIT_COMMITTER_NAME = "BrainPilot dataset cache";
+    env.GIT_AUTHOR_EMAIL = env.GIT_COMMITTER_EMAIL = "datasets@brainpilot.invalid";
+  }
   for (const [key, credentialId] of Object.entries(recipe.env ?? {})) env[key] = credentialId === "__stdin__" ? "/dev/stdin" : credentials[credentialId];
   return env;
 }
@@ -186,31 +141,58 @@ function interpolate(value: string, credentials: Record<string, string>): string
   return value.replace(/\{\{([a-zA-Z0-9]+)\}\}/g, (_match, id: string) => credentials[id] ?? "");
 }
 
-async function runCommand(recipe: Extract<DownloadRecipe, { type: "command" }>, targetDir: string, credentials: Record<string, string>): Promise<void> {
+async function runCommand(recipe: Extract<DownloadRecipe, { type: "command" }>, targetDir: string, credentials: Record<string, string>, signal?: AbortSignal): Promise<void> {
+  signal?.throwIfAborted();
   await new Promise<void>((resolve, reject) => {
-    const child = spawn(recipe.command, recipe.args.map((arg) => interpolate(arg, credentials)), { cwd: targetDir, env: sanitizedEnvironment(recipe, credentials), stdio: [recipe.stdin ? "pipe" : "ignore", "ignore", "pipe"], shell: false });
+    const child = spawn(recipe.command, recipe.args.map((arg) => interpolate(arg, credentials)), { cwd: targetDir, env: sanitizedEnvironment(recipe, credentials), stdio: [recipe.stdin ? "pipe" : "ignore", "ignore", "pipe"], shell: false, detached: process.platform !== "win32" });
+    let forceKill: ReturnType<typeof setTimeout> | undefined;
+    const kill = (kind: NodeJS.Signals) => {
+      try { if (process.platform !== "win32" && child.pid) process.kill(-child.pid, kind); else child.kill(kind); } catch { /* already exited */ }
+    };
+    const abort = () => { kill("SIGTERM"); forceKill = setTimeout(() => kill("SIGKILL"), 2_000); forceKill.unref(); };
+    signal?.addEventListener("abort", abort, { once: true });
+    const onExit = () => kill("SIGKILL");
+    process.once("exit", onExit);
+    const cleanup = () => { process.removeListener("exit", onExit); signal?.removeEventListener("abort", abort); if (forceKill) clearTimeout(forceKill); if (signal?.aborted) kill("SIGKILL"); };
+    child.stdin?.on("error", () => {}); // A downloader may exit before reading its config.
     if (recipe.stdin && child.stdin) child.stdin.end(interpolate(recipe.stdin, credentials));
     let stderr = "";
     child.stderr?.on("data", (chunk) => { stderr = `${stderr}${String(chunk)}`.slice(-4000); });
-    child.on("error", (error) => reject(new Error(error.message.includes("ENOENT") ? `Required downloader '${recipe.command}' is not installed or not on PATH` : error.message)));
-    child.on("close", (code) => code === 0 ? resolve() : reject(new Error(stderr.trim() || `${recipe.command} exited with code ${code}`)));
+    child.on("error", (error) => { cleanup(); reject(new Error(error.message.includes("ENOENT") ? `Required downloader '${recipe.command}' is not installed or not on PATH` : error.message)); });
+    child.on("close", (code) => { cleanup(); code === 0 && !signal?.aborted ? resolve() : reject(new Error(stderr.trim() || `${recipe.command} exited with code ${code}`)); });
+    if (signal?.aborted) abort();
   });
 }
 
-async function runDatalad(recipe: Extract<DownloadRecipe, { type: "datalad" }>, targetDir: string): Promise<void> {
+async function runDatalad(recipe: Extract<DownloadRecipe, { type: "datalad" }>, targetDir: string, signal?: AbortSignal): Promise<void> {
   const repositoryExists = await stat(path.join(targetDir, ".git")).then((value) => value.isDirectory()).catch(() => false);
-  await runCommand(repositoryExists
-    ? { type: "command", command: "datalad", args: ["get", "-r", "."] }
-    : { type: "command", command: "datalad", args: ["install", "-r", "-g", "-s", recipe.repository, "."] }, targetDir, {});
+  if (!repositoryExists) await runCommand({ type: "command", command: "datalad", args: ["install", "-r", "-s", recipe.repository, "."] }, targetDir, {}, signal);
+  if (recipe.revision) await runCommand({ type: "command", command: "git", args: ["checkout", "--detach", recipe.revision] }, targetDir, {}, signal);
+  await runCommand({ type: "command", command: "datalad", args: ["get", "-r", "--", ...(recipe.paths ?? ["."])] }, targetDir, {}, signal);
+}
+
+async function verifyFileChecksum(file: string, checksum?: FileChecksum, signal?: AbortSignal): Promise<void> {
+  if (!checksum) return;
+  const hash = createHash(checksum.algorithm);
+  for await (const chunk of createReadStream(file)) { signal?.throwIfAborted(); hash.update(chunk); }
+  signal?.throwIfAborted();
+  if (hash.digest("hex") !== checksum.value.toLowerCase()) {
+    // Preserve unverified bytes, but keep them out of final-file reuse and Range retries.
+    const preserved = `${file}.corrupt-${randomUUID()}`;
+    await rename(file, preserved);
+    throw new Error(`Dataset checksum mismatch; unverified file preserved as ${path.basename(preserved)}. Retry to download a fresh copy.`);
+  }
 }
 
 export async function downloadHttpFile(
   url: string,
   destination: string,
-  options: { headers?: Headers | Record<string, string> | Array<[string, string]>; fetchFn?: typeof fetch; onProgress?: (downloaded: number, total?: number) => void } = {},
+  options: { availableBytes?: () => Promise<number>; signal?: AbortSignal; checksum?: FileChecksum; headers?: Headers | Record<string, string> | Array<[string, string]>; fetchFn?: typeof fetch; onProgress?: (downloaded: number, total?: number) => void } = {},
 ): Promise<{ bytesDownloaded: number; totalBytes?: number; reused: boolean }> {
+  options.signal?.throwIfAborted();
   const existingFinal = await stat(destination).catch(() => null);
   if (existingFinal?.isFile()) {
+    await verifyFileChecksum(destination, options.checksum, options.signal);
     options.onProgress?.(existingFinal.size, existingFinal.size);
     return { bytesDownloaded: existingFinal.size, totalBytes: existingFinal.size, reused: true };
   }
@@ -219,8 +201,16 @@ export async function downloadHttpFile(
   const partialBytes = partialStat?.isFile() ? partialStat.size : 0;
   const headers = new Headers(options.headers);
   if (partialBytes > 0) headers.set("Range", `bytes=${partialBytes}-`);
-  const response = await (options.fetchFn ?? fetch)(url, { headers, redirect: "follow" });
+  const response = await (options.fetchFn ?? fetch)(url, { headers, redirect: "follow", signal: options.signal });
   if (response.status === 416 && partialBytes > 0) {
+    const completeSize = response.headers.get("content-range")?.match(/^bytes \*\/(\d+)$/)?.[1];
+    if (!completeSize || Number(completeSize) !== partialBytes) {
+      await response.body?.cancel();
+      throw new Error("Provider rejected the resume offset; partial file size does not match the remote file");
+    }
+    await response.body?.cancel();
+    await verifyFileChecksum(partial, options.checksum, options.signal);
+    options.signal?.throwIfAborted();
     await rename(partial, destination);
     options.onProgress?.(partialBytes, partialBytes);
     return { bytesDownloaded: partialBytes, totalBytes: partialBytes, reused: false };
@@ -228,8 +218,29 @@ export async function downloadHttpFile(
   if (!response.ok || !response.body) throw new Error(`Dataset provider returned HTTP ${response.status}`);
   const append = partialBytes > 0 && response.status === 206;
   const startingBytes = append ? partialBytes : 0;
-  const contentLength = Number(response.headers.get("content-length"));
-  const totalBytes = Number.isFinite(contentLength) && contentLength >= 0 ? startingBytes + contentLength : undefined;
+  const lengthHeader = response.headers.get("content-length");
+  const contentLength = lengthHeader === null ? undefined : Number(lengthHeader);
+  let totalBytes = contentLength !== undefined && Number.isSafeInteger(contentLength) && contentLength >= 0 ? startingBytes + contentLength : undefined;
+  if (response.status === 206) {
+    const range = response.headers.get("content-range")?.match(/^bytes (\d+)-(\d+)\/(\d+)$/);
+    const start = Number(range?.[1]);
+    const end = Number(range?.[2]);
+    const total = Number(range?.[3]);
+    if (!range || start !== startingBytes || end < start || end >= total || !Number.isSafeInteger(total) ||
+        (contentLength !== undefined && contentLength !== end - start + 1)) {
+      await response.body.cancel();
+      throw new Error("Provider returned an invalid Content-Range; partial file was preserved");
+    }
+    totalBytes = total;
+  }
+  if (totalBytes !== undefined) {
+    const freeBytes = options.availableBytes ? await options.availableBytes() : await statfs(path.dirname(destination)).then((disk) => disk.bavail * disk.bsize);
+    const required = totalBytes - startingBytes;
+    if (required > freeBytes + (append ? 0 : partialBytes)) {
+      await response.body.cancel();
+      throw new Error("Not enough disk space for this download. Choose a smaller subset or free up space.");
+    }
+  }
   let downloaded = startingBytes;
   const counter = new Transform({
     transform(chunk: Buffer, _encoding, callback) {
@@ -238,12 +249,15 @@ export async function downloadHttpFile(
       callback(null, chunk);
     },
   });
-  await pipeline(Readable.fromWeb(response.body as never), counter, createWriteStream(partial, { flags: append ? "a" : "w" }));
+  await pipeline(Readable.fromWeb(response.body as never), counter, createWriteStream(partial, { flags: append ? "a" : "w" }), { signal: options.signal });
+  if (totalBytes !== undefined && downloaded !== totalBytes) throw new Error("Incomplete dataset download; retry to resume the partial file");
+  await verifyFileChecksum(partial, options.checksum, options.signal);
+  options.signal?.throwIfAborted();
   await rename(partial, destination);
   return { bytesDownloaded: downloaded, ...(totalBytes === undefined ? {} : { totalBytes }), reused: false };
 }
 
-async function runHttp(recipe: Extract<DownloadRecipe, { type: "http" }>, targetDir: string, credentials: Record<string, string>, job: DatasetDownloadJob): Promise<void> {
+async function runHttp(recipe: Extract<DownloadRecipe, { type: "http" }>, targetDir: string, credentials: Record<string, string>, job: DatasetDownloadJob, signal?: AbortSignal): Promise<void> {
   const headers = new Headers();
   if (recipe.basicAuth) {
     const username = credentials[recipe.basicAuth.username] ?? "";
@@ -252,6 +266,8 @@ async function runHttp(recipe: Extract<DownloadRecipe, { type: "http" }>, target
   }
   const result = await downloadHttpFile(recipe.url, path.join(targetDir, recipe.fileName), {
     headers,
+    checksum: recipe.checksum,
+    signal,
     onProgress: (downloaded, total) => {
       job.bytesDownloaded = downloaded;
       if (total !== undefined) job.totalBytes = total;
@@ -261,38 +277,46 @@ async function runHttp(recipe: Extract<DownloadRecipe, { type: "http" }>, target
   if (result.totalBytes !== undefined) job.totalBytes = result.totalBytes;
 }
 
-export async function startDatasetDownload(dataDir: string, datasetId: string, credentials: Record<string, string> = {}): Promise<DatasetDownloadJob> {
+export async function startDatasetDownload(dataDir: string, datasetId: string, credentials: Record<string, string> = {}, selectionId = "full"): Promise<DatasetDownloadJob> {
   const dataset = DATASET_CATALOG.find((entry) => entry.id === datasetId);
   if (!dataset) throw new Error("dataset not found");
-  if (!dataset.recipe) throw new Error("This dataset must be downloaded through the provider after approval");
+  const option = dataset.downloadOptions?.find((item) => item.id === selectionId);
+  const recipe = selectionId === "full" ? dataset.recipe : option?.recipe;
+  if (!recipe) throw new Error("This download selection is not available. Open the provider to select data.");
   for (const field of dataset.credentialFields ?? []) {
     if (field.required && !credentials[field.id]?.trim()) throw new Error(`${field.label} is required`);
   }
+  if (Object.values(credentials).some((value) => /[\r\n\0]/.test(value))) throw new Error("Credentials must not contain line breaks or null bytes");
+  const requirements = await datasetDownloadRequirements(datasetId, selectionId);
+  if (requirements.missing.length) throw new Error(`Missing download tools: ${requirements.missing.join(", ")}`);
   const root = path.resolve(dataDir, "data", "datasets");
-  const targetDir = path.join(root, dataset.id);
+  const targetDir = selectionId === "full" ? path.join(root, dataset.id) : path.join(root, `${dataset.id}--${selectionId}`);
   if (!targetDir.startsWith(`${root}${path.sep}`)) throw new Error("invalid dataset target");
-  const jobs = jobStore(dataDir);
-  const active = [...jobs.values()].find((job) => job.datasetId === datasetId && (job.status === "queued" || job.status === "downloading"));
-  if (active) return active;
-  await mkdir(targetDir, { recursive: true });
-  const job: DatasetDownloadJob = { id: randomUUID(), datasetId, datasetName: dataset.name, status: "queued", targetDir, startedAt: new Date().toISOString() };
-  jobs.set(job.id, job);
-  const recipe = dataset.recipe as DownloadRecipe;
-  void (async () => {
-    job.status = "downloading";
+  const store = await jobStore(dataDir);
+  const secrets = { ...credentials };
+  const job: DatasetDownloadJob = { id: randomUUID(), datasetId, datasetName: dataset.name, selectionId, selectionLabel: option?.label, status: "queued", targetDir, startedAt: new Date().toISOString() };
+  return store.start(job, async (signal) => {
     try {
-      if (recipe.type === "http") await runHttp(recipe, targetDir, credentials, job);
-      else if (recipe.type === "datalad") await runDatalad(recipe, targetDir);
-      else await runCommand(recipe, targetDir, credentials);
-      job.status = "completed";
-    } catch (error) {
-      job.status = "failed";
-      job.error = error instanceof Error ? error.message : String(error);
-      await rm(path.join(targetDir, ".credentials"), { force: true }).catch(() => undefined);
-    } finally {
-      job.finishedAt = new Date().toISOString();
-      for (const key of Object.keys(credentials)) credentials[key] = "";
+      await mkdir(targetDir, { recursive: true });
+      if (recipe.type === "http") await runHttp(recipe, targetDir, secrets, job, signal);
+      else if (recipe.type === "datalad") await runDatalad(recipe, targetDir, signal);
+      else if (recipe.type === "command") await runCommand(recipe, targetDir, secrets, signal);
+      else {
+        let finishedBytes = 0;
+        for (const file of recipe.files) {
+          const destination = path.resolve(targetDir, file.fileName);
+          if (!destination.startsWith(`${targetDir}${path.sep}`)) throw new Error("Invalid sample file path");
+          await mkdir(path.dirname(destination), { recursive: true });
+          const result = await downloadHttpFile(file.url, destination, { signal, checksum: file.checksum, onProgress: (bytes) => { job.bytesDownloaded = finishedBytes + bytes; } });
+          finishedBytes += result.bytesDownloaded;
+        }
+        job.bytesDownloaded = finishedBytes;
+        job.totalBytes = finishedBytes;
+      }
+    } catch (reason) {
+      let message = reason instanceof Error ? reason.message : String(reason);
+      for (const value of Object.values(secrets)) if (value) message = message.split(value).join("[redacted]");
+      throw new Error(message);
     }
-  })();
-  return job;
+  }, () => { for (const key of Object.keys(secrets)) secrets[key] = ""; });
 }

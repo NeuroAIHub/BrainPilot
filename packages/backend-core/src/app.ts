@@ -82,7 +82,7 @@ import {
   uninstallPlugin,
   updatePlugin,
 } from "./plugins.js";
-import { listDatasetJobs, listDatasets, startDatasetDownload } from "./datasets.js";
+import { cancelDatasetDownload, datasetDownloadRequirements, listDatasetJobs, listDatasets, startDatasetDownload } from "./datasets.js";
 
 export interface CreateAppOptions {
   orchestrator: Orchestrator;
@@ -693,7 +693,17 @@ export function createApp(options: CreateAppOptions): Hono {
 
   // ---- Curated dataset catalogue and local downloads ------------------
   api.get("/datasets", (c) => c.json(listDatasets()));
-  api.get("/datasets/downloads", (c) => c.json(listDatasetJobs(dataDir)));
+  api.get("/datasets/:id/requirements", async (c) => {
+    if (!localMode) return c.json({ error: "Dataset downloads are available only in local mode" }, 403);
+    try { return c.json(await datasetDownloadRequirements(c.req.param("id"), c.req.query("selectionId") ?? "full")); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
+  api.get("/datasets/downloads", async (c) => c.json(localMode ? await listDatasetJobs(dataDir) : []));
+  api.post("/datasets/downloads/:id/cancel", async (c) => {
+    if (!localMode) return c.json({ error: "Dataset downloads are available only in local mode" }, 403);
+    try { return c.json(await cancelDatasetDownload(dataDir, c.req.param("id"))); }
+    catch (error) { return c.json({ error: error instanceof Error ? error.message : String(error) }, 400); }
+  });
   api.post("/datasets/:id/download", async (c) => {
     if (!localMode) return c.json({ error: "Dataset downloads are available only in local mode" }, 403);
     const body = await safeJson(c);
@@ -702,7 +712,8 @@ export function createApp(options: CreateAppOptions): Hono {
       ? Object.fromEntries(Object.entries(rawCredentials).filter((entry): entry is [string, string] => typeof entry[1] === "string"))
       : {};
     try {
-      return c.json(await startDatasetDownload(dataDir, c.req.param("id"), credentials), 202);
+      const selectionId = typeof body.selectionId === "string" ? body.selectionId : "full";
+      return c.json(await startDatasetDownload(dataDir, c.req.param("id"), credentials, selectionId), 202);
     } catch (error) {
       return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
     }

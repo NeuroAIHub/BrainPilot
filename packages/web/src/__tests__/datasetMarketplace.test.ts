@@ -1,5 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import {
+  matchesDataset,
   canStartDatasetDownload,
   datasetCardAction,
   handleDatasetCardAction,
@@ -60,6 +61,10 @@ describe("dataset marketplace primary action", () => {
     expect(download).not.toHaveBeenCalled();
   });
 
+  it("shows download scope before starting a large collection", () => {
+    expect(datasetCardAction(dataset({ downloadReviewRequired: true }))).toBe("details");
+  });
+
   it("opens details when no automated recipe is available", () => {
     expect(datasetCardAction(dataset({ downloadAvailable: false }))).toBe("details");
   });
@@ -110,5 +115,34 @@ describe("dataset credential validation", () => {
 
   it("allows public datasets with no credential fields", () => {
     expect(hasRequiredDatasetCredentials(dataset(), {})).toBe(true);
+  });
+});
+
+
+describe("dataset discovery", () => {
+  it("searches task, format and stable dataset identifier", () => {
+    const entry = dataset({ id: "physionet-sleep-edfx", tasks: ["Sleep staging"], formats: ["EDF+"] });
+    expect(matchesDataset(entry, "sleep staging")).toBe(true);
+    expect(matchesDataset(entry, " edf+ ")).toBe(true);
+    expect(matchesDataset(entry, "sleep-edfx")).toBe(true);
+    expect(matchesDataset(entry, "MRI")).toBe(false);
+  });
+  it("lets users inspect active download progress", () => {
+    expect(datasetCardAction(dataset(), { ...completedJob(), status: "downloading" })).toBe("details");
+  });
+});
+
+
+describe("research question discovery", () => {
+  it("matches Chinese questions and words spread across metadata", () => {
+    const entry = dataset({ name: "Risk task", summaryZh: "风险决策数据", domains: ["learning"], researchQuestions: [{ en: "How does risk shape decisions?", zh: "风险如何影响决策？" }] });
+    expect(matchesDataset(entry, "风险 决策")).toBe(true);
+    expect(matchesDataset(entry, "learning EEG")).toBe(true);
+    expect(matchesDataset(entry, "language MRI")).toBe(false);
+  });
+  it("opens scope selection for subsets and permits retry after cancellation", () => {
+    const entry = dataset({ downloadOptions: [{ id: "sample", label: "Sample", labelZh: "示例", description: "A subset", descriptionZh: "一部分数据" }] });
+    expect(datasetCardAction(entry)).toBe("details");
+    expect(canStartDatasetDownload({ ...completedJob(), status: "cancelled" })).toBe(true);
   });
 });

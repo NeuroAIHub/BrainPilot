@@ -133,7 +133,7 @@ export function AgentsPanel() {
   );
 }
 
-export function TracePanel() {
+export function TracePanel({ onSelectArtifact }: { onSelectArtifact?: (path: string) => void } = {}) {
   // #79: trace is now live — seeded + kept current by SessionContext via SSE
   // (CUSTOM:trace_node), so this panel reads it instead of polling.
   const { currentSession, currentTrace, refreshTrace, workActive, messages } = useSessions();
@@ -360,6 +360,7 @@ export function TracePanel() {
                 {t("trace.layout.vertical")}
               </button>
             </div>
+            <button className="trace-fit-button" type="button" disabled={visibleNodes.length === 0} onClick={() => setFitToken((value) => value + 1)}>{t("trace.fitGraph")}</button>
             <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
               <RefreshCw size={15} />
             </IconButton>
@@ -387,6 +388,7 @@ export function TracePanel() {
               <label className="trace-search">
                 <Search size={14} />
                 <input
+                  aria-label={t("trace.searchPlaceholder")}
                   placeholder={t("trace.searchPlaceholder")}
                   value={query}
                   disabled={!controlsEffective}
@@ -444,6 +446,7 @@ export function TracePanel() {
               </label>
             </div>
 
+            {query || statusFilter !== "all" || typeFilter !== "all" ? <button className="trace-fit-button" type="button" onClick={() => { setQuery(""); setStatusFilter("all"); setTypeFilter("all"); }}>{t("trace.resetFilters")}</button> : null}
             <div className="trace-layout">
               <div className="trace-map" aria-label={t("trace.aria.graph")}>
                 <TraceGraphView
@@ -501,6 +504,7 @@ export function TracePanel() {
                   nodes={allNodes}
                   graph={trace}
                   onSelectNode={setSelectedNodeId}
+                  onSelectArtifact={onSelectArtifact}
                   formatKind={formatNodeKind}
                   t={t}
                   sessionId={currentSession?.id}

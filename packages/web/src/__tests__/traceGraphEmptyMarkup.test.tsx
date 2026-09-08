@@ -63,6 +63,9 @@ describe("TraceGraphView empty markup (#317)", () => {
     expect(html).not.toContain("trace-empty");
     expect(html).not.toContain("should not appear");
     expect(html).toContain("Task A");
+    expect(html).toContain('role="button"');
+    expect(html).toContain('tabindex="0"');
+    expect(html).toContain('aria-pressed="true"');
   });
 
   it("shows the Episode name on a node card without exposing its ID", () => {

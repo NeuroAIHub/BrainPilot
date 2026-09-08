@@ -27,14 +27,14 @@ try {
 
   const dandiVersion = spawnSync("dandi", ["--version"], { encoding: "utf8" });
   if (dandiVersion.error?.code === "ENOENT") {
-    results.push("DANDI 000026: skipped metadata download (dandi CLI is not installed)");
+    results.push("DANDI 000021: skipped metadata download (dandi CLI is not installed)");
   } else {
     const dandiRoot = path.join(root, "dandi");
     await mkdir(dandiRoot, { recursive: true });
-    execFileSync("dandi", ["download", "--format", "PYOUT", "--path-type", "EXACT", "--existing", "REFRESH", "--download", "dandiset.yaml", "--output-dir", dandiRoot, "DANDI:000026"], { stdio: "ignore", timeout: 60_000 });
-    const metadata = await readFile(path.join(dandiRoot, "000026", "dandiset.yaml"), "utf8");
-    if (!metadata.includes("identifier: DANDI:000026")) throw new Error("DANDI metadata identifier did not match");
-    results.push("DANDI 000026: downloaded and validated dandiset.yaml");
+    execFileSync("dandi", ["download", "--format", "PYOUT", "--path-type", "EXACT", "--existing", "REFRESH", "--download", "dandiset.yaml", "--output-dir", dandiRoot, "DANDI:000021"], { stdio: "ignore", timeout: 60_000 });
+    const metadata = await readFile(path.join(dandiRoot, "000021", "dandiset.yaml"), "utf8");
+    if (!metadata.includes("identifier: DANDI:000021")) throw new Error("DANDI metadata identifier did not match");
+    results.push("DANDI 000021: downloaded and validated dandiset.yaml");
   }
 
   for (const result of results) console.log(`✓ ${result}`);

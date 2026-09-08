@@ -20,7 +20,9 @@ import type { MarketplaceEntry as MarketplaceSdkEntry, PluginMarketCapability, P
 import { useT } from "../../i18n/useT";
 import { api, type McpRuntimeStatus } from "../../utils/api";
 import { trapFocusKeyDown } from "../settings/settingsModalStack";
+import { useMarketplaceDialog } from "./useMarketplaceDialog";
 import { DatasetMarketplace } from "./DatasetMarketplace";
+import { updateMarketplaceLocation, useWorkspaceLocation } from "../shell/workspaceNavigation";
 
 export type MarketplaceCategory = "skills" | "knowledge" | "plugins" | "datasets";
 type MarketplaceEntry = Awaited<ReturnType<typeof api.plugins.marketplace>>[number];
@@ -134,19 +136,41 @@ function capabilityLabelKey(capability: PluginMarketCapability): string {
   return `marketplace.capability.${capability}`;
 }
 
-export function PluginMarketplace() {
+interface MarketplaceProps {
+  onOpenKnowledgeBase?: (trigger: HTMLElement) => void;
+  onOpenDataset?: (path: string) => void;
+  onUseDataset?: (path: string) => void;
+}
+
+export function PluginMarketplace({ onOpenKnowledgeBase, onOpenDataset, onUseDataset }: MarketplaceProps = {}) {
   const t = useT();
+  const { searchParams } = useWorkspaceLocation();
   const [marketplace, setMarketplace] = useState<MarketplaceEntry[]>([]);
   const [installed, setInstalled] = useState<InstalledEntry[]>([]);
   const [updates, setUpdates] = useState<PluginUpdate[]>([]);
-  const [category, setCategory] = useState<MarketplaceCategory>("plugins");
+  const categoryParam = searchParams.get("category") as MarketplaceCategory;
+  const category = CATEGORIES.includes(categoryParam) ? categoryParam : "plugins";
+  const [installationFilter, setInstallationFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState<MarketplaceSourceFilter>("all");
-  const [query, setQuery] = useState("");
+  const [queries, setQueries] = useState<Partial<Record<MarketplaceCategory, string>>>({});
+  const query = searchParams.get("q") ?? "";
+  const setQuery = (value: string) => {
+    setQueries((current) => ({ ...current, [category]: value }));
+    updateMarketplaceLocation({ q: value || null });
+  };
+  const setCategory = (next: MarketplaceCategory) => {
+    setQueries((current) => ({ ...current, [category]: query }));
+    updateMarketplaceLocation({ category: next, q: queries[next] ?? null, dataset: null, scope: null, plugin: null }, false);
+  };
   const [loading, setLoading] = useState(true);
   const [busyPluginId, setBusyPluginId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [selectedPluginId, setSelectedPluginId] = useState<string | null>(null);
-  const [datasetCount, setDatasetCount] = useState(0);
+  const selectedPluginId = searchParams.get("plugin");
+  const setSelectedPluginId = (id: string | null) => updateMarketplaceLocation({ plugin: id }, false);
+  const closePluginDetails = useCallback(() => updateMarketplaceLocation({ plugin: null }), []);
+  const detailDialogRef = useMarketplaceDialog(selectedPluginId, closePluginDetails);
+  const [datasetRefresh, setDatasetRefresh] = useState(0);
+  const [datasetCount, setDatasetCount] = useState<number | null>(null);
   const [restartPrompt, setRestartPrompt] = useState<RestartPrompt | null>(null);
   const [restarting, setRestarting] = useState(false);
   const [restartError, setRestartError] = useState<string | null>(null);
@@ -184,6 +208,12 @@ export function PluginMarketplace() {
     window.addEventListener("brainpilot:plugins-changed", refresh);
     return () => window.removeEventListener("brainpilot:plugins-changed", refresh);
   }, [load]);
+
+  useEffect(() => {
+    let disposed = false;
+    void api.datasets.catalog().then((entries) => { if (!disposed) setDatasetCount(entries.length); }).catch(() => {});
+    return () => { disposed = true; };
+  }, []);
 
   useEffect(() => {
     restartingRef.current = restarting;
@@ -232,8 +262,8 @@ export function PluginMarketplace() {
 
   const installedById = useMemo(() => new Map(installed.map((entry) => [entry.manifest.id, entry])), [installed]);
   const updatesById = useMemo(() => new Map(updates.map((entry) => [entry.pluginId, entry])), [updates]);
-  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, item === "datasets" ? datasetCount : marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [datasetCount, marketplace]);
-  const visible = useMemo(() => marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === category && matchesMarketplaceSource(entry, sourceFilter) && matchesMarketplaceQuery(entry, query)), [category, marketplace, query, sourceFilter]);
+  const counts = useMemo(() => Object.fromEntries(CATEGORIES.map((item) => [item, item === "datasets" ? (datasetCount ?? 0) : marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === item).length])) as Record<MarketplaceCategory, number>, [datasetCount, marketplace]);
+  const visible = useMemo(() => marketplace.filter((entry) => categoryForMarketplaceEntry(entry) === category && matchesMarketplaceSource(entry, sourceFilter) && matchesMarketplaceQuery(entry, query) && (installationFilter === "all" || (installationFilter === "installed" ? installedById.has(entry.manifest.id) : updatesById.has(entry.manifest.id)))), [category, marketplace, query, sourceFilter, installationFilter, installedById, updatesById]);
   const enabledCount = installed.filter((entry) => entry.enabled).length;
   const selectedEntry = marketplace.find((entry) => entry.manifest.id === selectedPluginId) ?? null;
   const selectedInstalled = selectedEntry ? installedById.get(selectedEntry.manifest.id) : undefined;
@@ -249,15 +279,6 @@ export function PluginMarketplace() {
     setRestartError(null);
     setRestartPrompt(prompt);
   };
-
-  useEffect(() => {
-    if (!selectedEntry) return;
-    const closeOnEscape = (event: KeyboardEvent) => {
-      if (event.key === "Escape") setSelectedPluginId(null);
-    };
-    window.addEventListener("keydown", closeOnEscape);
-    return () => window.removeEventListener("keydown", closeOnEscape);
-  }, [selectedEntry]);
 
   const install = async (id: string) => {
     setBusyPluginId(id);
@@ -360,39 +381,48 @@ export function PluginMarketplace() {
       <header className="plugin-market__hero">
         <div>
           <span className="plugin-market__eyebrow">{t("marketplace.eyebrow")}</span>
-          <h1 id="plugin-market-title">{t("marketplace.title")}</h1>
-          <p>{t("marketplace.subtitle")}</p>
+          <h1 id="plugin-market-title">{t(category === "datasets" ? "datasets.libraryTitle" : "marketplace.title")}</h1>
+          <p>{t(category === "datasets" ? "datasets.librarySubtitle" : "marketplace.subtitle")}</p>
         </div>
-        <button className="plugin-market__refresh" disabled={loading} onClick={() => void load()} title={t("marketplace.refresh")} type="button">
+        <button className="plugin-market__refresh" disabled={loading} onClick={() => category === "datasets" ? setDatasetRefresh((value) => value + 1) : void load()} title={t(category === "datasets" ? "datasets.refresh" : "marketplace.refresh")} type="button">
           <RefreshCw className={loading ? "is-spinning" : ""} size={16} />
-          <span>{t("marketplace.refresh")}</span>
+          <span>{t(category === "datasets" ? "datasets.refresh" : "marketplace.refresh")}</span>
         </button>
       </header>
 
-      <section className="plugin-market__summary" aria-label={t("marketplace.title")}>
-        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length + datasetCount}</strong></div>
+      {category !== "datasets" ? <section className="plugin-market__summary" aria-label={t("marketplace.title")}>
+        <div><span>{t("marketplace.summary.available")}</span><strong>{marketplace.length + (datasetCount ?? 0)}</strong></div>
         <div><span>{t("marketplace.summary.installed")}</span><strong>{installed.length}</strong></div>
         <div><span>{t("marketplace.summary.enabled")}</span><strong>{enabledCount}</strong></div>
-      </section>
+      </section> : null}
 
       <section className="plugin-market__catalog">
         <div className="plugin-market__toolbar">
           <div className="plugin-market__categories" role="tablist" aria-label={t("marketplace.title")}>
             {CATEGORIES.map((item) => (
-              <button aria-selected={category === item} className={category === item ? "is-active" : ""} key={item} onClick={() => setCategory(item)} role="tab" type="button">
-                <span>{t(`marketplace.category.${item}`)}</span><small>{counts[item]}</small>
+              <button aria-selected={category === item} className={category === item ? "is-active" : ""} key={item} onClick={() => setCategory(item)} tabIndex={category === item ? 0 : -1} onKeyDown={(event) => {
+                const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+                if (!offset && event.key !== "Home" && event.key !== "End") return;
+                event.preventDefault();
+                const index = event.key === "Home" ? 0 : event.key === "End" ? CATEGORIES.length - 1 : (CATEGORIES.indexOf(item) + offset + CATEGORIES.length) % CATEGORIES.length;
+                setCategory(CATEGORIES[index]!);
+                event.currentTarget.parentElement?.querySelectorAll<HTMLButtonElement>("[role=tab]")[index]?.focus();
+              }} role="tab" type="button">
+                <span>{t(`marketplace.category.${item}`)}</span><small>{item === "datasets" && datasetCount === null ? "…" : counts[item]}</small>
               </button>
             ))}
           </div>
           <label className="plugin-market__search">
             <Search size={16} />
-            <input aria-label={t("marketplace.search")} onChange={(event) => setQuery(event.target.value)} placeholder={t("marketplace.search")} type="search" value={query} />
+            <input aria-label={t(category === "datasets" ? "datasets.search" : "marketplace.search")} onChange={(event) => setQuery(event.target.value)} placeholder={t(category === "datasets" ? "datasets.search" : "marketplace.search")} type="search" value={query} />
           </label>
         </div>
-        {category === "datasets" ? <DatasetMarketplace onCount={setDatasetCount} query={query} /> : <>
+        {category === "datasets" ? <DatasetMarketplace onCount={setDatasetCount} query={query} onQueryChange={setQuery} refreshSignal={datasetRefresh} onOpenDataset={onOpenDataset} onUseDataset={onUseDataset} /> : <>
+        {category === "knowledge" && onOpenKnowledgeBase ? <div className="plugin-market__notice"><span>{t("marketplace.myKnowledgeHint")}</span><button className="plugin-card__button" type="button" onClick={(event) => onOpenKnowledgeBase(event.currentTarget)}>{t("marketplace.myKnowledge")}</button></div> : null}
+        <div className="plugin-installation-filter"><label>{t("marketplace.installationFilter")}<select value={installationFilter} onChange={(event) => setInstallationFilter(event.target.value)}><option value="all">{t("marketplace.filterAll")}</option><option value="installed">{t("marketplace.filterInstalled")}</option><option value="updates">{t("marketplace.filterUpdates")}</option></select></label><span role="status">{visible.length} {t("marketplace.results")}</span></div>
         <div className="plugin-market__source-filters" aria-label={t("marketplace.sourceFilter.label")}>
           {SOURCE_FILTERS.map((item) => (
-            <button className={sourceFilter === item ? "is-active" : ""} key={item} onClick={() => setSourceFilter(item)} type="button">
+            <button aria-pressed={sourceFilter === item} className={sourceFilter === item ? "is-active" : ""} key={item} onClick={() => setSourceFilter(item)} type="button">
               {t(`marketplace.sourceFilter.${item}`)}
             </button>
           ))}
@@ -400,7 +430,7 @@ export function PluginMarketplace() {
 
         {error ? <div className="plugin-market__notice plugin-market__notice--error"><span>{error}</span><button onClick={() => void load()} type="button">{t("marketplace.retry")}</button></div> : null}
         {loading && marketplace.length === 0 ? <div className="plugin-market__empty"><Loader2 className="is-spinning" size={24} /><strong>{t("marketplace.loading")}</strong></div> : null}
-        {!loading && visible.length === 0 ? <div className="plugin-market__empty"><Package size={24} /><strong>{t("marketplace.empty")}</strong><p>{t("marketplace.emptyHint")}</p></div> : null}
+        {!loading && visible.length === 0 ? <div className="plugin-market__empty"><Package size={24} /><strong>{t("marketplace.empty")}</strong><p>{t(category === "knowledge" && !query && sourceFilter === "all" && installationFilter === "all" ? "marketplace.knowledgeEmpty" : "marketplace.emptyHint")}</p>{query || sourceFilter !== "all" || installationFilter !== "all" ? <button className="plugin-card__button" type="button" onClick={() => { setQuery(""); setSourceFilter("all"); setInstallationFilter("all"); }}>{t("datasets.resetFilters")}</button> : null}</div> : null}
 
         <div className="plugin-market__grid">
           {visible.map((entry) => {
@@ -467,7 +497,7 @@ export function PluginMarketplace() {
         const mcpRuntime = selectedInstalled?.enabled ? mcpRuntimeSummaryForPlugin(mcpStatus, selectedEntry.manifest.id) : null;
         return (
           <div className="plugin-detail-layer" onMouseDown={(event) => { if (event.currentTarget === event.target) setSelectedPluginId(null); }}>
-            <section aria-labelledby="plugin-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
+            <section ref={detailDialogRef} tabIndex={-1} aria-labelledby="plugin-detail-title" aria-modal="true" className="plugin-detail" role="dialog">
               <header className="plugin-detail__header">
                 <div className={`plugin-card__icon plugin-card__icon--${category}`}><Icon size={24} /></div>
                 <div><span>{t(sourceLabelKey(sourceFormat))}</span><h2 id="plugin-detail-title">{selectedEntry.manifest.displayName}</h2></div>

@@ -237,6 +237,7 @@ export function TraceGraphView({
           }, 0);
         }}
         onWheel={(event) => {
+          if (!event.ctrlKey && !event.metaKey) return;
           event.preventDefault();
           if (event.deltaY === 0) return;
           const step = event.deltaY > 0 ? -0.1 : 0.1;
@@ -247,7 +248,7 @@ export function TraceGraphView({
           height={adjustedLayout.height * zoom}
           viewBox={`0 0 ${adjustedLayout.width} ${adjustedLayout.height}`}
           width={adjustedLayout.width * zoom}
-          role="img"
+          role="group"
         >
           <defs>
             <marker id="trace-arrow" markerHeight="8" markerWidth="8" orient="auto" refX="7" refY="4">
@@ -313,6 +314,16 @@ export function TraceGraphView({
               <g
                 className={`trace-map-node trace-map-node--${kind} trace-map-node--${normalizeStatus(node.status)} ${node.revoked ? "is-revoked" : ""} ${selectedNodeId === node.id ? "is-selected" : ""} ${draggingNodeRef.current?.nodeId === node.id ? "is-dragging" : ""}`}
                 key={node.id}
+                role="button"
+                tabIndex={0}
+                aria-label={episodeTitle ? `${nodeTitle} — ${episodeTitle}` : nodeTitle}
+                aria-pressed={selectedNodeId === node.id}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault();
+                    onSelectNode(node.id);
+                  }
+                }}
                 onMouseDown={(e) => {
                   e.stopPropagation();
                   const offset = nodeOffsets.get(node.id) || { dx: 0, dy: 0 };
