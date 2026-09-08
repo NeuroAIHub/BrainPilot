@@ -269,6 +269,13 @@ export async function resolveSessionModel(
             {
               id: cfg.modelId,
               reasoning: cfg.reasoningEnabled ?? true,
+              // #549: reasoning support does not imply developer-role support.
+              // Custom Chat Completions gateways default to system messages;
+              // leave the native OpenAI endpoint and other APIs to the SDK.
+              ...(api === "openai-completions" &&
+                new URL(cfg.baseUrl).origin !== "https://api.openai.com"
+                ? { compat: { supportsDeveloperRole: false } }
+                : {}),
               input: ["text"],
               contextWindow:
                 cfg.contextWindow ?? intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
