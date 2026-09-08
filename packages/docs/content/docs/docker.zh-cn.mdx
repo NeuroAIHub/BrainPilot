@@ -109,7 +109,7 @@ docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d --no-build
 验证 PyTorch 是否能识别 GPU：
 
 ```bash
-docker run --rm --gpus all --entrypoint python \
+docker run --rm --gpus all --entrypoint python3 \
   brainpilot-registry.cn-wulanchabu.cr.aliyuncs.com/brainpilot/sandbox-gpu:0.2.2 \
   -c 'import torch; print(torch.cuda.is_available(), torch.cuda.get_device_name(0))'
 ```

@@ -4,6 +4,10 @@ node_modules
 **/dist
 *.tsbuildinfo
 **/*.tsbuildinfo
+# Fumadocs/Next caches contain host-specific paths; regenerate them in the image.
+packages/docs/.source
+packages/docs/.next
+packages/docs/out
 .git
 .gitignore
 .worktrees
