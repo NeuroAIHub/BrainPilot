@@ -48,7 +48,7 @@
     "@earendil-works/pi-coding-agent": "0.84.2",
     "@hono/node-server": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
-    "hono": "^4.13.0",
+    "hono": "^4.13.7",
     "yaml": "^2.9.0",
     "zod": "^3.24.0"
   }
