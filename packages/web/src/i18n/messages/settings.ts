@@ -9,6 +9,14 @@ export default defineMessages(
     "settings.aria.sections": "设置分区",
     "settings.loading": "正在加载设置…",
     "settings.loadFailed": "加载设置失败",
+    // Scoped section load failures (#556 follow-up). Each Settings section
+    // loads on its own, so a section that fails says so in place — with a
+    // retry — instead of replacing the whole dialog with a raw "404 Not Found".
+    "settings.section.retry": "重试",
+    "settings.providers.loadFailed": "服务商列表暂时加载不出来。",
+    "settings.mcp.loadFailed": "MCP 服务器列表暂时加载不出来。",
+    "settings.plugins.loadFailed": "已安装插件列表暂时加载不出来。",
+    "settings.plugins.toggleFailed": "切换插件启用状态失败",
     "settings.tab.account": "账户",
     "settings.tab.providers": "服务商",
     "settings.tab.mcp": "工具",
@@ -238,6 +246,10 @@ export default defineMessages(
     "settings.providers.added": "服务商已添加",
     "settings.providers.activeSwitched": "已切换活动服务商为 “{name}”。新会话将使用该服务商。",
     "settings.providers.saveFailed": "保存服务商失败",
+    // Scoped action failures — these used to reject unhandled, leaving the row
+    // unchanged with no explanation (a hosted backend 403s on shared profiles).
+    "settings.providers.activateFailed": "切换活动服务商失败",
+    "settings.providers.removeFailed": "删除服务商失败",
     "settings.providers.modelRequired": "至少需要配置一个模型",
     "settings.providers.empty": "还没有服务商",
     "settings.providers.emptyHint": "添加一个服务商，配置 API 接入与可用模型后即可开始新会话。",
@@ -344,6 +356,11 @@ export default defineMessages(
     "settings.aria.sections": "Settings sections",
     "settings.loading": "Loading settings...",
     "settings.loadFailed": "Failed to load settings",
+    "settings.section.retry": "Retry",
+    "settings.providers.loadFailed": "Providers could not be loaded right now.",
+    "settings.mcp.loadFailed": "MCP servers could not be loaded right now.",
+    "settings.plugins.loadFailed": "Installed plugins could not be loaded right now.",
+    "settings.plugins.toggleFailed": "Failed to change the plugin's enabled state",
     "settings.tab.account": "Account",
     "settings.tab.providers": "Providers",
     "settings.tab.mcp": "Tools",
@@ -562,6 +579,8 @@ export default defineMessages(
     "settings.providers.added": "Provider added",
     "settings.providers.activeSwitched": "Active provider switched to \"{name}\". New sessions will use this provider.",
     "settings.providers.saveFailed": "Failed to save provider",
+    "settings.providers.activateFailed": "Failed to switch the active provider",
+    "settings.providers.removeFailed": "Failed to remove the provider",
     "settings.providers.modelRequired": "At least one model is required",
     "settings.providers.empty": "No providers yet",
     "settings.providers.emptyHint": "Add a provider with its API connection and models to start new sessions.",
