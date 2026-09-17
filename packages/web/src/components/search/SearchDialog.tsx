@@ -3,6 +3,7 @@ import { MessageCircle, X } from "lucide-react";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
 import { IconButton } from "../primitives/IconButton";
+import { useRetryFocus } from "../primitives/useRetryFocus";
 import { listFocusable, trapFocusKeyDown } from "../settings/settingsModalStack";
 import {
   clampActiveIndex,
@@ -51,6 +52,11 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
   const isListPending = sessionsListStatus === "loading" || sessionsListStatus === "idle";
   const hasListError = sessionsListStatus === "error" || !!sessionsListError;
   const listUnavailable = sessions.length === 0 && (isListPending || hasListError);
+
+  // A retry that succeeds replaces the error notice with results (or the empty
+  // state), taking the focused Retry button with it; the hook then hands focus
+  // back to the search input rather than letting it fall to <body>.
+  const rememberRetryFocus = useRetryFocus(isOpen, { status: sessionsListStatus });
 
   const openSession = useCallback((sessionId: string) => navigateToSearchResult(sessionId, {
     confirmNavigation,
@@ -189,7 +195,11 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
                 aria-busy={sessionsListStatus === "loading"}
                 aria-disabled={sessionsListStatus === "loading"}
                 data-testid="search-list-retry"
-                onClick={() => { if (sessionsListStatus !== "loading") void refreshSessions(); }}
+                onClick={(event) => {
+                  if (sessionsListStatus === "loading") return;
+                  rememberRetryFocus(event.currentTarget, inputRef.current);
+                  void refreshSessions();
+                }}
               >
                 {t(sessionsListStatus === "loading" ? "search.retrying" : "search.retry")}
               </button>

@@ -37,7 +37,10 @@ describe("SearchDialog focus lifecycle", () => {
     act(() => { vi.runAllTimers(); });
     expect(inputFocus).toHaveBeenCalledTimes(1);
     const retry = () => renderer.root.findByProps({ "data-testid": "search-list-retry" });
-    act(() => retry().props.onClick());
+    // The handler reads `currentTarget` to remember where focus should return,
+    // so clicks carry a minimal event here (nothing is focused on it).
+    const clickRetry = () => act(() => retry().props.onClick({ currentTarget: {} }));
+    clickRetry();
     expect(context.refreshSessions).toHaveBeenCalledTimes(1);
     context.sessionsListStatus = "loading";
     act(() => renderer.update(view()));
@@ -46,7 +49,7 @@ describe("SearchDialog focus lifecycle", () => {
     expect(returnFocus).not.toHaveBeenCalled();
     expect(retry().props["aria-disabled"]).toBe(true);
     expect(retry().props.disabled).toBeUndefined(); // Busy control remains focusable.
-    act(() => retry().props.onClick());
+    clickRetry();
     expect(context.refreshSessions).toHaveBeenCalledTimes(1);
     context.sessionsListStatus = "error";
     act(() => renderer.update(view()));

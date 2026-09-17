@@ -484,8 +484,9 @@ button {
 }
 
 /* The conversation title is the row's whole point: give it up to two lines
-   before ellipsizing, instead of one line squeezed next to a date column. */
-.conversation-row__title {
+   before ellipsizing, instead of one line squeezed next to a date column.
+   Scoped to the row so it outranks the `.conversation-row span` nowrap above. */
+.conversation-row .conversation-row__title {
   display: -webkit-box;
   overflow: hidden;
   -webkit-box-orient: vertical;
@@ -11980,8 +11981,11 @@ button {
 .composer-technical-error > details { margin-top: 4px; }
 .composer-technical-error pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
 
-.trace-controls { align-items: flex-start; }
+/* The trace header now renders a search field plus a single details disclosure,
+   so the old third column left the filters stacked in a narrow strip. */
+.trace-controls { grid-template-columns: minmax(0, 1fr) auto; align-items: flex-start; }
 .trace-filter-options { margin: 0; padding: 5px 0; border: 0; min-width: 130px; }
+.trace-filter-options[open] { grid-column: 1 / -1; }
 .trace-filter-options .details-section__body { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 0; }
 .trace-filter-options .trace-segmented { align-self: center; }
 .composer-technical-error summary { cursor: pointer; }

@@ -16,6 +16,7 @@ import { runtimeConfig } from "../../config";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { useRetryFocus, type RememberRetryFocus } from "../primitives/useRetryFocus";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 import { BuiltinToolsSection } from "./BuiltinToolsSection";
 import { McpByokCard } from "./McpByokCard";
@@ -185,6 +186,13 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   const providers = resourceItems(providerResource);
   const mcpServers = resourceItems(mcpResource);
   const installedPlugins = resourceItems(pluginResource);
+
+  // A successful retry unmounts the failure notice the Retry button lives in;
+  // each resource keeps its own record so focus lands on that section's heading
+  // instead of falling to <body>.
+  const rememberProviderRetryFocus = useRetryFocus(isOpen, providerResource);
+  const rememberMcpRetryFocus = useRetryFocus(isOpen, mcpResource);
+  const rememberPluginRetryFocus = useRetryFocus(isOpen, pluginResource);
 
   // #328 — modal a11y: focus return, traps, nested Escape stack.
   const settingsRootRef = useRef<HTMLDivElement | null>(null);
@@ -530,11 +538,16 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
    * that failed shows friendly localized copy plus a retry (the raw transport
    * message — e.g. "404 Not Found" — is kept as a tooltip rather than shown as
    * the dialog's state). Any data already loaded stays rendered underneath.
+   *
+   * The retry removes itself when it succeeds, so `rememberFocus` records the
+   * section heading as the landing spot; `useRetryFocus` moves focus there
+   * after React has committed the new DOM (never at click time).
    */
   const renderResourceState = <T,>(
     resource: SettingsResource<T[]>,
     failedCopyKey: string,
     retry: () => Promise<void>,
+    rememberFocus: RememberRetryFocus,
   ) => {
     const pending = resource.status === "loading" || resource.status === "idle";
     if (!pending && resource.status !== "error") return null;
@@ -544,13 +557,10 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
         <button className="settings-button settings-button--ghost" aria-disabled={pending} aria-busy={pending} type="button" onClick={(event) => {
           if (pending) return;
           const trigger = event.currentTarget;
-          const section = trigger.closest("section");
-          void retry().finally(() => {
-            if (!trigger.isConnected && section?.isConnected && document.activeElement === document.body) {
-              const heading = section.querySelector<HTMLElement>("h3");
-              if (heading) { heading.tabIndex = -1; heading.focus(); }
-            }
-          });
+          const heading = trigger.closest("section")?.querySelector<HTMLElement>("h3") ?? null;
+          if (heading) heading.tabIndex = -1;
+          rememberFocus(trigger, heading);
+          void retry();
         }}>{t("settings.section.retry")}</button>
       </p>
     );
@@ -648,7 +658,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                   </div>
                 </div>
 
-                {renderResourceState(providerResource, "settings.providers.loadFailed", () => reloadProviders())}
+                {renderResourceState(providerResource, "settings.providers.loadFailed", () => reloadProviders(), rememberProviderRetryFocus)}
 
                 {(() => {
                   // `isShared` is the backend's authority (hosted preset ids are
@@ -772,7 +782,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                     {t("settings.mcp.addServer")}
                   </button>
                 </div>
-                {renderResourceState(mcpResource, "settings.mcp.loadFailed", () => reloadMcpServers())}
+                {renderResourceState(mcpResource, "settings.mcp.loadFailed", () => reloadMcpServers(), rememberMcpRetryFocus)}
                 {isConfirmedEmpty(mcpResource) ? (
                   <div className="settings-empty">
                     <Plug size={22} />
@@ -832,7 +842,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                 <div className="settings-section__header">
                   <div><h3>{t("settings.plugins.title")}</h3><p>{t("settings.plugins.description")}</p></div>
                 </div>
-                {renderResourceState(pluginResource, "settings.plugins.loadFailed", () => reloadPlugins())}
+                {renderResourceState(pluginResource, "settings.plugins.loadFailed", () => reloadPlugins(), rememberPluginRetryFocus)}
                 {isConfirmedEmpty(pluginResource) ? (
                   <div className="settings-empty"><Package size={22} /><strong>{t("settings.plugins.empty")}</strong><p>{t("settings.plugins.emptyHint")}</p></div>
                 ) : installedPlugins.length > 0 ? (
