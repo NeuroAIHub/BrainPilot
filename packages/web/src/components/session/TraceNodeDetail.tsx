@@ -1,3 +1,4 @@
+import { DetailsSection } from "../primitives/DetailsSection";
 import { AlertTriangle, ArrowRight, Box, Clock3, FileText, GitBranch, Timer, Wrench } from "lucide-react";
 import { TraceDependency, TraceGraph, TraceNode } from "../../contracts/backend";
 import { TranslateVars } from "../../i18n/translate";
@@ -120,7 +121,7 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
       <div className="trace-detail__badges">
         <span title={kind}>{kindLabel}</span>
         {node.revoked ? <span className="trace-detail__badge--revoked">{t("trace.node.revoked")}</span> : null}
-        <span>{t("trace.node.confidence", { level: confidenceLabel(node.confidence) })}</span>
+        {node.confidence ? <span>{t("trace.node.confidence", { level: confidenceLabel(node.confidence) })}</span> : null}
         {node.reviewConclusion && node.reviewConclusion !== "unreviewed" ? <span>{reviewLabel(node.reviewConclusion)}</span> : null}
         {node.agent ? <span>{node.agent === "host" ? t("trace.origin.system") : node.agent}</span> : null}
         {node.metadata?.auto ? (
@@ -130,94 +131,6 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
         ) : null}
       </div>
       <p>{nodeSummary}</p>
-      {confidenceReason ? (
-        <section className="trace-detail__section">
-          <h4><AlertTriangle size={13} /> {t("trace.node.confidenceTitle")}</h4>
-          <p>{confidenceReason}</p>
-        </section>
-      ) : null}
-      {reviewReason ? (
-        <section className="trace-detail__section">
-          <h4><AlertTriangle size={13} /> {t("trace.node.reviewTitle")}</h4>
-          <p>{reviewReason}</p>
-        </section>
-      ) : null}
-      {node.records?.length ? (
-        <section className="trace-detail__section">
-          <h4><FileText size={13} /> {t("trace.node.sourceRecords")}</h4>
-          <div className="trace-relation-list">
-            {node.records.map((record, index) => (
-              <div key={`${record.createdAt}-${index}`}>
-                <strong>{record.sourceAgent}</strong>
-                <small>{record.description}</small>
-                <small>{formatTime(record.createdAt)}</small>
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {node.reason ? (
-        <section className="trace-detail__section">
-          <h4><ArrowRight size={13} /> {t("trace.node.reasonTitle")}</h4>
-          <p>{node.reason}</p>
-        </section>
-      ) : null}
-      {node.context ? (
-        <section className="trace-detail__section">
-          <h4><FileText size={13} /> {t("trace.node.contextTitle")}</h4>
-          <p>{node.context}</p>
-        </section>
-      ) : null}
-      {metrics.length > 0 ? (
-        <div className="trace-detail__metrics">
-          {metrics.map((metric) => (
-            <span key={metric.key}>{metric.icon} {metric.label}</span>
-          ))}
-        </div>
-      ) : null}
-      {officialDependencies.length > 0 ? (
-        <section className="trace-detail__section">
-          <h4><GitBranch size={13} /> {t("trace.node.dependencies")}</h4>
-          <div className="trace-relation-list">
-            {officialDependencies.map((dependency) => "prerequisiteId" in dependency
-              ? renderDependency(dependency)
-              : <button key={dependency.id} onClick={() => onSelectNode(dependency.id)} title={dependency.id} type="button"><strong>{parentLabel(dependency.id)}</strong><span>{relationLabel(dependency.relation)}</span>{dependency.explanation ? <small>{dependency.explanation}</small> : null}</button>)}
-          </div>
-        </section>
-      ) : null}
-      {candidateDependencies.length > 0 ? (
-        <section className="trace-detail__section">
-          <h4><GitBranch size={13} /> {t("trace.node.candidateDependencies")}</h4>
-          <div className="trace-relation-list">
-            {candidateDependencies.map((dependency) => (
-              <div key={dependency.id} className="trace-dependency-candidate">
-                {renderDependency(dependency)}
-                <small>{t("trace.node.candidateMeta", { origin: originLabel(dependency.origin), count: dependency.evidence.length })}</small>
-                {onDependencyDecision ? (
-                  <span className="trace-dependency-candidate__actions">
-                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "accept")}>{t("trace.node.acceptDependency")}</button>
-                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "reject")}>{t("trace.node.rejectDependency")}</button>
-                  </span>
-                ) : null}
-              </div>
-            ))}
-          </div>
-        </section>
-      ) : null}
-      {episode ? (
-        <section className="trace-detail__section">
-          <h4><GitBranch size={13} /> {t("trace.node.episodeTitle")}</h4>
-          <p>{episode.title}{node.episodeTags?.length ? ` · ${t("trace.node.episodeTags", { tags: node.episodeTags.join(", ") })}` : ""}</p>
-        </section>
-      ) : null}
-      {node.toolCalls.length > 0 ? (
-        <section className="trace-detail__section">
-          <h4><Wrench size={13} /> {t("trace.node.toolCalls")}</h4>
-          <div className="trace-chip-list">
-            {node.toolCalls.map((tool) => <span key={tool} title={tool}>{formatToolName(tool)}</span>)}
-          </div>
-        </section>
-      ) : null}
       {node.errorMessage ? (
         <section className="trace-detail__section trace-detail__section--error">
           <h4><AlertTriangle size={13} /> {t("trace.node.error")}</h4>
@@ -257,8 +170,111 @@ export function TraceNodeDetail({ node, nodes, graph, onSelectNode, onSelectArti
           </div>
         </section>
       ) : null}
-      <TraceCheckpointDetail node={node} sessionId={sessionId} restoreDisabled={restoreDisabled} onRestored={onRestored} t={t} />
-      <TraceChangeHistory sessionId={sessionId} nodeId={node.id} />
+      {candidateDependencies.length > 0 ? (
+        <section className="trace-detail__section">
+          <h4><GitBranch size={13} /> {t("trace.node.candidateDependencies")}</h4>
+          <div className="trace-relation-list">
+            {candidateDependencies.map((dependency) => (
+              <div key={dependency.id} className="trace-dependency-candidate">
+                {renderDependency(dependency)}
+                <small>{t("trace.node.candidateMeta", { origin: originLabel(dependency.origin), count: dependency.evidence.length })}</small>
+                {onDependencyDecision ? (
+                  <span className="trace-dependency-candidate__actions">
+                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "accept")}>{t("trace.node.acceptDependency")}</button>
+                    <button type="button" onClick={() => void onDependencyDecision(dependency.id, "reject")}>{t("trace.node.rejectDependency")}</button>
+                  </span>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
+      {reviewReason ? (
+        <section className="trace-detail__section">
+          <h4><AlertTriangle size={13} /> {t("trace.node.reviewTitle")}</h4>
+          <p>{reviewReason}</p>
+        </section>
+      ) : null}
+
+      {confidenceReason || node.records?.length || node.reason || node.context ? (
+      <DetailsSection key={`${node.id}:reasoning`} summary={t("trace.details.reasoning")}>
+        {confidenceReason ? (
+          <section className="trace-detail__section">
+            <h4><AlertTriangle size={13} /> {t("trace.node.confidenceTitle")}</h4>
+            <p>{confidenceReason}</p>
+          </section>
+        ) : null}
+        {node.records?.length ? (
+          <section className="trace-detail__section">
+            <h4><FileText size={13} /> {t("trace.node.sourceRecords")}</h4>
+            <div className="trace-relation-list">
+              {node.records.map((record, index) => (
+                <div key={`${record.createdAt}-${index}`}>
+                  <strong>{record.sourceAgent}</strong>
+                  <small>{record.description}</small>
+                  <small>{formatTime(record.createdAt)}</small>
+                </div>
+              ))}
+            </div>
+          </section>
+        ) : null}
+        {node.reason ? (
+          <section className="trace-detail__section">
+            <h4><ArrowRight size={13} /> {t("trace.node.reasonTitle")}</h4>
+            <p>{node.reason}</p>
+          </section>
+        ) : null}
+        {node.context ? (
+          <section className="trace-detail__section">
+            <h4><FileText size={13} /> {t("trace.node.contextTitle")}</h4>
+            <p>{node.context}</p>
+          </section>
+        ) : null}
+
+      </DetailsSection>
+      ) : null}
+      {metrics.length > 0 || officialDependencies.length > 0 || episode || node.toolCalls.length > 0 ? (
+      <DetailsSection key={`${node.id}:execution`} summary={t("trace.details.execution")}>
+        {metrics.length > 0 ? (
+          <div className="trace-detail__metrics">
+            {metrics.map((metric) => (
+              <span key={metric.key}>{metric.icon} {metric.label}</span>
+            ))}
+          </div>
+        ) : null}
+        {officialDependencies.length > 0 ? (
+          <section className="trace-detail__section">
+            <h4><GitBranch size={13} /> {t("trace.node.dependencies")}</h4>
+            <div className="trace-relation-list">
+              {officialDependencies.map((dependency) => "prerequisiteId" in dependency
+                ? renderDependency(dependency)
+                : <button key={dependency.id} onClick={() => onSelectNode(dependency.id)} title={dependency.id} type="button"><strong>{parentLabel(dependency.id)}</strong><span>{relationLabel(dependency.relation)}</span>{dependency.explanation ? <small>{dependency.explanation}</small> : null}</button>)}
+            </div>
+          </section>
+        ) : null}
+        {episode ? (
+          <section className="trace-detail__section">
+            <h4><GitBranch size={13} /> {t("trace.node.episodeTitle")}</h4>
+            <p>{episode.title}{node.episodeTags?.length ? ` · ${t("trace.node.episodeTags", { tags: node.episodeTags.join(", ") })}` : ""}</p>
+          </section>
+        ) : null}
+        {node.toolCalls.length > 0 ? (
+          <section className="trace-detail__section">
+            <h4><Wrench size={13} /> {t("trace.node.toolCalls")}</h4>
+            <div className="trace-chip-list">
+              {node.toolCalls.map((tool) => <span key={tool} title={tool}>{formatToolName(tool)}</span>)}
+            </div>
+          </section>
+        ) : null}
+
+      </DetailsSection>
+      ) : null}
+      {sessionId || node.checkpoints?.length ? (
+      <DetailsSection key={`${node.id}:recovery`} summary={t("trace.details.recovery")}>
+        <TraceCheckpointDetail node={node} sessionId={sessionId} restoreDisabled={restoreDisabled} onRestored={onRestored} t={t} />
+        <TraceChangeHistory sessionId={sessionId} nodeId={node.id} />
+      </DetailsSection>
+      ) : null}
       <section className="trace-detail__section">
         <h4><Clock3 size={13} /> {t("trace.node.timeline")}</h4>
         <dl>

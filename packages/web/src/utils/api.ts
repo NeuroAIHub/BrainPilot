@@ -733,9 +733,11 @@ export const api = {
         return mockBackend.listSessions();
       }
       // Runtime returns the protocol envelope `{ sessions: [...] }` (see
-      // ListSessionsResponseSchema). Unwrap it; tolerate a bare array (legacy /
-      // mock) and fall back to [] so an unexpected shape never throws
-      // `.map is not a function` into SessionContext's error banner.
+      // ListSessionsResponseSchema). Unwrap it and tolerate a bare array
+      // (legacy / mock). A 200 whose body is neither shape is a real failure:
+      // returning [] here used to render "No conversations yet" over a broken
+      // endpoint, so reject instead and let the caller show a load error with
+      // Retry (cached rows stay on screen).
       const raw = await handleJson<{ sessions?: unknown[] } | unknown[]>(
         await apiFetch(`${API_BASE}/sessions`, { headers: authHeaders() }),
       );
@@ -743,7 +745,12 @@ export const api = {
         ? raw
         : Array.isArray((raw as { sessions?: unknown[] })?.sessions)
           ? (raw as { sessions: unknown[] }).sessions
-          : [];
+          : null;
+      if (!list) {
+        throw new Error(
+          "The server returned an unexpected session list payload (expected an array or { sessions: [...] }).",
+        );
+      }
       return list.map((item) => normalizeSession(item as Parameters<typeof normalizeSession>[0]));
     },
 
@@ -1042,9 +1049,10 @@ export const api = {
      * endpoint walks the on-disk log and returns the tail when long. Pass
      * `limit: 0` to request the full log for lossless rehydrate.
      *
-     * Tolerates any non-200 / non-JSON response by returning an empty
-     * envelope, so callers can fall through to whatever live data the SSE
-     * stream eventually delivers.
+     * A 404 (no transcript on disk yet) is the only "genuinely empty" case;
+     * every other failure — non-OK status, unparseable body, missing `events`
+     * array — rejects so the caller can show a scoped load error instead of a
+     * blank conversation. Unknown event types pass through untouched.
      */
     async getHistory(
       sessionId: string,
@@ -1069,10 +1077,18 @@ export const api = {
       const raw = (await res.json().catch(() => null)) as
         | { events?: unknown[]; total?: number; truncated?: boolean }
         | null;
+      // A readable 200 that isn't `{ events: [...] }` is a broken response, not
+      // an empty transcript — silently returning [] left the conversation blank
+      // with no way to tell the difference (#223).
+      if (!raw || typeof raw !== "object" || !Array.isArray(raw.events)) {
+        throw new Error(
+          "The server returned an unexpected history payload (expected { events: [...] }).",
+        );
+      }
       return {
-        events: Array.isArray(raw?.events) ? (raw!.events as RawAgUiEvent[]) : [],
-        total: typeof raw?.total === "number" ? raw!.total : 0,
-        truncated: Boolean(raw?.truncated),
+        events: raw.events as RawAgUiEvent[],
+        total: typeof raw.total === "number" ? raw.total : 0,
+        truncated: Boolean(raw.truncated),
       };
     },
 

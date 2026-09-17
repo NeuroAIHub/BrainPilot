@@ -14,7 +14,7 @@ import {
   shouldDismissMcpRestartPrompt,
   sourceFormatForMarketplaceEntry,
 } from "../components/plugins/PluginMarketplace";
-import { pluginMarketplaceSurface } from "../components/plugins/pluginMarketplaceAvailability";
+import { pluginMarketplaceSurface, showsResourcesNavItem } from "../components/plugins/pluginMarketplaceAvailability";
 
 const entry = {
   manifest: {
@@ -29,9 +29,17 @@ const entry = {
 } as Parameters<typeof matchesMarketplaceQuery>[0];
 
 describe("plugin marketplace catalogue model", () => {
-  it("keeps the catalogue local and shows an unavailable state in Cloud", () => {
+  it("follows the plugin capability, not local vs. hosted, for the catalogue", () => {
+    // A hosted deployment with the capability enabled keeps the real catalogue;
+    // a deployment with it disabled gets the unavailable surface even locally.
     expect(pluginMarketplaceSurface(true)).toBe("marketplace");
-    expect(pluginMarketplaceSurface(false)).toBe("cloud-unavailable");
+    expect(pluginMarketplaceSurface(false)).toBe("unavailable");
+    expect(showsResourcesNavItem(true)).toBe(true);
+    expect(showsResourcesNavItem(false)).toBe(false);
+    // The flag is opt-out in config.ts (`!== "0"`), so only an explicit false
+    // withdraws the surface; a config that never declares it keeps it.
+    expect(pluginMarketplaceSurface(undefined)).toBe("marketplace");
+    expect(showsResourcesNavItem(undefined)).toBe(true);
   });
 
   it("maps plugin contribution kinds into their marketplace panels", () => {

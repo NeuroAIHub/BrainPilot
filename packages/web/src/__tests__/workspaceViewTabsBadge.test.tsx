@@ -62,3 +62,28 @@ describe("WorkspaceViewTabs — hidden-errors badge (issue #278)", () => {
     expect(html).toContain(TRACE_BADGE);
   });
 });
+
+describe("WorkspaceViewTabs — visible desktop labels", () => {
+  // The desktop tabs were icon-only, with their names hidden in `sr-only`
+  // spans: three abstract glyphs with nothing to read. The short labels are now
+  // rendered next to the icons, and the badges/aria wiring must be unaffected.
+  it("shows a readable label beside each icon", () => {
+    const html = render({ currentView: "chat", hiddenErrorsUnread: false, traceUnread: false });
+    expect(html).toContain('class="workspace-view-tab__label">shell.view.chat<');
+    expect(html).toContain('class="workspace-view-tab__label">shell.view.agents<');
+    expect(html).toContain('class="workspace-view-tab__label">shell.view.trace<');
+  });
+
+  it("no longer hides the tab names from sighted users", () => {
+    const html = render({ currentView: "chat", hiddenErrorsUnread: false, traceUnread: false });
+    expect(html).not.toContain('class="sr-only">shell.view.chat<');
+  });
+
+  it("keeps the tablist semantics and badges alongside the labels", () => {
+    const html = render({ currentView: "agents", hiddenErrorsUnread: false, traceUnread: true });
+    expect(html).toContain('role="tab"');
+    expect(html).toContain('aria-selected="true"');
+    expect(html).toContain(TRACE_BADGE);
+    expect(html).toContain('class="workspace-view-tab__label">shell.view.agents<');
+  });
+});

@@ -1,3 +1,4 @@
+import { DetailsSection } from "../primitives/DetailsSection";
 /* --------------------------------------------------------------------------
  * GlobalOverview — the Detail tab's "nothing selected" state. Replaces the old
  * EmptyDetail with an at-a-glance session summary so the panel is informative
@@ -41,6 +42,17 @@ export function GlobalOverview({
     return e.lastTimestamp > latest ? e.lastTimestamp : latest;
   }, "");
 
+  const waiting = messages.some((message) => message.kind === "ask_user" && message.askUser
+    && (message.askUser.status ?? (message.askUser.answer === undefined ? "pending" : "answered")) === "pending");
+  const failedCount = agents.filter((agent) => agent.status === "error" || agent.status === "failed").length;
+  const hasActivity = totalMessages > 0 || messages.length > 0;
+  const summary = waiting
+    ? t("overview.waitingSummary")
+    : failedCount > 0
+      ? t("overview.attentionSummary", { count: failedCount })
+      : runningCount > 0
+        ? t("overview.activeSummary", { count: runningCount })
+        : t(hasActivity ? "overview.finishedSummary" : "overview.idleSummary");
   const latencyStats = summarizeLatencies(computeResponseLatencies(messages));
 
   return (
@@ -52,51 +64,54 @@ export function GlobalOverview({
         <h3>{t("overview.title")}</h3>
       </header>
 
-      <dl className="agent-network__overview-stats">
-        <div>
-          <dt>
-            <Users size={13} /> {t("overview.agents")}
-          </dt>
-          <dd>
-            {t("overview.liveDormant", { live: liveCount, dormant: dormantCount })}
-            <span className="agent-network__overview-sub">{t("overview.total", { total: totalNodes })}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <Activity size={13} /> {t("overview.runningNow")}
-          </dt>
-          <dd>{runningCount}</dd>
-        </div>
-        <div>
-          <dt>
-            <Inbox size={13} /> {t("overview.messages")}
-          </dt>
-          <dd>
-            {totalMessages}
-            <span className="agent-network__overview-sub">{t("overview.acrossLinks", { count: edges.length })}</span>
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <Timer size={13} /> {t("overview.avgResponse")}
-          </dt>
-          <dd>
-            {latencyStats ? formatDuration(latencyStats.mean) : "—"}
-            {latencyStats ? (
-              <span className="agent-network__overview-sub">
-                {t("overview.median", { value: formatDuration(latencyStats.median) })}
-              </span>
-            ) : null}
-          </dd>
-        </div>
-        <div>
-          <dt>
-            <Activity size={13} /> {t("overview.lastActivity")}
-          </dt>
-          <dd>{lastActivityIso ? relativeTime(lastActivityIso, now) : "—"}</dd>
-        </div>
-      </dl>
+      <p className="overview-primary" role={failedCount > 0 ? "alert" : "status"}>{summary}</p>
+      <DetailsSection summary={t("overview.details")}>
+        <dl className="agent-network__overview-stats">
+          <div>
+            <dt>
+              <Users size={13} /> {t("overview.agents")}
+            </dt>
+            <dd>
+              {t("overview.liveDormant", { live: liveCount, dormant: dormantCount })}
+              <span className="agent-network__overview-sub">{t("overview.total", { total: totalNodes })}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <Activity size={13} /> {t("overview.runningNow")}
+            </dt>
+            <dd>{runningCount}</dd>
+          </div>
+          <div>
+            <dt>
+              <Inbox size={13} /> {t("overview.messages")}
+            </dt>
+            <dd>
+              {totalMessages}
+              <span className="agent-network__overview-sub">{t("overview.acrossLinks", { count: edges.length })}</span>
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <Timer size={13} /> {t("overview.avgResponse")}
+            </dt>
+            <dd>
+              {latencyStats ? formatDuration(latencyStats.mean) : "—"}
+              {latencyStats ? (
+                <span className="agent-network__overview-sub">
+                  {t("overview.median", { value: formatDuration(latencyStats.median) })}
+                </span>
+              ) : null}
+            </dd>
+          </div>
+          <div>
+            <dt>
+              <Activity size={13} /> {t("overview.lastActivity")}
+            </dt>
+            <dd>{lastActivityIso ? relativeTime(lastActivityIso, now) : "—"}</dd>
+          </div>
+        </dl>
+      </DetailsSection>
 
       <p className="agent-network__overview-tip">
         {t("overview.tipPrefix")}

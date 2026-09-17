@@ -26,7 +26,7 @@ type SearchDialogProps = {
  * visible Close, and same-title disambiguation via date + short id.
  */
 export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigation }: SearchDialogProps) {
-  const { sessions, selectSession } = useSessions();
+  const { sessions, selectSession, sessionsListStatus, sessionsListError, refreshSessions } = useSessions();
   const t = useT();
   const [query, setQuery] = useState("");
   const [activeIndex, setActiveIndex] = useState(0);
@@ -44,6 +44,14 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
     [filteredSessions],
   );
 
+  // #324 — with nothing cached, a pending or failed session-list load must not
+  // read as "no matching conversations": there is nothing to search yet. Cached
+  // rows stay searchable and the failure is marked instead. The status is the
+  // authority: "error" is a failure even when no detail string came with it.
+  const isListPending = sessionsListStatus === "loading" || sessionsListStatus === "idle";
+  const hasListError = sessionsListStatus === "error" || !!sessionsListError;
+  const listUnavailable = sessions.length === 0 && (isListPending || hasListError);
+
   const openSession = useCallback((sessionId: string) => navigateToSearchResult(sessionId, {
     confirmNavigation,
     openWorkspace: onOpenWorkspace,
@@ -56,17 +64,24 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
     setActiveIndex((i) => clampActiveIndex(i, filteredSessions.length));
   }, [filteredSessions.length]);
 
+  // Focus belongs to the open/close lifecycle, not every callback/filter rerender.
+  useEffect(() => {
+    if (!isOpen) return;
+    returnFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    const timer = window.setTimeout(() => inputRef.current?.focus(), 0);
+    return () => {
+      window.clearTimeout(timer);
+      const target = returnFocusRef.current;
+      if (target?.isConnected) target.focus();
+    };
+  }, [isOpen]);
+
   useEffect(() => {
     if (!isOpen) {
       setQuery("");
       setActiveIndex(0);
       return;
     }
-
-    returnFocusRef.current =
-      document.activeElement instanceof HTMLElement ? document.activeElement : null;
-
-    const focusTimer = window.setTimeout(() => inputRef.current?.focus(), 0);
 
     const handleKeyDown = (event: KeyboardEvent) => {
       const dialog = dialogRef.current;
@@ -103,16 +118,7 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
 
     window.addEventListener("keydown", handleKeyDown, true);
     return () => {
-      window.clearTimeout(focusTimer);
       window.removeEventListener("keydown", handleKeyDown, true);
-      const el = returnFocusRef.current;
-      if (el && typeof el.focus === "function") {
-        try {
-          el.focus();
-        } catch {
-          /* gone */
-        }
-      }
     };
   }, [isOpen, onClose, filteredSessions, activeIndex, openSession]);
 
@@ -165,6 +171,30 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
           <p className="search-dialog__heading">
             {query.trim() ? t("search.results") : t("search.recent")}
           </p>
+          {hasListError ? (
+            <div className="composer-notice search-dialog__error" role="alert" data-testid="search-list-error">
+              <span className="composer-notice__text">
+                {t(sessions.length > 0 ? "search.refreshFailed" : "search.loadFailed")}
+                {sessionsListError ? (
+                  <details>
+                    <summary>{t("search.details")}</summary>
+                    <code>{sessionsListError}</code>
+                  </details>
+                ) : null}
+              </span>
+              {/* Kept mounted while the retry runs so focus is not lost. */}
+              <button
+                type="button"
+                className="composer-notice__cta"
+                aria-busy={sessionsListStatus === "loading"}
+                aria-disabled={sessionsListStatus === "loading"}
+                data-testid="search-list-retry"
+                onClick={() => { if (sessionsListStatus !== "loading") void refreshSessions(); }}
+              >
+                {t(sessionsListStatus === "loading" ? "search.retrying" : "search.retry")}
+              </button>
+            </div>
+          ) : null}
           {filteredSessions.length > 0 ? (
             <ul className="search-results" id="search-results-list" role="list">
               {filteredSessions.map((session, index) => {
@@ -202,6 +232,12 @@ export function SearchDialog({ isOpen, onClose, onOpenWorkspace, confirmNavigati
                 );
               })}
             </ul>
+          ) : listUnavailable ? (
+            isListPending ? (
+              <p className="search-dialog__empty" role="status" data-testid="search-list-loading">
+                {t("search.loading")}
+              </p>
+            ) : null
           ) : (
             <p className="search-dialog__empty">{t("search.empty")}</p>
           )}

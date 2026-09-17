@@ -196,3 +196,40 @@ describe("SettingsDialog — shared provider affordances", () => {
     expect(html).toContain("settings.providers.remove");
   });
 });
+
+
+describe("Provider information density", () => {
+  it("keeps three provider summaries and actions outside closed connection/model details", () => {
+    const profiles = [12, 7, 3].map((count, index) => profile(`Provider-${index}`, {
+      models: Array.from({ length: count }, (_, model) => `model-${index}-${model}`),
+      isActive: index === 0,
+    }));
+    const html = render({ providers: ready(profiles) });
+    const sections = [...html.matchAll(/<details[^>]*>[\s\S]*?<\/details>/g)].map(([section]) => section);
+    expect(sections).toHaveLength(3);
+    expect(sections.every((section) => !/^<details[^>]*\sopen/.test(section))).toBe(true);
+    const primary = html.replace(/<details[^>]*>[\s\S]*?<\/details>/g, "");
+    for (const provider of profiles) {
+      expect(primary).toContain(provider.name);
+      for (const model of provider.models) {
+        expect(primary).not.toContain(model);
+        expect(html.split(`>${model}<`).length - 1).toBe(1);
+      }
+    }
+    expect(primary).toContain("settings.providers.default");
+    expect(primary).toContain("settings.providers.use");
+    expect(primary).toContain("settings.providers.health.unknown");
+    expect(primary).not.toContain("settings.providers.empty");
+    expect(primary).not.toContain("sk-1");
+    expect(html).toContain("sk-1");
+  });
+  it("keeps shared/read-only and health state visible while details are collapsed", () => {
+    const html = render({ providers: ready([profile("Shared", { isShared: true, healthStatus: "healthy" })]) });
+    const primary = html.replace(/<details[^>]*>[\s\S]*?<\/details>/g, "");
+    expect(primary).toContain("settings.providers.readOnly");
+    expect(primary).toContain("settings.providers.health.healthy");
+    expect(primary).toContain("settings.providers.test");
+    expect(primary).not.toContain("settings.providers.edit");
+    expect(primary).not.toContain("settings.providers.remove");
+  });
+});

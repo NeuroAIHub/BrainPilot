@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from "react";
 import { runtimeConfig } from "../../config";
 import { useSessions } from "../../contexts/SessionContext";
 import { useT } from "../../i18n/useT";
+import { showsResourcesNavItem } from "../plugins/pluginMarketplaceAvailability";
 import { IconButton } from "../primitives/IconButton";
 import { SessionList } from "./SessionList";
 
@@ -32,6 +33,9 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
     sessions,
     currentSession,
     isLoading,
+    sessionsListStatus,
+    sessionsListError,
+    refreshSessions,
     startDraftSession,
     selectSession,
     updateSessionTitle,
@@ -148,6 +152,9 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
                   sessions={sessions}
                   currentId={currentSession?.id}
                   isLoading={isLoading}
+                  listStatus={sessionsListStatus}
+                  loadError={sessionsListError}
+                  onRetry={() => void refreshSessions()}
                   onSelect={(id) => { selectAndGo(id); setIsSessionsPopoverOpen(false); }}
                   onRename={updateSessionTitle}
                   onDelete={deleteAndGuard}
@@ -166,15 +173,20 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
           <MonitorPlay size={16} />
           <span>{t("sidebar.demo")}</span>
         </button>
-        <button
-          className={`nav-item ${activePage === "plugins" ? "is-active" : ""}`}
-          onClick={() => navigateWithGuard(onOpenPlugins)}
-          title={t("sidebar.plugins")}
-          type="button"
-        >
-          <Package size={16} />
-          <span>{t("sidebar.plugins")}</span>
-        </button>
+        {/* The aggregate Resources entry only exists where the capability is
+            enabled — otherwise it could only ever land on the unavailable page.
+            The route itself stays addressable for copied links. */}
+        {showsResourcesNavItem(runtimeConfig.pluginsSettingsEnabled) ? (
+          <button
+            className={`nav-item ${activePage === "plugins" ? "is-active" : ""}`}
+            onClick={() => navigateWithGuard(onOpenPlugins)}
+            title={t("sidebar.plugins")}
+            type="button"
+          >
+            <Package size={16} />
+            <span>{t("sidebar.plugins")}</span>
+          </button>
+        ) : null}
       </nav>
 
       <section className="sidebar-section sidebar-section--conversations" aria-labelledby="conversations-heading">
@@ -191,6 +203,9 @@ export function Sidebar({ isCollapsed, activePage, onOpenDemo, onGoWorkspace, on
           sessions={sessions}
           currentId={currentSession?.id}
           isLoading={isLoading}
+          listStatus={sessionsListStatus}
+          loadError={sessionsListError}
+          onRetry={() => void refreshSessions()}
           onSelect={selectAndGo}
           onRename={updateSessionTitle}
           onDelete={deleteAndGuard}

@@ -1,3 +1,4 @@
+import { DetailsSection } from "../primitives/DetailsSection";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, Database, Eye, EyeOff, Loader2, Package, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
@@ -205,7 +206,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
       updateProviders((current) =>
         current.map((p) => (p.id === providerId ? { ...p, healthStatus: result.healthStatus, healthCheckedAt: result.healthCheckedAt, modelHealth: result.modelHealth } : p)),
       );
-      setSectionStatus("providers", t("settings.providers.tested", { name: result.name, status: result.healthStatus }));
+      setSectionStatus("providers", t("settings.providers.tested", { name: result.name, status: t(`settings.providers.health.${result.healthStatus}`) }));
     } catch (err) {
       setSectionError("providers", errorMessage(err, t("settings.providers.testFailed")));
     } finally {
@@ -533,18 +534,24 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   const renderResourceState = <T,>(
     resource: SettingsResource<T[]>,
     failedCopyKey: string,
-    retry: () => void,
+    retry: () => Promise<void>,
   ) => {
-    if (resource.status === "loading" && resource.data === null) {
-      return <p className="settings-note">{t("settings.loading")}</p>;
-    }
-    if (resource.status !== "error") return null;
+    const pending = resource.status === "loading" || resource.status === "idle";
+    if (!pending && resource.status !== "error") return null;
     return (
-      <p className="settings-note settings-note--error">
-        <span title={resource.error ?? undefined}>{t(failedCopyKey)}</span>{" "}
-        <button className="settings-button settings-button--ghost" onClick={retry} type="button">
-          {t("settings.section.retry")}
-        </button>
+      <p className={`settings-note ${resource.status === "error" ? "settings-note--error" : ""}`} role={resource.status === "error" ? "alert" : "status"}>
+        <span title={resource.error ?? undefined}>{t(pending ? "settings.loading" : failedCopyKey)}</span>{" "}
+        <button className="settings-button settings-button--ghost" aria-disabled={pending} aria-busy={pending} type="button" onClick={(event) => {
+          if (pending) return;
+          const trigger = event.currentTarget;
+          const section = trigger.closest("section");
+          void retry().finally(() => {
+            if (!trigger.isConnected && section?.isConnected && document.activeElement === document.body) {
+              const heading = section.querySelector<HTMLElement>("h3");
+              if (heading) { heading.tabIndex = -1; heading.focus(); }
+            }
+          });
+        }}>{t("settings.section.retry")}</button>
       </p>
     );
   };
@@ -635,19 +642,13 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                     <p>{t("settings.providers.desc")}</p>
                   </div>
                   <div className="provider-header-actions">
-                    {providers.find((provider) => provider.isActive) ? (
-                      <span className="provider-active-pill">
-                        <Check size={13} />
-                        {providers.find((provider) => provider.isActive)?.name}
-                      </span>
-                    ) : null}
                     <button className="settings-button" onClick={openProviderForm} type="button">
                       {t("settings.providers.add")}
                     </button>
                   </div>
                 </div>
 
-                {renderResourceState(providerResource, "settings.providers.loadFailed", () => void reloadProviders())}
+                {renderResourceState(providerResource, "settings.providers.loadFailed", () => reloadProviders())}
 
                 {(() => {
                   // `isShared` is the backend's authority (hosted preset ids are
@@ -666,28 +667,30 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                           {provider.name}
                           <span
                             className={`provider-health-dot provider-health-dot--${provider.healthStatus}`}
-                            title={t("settings.providers.statusTitle", { status: provider.healthStatus })}
+                            title={t(`settings.providers.health.${provider.healthStatus}`)}
                           />
                         </strong>
-                        <span>{provider.baseUrl}</span>
-                        <small>
-                          {provider.models.join(", ") || t("settings.providers.noModelList")} · {provider.apiKeyMasked} · {provider.contextWindow === 1_000_000
-                            ? "1M"
-                            : provider.contextWindow === 262_144 ? "256K" : t("settings.providerForm.contextAuto")}
-                        </small>
-                        <div className="provider-model-health-row">
-                          {provider.modelHealth.map((mh) => (
-                            <span
-                              key={mh.model}
-                              className={`provider-model-pill provider-model-pill--${mh.status}`}
-                              title={mh.error || mh.status}
-                            >
-                              <span className={`model-status-dot model-status-dot--${mh.status}`} />
-                              {mh.model}
-                              {mh.latencyMs !== undefined ? ` (${mh.latencyMs}ms)` : null}
-                            </span>
-                          ))}
+                        <div className="provider-summary">
+                          {provider.isActive ? <span className="provider-active-pill"><Check size={12} aria-hidden="true" />{t("settings.providers.default")}</span> : null}
+                          <span>{t(`settings.providers.health.${provider.healthStatus}`)}</span>
+                          <span>{t("settings.providers.modelCount", { count: provider.models.length })}</span>
+                          {!permissions.canEdit ? <span>{t("settings.providers.readOnly")}</span> : null}
                         </div>
+                        <DetailsSection summary={t("settings.providers.details")} className="provider-details">
+                          <p className="provider-connection">{provider.baseUrl}</p>
+                          <small>{provider.apiKeyMasked} · {provider.contextWindow === 1_000_000 ? "1M" : provider.contextWindow === 262_144 ? "256K" : t("settings.providerForm.contextAuto")}</small>
+                          <div className="provider-model-health-row">
+                            {provider.models.map((model) => {
+                              const health = provider.modelHealth.find((item) => item.model === model);
+                              const status = health?.status ?? "unknown";
+                              return <span key={model} className={`provider-model-pill provider-model-pill--${status}`} title={health?.error || t(`settings.providers.health.${status}`)}>
+                                <span className={`model-status-dot model-status-dot--${status}`} aria-hidden="true" />
+                                {model}{health?.latencyMs !== undefined ? ` (${health.latencyMs}ms)` : ""}
+                              </span>;
+                            })}
+                          </div>
+                          {provider.notes ? <p>{provider.notes}</p> : null}
+                        </DetailsSection>
                       </div>
                       <div className="settings-list-item__actions provider-actions">
                         {permissions.canEdit ? (
@@ -697,13 +700,15 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                         ) : null}
                         <button
                           disabled={testingProviderId === provider.id}
+                          aria-label={t("settings.providers.test")}
+                          aria-busy={testingProviderId === provider.id}
                           onClick={() => void testProvider(provider.id)}
                           type="button"
                         >
                           {testingProviderId === provider.id ? <Loader2 size={14} className="spin" /> : t("settings.providers.test")}
                         </button>
                         <button disabled={provider.isActive} onClick={() => void activateProvider(provider.id)} type="button">
-                          {provider.isActive ? <Check size={14} /> : t("settings.providers.use")}
+                          {provider.isActive ? <><Check size={14} aria-hidden="true" />{t("settings.providers.default")}</> : t("settings.providers.use")}
                         </button>
                         {permissions.canRemove ? (
                           <button disabled={provider.isActive} onClick={() => void removeProvider(provider.id)} type="button">
@@ -767,7 +772,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                     {t("settings.mcp.addServer")}
                   </button>
                 </div>
-                {renderResourceState(mcpResource, "settings.mcp.loadFailed", () => void reloadMcpServers())}
+                {renderResourceState(mcpResource, "settings.mcp.loadFailed", () => reloadMcpServers())}
                 {isConfirmedEmpty(mcpResource) ? (
                   <div className="settings-empty">
                     <Plug size={22} />
@@ -827,7 +832,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                 <div className="settings-section__header">
                   <div><h3>{t("settings.plugins.title")}</h3><p>{t("settings.plugins.description")}</p></div>
                 </div>
-                {renderResourceState(pluginResource, "settings.plugins.loadFailed", () => void reloadPlugins())}
+                {renderResourceState(pluginResource, "settings.plugins.loadFailed", () => reloadPlugins())}
                 {isConfirmedEmpty(pluginResource) ? (
                   <div className="settings-empty"><Package size={22} /><strong>{t("settings.plugins.empty")}</strong><p>{t("settings.plugins.emptyHint")}</p></div>
                 ) : installedPlugins.length > 0 ? (

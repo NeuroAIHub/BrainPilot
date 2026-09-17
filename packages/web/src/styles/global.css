@@ -483,11 +483,18 @@ button {
   white-space: nowrap;
 }
 
-.conversation-row small {
-  margin-left: auto;
-  color: var(--color-text-subtle);
-  font-size: 11px;
-  white-space: nowrap;
+/* The conversation title is the row's whole point: give it up to two lines
+   before ellipsizing, instead of one line squeezed next to a date column. */
+.conversation-row__title {
+  display: -webkit-box;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+  line-clamp: 2;
+  text-overflow: ellipsis;
+  white-space: normal;
+  word-break: break-word;
+  line-height: 1.35;
 }
 
 .muted-label {
@@ -497,9 +504,15 @@ button {
 }
 
 .conversation-row {
-  height: 34px;
-  padding: 0 7px;
+  min-height: 34px;
+  align-items: flex-start;
+  padding: 7px;
   font-size: 13px;
+}
+
+/* Keep the leading icon on the title's first line when it wraps. */
+.conversation-row svg {
+  margin-top: 1px;
 }
 
 .conversation-edit {
@@ -739,13 +752,11 @@ button {
   outline: none;
 }
 
-/* #104: icon-only nav — square buttons, no horizontal text weight. The label
-   lives in a .sr-only span so the accessible name is preserved. */
-.workspace-view-tabs--icon-only button {
-  width: 28px;
-  justify-content: center;
-  gap: 0;
-  padding: 0;
+/* #104 kept these tabs compact; the short label is visible again so the three
+   surfaces are identifiable without hovering. It is the accessible name too, so
+   no sr-only duplicate is needed. */
+.workspace-view-tab__label {
+  white-space: nowrap;
 }
 
 /* #134: a tab that can carry a quiet unread dot (Trace). Positioned so the dot
@@ -788,12 +799,8 @@ button {
   white-space: nowrap;
 }
 
-/* #105: id demoted to muted secondary metadata beside the real title. */
-.session-title__id {
-  color: var(--color-text-subtle);
-  font-size: 11px;
-  font-family: var(--font-mono);
-}
+/* #105: the id is metadata only — it lives in the title's tooltip, not in a
+   printed column, so the toolbar shows one human-readable name. */
 
 .toolbar-select {
   display: inline-flex;
@@ -4071,7 +4078,7 @@ button {
    squeeze/hide for everything inside it — its content is fully expanded. */
 .desktop-shell--sidebar-collapsed .sidebar__sessions-popover .nav-item span,
 .desktop-shell--sidebar-collapsed .sidebar__sessions-popover .conversation-row span,
-.desktop-shell--sidebar-collapsed .sidebar__sessions-popover .conversation-row small {
+.desktop-shell--sidebar-collapsed .sidebar__sessions-popover .conversation-row__title {
   opacity: 1;
 }
 
@@ -6351,7 +6358,7 @@ button {
 
 .provider-actions {
   display: grid;
-  grid-template-columns: repeat(3, 82px);
+  grid-template-columns: repeat(3, max-content);
   justify-content: end;
 }
 
@@ -6380,7 +6387,10 @@ button {
 
 .provider-actions button {
   display: inline-flex;
-  width: 82px;
+  width: auto;
+  min-width: 82px;
+  gap: 4px;
+  white-space: nowrap;
   align-items: center;
   justify-content: center;
 }
@@ -11266,7 +11276,7 @@ button {
 
 .plugin-market__catalog { padding-bottom: 56px; }
 
-.plugin-market__cloud-unavailable {
+.plugin-market__unavailable {
   display: flex;
   align-items: flex-start;
   gap: 12px;
@@ -11277,7 +11287,7 @@ button {
   box-shadow: var(--shadow-sm);
 }
 
-.plugin-market__cloud-unavailable-icon {
+.plugin-market__unavailable-icon {
   display: grid;
   width: 36px;
   height: 36px;
@@ -11288,16 +11298,36 @@ button {
   color: var(--color-accent);
 }
 
-.plugin-market__cloud-unavailable h2 {
+.plugin-market__unavailable h2 {
   margin: 0 0 4px;
   font-size: 14px;
 }
 
-.plugin-market__cloud-unavailable p {
+.plugin-market__unavailable p {
   margin: 0;
   color: var(--color-text-muted);
   font-size: 12px;
   line-height: 1.6;
+}
+
+.plugin-market__unavailable-cta {
+  margin-top: 12px;
+  border: 1px solid var(--color-border);
+  border-radius: var(--radius-sm);
+  background: var(--color-surface);
+  color: var(--color-text);
+  padding: 6px 12px;
+  font-size: 12px;
+  cursor: pointer;
+  transition:
+    background var(--ease-standard),
+    border-color var(--ease-standard);
+}
+
+.plugin-market__unavailable-cta:hover,
+.plugin-market__unavailable-cta:focus-visible {
+  background: var(--color-hover);
+  outline: none;
 }
 
 .plugin-market__toolbar {
@@ -11930,3 +11960,28 @@ button {
 .dataset-compare-bar { position: fixed; z-index: 80; bottom: 18px; right: 24px; display: flex; align-items: center; gap: 12px; max-width: calc(100vw - 48px); padding: 12px; border: 1px solid var(--color-border-strong); border-radius: var(--radius-md); background: var(--color-surface); box-shadow: var(--shadow-lg); font-size: 12px; }
 .dataset-compare-bar > span { max-width: 350px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 @media (max-width: 600px) { .dataset-compare-bar { right: 12px; bottom: 12px; max-width: calc(100vw - 24px); } .dataset-compare-bar > span { display: none; } }
+
+/* Desktop information hierarchy: useful summaries first, complete details on demand. */
+.details-section { min-width: 0; margin-top: 10px; border-top: 1px solid var(--color-border); padding-top: 8px; }
+.details-section > summary { cursor: pointer; color: var(--color-text-secondary); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.details-section > summary:focus-visible { outline: 2px solid var(--color-text-muted); outline-offset: 3px; border-radius: 3px; }
+.details-section__body { min-width: 0; padding-top: 8px; overflow-wrap: anywhere; }
+.provider-summary { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 12px; margin-top: 7px; color: var(--color-text-secondary); font-size: 12px; }
+.provider-summary .provider-active-pill { padding: 2px 7px; }
+.provider-details .provider-model-pill { max-width: 100%; white-space: normal; overflow-wrap: anywhere; }
+.provider-details .provider-connection { margin: 0 0 4px; font-size: 12px; overflow-wrap: anywhere; }
+.provider-details .provider-model-health-row { margin-top: 8px; }
+.file-preview__information { margin: 0; padding: 8px 16px; border-top: 0; border-bottom: 1px solid var(--color-border); }
+.file-preview__information .file-preview__meta { padding: 4px 0; border: 0; }
+.overview-primary { line-height: 1.65; }
+.settings-button[aria-disabled="true"], .composer-notice__cta[aria-disabled="true"] { opacity: .55; cursor: progress; }
+.composer-notice details code, .sidebar-list-error details code, .search-dialog__error details code { display: block; max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+.composer-technical-error { margin: 8px 0; font-size: 12px; color: var(--color-text-secondary); }
+.composer-technical-error > details { margin-top: 4px; }
+.composer-technical-error pre { max-height: 180px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+
+.trace-controls { align-items: flex-start; }
+.trace-filter-options { margin: 0; padding: 5px 0; border: 0; min-width: 130px; }
+.trace-filter-options .details-section__body { display: flex; flex-wrap: wrap; gap: 10px; padding: 10px 0; }
+.trace-filter-options .trace-segmented { align-self: center; }
+.composer-technical-error summary { cursor: pointer; }

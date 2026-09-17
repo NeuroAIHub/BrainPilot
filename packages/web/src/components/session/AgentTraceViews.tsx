@@ -1,3 +1,4 @@
+import { DetailsSection } from "../primitives/DetailsSection";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Network, Pause, Play, RefreshCw, Search, X } from "lucide-react";
 import { TraceNode } from "../../contracts/backend";
@@ -340,26 +341,6 @@ export function TracePanel({ onSelectArtifact }: { onSelectArtifact?: (path: str
             <h2 id="trace-panel-heading">{t("trace.title")}</h2>
           </div>
           <div className="trace-toolbar">
-            <div className="trace-segmented" role="group" aria-label={t("trace.aria.layoutDir")}>
-              <button
-                type="button"
-                className={layoutToggle.lr.pressed ? "is-active" : ""}
-                aria-pressed={layoutToggle.lr.pressed}
-                disabled={layoutToggle.lr.disabled}
-                onClick={() => setDirection("LR")}
-              >
-                {t("trace.layout.horizontal")}
-              </button>
-              <button
-                type="button"
-                className={layoutToggle.tb.pressed ? "is-active" : ""}
-                aria-pressed={layoutToggle.tb.pressed}
-                disabled={layoutToggle.tb.disabled}
-                onClick={() => setDirection("TB")}
-              >
-                {t("trace.layout.vertical")}
-              </button>
-            </div>
             <button className="trace-fit-button" type="button" disabled={visibleNodes.length === 0} onClick={() => setFitToken((value) => value + 1)}>{t("trace.fitGraph")}</button>
             <IconButton className={isRefreshing ? "is-active" : ""} disabled={!currentSession} label={t("trace.aria.refresh")} onClick={() => void handleRefresh()}>
               <RefreshCw size={15} />
@@ -405,6 +386,27 @@ export function TracePanel({ onSelectArtifact }: { onSelectArtifact?: (path: str
                   </button>
                 ) : null}
               </label>
+              <DetailsSection className="trace-filter-options" summary={<>{t("trace.details.controls")}{statusFilter !== "all" || typeFilter !== "all" || !showProposedDependencies || collapseEpisodes || direction !== "LR" ? ` · ${t("trace.details.adjusted")}` : ""}</>}>
+            <div className="trace-segmented" role="group" aria-label={t("trace.aria.layoutDir")}>
+              <button
+                type="button"
+                className={layoutToggle.lr.pressed ? "is-active" : ""}
+                aria-pressed={layoutToggle.lr.pressed}
+                disabled={layoutToggle.lr.disabled}
+                onClick={() => setDirection("LR")}
+              >
+                {t("trace.layout.horizontal")}
+              </button>
+              <button
+                type="button"
+                className={layoutToggle.tb.pressed ? "is-active" : ""}
+                aria-pressed={layoutToggle.tb.pressed}
+                disabled={layoutToggle.tb.disabled}
+                onClick={() => setDirection("TB")}
+              >
+                {t("trace.layout.vertical")}
+              </button>
+            </div>
               <div className="trace-control">
                 <span>{t("trace.status")}</span>
                 <CustomSelect
@@ -444,6 +446,7 @@ export function TracePanel({ onSelectArtifact }: { onSelectArtifact?: (path: str
                 <input checked={collapseEpisodes} onChange={(event) => setCollapseEpisodes(event.target.checked)} type="checkbox" />
                 <span>{t("trace.toggle.episodes")}</span>
               </label>
+              </DetailsSection>
             </div>
 
             {query || statusFilter !== "all" || typeFilter !== "all" ? <button className="trace-fit-button" type="button" onClick={() => { setQuery(""); setStatusFilter("all"); setTypeFilter("all"); }}>{t("trace.resetFilters")}</button> : null}

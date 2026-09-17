@@ -1,6 +1,7 @@
+import { isTechnicalComposerError, composerErrorSummaryKey } from "./composerStatus";
 import { Bot, CircleAlert, Paperclip, Square, X } from "lucide-react";
 import { FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import type { ProviderProfile, ThinkingLevel } from "../../contracts/backend";
+import type { ThinkingLevel } from "../../contracts/backend";
 import { useSandbox } from "../../contexts/SandboxContext";
 import { DRAFT_SESSION_ID, useSessions } from "../../contexts/SessionContext";
 import { latestDurableUserTurn, useTurnTimer } from "../../contexts/useTurnTimer";
@@ -34,7 +35,9 @@ import { MessageStream } from "./MessageStream";
 import type { WorkspaceFileTarget } from "./workspaceFileLink";
 import { RunningScriptsPanel } from "./RunningScriptsPanel";
 import { selectActiveScripts } from "./runningScripts";
-import { shouldShowNoProviderBanner } from "./noProviderBanner";
+import { resolveComposerProviderNotice, type ProviderListPhase } from "./noProviderBanner";
+import { resolveComposerStatus } from "./composerStatus";
+import { useComposerProviders } from "./useComposerProviders";
 import {
   composerPlaceholderKey,
   placeholderAvailabilityFromSources,
@@ -42,6 +45,11 @@ import {
   type MentionPlugin,
   type SourceStatus,
 } from "./mentionLogic";
+
+// The provider-list loading model and the selection helpers live in
+// useComposerProviders; re-exported here because they are imported from this
+// module (see __tests__/thinkingSupport.test.ts).
+export { mergeProviderHealth, selectAvailableDraftModel } from "./useComposerProviders";
 
 /** #305: in-flight attachment upload state for the progress row. */
 type ComposerUploadState = {
@@ -89,50 +97,49 @@ export function resolveComposerReasoningSupport(input: {
   );
 }
 
-export function mergeProviderHealth(
-  profiles: ProviderProfile[],
-  healthProfiles: ProviderProfile[],
-): ProviderProfile[] {
-  return profiles.map((profile) => {
-    const health = healthProfiles.find((item) => item.id === profile.id);
-    return health
-      ? {
-          ...profile,
-          healthStatus: health.healthStatus,
-          healthCheckedAt: health.healthCheckedAt,
-          modelHealth: health.modelHealth,
-        }
-      : profile;
-  });
-}
-
-export function selectAvailableDraftModel(
-  provider: ProviderProfile | null,
-  candidates: Array<string | undefined>,
-): string {
-  if (!provider) return "";
-  const configuredCandidates = candidates.filter(
-    (model): model is string => Boolean(model && provider.models.includes(model)),
-  );
-  return configuredCandidates.find((model) => selectedModelStatus(provider, model) !== "unavailable")
-    ?? provider.models.find((model) => selectedModelStatus(provider, model) !== "unavailable")
-    ?? configuredCandidates[0]
-    ?? provider.models[0]
-    ?? "";
-}
-
 export function resolveComposerCanSend(input: {
   sandboxRunning: boolean;
   isSending: boolean;
   uploading: boolean;
   connectedOrDraft: boolean;
   draftModelUnavailable: boolean;
+  /** A brand-new draft: nothing is pinned, so a selection has to exist. */
+  isDraft?: boolean;
+  /**
+   * A provider *and* a model are chosen (from a fresh pick or a valid cached
+   * selection). Only consulted for drafts; an existing session's provider and
+   * model are pinned server-side and stay usable. Optional — callers that do
+   * not know yet keep the previous transport-only behaviour.
+   */
+  hasProviderSelection?: boolean;
 }): boolean {
+  // A draft with no provider/model cannot run anywhere, so a ready sandbox and
+  // a live socket must not light up Send: the send would fail after the fact.
+  if (input.isDraft && input.hasProviderSelection === false) return false;
   return input.sandboxRunning &&
     !input.isSending &&
     !input.uploading &&
     input.connectedOrDraft &&
     !input.draftModelUnavailable;
+}
+
+/**
+ * Whether the provider/model picker should be operable.
+ *
+ * It is disabled while the first load is still pending, and also when that load
+ * *failed with nothing cached*: an enabled picker would open onto an empty list
+ * that reads as "you have no providers, add one" — a wrong diagnosis of a failed
+ * request. The load-failed notice above it carries the retry instead. A
+ * confirmed-empty success keeps the picker (and its Add Provider onboarding),
+ * and cached profiles stay pickable through a failed refresh.
+ */
+export function resolveModelPickerEnabled(input: {
+  phase: ProviderListPhase;
+  hasCachedProfiles: boolean;
+}): boolean {
+  if (input.phase === "pending") return false;
+  if (input.phase === "failed") return input.hasCachedProfiles;
+  return true;
 }
 
 function revokeAttachmentPreview(attachment: ComposerAttachment): void {
@@ -152,12 +159,6 @@ type PromptComposerProps = {
 export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: PromptComposerProps = {}) {
   const t = useT();
   const [suggestedTasks, setSuggestedTasks] = useState<string[]>([]);
-  const [providerProfiles, setProviderProfiles] = useState<ProviderProfile[]>([]);
-  const [activeProvider, setActiveProvider] = useState<ProviderProfile | null>(null);
-  // Distinguishes "provider load hasn't resolved yet" from "loaded, none
-  // active" so the no-provider banner doesn't flash during initial load.
-  const [providersLoaded, setProvidersLoaded] = useState(false);
-  const [selectedModel, setSelectedModel] = useState("");
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("medium");
   // 可用命令（已通过真实 API 测试 /context ✅ /cost ✅；/compact 由 SDK 内置 ✅）
   // 不可用命令（已移除）：/usage ❌ /clear ❌ /init ❌
@@ -195,7 +196,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const [draftStagingReady, setDraftStagingReady] = useState(false);
   const [removingAttachmentKeys, setRemovingAttachmentKeys] = useState<ReadonlySet<string>>(new Set());
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters, historyLoadError, isRefreshingMessages, refreshMessages } = useSessions();
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
   const persistedAttachmentNames = useAttachments(sessionId);
   const attachmentScopeRef = useRef<string | null>(sessionId);
@@ -205,6 +206,26 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       : undefined,
     [agents],
   );
+  // Provider list + model selection. The list, its optional health decoration and
+  // the saved-model preference are loaded independently, so neither a failing
+  // health probe nor a failing settings read can empty the picker or make an API
+  // error look like "no provider configured".
+  const {
+    list: providerList,
+    profiles: providerProfiles,
+    activeProvider,
+    selectedModel,
+    phase: providerPhase,
+    retry: retryProviderLoad,
+    selectProviderModel,
+    markProviderActive,
+  } = useComposerProviders({
+    isDraft,
+    sessionKey: sessionId,
+    sessionProviderId: currentSession?.providerId,
+    sessionModelId: currentSession?.modelId,
+    fallbackError: t("chat.provider.loadFailed"),
+  });
   const draftModelUnavailable = isDraft &&
     Boolean(activeProvider && selectedModel) &&
     selectedModelStatus(activeProvider, selectedModel) === "unavailable";
@@ -217,6 +238,8 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     uploading,
     connectedOrDraft: isConnected || isDraft,
     draftModelUnavailable,
+    isDraft,
+    hasProviderSelection: Boolean(activeProvider && selectedModel),
   }) && (!isDraft || draftStagingReady);
   const reasoningSupported = resolveComposerReasoningSupport({
     isDraft,
@@ -316,14 +339,21 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   // so keystroke state stays off this render path; only status flips re-render.
   const [pluginSource, setPluginSource] = useState<SourceStatus<MentionPlugin>>({ state: "loading" });
   const [fileSource, setFileSource] = useState<SourceStatus<MentionFile>>({ state: "idle" });
-  // No provider configured: after the first load resolves, there's no active
-  // provider. Surface a persistent banner + CTA so a first-run user isn't left
-  // to discover it only by sending a message and hitting an opaque error. The CTA
-  // deep-links to Settings → Providers (wired by the parent shell).
-  const showNoProviderBanner = shouldShowNoProviderBanner({
-    providersLoaded,
+  // What to say about model availability, if anything: the first-run "add a
+  // provider" CTA (only for a *confirmed* empty list), an invitation to pick a
+  // model when providers exist but nothing is selected, or a load/refresh failure
+  // with a retry. The Add Provider CTA deep-links to Settings → Providers (wired
+  // by the parent shell).
+  const providerNotice = resolveComposerProviderNotice({
+    list: providerList,
     hasActiveProvider: Boolean(activeProvider),
+    hasSelectedModel: Boolean(selectedModel),
+    isPinnedSession: !isDraft && Boolean(currentSession?.providerId),
     hasCta: Boolean(onOpenProviderSettings),
+  });
+  const modelPickerEnabled = resolveModelPickerEnabled({
+    phase: providerPhase,
+    hasCachedProfiles: providerProfiles.length > 0,
   });
 
   const visibleMessages = useMemo(() => {
@@ -580,74 +610,8 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   // PromptComposer no longer re-renders on keystrokes — that's the whole point
   // of the split.
 
-  useEffect(() => {
-    let cancelled = false;
-    const loadProviderAndSettings = async () => {
-      try {
-        const [profiles, settings, healthProfiles] = await Promise.all([
-          api.providers.list(),
-          api.settings.get(),
-          api.providers.health().catch(() => [] as ProviderProfile[]),
-        ]);
-        if (cancelled) {
-          return;
-        }
-        const enrichedProfiles = mergeProviderHealth(profiles, healthProfiles);
-        const provider = (
-          !isDraft && currentSession?.providerId
-            ? enrichedProfiles.find((item) => item.id === currentSession.providerId)
-            : enrichedProfiles.find((item) => item.isActive)
-        ) ?? null;
-        setProviderProfiles(enrichedProfiles);
-        setActiveProvider(provider);
-        setProvidersLoaded(true);
-        setSelectedModel((current) => {
-          if (!isDraft && currentSession?.modelId) return currentSession.modelId;
-          return selectAvailableDraftModel(provider, [current, settings.model]);
-        });
-      } catch {
-        if (!cancelled) {
-          setProviderProfiles([]);
-          setActiveProvider(null);
-          setProvidersLoaded(true);
-          setSelectedModel("");
-        }
-      }
-    };
-    void loadProviderAndSettings();
-    window.addEventListener("provider-profiles-updated", loadProviderAndSettings);
-    return () => {
-      cancelled = true;
-      window.removeEventListener("provider-profiles-updated", loadProviderAndSettings);
-    };
-  }, [currentSession?.id, currentSession?.modelId, currentSession?.providerId, isDraft]);
-
-  useEffect(() => {
-    const refreshProvider = async () => {
-      try {
-        const [profiles, healthProfiles] = await Promise.all([
-          api.providers.list(),
-          api.providers.health().catch(() => [] as ProviderProfile[]),
-        ]);
-        const enrichedProfiles = mergeProviderHealth(profiles, healthProfiles);
-        const provider = (
-          !isDraft && currentSession?.providerId
-            ? enrichedProfiles.find((item) => item.id === currentSession.providerId)
-            : enrichedProfiles.find((item) => item.isActive)
-        ) ?? null;
-        setProviderProfiles(enrichedProfiles);
-        setActiveProvider(provider);
-        setSelectedModel((current) => {
-          if (!isDraft && currentSession?.modelId) return currentSession.modelId;
-          return selectAvailableDraftModel(provider, [current]);
-        });
-      } catch {
-        // ignore silent refresh errors
-      }
-    };
-    const id = window.setInterval(() => void refreshProvider(), 30000);
-    return () => window.clearInterval(id);
-  }, [currentSession?.modelId, currentSession?.providerId, isDraft]);
+  // Provider/model loading, the `provider-profiles-updated` listener and the 30s
+  // background refresh all live in useComposerProviders above.
 
   const queuedPrompts = sessionId ? (queuedPromptsBySession[sessionId] ?? []) : [];
 
@@ -929,8 +893,9 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     const previousModel = selectedModel;
     const previousThinking = thinkingLevel;
     const supportsReasoning = selectedModelSupportsReasoning(provider, modelId);
-    setActiveProvider(provider);
-    setSelectedModel(modelId);
+    // An explicit pick outranks any refresh still in flight (and any later
+    // preference/health reply) until the save resolves one way or the other.
+    selectProviderModel(provider, modelId);
     setThinkingLevel((current) => supportsReasoning ? (current === "off" ? "medium" : current) : "off");
     setComposerError(null);
     let switchedProvider = false;
@@ -938,23 +903,16 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
       if (!provider.isActive) {
         await api.providers.setActive(provider.id);
         switchedProvider = true;
-        setProviderProfiles((current) => current.map((item) => ({
-          ...item,
-          isActive: item.id === provider.id,
-        })));
+        markProviderActive(provider.id);
       }
       await api.settings.update({ model: modelId });
       await reloadConfig();
     } catch (error) {
-      setActiveProvider(previousProvider);
-      setSelectedModel(previousModel);
+      selectProviderModel(previousProvider, previousModel, { manual: false });
       setThinkingLevel(previousThinking);
       if (switchedProvider && previousProvider) {
         void api.providers.setActive(previousProvider.id).catch(() => {});
-        setProviderProfiles((current) => current.map((item) => ({
-          ...item,
-          isActive: item.id === previousProvider.id,
-        })));
+        markProviderActive(previousProvider.id);
       }
       const message = error instanceof Error ? error.message : String(error);
       setComposerError(t("chat.error.saveModel", { msg: message }));
@@ -1005,6 +963,15 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     }
   };
 
+  /** Open whichever model control is mounted (main composer or #494 fallback). */
+  const openModelPicker = () => {
+    const trigger = document.querySelector<HTMLButtonElement>(
+      ".provider-model-control__trigger, .model-select .custom-select__trigger",
+    );
+    trigger?.focus();
+    trigger?.click();
+  };
+
   const changeModelForFailedPrompt = (prompt?: string) => {
     if (prompt && !writeRecoveryDraft(
       draftStore,
@@ -1015,20 +982,54 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     startDraftSession();
     // Existing sessions freeze provider/model. Move the failed prompt into a
     // new draft, then open whichever model control is present (main or #494).
-    requestAnimationFrame(() => requestAnimationFrame(() => {
-      const trigger = document.querySelector<HTMLButtonElement>(
-        ".provider-model-control__trigger, .model-select .custom-select__trigger",
-      );
-      trigger?.focus();
-      trigger?.click();
-    }));
+    requestAnimationFrame(() => requestAnimationFrame(openModelPicker));
   };
+
+  const statusLines = resolveComposerStatus({
+    runError: error,
+    operationError: composerError,
+    stagingError,
+    providerLoadFailed: providerNotice.kind === "load-failed",
+    providerSelectionMissing:
+      providerNotice.kind === "choose-model" || providerNotice.kind === "add-provider",
+    historyLoadFailed: Boolean(historyLoadError),
+    canSend,
+    draftModelUnavailable,
+    sandboxRunning: sandboxStatus === "running",
+    isConnected,
+  });
 
   const recoveryBusy = !canSend || workActive?.active === true;
   return (
     <section className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`} aria-labelledby="prompt-heading">
       <div className="prompt-home__inner">
-        {showNoProviderBanner ? (
+        {providerNotice.kind === "load-failed" ? (
+          <div className="composer-notice" role="alert" data-testid="provider-load-failed">
+            <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
+            <span className="composer-notice__text">
+              {t(providerNotice.hasCachedList
+                ? "chat.provider.refreshFailed"
+                : "chat.provider.loadFailed")}
+              {providerNotice.detail ? (
+                <details>
+                  <summary>{t("chat.system.details")}</summary>
+                  <code>{providerNotice.detail}</code>
+                </details>
+              ) : null}
+            </span>
+            {/* Stays mounted while the retry runs, so focus is not lost. */}
+            <button
+              type="button"
+              className="composer-notice__cta"
+              aria-busy={providerNotice.busy}
+              aria-disabled={providerNotice.busy}
+              data-testid="provider-load-retry"
+              onClick={() => { if (!providerNotice.busy) void retryProviderLoad(); }}
+            >
+              {t(providerNotice.busy ? "chat.provider.retrying" : "chat.provider.retry")}
+            </button>
+          </div>
+        ) : providerNotice.kind === "add-provider" ? (
           <div className="composer-notice" role="alert" data-testid="no-provider-banner">
             <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
             <span className="composer-notice__text">{t("chat.noProvider.banner")}</span>
@@ -1039,6 +1040,50 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             >
               {t("chat.noProvider.cta")}
             </button>
+          </div>
+        ) : providerNotice.kind === "choose-model" ? (
+          <div className="composer-notice" role="status" data-testid="choose-model-notice">
+            <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
+            <span className="composer-notice__text">{t("chat.provider.chooseModel")}</span>
+            <button
+              type="button"
+              className="composer-notice__cta"
+              onClick={openModelPicker}
+            >
+              {t("chat.modelControl.select")}
+            </button>
+          </div>
+        ) : null}
+
+        {/* History load state for the ACTIVE session. Independent of the provider
+            notices above and of run/fatal errors below — a failed transcript
+            fetch is a data-load problem, not a new runtime error card, and the
+            messages already on screen (SSE / optimistic / cached) stay put. */}
+        {historyLoadError ? (
+          <div className="composer-notice" role="alert" data-testid="history-load-failed">
+            <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
+            <span className="composer-notice__text">
+              {t(hasMessages ? "chat.history.refreshFailed" : "chat.history.loadFailed")}
+              <details>
+                <summary>{t("chat.system.details")}</summary>
+                <code>{historyLoadError}</code>
+              </details>
+            </span>
+            {/* Stays mounted while the retry runs, so focus is not lost. */}
+            <button
+              type="button"
+              className="composer-notice__cta"
+              aria-busy={isRefreshingMessages}
+              aria-disabled={isRefreshingMessages}
+              data-testid="history-load-retry"
+              onClick={() => { if (!isRefreshingMessages) void refreshMessages(); }}
+            >
+              {t(isRefreshingMessages ? "chat.history.retrying" : "chat.history.retry")}
+            </button>
+          </div>
+        ) : isRefreshingMessages && currentSession ? (
+          <div className="composer-notice" role="status" data-testid="history-loading">
+            <span className="composer-notice__text">{t("chat.history.loading")}</span>
           </div>
         ) : null}
 
@@ -1069,6 +1114,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             <span className="agent-running-toast__dot" />
             <span className="agent-running-toast__label">
               {(() => {
+                // While an ask_user request is unanswered the run is not
+                // "working" — it is parked on the user. Saying so keeps the
+                // toast honest; Stop, the timers and the question controls
+                // below are untouched.
+                if (askTakeover) return t("chat.awaitingAnswer");
                 const label = runningToastLabel(workingAgentNames, "、", retryingAgent);
                 return t(label.key, label.vars);
               })()}
@@ -1247,7 +1297,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             <ComposerSendTools
               modelControl={
                 <ProviderModelControl
-                  disabled={!providersLoaded}
+                  disabled={!modelPickerEnabled}
                   isDraft={isDraft}
                   modelId={selectedModel}
                   onManageProviders={onOpenProviderSettings}
@@ -1272,21 +1322,16 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
         </form>
         )}
 
-        {error ? <p className="composer-status composer-status--error">{error}</p> : null}
-        {composerError || stagingError ? (
-          <p className="composer-status composer-status--error">{composerError ?? stagingError}</p>
-        ) : null}
-        {!canSend ? (
-          <p className="composer-status">
-            {draftModelUnavailable
-              ? t("chat.status.modelUnavailable")
-              : sandboxStatus !== "running"
-                ? t("chat.status.startSandbox")
-                : isConnected
-                  ? t("chat.status.preparing")
-                  : t("chat.status.connecting")}
-          </p>
-        ) : null}
+        {/* One line per genuine problem, plus at most one blocked-send hint —
+            never a generic "connecting…" on top of a specific error. */}
+        {statusLines.map((line) => (
+          <div className={`composer-status ${line.tone === "error" ? "composer-status--error" : ""}`} data-testid={`composer-status-${line.id}`} key={line.id} role={line.tone === "error" ? "alert" : "status"}>
+            {line.tone === "error" && isTechnicalComposerError(line.text) ? <div className="composer-technical-error">
+              <span>{t(composerErrorSummaryKey(line.id))}</span>
+              <details><summary>{t("chat.system.details")}</summary><pre>{line.text}</pre></details>
+            </div> : line.tone === "error" ? line.text : t(line.messageKey)}
+          </div>
+        ))}
 
         {!hasMessages && suggestedTasks.length > 0 ? <div className="suggestions" aria-label={t("chat.aria.suggested")}>
           {suggestedTasks.map((task) => (
