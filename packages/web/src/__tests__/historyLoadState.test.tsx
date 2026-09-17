@@ -260,9 +260,9 @@ describe("history load failure is scoped to the active session", () => {
   });
 
   it("does not let a late reply for an abandoned session hide the new one's loading state", async () => {
-    // `isRefreshingMessages` is one global flag. A manual refresh of s1 that
-    // lands after the user opened s2 must not clear the indicator s2's own
-    // (still pending) hydration owns.
+    // Loading is owned per session. A manual refresh of s1 that lands after the
+    // user opened s2 must not clear the indicator s2's own (still pending)
+    // hydration owns.
     const abandoned = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
     const pendingForS2 = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
     mocks.list.mockResolvedValueOnce([
@@ -349,5 +349,199 @@ describe("history load failure is scoped to the active session", () => {
     expect(value().messages.map((m) => m.content)).toEqual(["fresh"]);
     expect(value().isRefreshingMessages).toBe(false);
     await act(async () => renderer.unmount());
+  });
+});
+
+describe("history loading is owned by the session that requested it", () => {
+  // The composer shows "loading history" for the conversation ON SCREEN. An
+  // outstanding read for a session the user has left owns only its own entry:
+  // it neither keeps the newly shown scope busy nor, when it finally answers,
+  // clears a scope that is loading something else.
+  it.each(["cached-session", "draft"] as const)(
+    "leaves the active scope idle when a refresh of another session is still pending (%s)",
+    async (target) => {
+      mocks.list.mockResolvedValueOnce([
+        session("s1", "2026-02-02T00:00:00.000Z"),
+        session("s2", "2026-02-01T00:00:00.000Z"),
+      ]);
+      const renderer = await mount();
+      try {
+        // Hydrate s2 as well, then come back to s1: re-selecting an already
+        // hydrated session issues no new read, so it has nothing to wait for.
+        await act(async () => {
+          value().selectSession("s2");
+        });
+        await flush();
+        await act(async () => {
+          value().selectSession("s1");
+        });
+        await flush();
+        expect(value().currentSession?.id).toBe("s1");
+        expect(value().isRefreshingMessages).toBe(false);
+
+        const abandoned = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+        mocks.getHistory.mockImplementationOnce(() => abandoned.promise);
+        act(() => {
+          void value().refreshMessages();
+        });
+        await flush();
+        expect(value().isRefreshingMessages).toBe(true);
+
+        await act(async () => {
+          if (target === "draft") value().startDraftSession();
+          else value().selectSession("s2");
+        });
+        await flush();
+        expect(target === "draft" ? value().isDraft : value().currentSession?.id === "s2").toBe(true);
+        // Immediately after the switch: the scope on screen has no read of its
+        // own, so it is idle even though s1's refresh is still in flight.
+        expect(value().isRefreshingMessages).toBe(false);
+
+        abandoned.resolve(history([textEvent("m1", "from s1")]));
+        await flush();
+        // And s1's late answer leaves the active scope idle too.
+        expect(value().isRefreshingMessages).toBe(false);
+
+        if (target !== "draft") {
+          // Returning to s1 shows no stale busy state either: its request is done.
+          await act(async () => {
+            value().selectSession("s1");
+          });
+          await flush();
+          expect(value().isRefreshingMessages).toBe(false);
+        }
+      } finally {
+        await act(async () => renderer.unmount());
+      }
+    },
+  );
+
+  it("keeps a session busy while its own request is still pending after a round trip away", async () => {
+    mocks.list.mockResolvedValueOnce([
+      session("s1", "2026-02-02T00:00:00.000Z"),
+      session("s2", "2026-02-01T00:00:00.000Z"),
+    ]);
+    const renderer = await mount();
+    try {
+      await act(async () => {
+        value().selectSession("s2");
+      });
+      await flush();
+      await act(async () => {
+        value().selectSession("s1");
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(false);
+
+      const pending = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+      mocks.getHistory.mockImplementationOnce(() => pending.promise);
+      act(() => {
+        void value().refreshMessages();
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(true);
+
+      // Away to s2 (idle there) and back to s1, whose read is still in flight.
+      await act(async () => {
+        value().selectSession("s2");
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(false);
+      await act(async () => {
+        value().selectSession("s1");
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(true);
+
+      pending.resolve(history([textEvent("m1", "first")]));
+      await flush();
+      expect(value().isRefreshingMessages).toBe(false);
+      expect(value().messages.map((m) => m.content)).toEqual(["first"]);
+    } finally {
+      await act(async () => renderer.unmount());
+    }
+  });
+
+  it("stays busy until the newest of two overlapping refreshes finishes", async () => {
+    mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
+    const renderer = await mount();
+    try {
+      expect(value().currentSession?.id).toBe("s1");
+      expect(value().isRefreshingMessages).toBe(false);
+
+      const older = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+      const newer = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+      mocks.getHistory.mockImplementationOnce(() => older.promise);
+      act(() => {
+        void value().refreshMessages();
+      });
+      await flush();
+      mocks.getHistory.mockImplementationOnce(() => newer.promise);
+      act(() => {
+        void value().refreshMessages();
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(true);
+
+      // The superseded read answers first: it owns nothing anymore, so it may
+      // neither publish its transcript nor end the newer read's loading state.
+      older.resolve(history([textEvent("m1", "stale")]));
+      await flush();
+      expect(value().isRefreshingMessages).toBe(true);
+      expect(value().messages).toEqual([]);
+
+      newer.resolve(history([textEvent("m2", "fresh")]));
+      await flush();
+      expect(value().isRefreshingMessages).toBe(false);
+      expect(value().messages.map((m) => m.content)).toEqual(["fresh"]);
+      expect(value().historyLoadError).toBeNull();
+    } finally {
+      await act(async () => renderer.unmount());
+    }
+  });
+
+  it("releases the pending record when a refresh for an abandoned session fails", async () => {
+    mocks.list.mockResolvedValueOnce([
+      session("s1", "2026-02-02T00:00:00.000Z"),
+      session("s2", "2026-02-01T00:00:00.000Z"),
+    ]);
+    const renderer = await mount();
+    try {
+      await act(async () => {
+        value().selectSession("s2");
+      });
+      await flush();
+      await act(async () => {
+        value().selectSession("s1");
+      });
+      await flush();
+
+      const failing = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+      mocks.getHistory.mockImplementationOnce(() => failing.promise);
+      act(() => {
+        void value().refreshMessages();
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(true);
+
+      await act(async () => {
+        value().selectSession("s2");
+      });
+      await flush();
+      failing.reject(new Error("s1 refresh failed"));
+      await flush();
+
+      // s2 is untouched, and s1 is neither busy nor silently stuck on return.
+      expect(value().isRefreshingMessages).toBe(false);
+      expect(value().historyLoadError).toBeNull();
+      await act(async () => {
+        value().selectSession("s1");
+      });
+      await flush();
+      expect(value().isRefreshingMessages).toBe(false);
+      expect(value().historyLoadError).toBe("s1 refresh failed");
+    } finally {
+      await act(async () => renderer.unmount());
+    }
   });
 });

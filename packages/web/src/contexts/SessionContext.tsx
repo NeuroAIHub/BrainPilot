@@ -443,7 +443,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const interruptingRef = useRef(false);
   const interruptingToolsRef = useRef<Set<string>>(new Set());
   const [interruptingToolIds, setInterruptingToolIds] = useState<ReadonlySet<string>>(new Set());
-  const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
+  // History loading is owned per session, not globally: the sequence number of
+  // the newest in-flight history request for each session that has one (initial
+  // hydration and manual refresh share the counter). The public
+  // `isRefreshingMessages` boolean is derived from the ACTIVE session's entry
+  // below, so a read left behind on an abandoned session can never keep the
+  // newly opened one — or a draft — looking busy, and its own late completion
+  // only clears its own entry.
+  const [pendingHistoryBySession, setPendingHistoryBySession] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<"chat" | "agents" | "trace">("chat");
   // #134 — read currentView inside the SSE queue-drain effect (keyed on
@@ -509,16 +516,37 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // `sessionsRequestSeqRef` numbers session-list requests, and
   // `historyRequestSeqRef` numbers history requests per session id (initial
   // hydration and manual refresh share one counter). Only the newest request may
-  // publish its outcome — status, scoped error, metadata or the loading flag —
-  // so a slow older read can neither replace a newer result nor resurrect an
-  // error the newer read already cleared.
+  // publish its outcome — status, scoped error or metadata — so a slow older
+  // read can neither replace a newer result nor resurrect an error the newer
+  // read already cleared. Loading ownership is tracked separately (see
+  // `pendingHistoryBySession`): staleness decides who may COMMIT data, while the
+  // pending record decides who still owes a completion.
   const sessionsRequestSeqRef = useRef(0);
   const historyRequestSeqRef = useRef<Map<string, number>>(new Map());
 
+  /** Allocate the next sequence for `sessionId` and record it as pending. */
   const beginHistoryRequest = useCallback((sessionId: string) => {
     const seq = (historyRequestSeqRef.current.get(sessionId) ?? 0) + 1;
     historyRequestSeqRef.current.set(sessionId, seq);
+    setPendingHistoryBySession((current) => ({ ...current, [sessionId]: seq }));
     return seq;
+  }, []);
+
+  /**
+   * Release the pending record this request owns. Only the entry that still
+   * equals `seq` is dropped, so an older completion can never clear a newer
+   * request for the same session, and never touches another session at all.
+   * Called unconditionally in `finally` by both read paths — including reads
+   * whose session is no longer selected, which must still settle their own
+   * bookkeeping instead of leaking a permanently busy entry.
+   */
+  const finishHistoryRequest = useCallback((sessionId: string, seq: number) => {
+    setPendingHistoryBySession((current) => {
+      if (current[sessionId] !== seq) return current;
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
   }, []);
 
   /** False once a newer request for the same session has started. */
@@ -604,7 +632,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // Superseded by a newer read for this same session (e.g. a manual refresh
       // overtaking this one) — that request owns the outcome from then on.
       const stale = () => cancelled || !isLatestHistoryRequest(sessionId, seq);
-      setIsRefreshingMessages(true);
       // A previous failure stays visible (with a busy Retry) until this attempt
       // succeeds — see the success clear below.
       try {
@@ -673,7 +700,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const detail = err instanceof Error ? err.message : String(err);
         setHistoryErrorBySession((current) => ({ ...current, [sessionId]: detail }));
       } finally {
-        if (!stale()) setIsRefreshingMessages(false);
+        // Unconditional: this request settles its own pending record even when
+        // it was cancelled or superseded, so the session it belongs to never
+        // keeps a stale busy entry. `finishHistoryRequest` ignores the call if a
+        // newer request for this session already took ownership.
+        finishHistoryRequest(sessionId, seq);
       }
     }
 
@@ -681,7 +712,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [currentSessionId, beginHistoryRequest, isLatestHistoryRequest]);
+  }, [currentSessionId, beginHistoryRequest, isLatestHistoryRequest, finishHistoryRequest]);
 
   const selectSession = useCallback((sessionId: string) => {
     console.log(`[SessionContext] selectSession: ${sessionId}`);
@@ -1073,7 +1104,6 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     const sessionId = currentSession.id;
     console.log(`[SessionContext] refreshMessages: ${sessionId}`);
     const seq = beginHistoryRequest(sessionId);
-    setIsRefreshingMessages(true);
     // The existing failure notice stays mounted (Retry busy) until this attempt
     // succeeds. Scoped to history — the run/action `error` is left alone.
     try {
@@ -1127,16 +1157,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       const detail = err instanceof Error ? err.message : tg("ctx.session.refreshFailed");
       setHistoryErrorBySession((current) => ({ ...current, [sessionId]: detail }));
     } finally {
-      // `isRefreshingMessages` is global to the composer, so clearing it needs
-      // both guards: this must still be the newest read for `sessionId` AND
-      // `sessionId` must still be the active conversation. Without the second
-      // check a late reply for an abandoned session switched off the loading
-      // indicator of the session the user had just opened.
-      if (currentSessionIdRef.current === sessionId && isLatestHistoryRequest(sessionId, seq)) {
-        setIsRefreshingMessages(false);
-      }
+      // Loading is owned per session, so this read always releases its own
+      // pending record — even when the user has since switched away. The old
+      // "still active AND still newest" guard belonged to a single global flag;
+      // under per-session ownership it only stranded the abandoned session in a
+      // permanently busy state. `finishHistoryRequest` keeps the newest request
+      // for this session in charge if one has started since.
+      finishHistoryRequest(sessionId, seq);
     }
-  }, [currentSession, disconnectSession, connectSession, beginHistoryRequest, isLatestHistoryRequest]);
+  }, [currentSession, disconnectSession, connectSession, beginHistoryRequest, isLatestHistoryRequest, finishHistoryRequest]);
 
   useEffect(() => {
     if (!currentSession?.id) {
@@ -1514,6 +1543,12 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const hiddenErrorsUnread = !!(hiddenErrorsEntry && hiddenErrorsEntry.count > 0 && !hiddenErrorsEntry.seen);
   // Per-session history failure, resolved for the active session only.
   const historyLoadError = currentSessionId ? (historyErrorBySession[currentSessionId] ?? null) : null;
+  // Busy only when the conversation on screen has a history read of its own
+  // outstanding. A draft (or no selection) has nothing to load, so it reports
+  // false no matter what is still in flight for a session in the background.
+  const isRefreshingMessages = currentSessionId
+    ? pendingHistoryBySession[currentSessionId] !== undefined
+    : false;
 
   const value = useMemo(
     () => ({
