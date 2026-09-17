@@ -86,7 +86,7 @@ describe("provider context-window contract", () => {
   });
 });
 
-describe("api.sessions.list — unwraps { sessions } and tolerates shape", () => {
+describe("api.sessions.list — unwraps valid session lists and rejects malformed payloads", () => {
   it("unwraps the runtime's { sessions: [...] } envelope", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({ contentType: "application/json", json: { sessions: [{ id: "a" }, { id: "b" }] } }),
@@ -105,14 +105,14 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
     expect(out[0].id).toBe("x");
   });
 
-  it("returns [] (never throws .map) for an unexpected shape", async () => {
+  it("rejects an unexpected shape instead of claiming an empty list", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: {} }));
-    await expect(api.sessions.list()).resolves.toEqual([]);
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected session list payload/i);
   });
 
-  it("returns [] for a null body", async () => {
+  it("rejects a null list body", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
-    await expect(api.sessions.list()).resolves.toEqual([]);
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected session list payload/i);
   });
 
   // handleJson guard: a 200 that isn't JSON (SPA index.html fallback for an
@@ -320,10 +320,9 @@ describe("api.sessions.getHistory — persisted events.jsonl rehydration", () =>
     await expect(api.sessions.getHistory("s1")).rejects.toThrow(/history fetch failed: 500/);
   });
 
-  it("returns the empty envelope when the body is null", async () => {
+  it("rejects null history instead of claiming an empty transcript", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
-    const out = await api.sessions.getHistory("s1");
-    expect(out).toEqual({ events: [], total: 0, truncated: false });
+    await expect(api.sessions.getHistory("s1")).rejects.toThrow(/unexpected history payload/i);
   });
 });
 

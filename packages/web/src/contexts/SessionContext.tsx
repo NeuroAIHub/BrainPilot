@@ -21,7 +21,10 @@ import {
   eventSessionId,
   finalizeAssistant,
   generateUUID,
+  mergeTerminalAliases,
+  mergeTerminalIdentity,
   reduceMessagesForEvent,
+  terminalIdentityIds,
 } from "./messageReducer";
 import { reduceAgentsForEvent } from "./agentsReducer";
 import { reduceTraceForEvent } from "./traceReducer";
@@ -36,8 +39,23 @@ export interface AgentMessageFilter {
 interface SessionContextValue {
   sessions: Session[];
   sessionsListStatus: SessionsListStatus;
+  /**
+   * Technical detail of the last session-list load failure, or null when the
+   * list is healthy. Deliberately separate from `error` (run / action failures)
+   * so a list refresh never clobbers a run error and vice versa. The sidebar and
+   * search dialog localize their own primary message and keep this as collapsed
+   * detail; cached rows stay usable while it is set.
+   */
+  sessionsListError: string | null;
   currentSession: Session | null;
   messages: ChatMessage[];
+  /**
+   * Technical detail of the last history load/refresh failure for the ACTIVE
+   * session, or null. Scoped per session so switching conversations never shows
+   * another session's stale failure. Cached / live SSE messages are preserved;
+   * the composer shows a localized notice with Retry (refreshMessages).
+   */
+  historyLoadError: string | null;
   isLoading: boolean;
   isSending: boolean;
   isRefreshingMessages: boolean;
@@ -188,9 +206,10 @@ const HISTORY_REHYDRATE_LIMIT = 0;
  * list already holds. On refresh the SSE ring-buffer tail seeds a few recent
  * messages before history arrives; we must NOT discard the (complete) history
  * just because the list is non-empty. The persisted history is the base; we
- * append only the messages already shown that history doesn't contain (by id) —
- * in-flight optimistic sends, or events newer than the persisted file. Ordering
- * matters: history first (chronological), then the live-only tail.
+ * append only the messages already shown that history doesn't contain (by id, or
+ * by terminal identity for failure cards) — in-flight optimistic sends, or events
+ * newer than the persisted file. Ordering matters: history first (chronological),
+ * then the live-only tail.
  */
 export function mergeRehydratedMessages(
   existing: ChatMessage[],
@@ -198,35 +217,84 @@ export function mergeRehydratedMessages(
 ): ChatMessage[] {
   if (existing.length === 0) return history;
   const liveById = new Map(existing.map((m) => [m.id, m]));
+  // Terminal diagnostics also join across row ids (see `terminalIdentityIds`):
+  // the live tail may hold the standalone RUN_ERROR card keyed by the transport
+  // event id while history holds the rich diagnostic that absorbed that very
+  // same event id under its own stable id. Joining by row id alone appends the
+  // live fallback and the user sees two recovery cards for one failure.
+  const liveTerminals = existing.flatMap((message) => {
+    const ids = terminalIdentityIds(message);
+    return ids ? [{ id: message.id, ids }] : [];
+  });
   const merged = history.map((saved) => {
     const live = liveById.get(saved.id);
-    if (!live) return saved;
-    liveById.delete(saved.id);
-    if (saved.kind !== "tool") return saved;
-    // A terminal projection is monotonic: an older history START must never
-    // resurrect a tool already ended by the live SSE tail (and vice versa).
-    const eventTerminals = [live, saved].filter(
-      (message) => message.streaming === false && message.toolTerminalSource === "event",
-    );
-    const terminalTime = (message: ChatMessage): number => {
-      const parsed = Date.parse(message.completedAt ?? "");
-      return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
-    };
-    const eventTerminal = eventTerminals.sort((a, b) => terminalTime(b) - terminalTime(a))[0];
-    const terminal = eventTerminal
-      ?? (live.streaming === false ? live : saved.streaming === false ? saved : undefined);
-    if (!terminal) return saved;
-    return {
-      ...saved,
-      ...terminal,
-      streaming: false,
-      completedAt: terminal.completedAt ?? live.completedAt ?? saved.completedAt,
-      durationMs: terminal.durationMs ?? live.durationMs ?? saved.durationMs,
-      toolStatus: terminal.toolStatus ?? live.toolStatus ?? saved.toolStatus,
-      toolTerminalSource: terminal.toolTerminalSource ?? live.toolTerminalSource ?? saved.toolTerminalSource,
-    };
+    if (live) liveById.delete(saved.id);
+    return foldLiveTerminalAliases(mergeLiveRow(saved, live), liveById, liveTerminals);
   });
   return [...merged, ...liveById.values()];
+}
+
+/**
+ * Consume every live row that shares a terminal identity with `row` but is keyed
+ * by a different id, so repeated live representations of one known failure
+ * collapse into a single card. Genuinely distinct terminal event ids share no
+ * identity and stay separate rows.
+ */
+function foldLiveTerminalAliases(
+  row: ChatMessage,
+  liveById: Map<string, ChatMessage>,
+  liveTerminals: Array<{ id: string; ids: string[] }>,
+): ChatMessage {
+  let folded = row;
+  let ids = terminalIdentityIds(folded);
+  if (!ids) return folded;
+  for (const entry of liveTerminals) {
+    if (entry.id === folded.id) continue;
+    const candidate = liveById.get(entry.id);
+    if (!candidate) continue; // absent or already consumed by an earlier row
+    // Annotated because `ids` is re-assigned from `current` below; without it TS
+    // cannot break the self-referential inference (TS7022).
+    const current: string[] = ids;
+    if (!entry.ids.some((id) => current.includes(id))) continue;
+    liveById.delete(entry.id);
+    folded = mergeTerminalAliases(folded, candidate);
+    ids = terminalIdentityIds(folded) ?? current;
+  }
+  return folded;
+}
+
+/** Reconcile one persisted row with the live row carrying the same id. */
+function mergeLiveRow(saved: ChatMessage, live: ChatMessage | undefined): ChatMessage {
+  if (!live) return saved;
+  // Persisted history predates the RUN_ERROR that promoted this diagnostic in
+  // the live tail; keep the terminal identity so the reload doesn't demote the
+  // recovery card back to a plain error (and later re-append a phantom one).
+  if (saved.kind === "system_message" || live.kind === "system_message") {
+    return mergeTerminalIdentity(saved, live);
+  }
+  if (saved.kind !== "tool") return saved;
+  // A terminal projection is monotonic: an older history START must never
+  // resurrect a tool already ended by the live SSE tail (and vice versa).
+  const eventTerminals = [live, saved].filter(
+    (message) => message.streaming === false && message.toolTerminalSource === "event",
+  );
+  const terminalTime = (message: ChatMessage): number => {
+    const parsed = Date.parse(message.completedAt ?? "");
+    return Number.isFinite(parsed) ? parsed : Number.NEGATIVE_INFINITY;
+  };
+  const eventTerminal = eventTerminals.sort((a, b) => terminalTime(b) - terminalTime(a))[0];
+  const terminal = eventTerminal
+    ?? (live.streaming === false ? live : saved.streaming === false ? saved : undefined);
+  if (!terminal) return saved;
+  return {
+    ...saved,
+    ...terminal,
+    streaming: false,
+    completedAt: terminal.completedAt ?? live.completedAt ?? saved.completedAt,
+    durationMs: terminal.durationMs ?? live.durationMs ?? saved.durationMs,
+    toolStatus: terminal.toolStatus ?? live.toolStatus ?? saved.toolStatus,
+    toolTerminalSource: terminal.toolTerminalSource ?? live.toolTerminalSource ?? saved.toolTerminalSource,
+  };
 }
 
 /** Close stale tool cards using the session snapshot as lifecycle authority. */
@@ -350,6 +418,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   // wait until the first list request has finished; the initial empty in-memory
   // list is not "no conversations exist".
   const [sessionsListStatus, setSessionsListStatus] = useState<SessionsListStatus>("idle");
+  // Scoped list-load failure detail. Kept out of `error` so the sidebar can say
+  // "the conversation list could not be loaded" without swallowing (or being
+  // swallowed by) a run/Stop error from the active session.
+  const [sessionsListError, setSessionsListError] = useState<string | null>(null);
+  // Scoped history-load failure detail, keyed by session id so a failure on an
+  // old session never leaks into the newly selected one.
+  const [historyErrorBySession, setHistoryErrorBySession] = useState<Record<string, string>>({});
   // Mirror of isDraft for reading inside callbacks that must not re-create when
   // the draft flag flips (e.g. refreshSessions, keyed only on isAuthReady).
   const isDraftRef = useRef(false);
@@ -368,7 +443,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const interruptingRef = useRef(false);
   const interruptingToolsRef = useRef<Set<string>>(new Set());
   const [interruptingToolIds, setInterruptingToolIds] = useState<ReadonlySet<string>>(new Set());
-  const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
+  // History loading is owned per session, not globally: the sequence number of
+  // the newest in-flight history request for each session that has one (initial
+  // hydration and manual refresh share the counter). The public
+  // `isRefreshingMessages` boolean is derived from the ACTIVE session's entry
+  // below, so a read left behind on an abandoned session can never keep the
+  // newly opened one — or a draft — looking busy, and its own late completion
+  // only clears its own entry.
+  const [pendingHistoryBySession, setPendingHistoryBySession] = useState<Record<string, number>>({});
   const [error, setError] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<"chat" | "agents" | "trace">("chat");
   // #134 — read currentView inside the SSE queue-drain effect (keyed on
@@ -429,20 +511,72 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     ? connections.get(currentSessionId) === "open"
     : false;
 
+  // #324 follow-up — request bookkeeping for the two overlapping reads.
+  //
+  // `sessionsRequestSeqRef` numbers session-list requests, and
+  // `historyRequestSeqRef` numbers history requests per session id (initial
+  // hydration and manual refresh share one counter). Only the newest request may
+  // publish its outcome — status, scoped error or metadata — so a slow older
+  // read can neither replace a newer result nor resurrect an error the newer
+  // read already cleared. Loading ownership is tracked separately (see
+  // `pendingHistoryBySession`): staleness decides who may COMMIT data, while the
+  // pending record decides who still owes a completion.
+  const sessionsRequestSeqRef = useRef(0);
+  const historyRequestSeqRef = useRef<Map<string, number>>(new Map());
+
+  /** Allocate the next sequence for `sessionId` and record it as pending. */
+  const beginHistoryRequest = useCallback((sessionId: string) => {
+    const seq = (historyRequestSeqRef.current.get(sessionId) ?? 0) + 1;
+    historyRequestSeqRef.current.set(sessionId, seq);
+    setPendingHistoryBySession((current) => ({ ...current, [sessionId]: seq }));
+    return seq;
+  }, []);
+
+  /**
+   * Release the pending record this request owns. Only the entry that still
+   * equals `seq` is dropped, so an older completion can never clear a newer
+   * request for the same session, and never touches another session at all.
+   * Called unconditionally in `finally` by both read paths — including reads
+   * whose session is no longer selected, which must still settle their own
+   * bookkeeping instead of leaking a permanently busy entry.
+   */
+  const finishHistoryRequest = useCallback((sessionId: string, seq: number) => {
+    setPendingHistoryBySession((current) => {
+      if (current[sessionId] !== seq) return current;
+      const next = { ...current };
+      delete next[sessionId];
+      return next;
+    });
+  }, []);
+
+  /** False once a newer request for the same session has started. */
+  const isLatestHistoryRequest = useCallback(
+    (sessionId: string, seq: number) => historyRequestSeqRef.current.get(sessionId) === seq,
+    [],
+  );
+
   const refreshSessions = useCallback(async () => {
+    const seq = (sessionsRequestSeqRef.current += 1);
     if (!isAuthReady) {
       setSessions([]);
       setCurrentSessionId(null);
       setIsDraft(false);
       setSessionsListStatus("idle");
+      setSessionsListError(null);
       return;
     }
 
     setIsLoading(true);
     setSessionsListStatus("loading");
-    setError(null);
+    // NOTE: the previous failure is deliberately NOT cleared here — the sidebar
+    // keeps its notice (and its focused Retry button) mounted and busy while the
+    // retry runs, and only success clears it. `error` is untouched either way:
+    // it still belongs to the last run/action.
     try {
       const nextSessions = await api.sessions.list();
+      // A newer list request (or a sign-out reset) started while this one was in
+      // flight: its outcome wins, so drop this reply entirely.
+      if (sessionsRequestSeqRef.current !== seq) return;
       const sorted = [...nextSessions].sort((a, b) => b.updatedAt.localeCompare(a.updatedAt));
       setSessions(sorted);
       // #324 — restore preferred / fallback only after the list is ready.
@@ -462,11 +596,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         saveLastSessionId(resolved.sessionId);
       }
       setSessionsListStatus("ready");
+      setSessionsListError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tg("ctx.session.loadFailed"));
+      // A superseded failure must not overwrite the newest outcome.
+      if (sessionsRequestSeqRef.current !== seq) return;
+      // Keep the cached `sessions` rows on screen; only flag the failure.
+      setSessionsListError(err instanceof Error ? err.message : tg("ctx.session.loadFailed"));
       setSessionsListStatus("error");
     } finally {
-      setIsLoading(false);
+      if (sessionsRequestSeqRef.current === seq) setIsLoading(false);
     }
   }, [isAuthReady]);
 
@@ -490,10 +628,15 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     let cancelled = false;
 
     async function loadHistory() {
-      setIsRefreshingMessages(true);
+      const seq = beginHistoryRequest(sessionId);
+      // Superseded by a newer read for this same session (e.g. a manual refresh
+      // overtaking this one) — that request owns the outcome from then on.
+      const stale = () => cancelled || !isLatestHistoryRequest(sessionId, seq);
+      // A previous failure stays visible (with a busy Retry) until this attempt
+      // succeeds — see the success clear below.
       try {
         const { events } = await api.sessions.getHistory(sessionId, { limit: HISTORY_REHYDRATE_LIMIT });
-        if (cancelled) return;
+        if (stale()) return;
 
         // Replay the persisted event stream through the same reducers SSE uses
         // (messageReducer / traceReducer / agents seed via session_state). The
@@ -503,8 +646,14 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         const { messages: nextMessages, trace: nextTrace, agents: lastAgents, tokenUsage: lastUsage } =
           foldSessionHistory(events, sessionId);
 
-        if (cancelled) return;
+        if (stale()) return;
         hydratedSessionsRef.current.add(sessionId);
+        setHistoryErrorBySession((current) => {
+          if (!(sessionId in current)) return current;
+          const next = { ...current };
+          delete next[sessionId];
+          return next;
+        });
         if (lastUsage) setTokenUsage(lastUsage);
 
         // Merge the full history under whatever SSE / optimistic messages have
@@ -541,11 +690,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch (err) {
-        // Best-effort. SSE will eventually drive the panel; we shouldn't surface
-        // a banner just because the history file was unreachable for a moment.
+        // Don't swallow this: an unreachable/unreadable transcript used to leave
+        // a silently blank or partial conversation (console.warn only). Record a
+        // scoped, retryable failure for THIS session — cached and live SSE
+        // messages are left untouched, and the generic run `error` is not used
+        // so a real run/Stop failure can't be masked by (or mask) this one.
+        if (stale()) return;
         console.warn(`[SessionContext] history rehydrate failed for ${sessionId}:`, err);
+        const detail = err instanceof Error ? err.message : String(err);
+        setHistoryErrorBySession((current) => ({ ...current, [sessionId]: detail }));
       } finally {
-        if (!cancelled) setIsRefreshingMessages(false);
+        // Unconditional: this request settles its own pending record even when
+        // it was cancelled or superseded, so the session it belongs to never
+        // keeps a stale busy entry. `finishHistoryRequest` ignores the call if a
+        // newer request for this session already took ownership.
+        finishHistoryRequest(sessionId, seq);
       }
     }
 
@@ -553,7 +712,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [currentSessionId]);
+  }, [currentSessionId, beginHistoryRequest, isLatestHistoryRequest, finishHistoryRequest]);
 
   const selectSession = useCallback((sessionId: string) => {
     console.log(`[SessionContext] selectSession: ${sessionId}`);
@@ -942,20 +1101,33 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     if (!currentSession) {
       return;
     }
-      console.log(`[SessionContext] refreshMessages: ${currentSession.id}`);
-    setIsRefreshingMessages(true);
-    setError(null);
+    const sessionId = currentSession.id;
+    console.log(`[SessionContext] refreshMessages: ${sessionId}`);
+    const seq = beginHistoryRequest(sessionId);
+    // The existing failure notice stays mounted (Retry busy) until this attempt
+    // succeeds. Scoped to history — the run/action `error` is left alone.
     try {
-      const { events } = await api.sessions.getHistory(currentSession.id, {
+      const { events } = await api.sessions.getHistory(sessionId, {
         limit: HISTORY_REHYDRATE_LIMIT,
       });
+      // The user may have switched conversations while this was in flight;
+      // a late response must not overwrite the now-active session's messages,
+      // trace, agents or usage. A newer read of THIS session supersedes us too.
+      if (currentSessionIdRef.current !== sessionId) return;
+      if (!isLatestHistoryRequest(sessionId, seq)) return;
       const { messages: nextMessages, trace: nextTrace, agents: nextAgents, tokenUsage: nextUsage } =
-        foldSessionHistory(events, currentSession.id);
+        foldSessionHistory(events, sessionId);
 
+      setHistoryErrorBySession((current) => {
+        if (!(sessionId in current)) return current;
+        const next = { ...current };
+        delete next[sessionId];
+        return next;
+      });
       if (nextUsage) setTokenUsage(nextUsage);
-      setMessagesBySession((current) => ({ ...current, [currentSession.id]: nextMessages }));
+      setMessagesBySession((current) => ({ ...current, [sessionId]: nextMessages }));
       if (nextTrace) {
-        setTraceBySession((current) => ({ ...current, [currentSession.id]: nextTrace }));
+        setTraceBySession((current) => ({ ...current, [sessionId]: nextTrace }));
       }
       if (nextAgents && nextAgents.length > 0) {
         setAgents(nextAgents);
@@ -971,18 +1143,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           return changed ? next : current;
         });
       }
-      hydratedSessionsRef.current.add(currentSession.id);
+      hydratedSessionsRef.current.add(sessionId);
 
       // Re-connect the SSE stream so live updates continue after the disk
       // history has refreshed the local cache.
-      disconnectSession(currentSession.id);
-      connectSession(currentSession.id);
+      disconnectSession(sessionId);
+      connectSession(sessionId);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tg("ctx.session.refreshFailed"));
+      // Same scoped, retryable state the initial hydration uses; cached/live
+      // messages stay on screen. A superseded attempt stays silent so it cannot
+      // re-flag a session a newer read already loaded successfully.
+      if (!isLatestHistoryRequest(sessionId, seq)) return;
+      const detail = err instanceof Error ? err.message : tg("ctx.session.refreshFailed");
+      setHistoryErrorBySession((current) => ({ ...current, [sessionId]: detail }));
     } finally {
-      setIsRefreshingMessages(false);
+      // Loading is owned per session, so this read always releases its own
+      // pending record — even when the user has since switched away. The old
+      // "still active AND still newest" guard belonged to a single global flag;
+      // under per-session ownership it only stranded the abandoned session in a
+      // permanently busy state. `finishHistoryRequest` keeps the newest request
+      // for this session in charge if one has started since.
+      finishHistoryRequest(sessionId, seq);
     }
-  }, [currentSession, disconnectSession, connectSession]);
+  }, [currentSession, disconnectSession, connectSession, beginHistoryRequest, isLatestHistoryRequest, finishHistoryRequest]);
 
   useEffect(() => {
     if (!currentSession?.id) {
@@ -1358,13 +1541,23 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const hiddenErrorsEntry = currentSessionId ? hiddenErrorsBySession[currentSessionId] : undefined;
   const hiddenErrorsCount = hiddenErrorsEntry?.count ?? 0;
   const hiddenErrorsUnread = !!(hiddenErrorsEntry && hiddenErrorsEntry.count > 0 && !hiddenErrorsEntry.seen);
+  // Per-session history failure, resolved for the active session only.
+  const historyLoadError = currentSessionId ? (historyErrorBySession[currentSessionId] ?? null) : null;
+  // Busy only when the conversation on screen has a history read of its own
+  // outstanding. A draft (or no selection) has nothing to load, so it reports
+  // false no matter what is still in flight for a session in the background.
+  const isRefreshingMessages = currentSessionId
+    ? pendingHistoryBySession[currentSessionId] !== undefined
+    : false;
 
   const value = useMemo(
     () => ({
       sessions,
       sessionsListStatus,
+      sessionsListError,
       currentSession,
       messages,
+      historyLoadError,
       isLoading,
       isSending,
       isRefreshingMessages,
@@ -1406,8 +1599,10 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     [
       sessions,
       sessionsListStatus,
+      sessionsListError,
       currentSession,
       messages,
+      historyLoadError,
       isLoading,
       isSending,
       isRefreshingMessages,

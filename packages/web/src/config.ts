@@ -13,6 +13,14 @@ export const runtimeConfig = {
   // VITE_KB_SETTINGS_ENABLED=0. This only hides the management UI; it does not
   // disable the get_domain_knowledge_local retrieval tool.
   knowledgeBaseSettingsEnabled: import.meta.env.VITE_KB_SETTINGS_ENABLED !== "0",
+  // Downloaded-plugin management needs a host that implements
+  // `/api/plugins/*`. A deployment whose backend is runtime-only (no
+  // backend-core plugin registry) builds with VITE_PLUGINS_SETTINGS_ENABLED=0
+  // so the Settings plugin tab — and the installed-plugin fetch behind it —
+  // disappear instead of 404ing. Default stays enabled for local/self-hosted
+  // installs. Deliberately independent from `localMode`: a self-hosted
+  // non-local server can still serve the plugin API.
+  pluginsSettingsEnabled: import.meta.env.VITE_PLUGINS_SETTINGS_ENABLED !== "0",
   // Hosted multi-user deployments mount this app under a subpath (e.g. /app)
   // while the marketing/home page lives at the site root. Non-local builds show
   // a "return home" entry pointing here; override with VITE_HOME_URL so the host

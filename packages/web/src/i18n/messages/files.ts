@@ -2,6 +2,7 @@ import { defineMessages } from "../types";
 
 export default defineMessages(
   {
+    "files.preview.info": "文件信息",
     "files.aria.sidebar": "工作区文件",
     "files.aria.resizeSidebar": "调整文件栏宽度",
     "files.eyebrow.workspace": "工作区",
@@ -39,7 +40,7 @@ export default defineMessages(
     "files.aria.delete": "删除 {name}",
     "files.aria.deleteSelected": "删除已选文件",
     "files.tier.workspace": "当前会话",
-    "files.tier.workspaceHint": "本会话的工作区，agent 在此读写；随会话结束而清理。",
+    "files.tier.workspaceHint": "本会话的工作区。运行结束后仍可查看；删除会话会清理这里的文件。",
     "files.tier.draftHint": "发送第一条消息后创建本会话工作区。已下载的数据可从下方持久库选择，用于第一条研究提问。",
     "files.tier.data": "持久库",
     "files.tier.dataHint": "跨会话持久保存，可在其他会话复用；适合数据集、参考资料。",
@@ -79,6 +80,7 @@ export default defineMessages(
     "files.editor.overwrite": "覆盖文件",
   },
   {
+    "files.preview.info": "File information",
     "files.aria.sidebar": "Workspace files",
     "files.aria.resizeSidebar": "Resize files sidebar",
     "files.eyebrow.workspace": "Workspace",
@@ -116,7 +118,7 @@ export default defineMessages(
     "files.aria.delete": "Delete {name}",
     "files.aria.deleteSelected": "Delete selected files",
     "files.tier.workspace": "Current session",
-    "files.tier.workspaceHint": "This session's workspace, where the agent reads and writes; cleared when the session ends.",
+    "files.tier.workspaceHint": "Files remain after a run. Deleting the conversation also removes this session's workspace.",
     "files.tier.draftHint": "The session workspace is created on your first message. Select downloaded data from the persistent library below for your first research question.",
     "files.tier.data": "Persistent library",
     "files.tier.dataHint": "Persists across sessions and can be reused in others; good for datasets and reference material.",

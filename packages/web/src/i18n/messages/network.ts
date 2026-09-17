@@ -2,6 +2,12 @@ import { defineMessages } from "../types";
 
 export default defineMessages(
   {
+    "overview.details": "详细统计",
+    "overview.idleSummary": "尚未产生协作活动。可返回对话开始任务。",
+    "overview.activeSummary": "{count} 个智能体正在工作。",
+    "overview.waitingSummary": "正在等待你的回答，请返回对话完成确认。",
+    "overview.attentionSummary": "{count} 个智能体需要关注，请查看相应节点。",
+    "overview.finishedSummary": "当前没有运行中的工作。选择节点可查看结果。",
     // Empty state
     "network.empty":
       "当前会话还没有智能体协作活动。发送一条消息开始任务后，这里会出现智能体节点和它们之间的消息流。",
@@ -113,6 +119,12 @@ export default defineMessages(
     "network.filter.hooks.description": "系统诊断事件",
   },
   {
+    "overview.details": "Detailed statistics",
+    "overview.idleSummary": "No collaboration activity yet. Start a task in Chat.",
+    "overview.activeSummary": "{count} agents are working.",
+    "overview.waitingSummary": "Waiting for your answer. Return to Chat to respond.",
+    "overview.attentionSummary": "{count} agents need attention. Inspect their nodes.",
+    "overview.finishedSummary": "No work is currently running. Select a node to inspect results.",
     "network.empty":
       "No agent collaboration activity in this session yet. Once you send a message to start a task, agent nodes and the message flow between them will appear here.",
 

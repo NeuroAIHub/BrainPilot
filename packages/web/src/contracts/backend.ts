@@ -241,6 +241,14 @@ export interface ChatMessage {
    * not concatenate the same delta twice (#314). Not rendered.
    */
   appliedStreamKeys?: string[];
+  /**
+   * Reducer-internal: identities (`_eventId`) of the terminal RUN_ERROR events
+   * already applied to this row. Separate from `appliedStreamKeys`, which is
+   * dropped on finalization — a terminal card outlives its stream and must stay
+   * recognizable when history rehydrate or SSE replay delivers it again after a
+   * later user turn (#556 follow-up). Not rendered.
+   */
+  terminalEventIds?: string[];
   /** Reducer-only buffer for a split NO-RENDER block; never rendered. */
   suppressedContent?: string;
 }

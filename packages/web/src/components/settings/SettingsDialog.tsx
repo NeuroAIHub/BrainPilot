@@ -1,8 +1,8 @@
+import { DetailsSection } from "../primitives/DetailsSection";
 import { FormEvent, useEffect, useRef, useState } from "react";
 import { Check, Database, Eye, EyeOff, Loader2, Package, Plug, Plus, Settings, SlidersHorizontal, Trash2, UserRound, Wrench, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type {
-  McpByokStatus,
   McpServerEntry,
   ProviderProfile,
   ProviderApi,
@@ -11,11 +11,12 @@ import type {
 import { useAuth } from "../../contexts/AuthContext";
 import { usePreferences } from "../../contexts/PreferencesContext";
 import { useT } from "../../i18n/useT";
-import { api, type InstalledPluginApiEntry } from "../../utils/api";
+import { api } from "../../utils/api";
 import { runtimeConfig } from "../../config";
 import { EXAMPLE_MODEL } from "@brainpilot/protocol";
 import { CustomSelect } from "../primitives/CustomSelect";
 import { IconButton } from "../primitives/IconButton";
+import { useRetryFocus, type RememberRetryFocus } from "../primitives/useRetryFocus";
 import { KnowledgeBasePanel } from "./KnowledgeBasePanel";
 import { BuiltinToolsSection } from "./BuiltinToolsSection";
 import { McpByokCard } from "./McpByokCard";
@@ -28,6 +29,9 @@ import {
   type ProviderFormErrors,
 } from "./providerFormValidation";
 import { listFocusable, resolveEscapeLayer, trapFocusKeyDown } from "./settingsModalStack";
+import { groupProviders, providerActionPermissions } from "./providerSettingsView";
+import { isConfirmedEmpty, resourceItems, type SettingsResource } from "./settingsResources";
+import { useSettingsResources } from "./useSettingsResources";
 
 export type SettingsTab = "account" | "providers" | "mcp" | "plugins" | "knowledgeBase" | "preferences";
 
@@ -57,7 +61,10 @@ const ALL_TABS: Array<{ id: SettingsTab; labelKey: string; icon: LucideIcon }> =
 type SettingsTabConfig = Pick<
   typeof runtimeConfig,
   "localMode" | "knowledgeBaseSettingsEnabled"
->;
+> & {
+  /** Omitted means enabled: a host that predates the flag serves `/api/plugins/*`. */
+  pluginsSettingsEnabled?: boolean;
+};
 
 /** Apply deployment capabilities to the Settings navigation. */
 export function getSettingsTabs(config: SettingsTabConfig) {
@@ -68,11 +75,29 @@ export function getSettingsTabs(config: SettingsTabConfig) {
     // Managed deployments may ship a pre-provisioned knowledge base and hide
     // the local build/configuration surface while retaining retrieval tools.
     if (!config.knowledgeBaseSettingsEnabled && tab.id === "knowledgeBase") return false;
+    // A runtime-only backend serves no `/api/plugins/*`, so hide the
+    // downloaded-plugin tab rather than rendering a permanent load error.
+    if (config.pluginsSettingsEnabled === false && tab.id === "plugins") return false;
     return true;
   });
 }
 
 const tabs = getSettingsTabs(runtimeConfig);
+
+/**
+ * Resolve the tab to show for a requested deep link. A capability can hide the
+ * requested tab (e.g. the no-provider banner deep-links to "providers"; a
+ * deployment with plugins off still offers other entry points), so an
+ * unavailable request falls back to the first visible tab instead of rendering
+ * an active tab that is not in the nav.
+ */
+export function resolveInitialTab(
+  requested: SettingsTab | undefined,
+  available: Array<{ id: SettingsTab }>,
+): SettingsTab {
+  if (requested && available.some((tab) => tab.id === requested)) return requested;
+  return available[0]?.id ?? "preferences";
+}
 
 const DEFAULT_PROVIDER_FORM = {
   name: "",
@@ -97,6 +122,21 @@ const DEFAULT_MCP_FORM = {
 const colorOptions = ["#111111", "#16a34a", "#2563eb", "#7c3aed", "#f59e0b", "#d92d20", "#64748b"];
 const PROVIDER_UPDATED_EVENT = "provider-profiles-updated";
 
+/**
+ * Status/error text belongs to the section that triggered the operation. The
+ * dialog used to keep one global pair, so a provider 403 stayed pinned over
+ * Preferences and Account until the dialog was closed.
+ */
+type SettingsFeedback = {
+  section: SettingsTab;
+  kind: "status" | "error";
+  message: string;
+};
+
+function errorMessage(reason: unknown, fallback: string): string {
+  return reason instanceof Error ? reason.message : fallback;
+}
+
 function splitList(value: string) {
   return value
     .split(",")
@@ -108,15 +148,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   const { user } = useAuth();
   const preferences = usePreferences();
   const t = useT();
-  const [activeTab, setActiveTab] = useState<SettingsTab>(tabs[0].id);
-  const [providers, setProviders] = useState<ProviderProfile[]>([]);
-  const [mcpServers, setMcpServers] = useState<McpServerEntry[]>([]);
-  const [installedPlugins, setInstalledPlugins] = useState<InstalledPluginApiEntry[]>([]);
-  // #377: preset BYOK. `null` = this deployment has no `/api/mcp-servers/byok`
-  // (self-hosted) → presets behave exactly as before, no BYOK cards. An array
-  // (possibly empty) = hosted deployment; each row tells us whether the user
-  // already has a key on file for that `byok.kind`.
-  const [mcpByokStatus, setMcpByokStatus] = useState<McpByokStatus[] | null>(null);
+  const [activeTab, setActiveTab] = useState<SettingsTab>(() => resolveInitialTab(initialTab, tabs));
   const [providerForm, setProviderForm] = useState(DEFAULT_PROVIDER_FORM);
   const [editingProviderId, setEditingProviderId] = useState<string | null>(null);
   const [isProviderFormOpen, setIsProviderFormOpen] = useState(false);
@@ -126,11 +158,41 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   const [mcpForm, setMcpForm] = useState(DEFAULT_MCP_FORM);
   const [editingMcpName, setEditingMcpName] = useState<string | null>(null);
   const [isMcpFormOpen, setIsMcpFormOpen] = useState(false);
-  const [isLoading, setIsLoading] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  // Operation feedback is scoped to the section that produced it: a provider
+  // failure must not appear over the Account or Preferences tab.
+  const [feedback, setFeedback] = useState<SettingsFeedback | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [testingProviderId, setTestingProviderId] = useState<string | null>(null);
+
+  const {
+    providers: providerResource,
+    mcpServers: mcpResource,
+    installedPlugins: pluginResource,
+    mcpByok: mcpByokStatus,
+    reloadProviders,
+    reloadMcpServers,
+    reloadPlugins,
+    refreshMcpByok,
+    updateProviders,
+    updateMcpServers,
+  } = useSettingsResources({
+    isOpen,
+    pluginsEnabled: runtimeConfig.pluginsSettingsEnabled,
+    fallbackError: t("settings.loadFailed"),
+    // Background refresh only while the tab that shows provider health is up.
+    autoRefresh: activeTab === "providers",
+  });
+
+  const providers = resourceItems(providerResource);
+  const mcpServers = resourceItems(mcpResource);
+  const installedPlugins = resourceItems(pluginResource);
+
+  // A successful retry unmounts the failure notice the Retry button lives in;
+  // each resource keeps its own record so focus lands on that section's heading
+  // instead of falling to <body>.
+  const rememberProviderRetryFocus = useRetryFocus(isOpen, providerResource);
+  const rememberMcpRetryFocus = useRetryFocus(isOpen, mcpResource);
+  const rememberPluginRetryFocus = useRetryFocus(isOpen, pluginResource);
 
   // #328 — modal a11y: focus return, traps, nested Escape stack.
   const settingsRootRef = useRef<HTMLDivElement | null>(null);
@@ -140,87 +202,21 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   const returnFocusRef = useRef<HTMLElement | null>(null);
   const providerNameInputRef = useRef<HTMLInputElement | null>(null);
 
-  const mergeHealth = (profiles: ProviderProfile[], healthProfiles: ProviderProfile[]): ProviderProfile[] => {
-    const healthById = new Map(healthProfiles.map((p) => [p.id, p]));
-    return profiles.map((p) => {
-      const h = healthById.get(p.id);
-      if (!h) return p;
-      return { ...p, healthStatus: h.healthStatus, healthCheckedAt: h.healthCheckedAt, modelHealth: h.modelHealth };
-    });
-  };
-
-  const loadSettings = async () => {
-    setIsLoading(true);
-    setError(null);
-    try {
-      const [nextProviders, nextMcpServers, healthProfiles, nextInstalledPlugins, nextByok] = await Promise.all([
-        api.providers.list(),
-        api.mcpServers.list(),
-        api.providers.health().catch(() => [] as ProviderProfile[]),
-        api.plugins.installed(),
-        // Probe never rejects — it resolves to null when unsupported (#377).
-        api.mcpByok.support(),
-      ]);
-      setProviders(mergeHealth(nextProviders, healthProfiles));
-      setMcpServers(nextMcpServers);
-      setInstalledPlugins(nextInstalledPlugins);
-      setMcpByokStatus(nextByok);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : t("settings.loadFailed"));
-    } finally {
-      setIsLoading(false);
-    }
-  };
-
-  const refreshHealth = async () => {
-    try {
-      const healthProfiles = await api.providers.health();
-      setProviders((current) => mergeHealth(current, healthProfiles));
-    } catch {
-      // ignore silent refresh errors
-    }
-  };
-
-  const refreshSettingsSilent = async () => {
-    try {
-      const [nextProviders, nextMcpServers, healthProfiles, nextByok] = await Promise.all([
-        api.providers.list(),
-        api.mcpServers.list(),
-        api.providers.health().catch(() => [] as ProviderProfile[]),
-        api.mcpByok.support(),
-      ]);
-      setProviders(mergeHealth(nextProviders, healthProfiles));
-      setMcpServers(nextMcpServers);
-      setMcpByokStatus(nextByok);
-    } catch {
-      // ignore silent refresh errors
-    }
-  };
-
-  /**
-   * #377: re-probe after a BYOK save/clear so the `configured` badge reflects the
-   * write. Also refreshes the server list, because the hosted layer rewrites the
-   * preset URL with the user's key as part of the same operation.
-   */
-  const refreshMcpByok = async () => {
-    const [nextByok, nextMcpServers] = await Promise.all([
-      api.mcpByok.support(),
-      api.mcpServers.list().catch(() => null),
-    ]);
-    setMcpByokStatus(nextByok);
-    if (nextMcpServers) setMcpServers(nextMcpServers);
-  };
+  const setSectionStatus = (section: SettingsTab, message: string) =>
+    setFeedback({ section, kind: "status", message });
+  const setSectionError = (section: SettingsTab, message: string) =>
+    setFeedback({ section, kind: "error", message });
 
   const testProvider = async (providerId: string) => {
     setTestingProviderId(providerId);
     try {
       const result = await api.providers.test(providerId);
-      setProviders((current) =>
+      updateProviders((current) =>
         current.map((p) => (p.id === providerId ? { ...p, healthStatus: result.healthStatus, healthCheckedAt: result.healthCheckedAt, modelHealth: result.modelHealth } : p)),
       );
-      setStatus(t("settings.providers.tested", { name: result.name, status: result.healthStatus }));
+      setSectionStatus("providers", t("settings.providers.tested", { name: result.name, status: t(`settings.providers.health.${result.healthStatus}`) }));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("settings.providers.testFailed"));
+      setSectionError("providers", errorMessage(err, t("settings.providers.testFailed")));
     } finally {
       setTestingProviderId(null);
     }
@@ -230,18 +226,13 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
     if (isOpen) {
       // Honour a deep-link target (e.g. the composer's no-provider banner jumps
       // straight to Providers). Only on the open transition, so a user can still
-      // navigate to other tabs while the dialog stays open.
-      if (initialTab) setActiveTab(initialTab);
-      void loadSettings();
+      // navigate to other tabs while the dialog stays open. A request for a tab
+      // this deployment hides falls back to the first visible section.
+      setActiveTab((current) => resolveInitialTab(initialTab ?? current, tabs));
+      setFeedback(null);
       void api.getVersion().then((v) => setVersion(v.version)).catch(() => setVersion(null));
     }
   }, [isOpen]);
-
-  useEffect(() => {
-    if (!isOpen || activeTab !== "providers") return;
-    const id = window.setInterval(() => void refreshSettingsSilent(), 30000);
-    return () => window.clearInterval(id);
-  }, [isOpen, activeTab]);
 
   // Capture the control that opened Settings and restore focus on close (#328).
   useEffect(() => {
@@ -374,7 +365,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
 
   const saveProvider = async (event: FormEvent) => {
     event.preventDefault();
-    setError(null);
+    setFeedback(null);
     const validation = validateProviderForm(providerForm, {
       isEdit: Boolean(editingProviderId),
     });
@@ -406,15 +397,15 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
             iconColor: providerForm.iconColor,
             notes: providerForm.notes,
           });
-      setProviders((current) => [provider, ...current.filter((item) => item.id !== provider.id)]);
+      updateProviders((current) => [provider, ...current.filter((item) => item.id !== provider.id)]);
       setProviderForm(DEFAULT_PROVIDER_FORM);
       setEditingProviderId(null);
       setShowProviderKey(false);
       setIsProviderFormOpen(false);
-      setStatus(editingProviderId ? t("settings.providers.updated") : t("settings.providers.added"));
+      setSectionStatus("providers", editingProviderId ? t("settings.providers.updated") : t("settings.providers.added"));
       emitProviderUpdated();
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("settings.providers.saveFailed"));
+      setSectionError("providers", errorMessage(err, t("settings.providers.saveFailed")));
     }
   };
 
@@ -436,16 +427,28 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   };
 
   const activateProvider = async (providerId: string) => {
-    const active = await api.providers.setActive(providerId);
-    setProviders((current) => current.map((provider) => ({ ...provider, isActive: provider.id === active.id })));
-    setStatus(t("settings.providers.activeSwitched", { name: active.name }));
-    emitProviderUpdated();
+    setFeedback(null);
+    try {
+      const active = await api.providers.setActive(providerId);
+      updateProviders((current) => current.map((provider) => ({ ...provider, isActive: provider.id === active.id })));
+      setSectionStatus("providers", t("settings.providers.activeSwitched", { name: active.name }));
+      emitProviderUpdated();
+    } catch (err) {
+      // A hosted backend 403s on a profile the user may not manage; without this
+      // the promise rejected unhandled and the row silently stayed as it was.
+      setSectionError("providers", errorMessage(err, t("settings.providers.activateFailed")));
+    }
   };
 
   const removeProvider = async (providerId: string) => {
-    await api.providers.remove(providerId);
-    setProviders((current) => current.filter((provider) => provider.id !== providerId));
-    emitProviderUpdated();
+    setFeedback(null);
+    try {
+      await api.providers.remove(providerId);
+      updateProviders((current) => current.filter((provider) => provider.id !== providerId));
+      emitProviderUpdated();
+    } catch (err) {
+      setSectionError("providers", errorMessage(err, t("settings.providers.removeFailed")));
+    }
   };
 
   const updateProviderModel = (index: number, value: string) => {
@@ -480,7 +483,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
 
   const saveMcpServer = async (event: FormEvent) => {
     event.preventDefault();
-    setError(null);
+    setFeedback(null);
     try {
       const config: Omit<McpServerEntry, "name"> =
         mcpForm.type === "stdio"
@@ -489,13 +492,13 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
       const server = editingMcpName
         ? await api.mcpServers.update(editingMcpName, config)
         : await api.mcpServers.add(mcpForm.name, config);
-      setMcpServers((current) => [server, ...current.filter((item) => item.name !== server.name)]);
+      updateMcpServers((current) => [server, ...current.filter((item) => item.name !== server.name)]);
       setMcpForm(DEFAULT_MCP_FORM);
       setEditingMcpName(null);
       setIsMcpFormOpen(false);
-      setStatus(editingMcpName ? t("settings.mcp.updated") : t("settings.mcp.added"));
+      setSectionStatus("mcp", editingMcpName ? t("settings.mcp.updated") : t("settings.mcp.added"));
     } catch (err) {
-      setError(err instanceof Error ? err.message : t("settings.mcp.saveFailed"));
+      setSectionError("mcp", errorMessage(err, t("settings.mcp.saveFailed")));
     }
   };
 
@@ -512,14 +515,14 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
   };
 
   const removeMcpServer = async (name: string) => {
-    setError(null);
+    setFeedback(null);
     try {
       await api.mcpServers.remove(name);
-      setMcpServers((current) => current.filter((server) => server.name !== name));
+      updateMcpServers((current) => current.filter((server) => server.name !== name));
     } catch (err) {
       // #377: the backend now 403s on a platform-managed entry. Surface it rather
       // than rejecting unhandled and leaving the row silently in place.
-      setError(err instanceof Error ? err.message : t("settings.mcp.removeFailed"));
+      setSectionError("mcp", errorMessage(err, t("settings.mcp.removeFailed")));
     }
   };
 
@@ -529,6 +532,39 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
    * URL) — that's the only case needing a localized stand-in.
    */
   const mcpSubtitle = (subtitle: string | null): string => subtitle ?? t("settings.mcp.presetHiddenUrl");
+
+  /**
+   * Per-section load state. A section that is still loading says so; a section
+   * that failed shows friendly localized copy plus a retry (the raw transport
+   * message — e.g. "404 Not Found" — is kept as a tooltip rather than shown as
+   * the dialog's state). Any data already loaded stays rendered underneath.
+   *
+   * The retry removes itself when it succeeds, so `rememberFocus` records the
+   * section heading as the landing spot; `useRetryFocus` moves focus there
+   * after React has committed the new DOM (never at click time).
+   */
+  const renderResourceState = <T,>(
+    resource: SettingsResource<T[]>,
+    failedCopyKey: string,
+    retry: () => Promise<void>,
+    rememberFocus: RememberRetryFocus,
+  ) => {
+    const pending = resource.status === "loading" || resource.status === "idle";
+    if (!pending && resource.status !== "error") return null;
+    return (
+      <p className={`settings-note ${resource.status === "error" ? "settings-note--error" : ""}`} role={resource.status === "error" ? "alert" : "status"}>
+        <span title={resource.error ?? undefined}>{t(pending ? "settings.loading" : failedCopyKey)}</span>{" "}
+        <button className="settings-button settings-button--ghost" aria-disabled={pending} aria-busy={pending} type="button" onClick={(event) => {
+          if (pending) return;
+          const trigger = event.currentTarget;
+          const heading = trigger.closest("section")?.querySelector<HTMLElement>("h3") ?? null;
+          if (heading) heading.tabIndex = -1;
+          rememberFocus(trigger, heading);
+          void retry();
+        }}>{t("settings.section.retry")}</button>
+      </p>
+    );
+  };
 
   return (
     <div
@@ -581,9 +617,11 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
           </nav>
 
           <div className="settings-content">
-            {isLoading ? <p className="settings-note">{t("settings.loading")}</p> : null}
-            {error ? <p className="settings-note settings-note--error">{error}</p> : null}
-            {status ? <p className="settings-note">{status}</p> : null}
+            {feedback && feedback.section === activeTab ? (
+              <p className={feedback.kind === "error" ? "settings-note settings-note--error" : "settings-note"}>
+                {feedback.message}
+              </p>
+            ) : null}
 
             {activeTab === "account" ? (
               <section className="settings-section">
@@ -614,23 +652,24 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                     <p>{t("settings.providers.desc")}</p>
                   </div>
                   <div className="provider-header-actions">
-                    {providers.find((provider) => provider.isActive) ? (
-                      <span className="provider-active-pill">
-                        <Check size={13} />
-                        {providers.find((provider) => provider.isActive)?.name}
-                      </span>
-                    ) : null}
                     <button className="settings-button" onClick={openProviderForm} type="button">
                       {t("settings.providers.add")}
                     </button>
                   </div>
                 </div>
 
-                {(() => {
-                  const sharedProviders = providers.filter((p) => p.id.startsWith("shared_"));
-                  const privateProviders = providers.filter((p) => !p.id.startsWith("shared_"));
+                {renderResourceState(providerResource, "settings.providers.loadFailed", () => reloadProviders(), rememberProviderRetryFocus)}
 
-                  const renderProviderCard = (provider: ProviderProfile) => (
+                {(() => {
+                  // `isShared` is the backend's authority (hosted preset ids are
+                  // arbitrary), and shared profiles get no Edit/Remove — only
+                  // Use/Test, which the backend does allow.
+                  const { shared: sharedProviders, private: privateProviders } =
+                    groupProviders(providers);
+
+                  const renderProviderCard = (provider: ProviderProfile) => {
+                    const permissions = providerActionPermissions(provider);
+                    return (
                     <article className="settings-list-item" key={provider.id}>
                       <div>
                         <strong>
@@ -638,51 +677,62 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                           {provider.name}
                           <span
                             className={`provider-health-dot provider-health-dot--${provider.healthStatus}`}
-                            title={t("settings.providers.statusTitle", { status: provider.healthStatus })}
+                            title={t(`settings.providers.health.${provider.healthStatus}`)}
                           />
                         </strong>
-                        <span>{provider.baseUrl}</span>
-                        <small>
-                          {provider.models.join(", ") || t("settings.providers.noModelList")} · {provider.apiKeyMasked} · {provider.contextWindow === 1_000_000
-                            ? "1M"
-                            : provider.contextWindow === 262_144 ? "256K" : t("settings.providerForm.contextAuto")}
-                        </small>
-                        <div className="provider-model-health-row">
-                          {provider.modelHealth.map((mh) => (
-                            <span
-                              key={mh.model}
-                              className={`provider-model-pill provider-model-pill--${mh.status}`}
-                              title={mh.error || mh.status}
-                            >
-                              <span className={`model-status-dot model-status-dot--${mh.status}`} />
-                              {mh.model}
-                              {mh.latencyMs !== undefined ? ` (${mh.latencyMs}ms)` : null}
-                            </span>
-                          ))}
+                        <div className="provider-summary">
+                          {provider.isActive ? <span className="provider-active-pill"><Check size={12} aria-hidden="true" />{t("settings.providers.default")}</span> : null}
+                          <span>{t(`settings.providers.health.${provider.healthStatus}`)}</span>
+                          <span>{t("settings.providers.modelCount", { count: provider.models.length })}</span>
+                          {!permissions.canEdit ? <span>{t("settings.providers.readOnly")}</span> : null}
                         </div>
+                        <DetailsSection summary={t("settings.providers.details")} className="provider-details">
+                          <p className="provider-connection">{provider.baseUrl}</p>
+                          <small>{provider.apiKeyMasked} · {provider.contextWindow === 1_000_000 ? "1M" : provider.contextWindow === 262_144 ? "256K" : t("settings.providerForm.contextAuto")}</small>
+                          <div className="provider-model-health-row">
+                            {provider.models.map((model) => {
+                              const health = provider.modelHealth.find((item) => item.model === model);
+                              const status = health?.status ?? "unknown";
+                              return <span key={model} className={`provider-model-pill provider-model-pill--${status}`} title={health?.error || t(`settings.providers.health.${status}`)}>
+                                <span className={`model-status-dot model-status-dot--${status}`} aria-hidden="true" />
+                                {model}{health?.latencyMs !== undefined ? ` (${health.latencyMs}ms)` : ""}
+                              </span>;
+                            })}
+                          </div>
+                          {provider.notes ? <p>{provider.notes}</p> : null}
+                        </DetailsSection>
                       </div>
                       <div className="settings-list-item__actions provider-actions">
-                        <button onClick={() => editProvider(provider)} type="button">
-                          {t("settings.providers.edit")}
-                        </button>
+                        {permissions.canEdit ? (
+                          <button onClick={() => editProvider(provider)} type="button">
+                            {t("settings.providers.edit")}
+                          </button>
+                        ) : null}
                         <button
                           disabled={testingProviderId === provider.id}
+                          aria-label={t("settings.providers.test")}
+                          aria-busy={testingProviderId === provider.id}
                           onClick={() => void testProvider(provider.id)}
                           type="button"
                         >
                           {testingProviderId === provider.id ? <Loader2 size={14} className="spin" /> : t("settings.providers.test")}
                         </button>
                         <button disabled={provider.isActive} onClick={() => void activateProvider(provider.id)} type="button">
-                          {provider.isActive ? <Check size={14} /> : t("settings.providers.use")}
+                          {provider.isActive ? <><Check size={14} aria-hidden="true" />{t("settings.providers.default")}</> : t("settings.providers.use")}
                         </button>
-                        <button disabled={provider.isActive} onClick={() => void removeProvider(provider.id)} type="button">
-                          {t("settings.providers.remove")}
-                        </button>
+                        {permissions.canRemove ? (
+                          <button disabled={provider.isActive} onClick={() => void removeProvider(provider.id)} type="button">
+                            {t("settings.providers.remove")}
+                          </button>
+                        ) : null}
                       </div>
                     </article>
-                  );
+                    );
+                  };
 
-                  if (providers.length === 0) {
+                  // Only a confirmed-empty success may claim there is nothing
+                  // configured; loading and failed states render nothing here.
+                  if (isConfirmedEmpty(providerResource)) {
                     return (
                       <div className="settings-empty">
                         <SlidersHorizontal size={22} />
@@ -732,7 +782,8 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                     {t("settings.mcp.addServer")}
                   </button>
                 </div>
-                {mcpServers.length === 0 ? (
+                {renderResourceState(mcpResource, "settings.mcp.loadFailed", () => reloadMcpServers(), rememberMcpRetryFocus)}
+                {isConfirmedEmpty(mcpResource) ? (
                   <div className="settings-empty">
                     <Plug size={22} />
                     <strong>{t("settings.mcp.empty")}</strong>
@@ -741,7 +792,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                       {t("settings.mcp.addServer")}
                     </button>
                   </div>
-                ) : (
+                ) : mcpServers.length > 0 ? (
                   <div className="settings-list">
                     {mcpServers.map((server) => {
                       // #377: platform-managed presets get no Edit / Delete and no raw
@@ -781,7 +832,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                       );
                     })}
                   </div>
-                )}
+                ) : null}
                 </section>
               </>
             ) : null}
@@ -791,9 +842,10 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                 <div className="settings-section__header">
                   <div><h3>{t("settings.plugins.title")}</h3><p>{t("settings.plugins.description")}</p></div>
                 </div>
-                {installedPlugins.length === 0 ? (
+                {renderResourceState(pluginResource, "settings.plugins.loadFailed", () => reloadPlugins(), rememberPluginRetryFocus)}
+                {isConfirmedEmpty(pluginResource) ? (
                   <div className="settings-empty"><Package size={22} /><strong>{t("settings.plugins.empty")}</strong><p>{t("settings.plugins.emptyHint")}</p></div>
-                ) : (
+                ) : installedPlugins.length > 0 ? (
                   <div className="settings-list">
                     {installedPlugins.map((plugin) => (
                       <article className="settings-list-item" key={plugin.manifest.id}>
@@ -805,7 +857,10 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                         <div className="settings-list-item__actions">
                           <button
                             disabled={!plugin.compatibility.compatible && !plugin.enabled}
-                            onClick={() => void api.plugins.setEnabled(plugin.manifest.id, !plugin.enabled).then(loadSettings).catch((reason) => setError(reason instanceof Error ? reason.message : String(reason)))}
+                            onClick={() => void api.plugins
+                              .setEnabled(plugin.manifest.id, !plugin.enabled)
+                              .then(() => reloadPlugins())
+                              .catch((reason) => setSectionError("plugins", errorMessage(reason, t("settings.plugins.toggleFailed"))))}
                             type="button"
                           >
                             {t(plugin.enabled ? "marketplace.disable" : "marketplace.enable")}
@@ -814,7 +869,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                       </article>
                     ))}
                   </div>
-                )}
+                ) : null}
               </section>
             ) : null}
 

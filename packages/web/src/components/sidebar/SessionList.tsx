@@ -1,6 +1,7 @@
 import { Check, MessageCircle, PenLine, Search, Trash2, X } from "lucide-react";
 import { FormEvent, KeyboardEvent, useEffect, useRef, useState } from "react";
 import type { Session } from "../../contracts/backend";
+import type { SessionsListStatus } from "../../contexts/sessionSelection";
 import { useT } from "../../i18n/useT";
 import { IconButton } from "../primitives/IconButton";
 import {
@@ -14,6 +15,17 @@ type SessionListProps = {
   sessions: Session[];
   currentId: string | undefined;
   isLoading: boolean;
+  /**
+   * #324 — readiness of the session-list request. Together with `loadError` it
+   * separates "we don't know the list yet / it failed" from "there really are no
+   * conversations", so a pending or failed load never renders a 0 count or the
+   * empty state. Optional for callers that only have the legacy `isLoading`.
+   */
+  listStatus?: SessionsListStatus;
+  /** Technical detail of the last list-load failure, or null when healthy. */
+  loadError?: string | null;
+  /** Re-run the list request (kept mounted and busy while it is in flight). */
+  onRetry?: () => void;
   /** Select an existing session (callers also switch to the workspace page). */
   onSelect: (sessionId: string) => void;
   /** Rename a session by id. */
@@ -38,6 +50,9 @@ export function SessionList({
   sessions,
   currentId,
   isLoading,
+  listStatus,
+  loadError = null,
+  onRetry,
   onSelect,
   onRename,
   onDelete,
@@ -58,6 +73,31 @@ export function SessionList({
   const canSave = editingId ? canCommitRename(editingOriginal, editingTitle) : false;
   const validation = editingId ? renameValidation(editingOriginal, editingTitle) : "ok";
   const validationMsgKey = renameValidationKey(validation);
+
+  /** Title + last-updated date: the row's accessible name and hover tooltip. */
+  const rowLabel = (session: Session) =>
+    t("sidebar.row.label", {
+      title: session.title,
+      date: new Date(session.updatedAt).toLocaleDateString(),
+    });
+
+  // #324 — an unknown or failed list is not an empty list. While a load is
+  // pending, or after it failed with nothing cached, suppress both the count and
+  // the "No conversations yet" line and show the scoped state instead.
+  //
+  // `listStatus` is the authority when the host passes it: "idle" means the first
+  // read hasn't finished (nothing is known yet) and "error" means it failed, even
+  // when no technical detail string came with it. Legacy hosts that only have
+  // `isLoading` keep their old behaviour.
+  const hasRows = sessions.length > 0;
+  const isPending = isLoading || listStatus === "loading" || listStatus === "idle";
+  const hasLoadError = listStatus === "error" || !!loadError;
+  const countLabel = isPending
+    ? t("sidebar.loading")
+    : hasRows || !hasLoadError
+      ? t("sidebar.sessionCount", { count: sessions.length })
+      : null;
+  const showEmpty = !hasRows && !isPending && !hasLoadError;
 
   useEffect(() => {
     if (editingId && renameInputRef.current) {
@@ -148,10 +188,38 @@ export function SessionList({
         <Search size={14} />
         <span>{t("sidebar.search")}</span>
       </button>
-      <p className="muted-label">
-        {isLoading ? t("sidebar.loading") : t("sidebar.sessionCount", { count: sessions.length })}
-      </p>
-      {sessions.length === 0 && !isLoading ? <p className="sidebar-empty">{t("sidebar.empty")}</p> : null}
+      {countLabel ? (
+        <p className="muted-label" data-testid="session-list-status">
+          {countLabel}
+        </p>
+      ) : null}
+      {hasLoadError ? (
+        <div className="composer-notice sidebar-list-error" role="alert" data-testid="session-list-error">
+          <span className="composer-notice__text">
+            {t(hasRows ? "sidebar.list.refreshFailed" : "sidebar.list.unavailable")}
+            {loadError ? (
+              <details>
+                <summary>{t("sidebar.list.details")}</summary>
+                <code>{loadError}</code>
+              </details>
+            ) : null}
+          </span>
+          {/* Stays mounted while the retry runs so keyboard focus is not lost. */}
+          {onRetry ? (
+            <button
+              type="button"
+              className="composer-notice__cta"
+              aria-busy={isPending}
+              aria-disabled={isPending}
+              data-testid="session-list-retry"
+              onClick={() => { if (!isPending) onRetry(); }}
+            >
+              {t(isPending ? "sidebar.list.retrying" : "sidebar.list.retry")}
+            </button>
+          ) : null}
+        </div>
+      ) : null}
+      {showEmpty ? <p className="sidebar-empty">{t("sidebar.empty")}</p> : null}
       {sessions.map((session) => {
         const isEditing = editingId === session.id;
         const isConfirming = confirmDeleteId === session.id;
@@ -212,10 +280,20 @@ export function SessionList({
               </form>
             ) : (
               <>
-                <button className="conversation-row" onClick={() => onSelect(session.id)} type="button">
+                {/* #131 follow-up — the row used to end in a right-aligned date
+                    that stole width from the title and truncated most of it to
+                    a few characters. The title now gets up to two lines, and
+                    the date moves into the row's accessible name/tooltip so it
+                    is still readable (and searchable) without the competition. */}
+                <button
+                  aria-label={rowLabel(session)}
+                  className="conversation-row"
+                  onClick={() => onSelect(session.id)}
+                  title={rowLabel(session)}
+                  type="button"
+                >
                   <MessageCircle size={16} />
-                  <span>{session.title}</span>
-                  <small>{new Date(session.updatedAt).toLocaleDateString()}</small>
+                  <span className="conversation-row__title">{session.title}</span>
                 </button>
                 <div className="conversation-actions">
                   {isConfirming ? (
