@@ -7,7 +7,7 @@ import { latestDurableUserTurn, useTurnTimer } from "../../contexts/useTurnTimer
 import { draftStore } from "../../contexts/draftStore";
 import { writeRecoveryDraft } from "../../contexts/errorRecovery";
 import { applyMessageFilters } from "../../contexts/messageFilters";
-import { runningToastLabel } from "../../contexts/runningToast";
+import { runningToastLabel, runningToastState } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
 import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { IconButton } from "../primitives/IconButton";
@@ -373,6 +373,12 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     () => selectActiveScripts(visibleMessages, activeTools).length > 0,
     [visibleMessages, activeTools],
   );
+  const runningToast = runningToastState({
+    workActive,
+    hasAgentActivity: isAgentRunning || lastAssistantStreaming === true,
+    waitingForUser: askTakeover !== null,
+    hasActiveScripts,
+  });
 
   // Agents whose run is still active. Threaded to MessageStream so a folded
   // activity block stays "in progress" across ReAct rounds — without this, the
@@ -1064,7 +1070,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
           />
         ) : null}
 
-        {isAgentRunning || lastAssistantStreaming ? (
+        {runningToast.visible ? (
           <div className="agent-running-toast" role="status" aria-live="polite">
             <span className="agent-running-toast__dot" />
             <span className="agent-running-toast__label">
@@ -1073,7 +1079,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
                 return t(label.key, label.vars);
               })()}
             </span>
-            {hasActiveScripts || runActive?.active !== true ? null : (
+            {!runningToast.showStop ? null : (
               <button
                 className="agent-running-toast__stop"
                 type="button"

@@ -23,8 +23,13 @@ import {
   createSearchPapersLocalTool,
 } from "./kb/tools.js";
 import { isToolEnabled, type ToolToggles } from "../tool-toggles.js";
+import { createWorkflowTools, type WorkflowToolDeps } from "./workflows.js";
 
 export interface ToolDeps {
+  listWorkflows?: WorkflowToolDeps["listWorkflows"];
+  startWorkflow?: WorkflowToolDeps["startWorkflow"];
+  getWorkflows?: WorkflowToolDeps["getWorkflows"];
+  cancelWorkflow?: WorkflowToolDeps["cancelWorkflow"];
   sessionId: string;
   fromAgent: string;
   trace: GraphOfTrace;
@@ -1015,6 +1020,10 @@ export function allSystemTools(
   if (deps.spawnSubagents) {
     tools.push(createSpawnSubagentTool(deps), createWaitSubagentTool(deps), createGetSubagentTool(deps), createCancelSubagentTool(deps), createListSubagentProfilesTool(deps));
   }
+  if (deps.listWorkflows && deps.startWorkflow && deps.getWorkflows && deps.cancelWorkflow) {
+    tools.push(...createWorkflowTools({ listWorkflows: deps.listWorkflows, startWorkflow: deps.startWorkflow,
+      getWorkflows: deps.getWorkflows, cancelWorkflow: deps.cancelWorkflow }));
+  }
   if (deps.startMonitor && deps.listMonitors && deps.stopMonitor) {
     tools.push(createRunInBackgroundTool(deps), createStartMonitorTool(deps), createListMonitorsTool(deps), createStopMonitorTool(deps));
   }
@@ -1044,6 +1053,7 @@ export const AGENT_TOOL_CONFIG: Record<string, string[]> = {
   // not in <available_skills>). Trace is deliberately excluded: it is a
   // graph-only recorder, not a domain reasoner.
   principal: [
+    "workflow_search", "workflow_start", "workflow_get", "workflow_cancel",
     "dispatch_task",
     "cancel_task",
     "complete_task",

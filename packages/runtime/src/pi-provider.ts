@@ -22,7 +22,7 @@
  */
 import { mkdirSync, writeFileSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { deriveProviderApi, type ProviderAdapter } from "@brainpilot/protocol";
+import { deriveProviderApi, ModelInputModalitiesSchema, type ModelInputModalities, type ProviderAdapter } from "@brainpilot/protocol";
 
 /** The synthetic provider id under which the auto-generated gateway lives. */
 export const GATEWAY_PROVIDER = "bp-gateway";
@@ -58,8 +58,9 @@ export interface PiProviderSdk {
   ModelRuntime: {
     create(options: {
       authPath?: string;
-      modelsPath?: string;
+      modelsPath?: string | null;
       allowModelNetwork?: boolean;
+      refreshOnCreate?: boolean;
     }): Promise<PiModelRuntime>;
   };
 }
@@ -67,6 +68,7 @@ export interface PiProviderSdk {
 export interface PiModelRuntime {
   getError(): string | undefined;
   getModel(provider: string, modelId: string): unknown;
+  getModels?(): readonly unknown[];
   setRuntimeApiKey(provider: string, key: string): Promise<void>;
 }
 
@@ -84,6 +86,8 @@ export interface SessionProviderConfig {
   /** Provider-level override; absent preserves env/default behavior. */
   contextWindow?: number;
   reasoningEnabled?: boolean;
+  /** Explicit capability for this exact model, selected from the provider's per-model map. */
+  inputModalities?: ModelInputModalities;
 }
 
 export interface CompactionSettings {
@@ -118,6 +122,55 @@ function intEnv(name: string): number | undefined {
   return Number.isInteger(n) && n > 0 ? n : undefined;
 }
 
+const staticModelCatalogs = new WeakMap<PiProviderSdk, Promise<readonly unknown[]>>();
+
+/** Read only Pi's versioned built-in catalog: no custom models, cache refresh, or network. */
+async function staticModelCatalog(sdk: PiProviderSdk, agentDir: string): Promise<readonly unknown[]> {
+  let catalog = staticModelCatalogs.get(sdk);
+  if (!catalog) {
+    catalog = sdk.ModelRuntime.create({ authPath: join(agentDir, "auth.json"), modelsPath: null,
+      allowModelNetwork: false, refreshOnCreate: false })
+      .then((runtime) => runtime.getError() ? [] : runtime.getModels?.() ?? [])
+      .catch(() => []);
+    staticModelCatalogs.set(sdk, catalog);
+  }
+  return catalog;
+}
+
+function metadataEndpoint(baseUrl: unknown, api: string): string | undefined {
+  if (typeof baseUrl !== "string") return undefined;
+  try {
+    const url = new URL(normalizeProviderBaseUrl(baseUrl, api));
+    if (url.username || url.password || url.search || url.hash) return undefined;
+    return url.href.replace(/\/+$/, "");
+  } catch { return undefined; }
+}
+
+async function resolveInputModalities(
+  sdk: PiProviderSdk, agentDir: string, baseUrl: string, api: string, modelId: string,
+  explicit?: ModelInputModalities,
+): Promise<ModelInputModalities> {
+  if (explicit !== undefined) return ModelInputModalitiesSchema.parse(explicit);
+  const endpoint = metadataEndpoint(baseUrl, api);
+  if (!endpoint) return ["text"];
+  const matches = (await staticModelCatalog(sdk, agentDir)).flatMap((value) => {
+    if (!value || typeof value !== "object") return [];
+    const model = value as Record<string, unknown>;
+    if (model.id !== modelId || model.api !== api || metadataEndpoint(model.baseUrl, api) !== endpoint) return [];
+    const parsed = ModelInputModalitiesSchema.safeParse(model.input);
+    return parsed.success ? [parsed.data] : [];
+  });
+  // A same-named third-party endpoint, an alias or conflicting catalog entries
+  // are not evidence of image support. Operators can declare a probed endpoint.
+  if (!matches.length || matches.some((input) => JSON.stringify(input) !== JSON.stringify(matches[0]))) return ["text"];
+  return [...matches[0]!];
+}
+
+function envInputModalities(): ModelInputModalities | undefined {
+  const value = process.env.BP_MODEL_INPUT_MODALITIES?.trim();
+  return value ? ModelInputModalitiesSchema.parse(value.split(",").map((part) => part.trim())) : undefined;
+}
+
 /**
  * Resolve a custom model from env, or return `{}` when none is configured.
  * `agentDir` is Pi's global config dir (getAgentDir()).
@@ -143,6 +196,7 @@ export async function resolveGatewayModel(
   if (!baseUrl || !modelId) return {};
 
   mkdirSync(agentDir, { recursive: true });
+  const inputModalities = await resolveInputModalities(sdk, agentDir, baseUrl, "anthropic-messages", modelId, envInputModalities());
   const modelsJsonPath = join(agentDir, "bp-gateway-models.json");
   const desired = JSON.stringify(
     {
@@ -156,7 +210,7 @@ export async function resolveGatewayModel(
             {
               id: modelId,
               reasoning: true,
-              input: ["text"],
+              input: inputModalities,
               contextWindow: intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
               maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
             },
@@ -250,6 +304,7 @@ export async function resolveSessionModel(
     cfg.api ??
     deriveProviderApi(cfg.adapter as ProviderAdapter | undefined) ??
     "anthropic-messages";
+  const inputModalities = await resolveInputModalities(sdk, agentDir, cfg.baseUrl, api, cfg.modelId, cfg.inputModalities);
   // One models.json per provider id — distinct registries stay isolated.
   const modelsJsonPath = join(agentDir, `bp-session-${sanitize(cfg.providerId)}-models.json`);
   const desired = JSON.stringify(
@@ -269,7 +324,7 @@ export async function resolveSessionModel(
             {
               id: cfg.modelId,
               reasoning: cfg.reasoningEnabled ?? true,
-              input: ["text"],
+              input: inputModalities,
               contextWindow:
                 cfg.contextWindow ?? intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
               maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,

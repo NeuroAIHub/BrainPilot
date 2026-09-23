@@ -50,6 +50,13 @@ export interface Orchestrator {
   /** Whether this process owns the runtime lifecycle or only connects to it. */
   readonly runtimeLifecycle?: "managed" | "external";
   /**
+   * Whether this backend's plugin settings belong to one fixed user/runtime.
+   * Only an explicit single-user declaration permits workflow activation.
+   * Per-user routing and unknown/external scope remain unsupported until the
+   * plugin control plane has an independently isolated settings root per user.
+   */
+  readonly workflowSettingsScope?: "single-user" | "per-user";
+  /**
    * Start a runtime (idempotent — repeated calls return the same handle while
    * the runtime is healthy) and resolve once it is reachable.
    */

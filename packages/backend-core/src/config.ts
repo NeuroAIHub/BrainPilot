@@ -12,7 +12,7 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import type { ProviderApi, ProviderAdapter, HealthStatus, ModelHealth } from "@brainpilot/protocol";
-import { deriveProviderApi, EXAMPLE_MODEL } from "@brainpilot/protocol";
+import { deriveProviderApi, EXAMPLE_MODEL, ModelInputModalitiesSchema, ProviderInputModalitiesSchema, type ProviderInputModalities } from "@brainpilot/protocol";
 
 export interface ResolvedProvider {
   /** API key, if any layer supplied one. */
@@ -148,6 +148,8 @@ export interface StoredProviderProfile {
   contextWindow?: 262_144 | 1_000_000 | null;
   /** Model ids that support extended thinking. Missing on legacy profiles means all configured models. */
   reasoningModels?: string[];
+  /** Explicit support by exact model ID; never grants images to other profile models. */
+  inputModalities?: ProviderInputModalities;
   icon?: string;
   iconColor?: string;
   notes?: string;
@@ -228,6 +230,7 @@ export async function createProfile(
     models: input.models ?? [],
     contextWindow: input.contextWindow ?? undefined,
     reasoningModels: input.reasoningModels ?? input.models ?? [],
+    inputModalities: input.inputModalities === undefined ? undefined : ProviderInputModalitiesSchema.parse(input.inputModalities),
     icon: input.icon,
     iconColor: input.iconColor,
     notes: input.notes,
@@ -248,6 +251,16 @@ export async function updateProfile(
   const file = await readProviders(dataDir);
   const profile = file.profiles.find((p) => p.id === id);
   if (!profile) return undefined;
+  const currentApi = profile.api ?? deriveProviderApi(profile.adapter) ?? "anthropic-messages";
+  const nextApi = patch.api ?? profile.api ?? deriveProviderApi(patch.adapter ?? profile.adapter) ?? "anthropic-messages";
+  const endpoint = (base: string, api: string) => {
+    const normalized = base.trim().replace(/\/+$/, "");
+    return api === "anthropic-messages" ? normalized.replace(/\/v1$/, "") : normalized;
+  };
+  const targetChanged = currentApi !== nextApi
+    || endpoint(patch.baseUrl ?? profile.baseUrl, nextApi) !== endpoint(profile.baseUrl, currentApi);
+  if (patch.inputModalities !== undefined) profile.inputModalities = ProviderInputModalitiesSchema.parse(patch.inputModalities);
+  else if (targetChanged) delete profile.inputModalities;
   // apiKey omitted in patch → keep existing (UI sends masked key, not the real one).
   const writable = profile as unknown as Record<string, unknown>;
   for (const k of ["name", "baseUrl", "api", "adapter", "models", "reasoningModels", "icon", "iconColor", "notes"] as const) {
@@ -520,6 +533,10 @@ export async function bootstrapEnvProvider(
     (keySources.BP_API_KEY && "BP_API_KEY") ||
     (keySources.OPENAI_API_KEY && "OPENAI_API_KEY") ||
     "ANTHROPIC_API_KEY";
+  const declaredInputs = keySources.BP_MODEL_INPUT_MODALITIES?.trim();
+  const inputModalities = resolved.model && declaredInputs
+    ? { [resolved.model]: ModelInputModalitiesSchema.parse(declaredInputs.split(",").map((part) => part.trim())) }
+    : undefined;
 
   return createProfile(dataDir, {
     name: "Environment",
@@ -527,6 +544,7 @@ export async function bootstrapEnvProvider(
     apiKey: "", // #65: never persisted; resolved from apiKeyEnv at request time
     apiKeyEnv,
     models: resolved.model ? [resolved.model] : [],
+    inputModalities,
     notes: `Auto-created from environment variables on first launch. The API key is read from $${apiKeyEnv} at request time and is not stored on disk.`,
   });
 }

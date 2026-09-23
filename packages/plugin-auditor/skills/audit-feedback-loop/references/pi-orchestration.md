@@ -38,3 +38,5 @@ PI owns all routing. Auditor advises PI and does not direct Experts. Never ask t
 ## Final delivery gate
 
 Before delivering substantive hard claims, ensure the latest relevant revision has a `pass`, or explicitly disclose unresolved low-risk limitations. Do not silently override an open high-risk finding.
+
+A workflow terminal handoff limited to host-recorded status, links to registered artifacts, and explicitly attributed recorded errors or gaps is an operational status report, not a substantive claim, and may be sent before an audit or repair. Mark unresolved outputs as unvalidated or incomplete. It does not approve the artifacts' scientific claims, override a `revise` or `block` verdict, or permit claiming validated completion; substantive results and new scientific conclusions still pass through the normal audit and correction loop.

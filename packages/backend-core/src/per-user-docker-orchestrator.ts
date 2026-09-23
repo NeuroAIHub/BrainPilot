@@ -94,6 +94,7 @@ async function defaultMetricsProbe(
 }
 
 export class PerUserDockerOrchestrator implements Orchestrator {
+  readonly workflowSettingsScope = "per-user" as const;
   private readonly base: Omit<DockerOrchestratorOptions, "hostPort" | "dataDir">;
   private readonly dataRoot?: string;
   private readonly containerDataDir: string;

@@ -1,0 +1,85 @@
+{
+  "schemaVersion": 1,
+  "recordedAt": "2026-09-23",
+  "scope": "Historical engineering acceptance from the BrainPilot-workflow development task, not a new run of the collaboration branch.",
+  "baseCommit": "cfb2cd903fa05a67b9615defc6136c5429f058a0",
+  "writing": {
+    "date": "2026-09-15",
+    "engineeringAcceptance": "passed on historical frozen candidate",
+    "model": "Kimi K3",
+    "thinking": "low",
+    "durationMs": 5743222,
+    "stages": 54,
+    "providerRequests": 71,
+    "failedStages": 0,
+    "limitations": [
+      "Final model review scored 3/10; this was not an independent scientific quality acceptance.",
+      "Only one verified reference; citation coverage and unsupported statements remain concerns."
+    ]
+  },
+  "research": {
+    "date": "2026-09-16",
+    "engineeringAcceptance": "passed on historical frozen candidate",
+    "model": "Kimi K3",
+    "thinking": "low",
+    "configuredMaxOutputTokens": 65536,
+    "sourceFiles": 7,
+    "durationMs": 1512681,
+    "providerRequests": 22,
+    "recordedTokensIncludingCache": 625975,
+    "registeredArtifacts": 29,
+    "stages": 12,
+    "remainingEvidenceGaps": 1,
+    "exitCode": 0,
+    "sourceHashesRecheckedOnImport": {
+      "packages/runtime/src/workflows/deep-research.ts": "d7e9a9faf40b74e9a0e2eaad0da6122374588bbcb7329194aeac376b33145682",
+      "packages/runtime/src/workflows/deep-research-contract.ts": "c03558063170fdc3a59aa550033ff2e73c699d056046d1ae60cf7a14f2148271",
+      "packages/runtime/src/workflows/prompts/deep-research.ts": "ca2a7344c3bb9f17a146df983a24048a4f991789ab430a54a96b84c1e34bc674",
+      "packages/runtime/src/__tests__/deep-research.test.ts": "b495a20da9ff99e9590b0643579d4390e3ce62fbc4b29dbe4ee8cd587bdc9a76",
+      "scripts/deepresearch-pilot.mjs": "6e016ba8a3f50a13bc829fe34e7ea0729cb47398d797cbc253934fa168331bef"
+    },
+    "limitations": [
+      "Fixed provided corpus with external retrieval disabled.",
+      "One development case does not establish general quality superiority.",
+      "Independent review noted statistical and condition-wording problems."
+    ]
+  },
+  "matchedLibrarian": {
+    "date": "2026-09-16",
+    "reportWritten": true,
+    "reportDelivered": true,
+    "engineeringAcceptance": "incomplete: token soft limit during closeout",
+    "durationMs": 257129,
+    "providerRequests": 20,
+    "recordedTokensIncludingCache": 1642127,
+    "exitCode": 2,
+    "configuredMaxOutputTokens": 65536,
+    "tokenSoftLimit": 1500000,
+    "note": "Configured output ceiling matched research; runtime context clamping reduced some request ceilings. Tokens include cache and do not establish monetary cost."
+  },
+  "earlierLibrarian": {
+    "configuredMaxOutputTokens": 32768,
+    "engineeringAcceptance": "completed",
+    "durationMs": 697226,
+    "providerRequests": 14,
+    "recordedTokensIncludingCache": 1110555
+  },
+  "provenance": {
+    "taskTitle": "BrainPilot-workflow",
+    "taskId": "01a099bd-45f4-7cb1-a43d-5018847f8960",
+    "evidenceRecords": [
+      "candidate-round32-freeze.json",
+      "pilot8-final/FINAL-AUDIT.json",
+      "librarian-64k-budget-stopped/AUDIT.json",
+      "COMPARISON-SUMMARY.md"
+    ],
+    "rawEvidence": "Retained outside Git in the original experiment archive. This public summary does not include papers, credentials, provider responses, private paths, or session logs."
+  },
+  "notValidated": [
+    "Open-ended web/literature research",
+    "General superiority over librarian",
+    "BrainPilotBench scientific workflow comparison",
+    "All providers",
+    "Multi-user production operation"
+  ]
+}

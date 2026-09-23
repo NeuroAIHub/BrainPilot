@@ -11,14 +11,15 @@ import {
 } from "../pi-provider.js";
 
 /** Fake Pi SDK that records the models.json path it was created against. */
-function fakeSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
+function fakeSdk(knownModels: readonly unknown[] = []): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
   let modelsPath: string | undefined;
   const sdk: PiProviderSdk = {
     ModelRuntime: {
       create: async ({ modelsPath: path }) => {
-        modelsPath = path;
+        modelsPath = path ?? undefined;
         return {
           getError: () => undefined,
+          getModels: () => knownModels,
           // Resolve only the gateway provider + the id present in models.json.
           getModel: (provider, modelId) => {
             if (provider !== GATEWAY_PROVIDER || !path) return undefined;
@@ -41,6 +42,7 @@ const ENV_KEYS = [
   "ANTHROPIC_MAX_TOKENS",
   "BP_MODELS_JSON",
   "BP_MODEL_PROVIDER",
+  "BP_MODEL_INPUT_MODALITIES",
 ] as const;
 
 describe("resolveGatewayModel", () => {
@@ -101,6 +103,30 @@ describe("resolveGatewayModel", () => {
 
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers[GATEWAY_PROVIDER].baseUrl).toBe("https://gw.example/proxy");
+  });
+
+  it("uses only an explicit declaration or exact offline catalog identity for gateway images", async () => {
+    process.env.ANTHROPIC_BASE_URL = "https://official.example/v1/";
+    process.env.ANTHROPIC_MODEL = "exact-model";
+    const { sdk, lastPath } = fakeSdk([{ id: "exact-model", api: "anthropic-messages", baseUrl: "https://official.example", input: ["text", "image"] }]);
+    await resolveGatewayModel(sdk, agentDir);
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers[GATEWAY_PROVIDER].models[0].input).toEqual(["text", "image"]);
+    process.env.ANTHROPIC_BASE_URL = "https://third-party.example/v1";
+    await resolveGatewayModel(sdk, agentDir);
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers[GATEWAY_PROVIDER].models[0].input).toEqual(["text"]);
+    process.env.BP_MODEL_INPUT_MODALITIES = "text,image";
+    await resolveGatewayModel(sdk, agentDir);
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers[GATEWAY_PROVIDER].models[0].input).toEqual(["text", "image"]);
+    process.env.BP_MODEL_INPUT_MODALITIES = "text";
+    await resolveGatewayModel(sdk, agentDir);
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers[GATEWAY_PROVIDER].models[0].input).toEqual(["text"]);
+  });
+
+  it("rejects malformed explicit gateway modalities rather than inventing support", async () => {
+    process.env.ANTHROPIC_BASE_URL = "https://third-party.example";
+    process.env.ANTHROPIC_MODEL = "unknown-model";
+    process.env.BP_MODEL_INPUT_MODALITIES = "vision";
+    await expect(resolveGatewayModel(fakeSdk().sdk, agentDir)).rejects.toThrow();
   });
 
   it("applies default context/token limits when env is unset", async () => {
@@ -248,14 +274,15 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
   });
 
   /** Fake SDK that records the models.json path and resolves any present model. */
-  function sessionSdk(): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
+  function sessionSdk(knownModels: readonly unknown[] = []): { sdk: PiProviderSdk; lastPath: () => string | undefined } {
     let modelsPath: string | undefined;
     const sdk: PiProviderSdk = {
       ModelRuntime: {
         create: async ({ modelsPath: path }) => {
-          modelsPath = path;
+          modelsPath = path ?? undefined;
           return {
             getError: () => undefined,
+            getModels: () => knownModels,
             getModel: (provider, id) => {
               if (!path) return undefined;
               const cfg = JSON.parse(readFileSync(path, "utf8"));
@@ -279,6 +306,45 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
     await expect(
       resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "k", baseUrl: "https://x" }),
     ).resolves.toEqual({}); // modelId missing
+  });
+
+  it("keeps unknown model names text-only and respects exact per-model declarations", async () => {
+    const { sdk, lastPath } = sessionSdk();
+    const cfg = { providerId: "mixed", baseUrl: "https://gateway.example", apiKey: "sk-test", modelId: "deepseek-v4-pro-202606" };
+    await resolveSessionModel(sdk, agentDir, cfg);
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers.mixed.models[0].input).toEqual(["text"]);
+    await resolveSessionModel(sdk, agentDir, { ...cfg, inputModalities: ["text", "image"] });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers.mixed.models[0].input).toEqual(["text", "image"]);
+    await resolveSessionModel(sdk, agentDir, { ...cfg, modelId: "unknown-vision-alias" });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers.mixed.models[0].input).toEqual(["text"]);
+    await expect(resolveSessionModel(sdk, agentDir, { ...cfg, inputModalities: ["image"] })).rejects.toThrow();
+  });
+
+  it("matches model ID, API and endpoint against static catalog metadata without network refresh", async () => {
+    const model = { id: "catalog-model", api: "openai-responses", baseUrl: "https://official.example/v1", input: ["text", "image"] };
+    const { sdk, lastPath } = sessionSdk([model]);
+    const create = sdk.ModelRuntime.create;
+    const catalogCalls: Array<Parameters<typeof create>[0]> = [];
+    sdk.ModelRuntime.create = async (options) => { if (options.modelsPath === null) catalogCalls.push(options); return create(options); };
+    const cfg = { providerId: "custom-id", baseUrl: "https://official.example/v1/", api: "openai-responses", apiKey: "sk-test", modelId: "catalog-model" };
+    await resolveSessionModel(sdk, agentDir, cfg);
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["custom-id"].models[0].input).toEqual(["text", "image"]);
+    expect(catalogCalls).toHaveLength(1);
+    expect(catalogCalls[0]).toMatchObject({ modelsPath: null, refreshOnCreate: false, allowModelNetwork: false });
+    for (const patch of [{ baseUrl: "https://other.example/v1" }, { api: "openai-completions" }, { modelId: "alias" }]) {
+      await resolveSessionModel(sdk, agentDir, { ...cfg, ...patch });
+      expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["custom-id"].models[0].input).toEqual(["text"]);
+    }
+    await resolveSessionModel(sdk, agentDir, { ...cfg, inputModalities: ["text"] });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers["custom-id"].models[0].input).toEqual(["text"]);
+    expect(catalogCalls).toHaveLength(1);
+  });
+
+  it("does not resolve conflicting catalog capabilities by choosing an image-capable entry", async () => {
+    const record = { id: "same", api: "anthropic-messages", baseUrl: "https://official.example" };
+    const { sdk, lastPath } = sessionSdk([{ ...record, input: ["text"] }, { ...record, input: ["text", "image"] }]);
+    await resolveSessionModel(sdk, agentDir, { providerId: "p", apiKey: "sk", modelId: "same", baseUrl: record.baseUrl });
+    expect(JSON.parse(readFileSync(lastPath()!, "utf8")).providers.p.models[0].input).toEqual(["text"]);
   });
 
   it("writes the selected api into models.json (azure-openai-responses)", async () => {

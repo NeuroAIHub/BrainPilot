@@ -1,0 +1,22 @@
+{
+  "id": "org.brainpilot.paperorchestra",
+  "version": "0.1.0",
+  "apiVersion": "1",
+  "displayName": "PaperOrchestra-inspired writing",
+  "description": "PaperOrchestra's default writing flow: outline, literature discovery, LaTeX writing, automatic scored refinement and formatting, with an editable source and compiled PDF. Uses the current Pi model and supplied research materials.",
+  "categories": ["workflow"],
+  "engines": { "brainpilot": ">=0.2.2 <0.4.0" },
+  "environments": ["local"],
+  "protocols": { "workflow": "1" },
+  "permissions": ["read:workspace", "network", "compute:worker"],
+  "contributes": {
+    "workflows": [
+      {
+        "id": "paper-writing",
+        "title": "Research manuscript drafting",
+        "entry": "workflow.json",
+        "format": "json"
+      }
+    ]
+  }
+}

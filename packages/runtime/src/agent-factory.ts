@@ -14,7 +14,7 @@
  *   - `SystemTool` is adapted to Pi's `defineTool` (params is a plain JSON
  *     schema, which `defineTool` accepts — verified empirically).
  */
-import type { AgentSessionFactory, IAgentSession, PiAgentEvent, PromptOptions, SystemTool } from "./types.js";
+import type { AgentSessionFactory, IAgentSession, PiAgentEvent, PromptOptions, SystemTool, WorkflowStageCancellation } from "./types.js";
 import { MockAgentSession } from "./mock-agent.js";
 import {
   resolveCompactionSettings,
@@ -94,9 +94,9 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // Target a custom Anthropic-compatible gateway. A per-session providerConfig
   // (from providers.json) wins and isolates its key via setRuntimeApiKey;
   // otherwise fall back to the env-based gateway (Docker/static compat).
-  const resolved = params.providerConfig
+  const resolved = params.workflowModelBinding ?? (params.providerConfig
     ? await resolveSessionModel(sdk as unknown as PiProviderSdk, agentDir, params.providerConfig)
-    : await resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir);
+    : await resolveGatewayModel(sdk as unknown as PiProviderSdk, agentDir));
   const { model, modelRuntime } = resolved;
 
   // `createAgentSession` has NO `systemPrompt`/`instructions` option — the
@@ -203,7 +203,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     resourceLoader,
     settingsManager,
     sessionManager: SessionManager.open(params.historyPath),
-    thinkingLevel: params.thinkingLevel,
+    thinkingLevel: params.workflowModelBinding?.thinkingLevel ?? params.thinkingLevel,
     ...(model ? { model } : {}),
     ...(modelRuntime ? { modelRuntime } : {}),
   });
@@ -211,9 +211,123 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // #365: Pi's built-in classifier intentionally excludes most HTTP 400s.
   // Extend it for the narrow, trace-id-only transient shape seen in production.
   installBrainPilotRetryClassifier(session);
+  if (params.workflowModelBinding) {
+    installWorkflowStageCompletion(session);
+    if (params.workflowStageCancellation) installWorkflowStageCancellation(session, params.workflowStageCancellation);
+  }
 
   return new RealAgentSession(session, bashControllers);
 };
+
+interface StageTurnContext {
+  toolResults: Array<{ toolName: string; isError: boolean }>;
+}
+type StageTurnStop<T extends StageTurnContext = StageTurnContext> = (context: T, signal?: AbortSignal) => boolean | Promise<boolean>;
+
+/** Pi saves this turn's tool results before consulting this public loop hook. */
+export function installWorkflowStageCompletion<T extends StageTurnContext>(session: { agent?: { shouldStopAfterTurn?: StageTurnStop<T> } }): void {
+  if (!session.agent) throw new Error("Pi workflow stages require the public agent turn-completion hook");
+  const previous = session.agent.shouldStopAfterTurn;
+  session.agent.shouldStopAfterTurn = async (context, signal) =>
+    Boolean(await previous?.(context, signal)) ||
+    context.toolResults.some(result => result.toolName === "submit_result" && !result.isError);
+}
+
+/** Public Pi stream boundary: the loop hands its run signal to the stream function. */
+type StageStreamOptions = { signal?: AbortSignal } & Record<string, unknown>;
+export type StageStreamFn = (model: unknown, context: unknown, options?: StageStreamOptions) => unknown;
+
+/**
+ * Bind a workflow stage's own cancellation into the real provider request.
+ *
+ * Pi passes the active run's signal to `agent.streamFunction`, and the supported
+ * providers forward that signal to `fetch`, so combining the stage signal here
+ * is what makes a stage deadline or session Stop cancel the actual HTTP stream
+ * instead of merely asking the agent loop to stop. Wrapping this public field is
+ * limited to workflow-stage sessions; ordinary agent sessions keep Pi's own
+ * stream function untouched. One documented consequence: because Pi identifies
+ * its default stream function by identity when resolving summarization auth, a
+ * wrapped stage resolves that auth through ModelRuntime — the same path any
+ * custom stream function already takes.
+ */
+export function installWorkflowStageCancellation(
+  session: { agent?: { streamFunction?: StageStreamFn } },
+  cancellation: WorkflowStageCancellation,
+): void {
+  const agent = session.agent;
+  const inner = agent?.streamFunction;
+  if (!agent || typeof inner !== "function") throw new Error("Pi workflow stages require the public agent stream function");
+  agent.streamFunction = async (model, context, options) => {
+    const signal = options?.signal ? AbortSignal.any([options.signal, cancellation.signal]) : cancellation.signal;
+    const settled = cancellation.requestStarted();
+    let stream: unknown;
+    try { stream = await inner(model, context, { ...options, signal }); }
+    catch (error) { settled(); throw error; }
+    return observeStreamSettlement(stream, settled);
+  };
+}
+
+/**
+ * Report when Pi's provider stream actually finished (or failed), so a fenced
+ * stage can tell "the transport stopped" from "a race resolved".
+ *
+ * The producer is what has to be observed: Pi's stream pushes messages into a
+ * queue that a consumer drains, and two supported consumers exist — the agent
+ * loop iterates, while compaction/summarization awaits `result()` without ever
+ * iterating. `result()` is the stream's public completion promise (it settles
+ * when the producer emitted its final done/error message), so it is subscribed
+ * to immediately and is the only settlement evidence used; the stream instance
+ * itself is returned untouched, keeping its prototype, private fields and
+ * `result()` identity exactly as the SDK created them. A consumer that stops
+ * early (`iterator.return`) is deliberately *not* treated as the producer
+ * ending: if the producer never settles after cancellation, the lifecycle
+ * reports the request as possibly still open instead of inventing completion.
+ * Only a stream without a public `result()` falls back to observing iteration,
+ * and only its natural end or failure — never a consumer's early return.
+ */
+function observeStreamSettlement(stream: unknown, settled: () => void): unknown {
+  let released = false;
+  const release = () => { if (!released) { released = true; settled(); } };
+  if (!stream || typeof stream !== "object") { release(); return stream; }
+  const producer: unknown = (stream as { result?: unknown }).result;
+  if (typeof producer === "function") {
+    // A rejected producer is still a finished producer, and its rejection stays
+    // owned by whoever awaits the stream itself.
+    try {
+      const completion: unknown = (producer as () => unknown).call(stream);
+      if (completion && typeof (completion as PromiseLike<unknown>).then === "function") {
+        (completion as PromiseLike<unknown>).then(release, release);
+      } else release();
+    } catch { release(); }
+    return stream;
+  }
+  if (typeof (stream as AsyncIterable<unknown>)[Symbol.asyncIterator] !== "function") { release(); return stream; }
+  return new Proxy(stream as object, {
+    get(target, property) {
+      if (property !== Symbol.asyncIterator) {
+        const value: unknown = Reflect.get(target, property);
+        return typeof value === "function" ? value.bind(target) : value;
+      }
+      return (): AsyncIterator<unknown> => {
+        const iterator = (target as AsyncIterable<unknown>)[Symbol.asyncIterator]();
+        return {
+          [Symbol.asyncIterator]() { return this; },
+          next: async () => {
+            try {
+              const step = await iterator.next();
+              if (step.done) release();
+              return step;
+            } catch (error) { release(); throw error; }
+          },
+          // The stage signal already reached the transport; a consumer walking
+          // away is not proof the producer stopped, so nothing is released here.
+          ...(iterator.return ? { return: async (value?: unknown) => iterator.return!(value) } : {}),
+          ...(iterator.throw ? { throw: async (error?: unknown) => iterator.throw!(error) } : {}),
+        } as AsyncIterator<unknown>;
+      };
+    },
+  });
+}
 
 type BashDefinition = ReturnType<PiSdk["createBashToolDefinition"]>;
 const MAX_FOREGROUND_BASH_TIMEOUT_SECONDS = 300;
@@ -327,6 +441,15 @@ export class RealAgentSession implements IAgentSession {
   get isStreaming(): boolean {
     return this.s.isStreaming;
   }
+  getWorkflowModelBinding(): import("./types.js").WorkflowAgentModelBinding {
+    const model = this.s.model;
+    if (!model || !this.s.modelRuntime) throw new Error("Principal model binding is unavailable");
+    return {
+      model: Object.freeze({ ...model }),
+      modelRuntime: this.s.modelRuntime,
+      thinkingLevel: this.s.thinkingLevel,
+    };
+  }
   subscribe(listener: (e: PiAgentEvent) => void): () => void {
     return this.s.subscribe((e: unknown) => listener(e as PiAgentEvent));
   }
@@ -385,6 +508,10 @@ export class RealAgentSession implements IAgentSession {
 
 /* ---- Minimal structural types for the Pi SDK (avoids hard type-coupling) ---- */
 interface PiSession {
+  readonly agent?: { shouldStopAfterTurn?: StageTurnStop; streamFunction?: StageStreamFn };
+  readonly model?: { id: string; provider: string; api?: string; [key: string]: unknown };
+  readonly modelRuntime?: unknown;
+  readonly thinkingLevel: import("@brainpilot/protocol").ThinkingLevel;
   readonly sessionId: string;
   readonly isStreaming: boolean;
   readonly state: { messages: unknown[] };
@@ -395,7 +522,7 @@ interface PiSession {
     buildSessionContext(): { messages: unknown[] };
   };
   subscribe(listener: (e: unknown) => void): () => void;
-  prompt(text: string, opts?: { streamingBehavior?: "steer" | "followUp" }): Promise<void>;
+  prompt(text: string, opts?: PromptOptions): Promise<void>;
   setThinkingLevel(level: import("@brainpilot/protocol").ThinkingLevel): void;
   abort(): Promise<void>;
   clearQueue(): unknown;

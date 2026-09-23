@@ -19,6 +19,20 @@ export interface RetryingAgent {
   delayMs: number;
 }
 
+/** Work-state remains active while an accepted workflow runs after PI is idle. */
+export function runningToastState(input: {
+  workActive: { active: boolean } | null;
+  hasAgentActivity: boolean;
+  waitingForUser: boolean;
+  hasActiveScripts: boolean;
+}): { visible: boolean; showStop: boolean } {
+  // A received aggregate state is authoritative, including after Stop. Agent
+  // streaming flags are only a fallback before that state arrives.
+  const active = input.workActive?.active ?? input.hasAgentActivity;
+  const visible = active && !input.waitingForUser;
+  return { visible, showStop: visible && !input.hasActiveScripts };
+}
+
 /**
  * @param workingAgentNames names of all agents with status "running"
  * @param separator locale-appropriate join for multiple names (default "、")

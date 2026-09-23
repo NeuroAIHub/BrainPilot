@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdtemp, mkdir, readFile, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import type { MarketplaceEntry, MarketplaceRelease, PluginManifest } from "@brainpilot/plugin-sdk";
 import { createApp } from "../src/app.js";
 import {
@@ -10,15 +10,21 @@ import {
   listEnabledRuntimeTools,
   listInstalledPlugins,
   loadMarketplaceSources,
+  PAPERORCHESTRA_PLUGIN_ID,
+  readWorkflowAvailability,
   rollbackPlugin,
   setPluginEnabled,
   uninstallPlugin,
   updatePlugin,
 } from "../src/plugins.js";
 import type { Orchestrator, RuntimeHandle } from "../src/orchestrator.js";
+import { LocalProcessOrchestrator } from "../src/local-orchestrator.js";
+import { PerUserDockerOrchestrator } from "../src/per-user-docker-orchestrator.js";
+import { StaticRuntimeOrchestrator } from "../src/static-orchestrator.js";
 
 function orchestrator(): Orchestrator {
   return {
+    workflowSettingsScope: "single-user",
     ensureRuntime: async (): Promise<RuntimeHandle> => ({
       baseUrl: "http://runtime.test",
       instanceId: "runtime-test-1",
@@ -26,6 +32,12 @@ function orchestrator(): Orchestrator {
     health: async () => true,
     stopRuntime: async () => {},
   };
+}
+
+function workflowAck(url: string, init?: RequestInit): Response | undefined {
+  return url.endsWith("/config/workflows")
+    ? Response.json(JSON.parse(String(init?.body ?? "{}")))
+    : undefined;
 }
 
 function manifest(id: string, version: string, dependencies?: PluginManifest["dependencies"]): PluginManifest {
@@ -61,6 +73,264 @@ async function writeLocalCatalogue(dataDir: string, entries: MarketplaceEntry[],
 }
 
 describe("plugin marketplace control plane", () => {
+  it("installs the trusted writing card disabled and persists monotonic availability", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-card-"));
+    expect(await readWorkflowAvailability(dataDir)).toEqual({ revision: 0, enabledWorkflowIds: [] });
+    const installed = await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    expect(installed).toMatchObject({ enabled: false, builtinSource: "paper-writing/0.1.0" });
+    expect(installed?.manifest.contributes?.workflows).toEqual([
+      expect.objectContaining({ id: "paper-writing", entry: "workflow.json" }),
+    ]);
+    expect(await readWorkflowAvailability(dataDir)).toEqual({ revision: 1, enabledWorkflowIds: [] });
+    await setPluginEnabled(dataDir, PAPERORCHESTRA_PLUGIN_ID, true);
+    expect(await readWorkflowAvailability(dataDir)).toEqual({ revision: 2, enabledWorkflowIds: ["paper-writing"] });
+    await setPluginEnabled(dataDir, PAPERORCHESTRA_PLUGIN_ID, false);
+    expect(await readWorkflowAvailability(dataDir)).toEqual({ revision: 3, enabledWorkflowIds: [] });
+    await uninstallPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    // Empty registry retains its revision, including after a fresh read/restart.
+    expect(await readWorkflowAvailability(dataDir)).toEqual({ revision: 4, enabledWorkflowIds: [] });
+  });
+
+  it("does not authorize the trusted workflow from an arbitrary marketplace contribution", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-untrusted-"));
+    const value = manifest("org.example.workflow", "1.0.0");
+    value.contributes!.workflows = [{ id: "paper-writing", title: "Untrusted alias", entry: "ui/index.html", format: "json" }];
+    const bytes = bundle(value, "{}");
+    await writeLocalCatalogue(dataDir, [{ manifest: value, publisher: "Example", verified: true, artifact: artifact(bytes, "alias.bundle.json") }], { "alias.bundle.json": bytes });
+    await installPlugin(dataDir, value.id);
+    await setPluginEnabled(dataDir, value.id, true);
+    expect(await readWorkflowAvailability(dataDir)).toEqual({ revision: 2, enabledWorkflowIds: [] });
+  });
+
+  it("excludes an enabled but now incompatible workflow from the availability snapshot", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-compat-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    await setPluginEnabled(dataDir, PAPERORCHESTRA_PLUGIN_ID, true);
+    const file = path.join(dataDir, "plugins", "registry.json");
+    const registry = JSON.parse(await readFile(file, "utf8"));
+    registry.plugins[PAPERORCHESTRA_PLUGIN_ID].manifest.engines.brainpilot = ">=99.0.0";
+    await writeFile(file, JSON.stringify(registry));
+    expect((await readWorkflowAvailability(dataDir)).enabledWorkflowIds).toEqual([]);
+  });
+
+  it("synchronizes the latest workflow gate before known and restarted runtimes receive work", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-sync-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    let instanceId = "runtime-1";
+    const calls: Array<{ pathname: string; body?: Record<string, unknown> }> = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      calls.push({ pathname: new URL(url).pathname, ...(init?.body ? { body: JSON.parse(String(init.body)) } : {}) });
+      return workflowAck(url, init) ?? Response.json({ sessions: [] });
+    };
+    const app = createApp({
+      orchestrator: { ...orchestrator(), ensureRuntime: async () => ({ baseUrl: "http://runtime.test", instanceId }) },
+      dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" },
+    });
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    expect(calls[0]).toEqual({ pathname: "/config/workflows", body: { revision: 1, enabledWorkflowIds: [] } });
+    const enable = () => app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+    });
+    expect((await enable()).status).toBe(200);
+    expect(calls.filter((call) => call.pathname === "/config/workflows").at(-1)?.body).toEqual({ revision: 2, enabledWorkflowIds: ["paper-writing"] });
+    instanceId = "runtime-2";
+    calls.length = 0;
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    expect(calls[0]).toEqual({ pathname: "/config/workflows", body: { revision: 2, enabledWorkflowIds: ["paper-writing"] } });
+    calls.length = 0;
+    const disable = await app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: false }),
+    });
+    expect(disable.status).toBe(200);
+    expect(calls.map((call) => call.pathname)).toEqual(["/config/workflows", "/runtime/capabilities"]);
+    expect(calls[0]?.body).toEqual({ revision: 3, enabledWorkflowIds: [] });
+    // Disabling is availability-only: no interrupt/cancel endpoint is called.
+  });
+
+  it("reports failed synchronization after saving a toggle and retries before proxying", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-sync-failed-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    let fail = false;
+    let forwarded = 0;
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/config/workflows")) {
+        return fail ? Response.json({ error: "unavailable" }, { status: 503 }) : workflowAck(url, init)!;
+      }
+      if (url.endsWith("/sessions")) forwarded += 1;
+      return Response.json({ sessions: [] });
+    };
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" } });
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    fail = true;
+    const requestToggle = () => app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+    });
+    const failed = await requestToggle();
+    expect(failed.status).toBe(502);
+    expect(await failed.json()).toMatchObject({ code: "WORKFLOW_SYNC_FAILED", stateSaved: true });
+    expect((await readWorkflowAvailability(dataDir)).enabledWorkflowIds).toEqual(["paper-writing"]);
+    expect((await app.request("/api/sessions")).status).toBe(500);
+    expect(forwarded).toBe(1);
+    fail = false;
+    expect((await requestToggle()).status).toBe(200);
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    expect(forwarded).toBe(2);
+  });
+
+  it.each(["missing-revision", "older-revision", "different-ids"])("does not report success for a bad runtime acknowledgement: %s", async (mode) => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-bad-ack-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      if (!url.endsWith("/config/workflows")) return Response.json({ sessions: [] });
+      const snapshot = JSON.parse(String(init?.body));
+      if (snapshot.enabledWorkflowIds.length === 0) return Response.json(snapshot);
+      return Response.json(mode === "missing-revision" ? { ok: true }
+        : mode === "older-revision" ? { ...snapshot, revision: snapshot.revision - 1 }
+          : { ...snapshot, enabledWorkflowIds: [] });
+    };
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" } });
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    const response = await app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(502);
+    expect(await response.json()).toMatchObject({ code: "WORKFLOW_SYNC_FAILED", stateSaved: true });
+  });
+
+  it("converges on disable when an earlier enable handshake is still in flight", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-sync-race-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    let markEnableStarted!: () => void;
+    const enableStarted = new Promise<void>((resolve) => { markEnableStarted = resolve; });
+    let releaseEnable!: () => void;
+    const enableGate = new Promise<void>((resolve) => { releaseEnable = resolve; });
+    const snapshots: Array<{ revision: number; enabledWorkflowIds: string[] }> = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      if (!url.endsWith("/config/workflows")) return Response.json({ sessions: [] });
+      const snapshot = JSON.parse(String(init?.body));
+      snapshots.push(snapshot);
+      if (snapshot.revision === 2) { markEnableStarted(); await enableGate; }
+      return Response.json(snapshot);
+    };
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" } });
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    const toggle = (enabled: boolean) => app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled }),
+    });
+    const enable = toggle(true);
+    await enableStarted;
+    const disable = toggle(false);
+    await vi.waitFor(async () => expect((await readWorkflowAvailability(dataDir)).revision).toBe(3));
+    releaseEnable();
+    const responses = await Promise.all([enable, disable]);
+    expect(responses.map((response) => response.status)).toEqual([200, 200]);
+    expect(snapshots.at(-1)).toEqual({ revision: 3, enabledWorkflowIds: [] });
+    expect(snapshots.map((snapshot) => snapshot.revision)).toEqual([1, 2, 3]);
+  });
+
+  it("resends availability for a legacy runtime without instance identity", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-legacy-runtime-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    await setPluginEnabled(dataDir, PAPERORCHESTRA_PLUGIN_ID, true);
+    const snapshots: unknown[] = [];
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/config/workflows")) snapshots.push(JSON.parse(String(init?.body)));
+      return workflowAck(url, init) ?? Response.json({ sessions: [] });
+    };
+    const app = createApp({
+      orchestrator: { ...orchestrator(), ensureRuntime: async () => ({ baseUrl: "http://runtime.test" }) },
+      dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" },
+    });
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    // A new process at the same legacy URL receives the state again.
+    expect((await app.request("/api/sessions")).status).toBe(200);
+    expect(snapshots).toEqual([
+      { revision: 2, enabledWorkflowIds: ["paper-writing"] },
+      { revision: 2, enabledWorkflowIds: ["paper-writing"] },
+    ]);
+  });
+
+  it.each([
+    { BP_LOCAL_MODE: "0", BP_ORCHESTRATOR: "local" },
+    { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "docker" },
+  ])("refuses workflow activation without a supported single-user deployment: %j", async (env) => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-scope-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    const app = createApp({ orchestrator: orchestrator(), dataDir, serveWeb: false, env });
+    const response = await app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: "WORKFLOW_DEPLOYMENT_UNSUPPORTED" });
+    expect((await listInstalledPlugins(dataDir))[0]?.enabled).toBe(false);
+  });
+
+  it("refuses per-user activation even with local env and only the first runtime discovered", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-users-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    const fetchFn = async (url: string, init?: RequestInit) => workflowAck(url, init) ?? Response.json({ sessions: [] });
+    const app = createApp({
+      orchestrator: { ...orchestrator(), workflowSettingsScope: "per-user", ensureRuntime: async (opts) => ({ baseUrl: `http://${opts?.userId}.test`, instanceId: `runtime-${opts?.userId}` }) },
+      dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" },
+    });
+    expect((await app.request("/api/sessions", { headers: { "x-bp-user": "alice" } })).status).toBe(200);
+    const response = await app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json", "x-bp-user": "alice" }, body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(409);
+    expect((await readWorkflowAvailability(dataDir)).enabledWorkflowIds).toEqual([]);
+  });
+
+  it("requires an orchestrator scope declaration rather than inferring safety from the environment", async () => {
+    const local: Orchestrator = new LocalProcessOrchestrator();
+    const perUser: Orchestrator = new PerUserDockerOrchestrator();
+    const external: Orchestrator = new StaticRuntimeOrchestrator({ baseUrl: "http://runtime.test" });
+    expect(local.workflowSettingsScope).toBe("single-user");
+    expect(perUser.workflowSettingsScope).toBe("per-user");
+    expect(external.workflowSettingsScope).toBeUndefined();
+  });
+
+  it.each(["per-user", "unknown", "static"])("rejects %s scope before creating any runtime, despite local environment defaults", async (scope) => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-scope-declared-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    let ensureCalls = 0;
+    const selected: Orchestrator = scope === "per-user" ? new PerUserDockerOrchestrator()
+      : scope === "static" ? new StaticRuntimeOrchestrator({ baseUrl: "http://runtime.test" })
+        : { ...orchestrator(), workflowSettingsScope: undefined };
+    const wrapped: Orchestrator = {
+      workflowSettingsScope: selected.workflowSettingsScope,
+      ensureRuntime: async () => { ensureCalls++; throw new Error("must not start a runtime"); },
+      health: async () => true, stopRuntime: async () => {},
+    };
+    const app = createApp({ orchestrator: wrapped, dataDir, serveWeb: false,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" } });
+    const response = await app.request(`/api/plugins/${PAPERORCHESTRA_PLUGIN_ID}/enabled`, {
+      method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ enabled: true }),
+    });
+    expect(response.status).toBe(409);
+    expect(ensureCalls).toBe(0);
+    expect((await readWorkflowAvailability(dataDir)).enabledWorkflowIds).toEqual([]);
+  });
+
+  it("never forwards an inherited single-user enabled snapshot to the first per-user runtime", async () => {
+    const dataDir = await mkdtemp(path.join(tmpdir(), "bp-workflow-inherited-scope-"));
+    await installPlugin(dataDir, PAPERORCHESTRA_PLUGIN_ID);
+    await setPluginEnabled(dataDir, PAPERORCHESTRA_PLUGIN_ID, true);
+    const calls: string[] = [];
+    const fetchFn = async (url: string) => { calls.push(url); return Response.json({ sessions: [] }); };
+    const app = createApp({ orchestrator: { ...orchestrator(), workflowSettingsScope: "per-user" },
+      dataDir, serveWeb: false, fetchFn: fetchFn as typeof fetch,
+      env: { BP_LOCAL_MODE: "1", BP_ORCHESTRATOR: "local" } });
+    expect((await app.request("/api/sessions", { headers: { "x-bp-user": "first-user" } })).status).toBe(500);
+    expect(calls).toEqual([]);
+  });
+
   it("loads a decoupled HTTPS catalogue source", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-market-source-"));
     await mkdir(path.join(dataDir, "plugins"), { recursive: true });
@@ -381,6 +651,8 @@ describe("plugin marketplace control plane", () => {
     const calls: Array<{ url: string; body?: string }> = [];
     const fetchFn = async (url: string, init?: RequestInit) => {
       calls.push({ url, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+      const ack = workflowAck(url, init);
+      if (ack) return ack;
       return url.endsWith("/sessions")
         ? Response.json({ id: "s1" }, { status: 201 })
         : Response.json({ ok: true });
@@ -422,6 +694,8 @@ describe("plugin marketplace control plane", () => {
     };
     const fetchFn = async (url: string, init?: RequestInit) => {
       calls.push({ url, ...(typeof init?.body === "string" ? { body: init.body } : {}) });
+      const ack = workflowAck(url, init);
+      if (ack) return ack;
       if (url.endsWith("/runtime/capabilities")) return Response.json({ ok: true });
       return Response.json({ id: "existing-session" });
     };
@@ -434,10 +708,11 @@ describe("plugin marketplace control plane", () => {
 
     expect((await app.request("/api/sessions/existing-session")).status).toBe(200);
     expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/config/workflows",
       "/runtime/capabilities",
       "/sessions/existing-session",
     ]);
-    expect(calls[0]?.body).toBe('{"capabilities":["builtin.monitor"]}');
+    expect(calls.find((call) => call.url.endsWith("/runtime/capabilities"))?.body).toBe('{"capabilities":["builtin.monitor"]}');
 
     calls.length = 0;
     expect((await app.request("/api/sessions/existing-session")).status).toBe(200);
@@ -449,10 +724,11 @@ describe("plugin marketplace control plane", () => {
     calls.length = 0;
     expect((await app.request("/api/sessions/existing-session")).status).toBe(200);
     expect(calls.map((call) => new URL(call.url).pathname)).toEqual([
+      "/config/workflows",
       "/runtime/capabilities",
       "/sessions/existing-session",
     ]);
-    expect(calls[0]?.body).toBe('{"capabilities":["builtin.monitor"]}');
+    expect(calls.find((call) => call.url.endsWith("/runtime/capabilities"))?.body).toBe('{"capabilities":["builtin.monitor"]}');
   });
 
   it("single-flights concurrent capability sync for one Runtime instance", async () => {
@@ -462,7 +738,9 @@ describe("plugin marketplace control plane", () => {
     let markSyncStarted!: () => void;
     const syncStarted = new Promise<void>((resolve) => { markSyncStarted = resolve; });
     let syncCalls = 0;
-    const fetchFn = async (url: string) => {
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      const ack = workflowAck(url, init);
+      if (ack) return ack;
       if (url.endsWith("/runtime/capabilities")) {
         syncCalls += 1;
         markSyncStarted();
@@ -496,7 +774,9 @@ describe("plugin marketplace control plane", () => {
   it("retries capability sync after a transient failure", async () => {
     const dataDir = await mkdtemp(path.join(tmpdir(), "bp-plugin-monitor-sync-retry-"));
     let syncCalls = 0;
-    const fetchFn = async (url: string) => {
+    const fetchFn = async (url: string, init?: RequestInit) => {
+      const ack = workflowAck(url, init);
+      if (ack) return ack;
       if (url.endsWith("/runtime/capabilities")) {
         syncCalls += 1;
         return syncCalls === 1

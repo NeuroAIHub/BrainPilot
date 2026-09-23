@@ -10,7 +10,9 @@
   "main": "./dist/index.js",
   "types": "./dist/index.d.ts",
   "files": [
-    "dist"
+    "dist",
+    "PAPERORCHESTRA_LICENSE",
+    "THIRD_PARTY_NOTICES.md"
   ],
   "repository": {
     "type": "git",

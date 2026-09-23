@@ -23,6 +23,10 @@
       "types": "./dist/preview.d.ts",
       "default": "./dist/preview.js"
     },
+    "./workflow": {
+      "types": "./dist/workflow.d.ts",
+      "default": "./dist/workflow.js"
+    },
     "./node": {
       "types": "./dist/node.d.ts",
       "default": "./dist/node.js"
@@ -38,6 +42,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "ajv": "^8.17.1",
     "semver": "^7.7.3"
   },
   "devDependencies": {

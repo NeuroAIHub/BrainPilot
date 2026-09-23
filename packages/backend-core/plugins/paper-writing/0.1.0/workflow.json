@@ -1,0 +1,6 @@
+{
+  "schemaVersion": 1,
+  "workflowId": "paper-writing",
+  "implementation": "builtin:paper-writing",
+  "note": "The host's trusted TypeScript registry owns the executable definition and its input/output schemas. This file is a contribution reference, not an executable module or a second definition."
+}

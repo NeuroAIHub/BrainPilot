@@ -85,6 +85,12 @@ export const SetRuntimeCapabilitiesRequestSchema = z.object({
 });
 export type SetRuntimeCapabilitiesRequest = z.infer<typeof SetRuntimeCapabilitiesRequestSchema>;
 
+export const SetWorkflowAvailabilityRequestSchema = z.object({
+  revision: z.number().int().nonnegative(),
+  enabledWorkflowIds: z.array(z.string().regex(/^[a-z0-9]+(?:[._-][a-z0-9]+)*$/)).max(128),
+}).strict();
+export type SetWorkflowAvailabilityRequest = z.infer<typeof SetWorkflowAvailabilityRequestSchema>;
+
 /* ------------------------------------------------------------------ *
  * POST /sessions  (create)
  * ------------------------------------------------------------------ */
@@ -309,6 +315,7 @@ export const RUNTIME_ROUTES = {
   health: { method: "GET", path: "/health" },
   metrics: { method: "GET", path: "/metrics" },
   setRuntimeCapabilities: { method: "PUT", path: "/runtime/capabilities" },
+  setWorkflowAvailability: { method: "PUT", path: "/config/workflows" },
   mcpStatus: { method: "GET", path: "/mcp/status" },
   createSession: { method: "POST", path: "/sessions" },
   listSessions: { method: "GET", path: "/sessions" },
@@ -317,6 +324,7 @@ export const RUNTIME_ROUTES = {
   updateSession: { method: "PUT", path: "/sessions/:id" },
   deleteSession: { method: "DELETE", path: "/sessions/:id" },
   getSessionState: { method: "GET", path: "/sessions/:id/state" },
+  getSessionWorkflows: { method: "GET", path: "/sessions/:id/workflows" },
   /**
    * Per-run + per-session usage stats (tokens + tool/skill/error counters).
    * Payload: `SessionStatsSchema`. Persisted alongside the session at

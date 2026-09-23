@@ -157,6 +157,33 @@ describe("SessionManager (mock mode)", () => {
     expect(principalTools).toContain("ask_user");
   });
 
+  it("retries a partially connected MCP generation after a bounded cooldown without changing config", async () => {
+    const root = await mkdtemp(join(tmpdir(), "bp-mcp-partial-"));
+    await mkdir(join(root, "bp_template"), { recursive: true });
+    await writeFile(join(root, "bp_template", "mcp_servers.json"), JSON.stringify({ mcpServers: {
+      neuro_sci_papersearch: { command: "fixture" }, tavily: { command: "fixture" },
+    } }));
+    let tavilyAttempts = 0;
+    const bridge = new McpBridge(async (name) => {
+      if (name === "tavily" && tavilyAttempts++ === 0) throw new Error("temporary fixture outage");
+      return { listTools: async () => ({ tools: [{ name: "search", inputSchema: { type: "object" } }] }),
+        callTool: async () => ({ content: [{ type: "text", text: "ok" }] }), close: async () => {} };
+    });
+    const manager = new SessionManager({ dataRoot: root, persist: false, agentFactory: mockAgentFactory, mcpBridge: bridge });
+    const start = Date.now(); const now = vi.spyOn(Date, "now").mockReturnValue(start);
+    try {
+      expect((await manager.getMcpRuntimeStatus()).state).toBe("degraded");
+      expect((await manager.getMcpRuntimeStatus()).state).toBe("degraded");
+      expect(tavilyAttempts).toBe(1);
+      now.mockReturnValue(start + 30_001);
+      const recovered = await manager.getMcpRuntimeStatus();
+      expect(recovered.state).toBe("ready");
+      expect(recovered.servers.map(server => server.name).sort()).toEqual(["neuro_sci_papersearch", "tavily"]);
+      expect(tavilyAttempts).toBe(2);
+      await manager.getMcpRuntimeStatus(); expect(tavilyAttempts).toBe(2);
+    } finally { now.mockRestore(); await manager.shutdownAndSave(); await rm(root, { recursive: true, force: true }); }
+  });
+
   it("reloads plugin MCP projections for agents created after enable and disable (#469)", async () => {
     const root = await mkdtemp(join(tmpdir(), "bp-mcp-hot-"));
     const runtimeDir = join(root, "plugins", "runtime");

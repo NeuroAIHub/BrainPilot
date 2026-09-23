@@ -1,0 +1,29 @@
+name: Workflow development
+
+on:
+  push:
+    branches: [feat/workflow-collaboration]
+  pull_request:
+    branches: [feat/workflow-collaboration]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  offline-checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - name: Install
+        run: npm ci
+      - name: Check workflows offline
+        run: npm run check:workflows

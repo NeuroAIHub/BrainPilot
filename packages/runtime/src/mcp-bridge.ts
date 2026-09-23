@@ -120,6 +120,7 @@ function materializePluginMcpSpec(spec: McpServerSpec, env: Record<string, strin
  * `callTool` with a small type surface.
  */
 export interface McpCallToolOptions {
+  signal?: AbortSignal;
   timeout?: number;
   resetTimeoutOnProgress?: boolean;
 }
@@ -324,7 +325,8 @@ export class McpBridge {
       name: `mcp__${server}__${t.name}`,
       description: t.description ?? `MCP tool '${t.name}' from server '${server}'`,
       parameters: t.inputSchema ?? { type: "object", properties: {} },
-      execute: async (params: Record<string, unknown>): Promise<SystemToolResult> => {
+      execute: async (params: Record<string, unknown>, options?: { signal?: AbortSignal }): Promise<SystemToolResult> => {
+        options?.signal?.throwIfAborted();
         // Explicit per-call `RequestOptions`: without this the SDK falls
         // back to `DEFAULT_REQUEST_TIMEOUT_MSEC` (60 s), which is too short
         // for the long-running tools BrainPilot users routinely wire up
@@ -333,6 +335,7 @@ export class McpBridge {
           { name: t.name, arguments: params },
           undefined,
           {
+            ...(options?.signal ? { signal: options.signal } : {}),
             timeout: MCP_TOOL_CALL_TIMEOUT_MS,
             resetTimeoutOnProgress: MCP_RESET_TIMEOUT_ON_PROGRESS,
           },

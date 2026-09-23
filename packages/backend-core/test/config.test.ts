@@ -210,6 +210,28 @@ describe("writeLocalSettings", () => {
 });
 
 describe("providers registry (CRUD + selection)", () => {
+  it("preserves exact-model input declarations and clears them when the endpoint or API changes", async () => {
+    const dir = await tmp();
+    const profile = await createProfile(dir, { name: "Mixed inputs", baseUrl: "https://first.example", apiKey: "sk", models: ["vision", "plain"],
+      inputModalities: { vision: ["text", "image"], plain: ["text"] } });
+    expect(profile.inputModalities).toEqual({ vision: ["text", "image"], plain: ["text"] });
+    expect((await updateProfile(dir, profile.id, { name: "Renamed", api: "anthropic-messages", baseUrl: "https://first.example/" }))?.inputModalities).toEqual(profile.inputModalities);
+    expect((await updateProfile(dir, profile.id, { baseUrl: "https://second.example" }))?.inputModalities).toBeUndefined();
+    expect((await updateProfile(dir, profile.id, { inputModalities: { vision: ["text", "image"] } }))?.inputModalities).toEqual({ vision: ["text", "image"] });
+    expect((await updateProfile(dir, profile.id, { api: "openai-responses" }))?.inputModalities).toBeUndefined();
+    await expect(createProfile(dir, { name: "Invalid", inputModalities: { invalid: ["image"] } })).rejects.toThrow();
+  });
+
+  it("carries an explicit single-model environment declaration into the bootstrap profile", async () => {
+    const dir = await tmp();
+    const profile = await bootstrapEnvProvider(dir, { ANTHROPIC_API_KEY: "sk-from-env", ANTHROPIC_BASE_URL: "https://gateway.example",
+      ANTHROPIC_MODEL: "probed-model", BP_MODEL_INPUT_MODALITIES: "text,image" });
+    expect(profile?.inputModalities).toEqual({ "probed-model": ["text", "image"] });
+    expect(profile?.apiKey).toBe("");
+    expect(profile?.apiKeyEnv).toBe("ANTHROPIC_API_KEY");
+    expect((await readProviders(dir)).profiles[0]?.inputModalities).toEqual({ "probed-model": ["text", "image"] });
+  });
+
   it("creates, updates (keeping key when omitted), deletes, and reselects", async () => {
     const dir = await tmp();
     const a = await createProfile(dir, { name: "A", baseUrl: "ua", apiKey: "ka", models: ["ma"] });

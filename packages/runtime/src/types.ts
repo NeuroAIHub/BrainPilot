@@ -21,6 +21,7 @@ export type AgentRole = "principal" | "expert" | "trace";
 export type StreamingBehavior = "steer" | "followUp";
 
 export interface PromptOptions {
+  images?: Array<{ type: "image"; data: string; mimeType: string }>;
   /**
    * When the agent is already streaming, the underlying SDK refuses a plain
    * prompt and requires a queueing mode: "steer" interrupts the current turn,
@@ -37,6 +38,8 @@ export interface IAgentSession {
    * `streamingBehavior` to queue the message instead.
    */
   readonly isStreaming: boolean;
+  /** Host-only snapshot of the actual Pi model; never exposed to plugins or serialized. */
+  getWorkflowModelBinding?(): WorkflowAgentModelBinding;
   /** Subscribe to Pi events. Returns an unsubscribe fn. */
   subscribe(listener: (event: PiAgentEvent) => void): () => void;
   /** Send a prompt. Resolves when the run completes (or is aborted). */
@@ -64,6 +67,31 @@ export interface IAgentSession {
   interruptTool?(toolCallId: string): boolean;
   /** Tear down; release resources. */
   dispose(): void;
+}
+
+export interface WorkflowAgentModelBinding {
+  model: { id: string; provider: string; api?: string; [key: string]: unknown };
+  modelRuntime: unknown;
+  thinkingLevel: ThinkingLevel;
+}
+
+/**
+ * A workflow stage's own cancellation, owned by the host (see
+ * `workflows/stage-lifecycle.ts`). The real factory binds `signal` into the
+ * provider request itself, so a stage deadline or session Stop cancels the
+ * actual HTTP stream instead of only asking the agent loop to stop, and reports
+ * each request's lifetime so the host never abandons a live request. Sessions
+ * without a transport (mock/test) simply ignore it.
+ */
+export interface WorkflowStageCancellation {
+  /** Aborted the moment the stage is fenced (deadline/Stop) or released. */
+  readonly signal: AbortSignal;
+  /**
+   * Call when a bound provider request starts; the returned fn reports that the
+   * request's producer really finished (its stream's own completion), not that a
+   * consumer walked away.
+   */
+  requestStarted(): () => void;
 }
 
 /**
@@ -186,6 +214,14 @@ export type AgentSessionFactory = (params: {
   systemPrompt: string;
   /** Session-wide reasoning effort shared by every agent. */
   thinkingLevel: ThinkingLevel;
+  /** An accepted workflow reuses the Principal's exact model/runtime, bypassing profile/env resolution. */
+  workflowModelBinding?: WorkflowAgentModelBinding;
+  /**
+   * Stage-owned cancellation for a workflow stage session. Supplied together
+   * with `workflowModelBinding`; the real factory binds it into the provider
+   * request so the stage's deadline/Stop cancels the actual stream.
+   */
+  workflowStageCancellation?: WorkflowStageCancellation;
   /** Leaf sessions use submit_result and must not receive persistent-expert coordination hooks. */
   suppressCoordinationHooks?: boolean;
   /**
@@ -270,6 +306,8 @@ export type AgentSessionFactory = (params: {
     modelId?: string;
     contextWindow?: number;
     reasoningEnabled?: boolean;
+    /** Input support of this exact resolved model, not a workflow override. */
+    inputModalities?: import("@brainpilot/protocol").ModelInputModalities;
   };
 }) => Promise<IAgentSession>;
 
@@ -282,7 +320,7 @@ export interface SystemTool {
   description: string;
   /** JSON-schema parameter object (Pi `defineTool` accepts plain JSON schema). */
   parameters: Record<string, unknown>;
-  execute: (params: Record<string, unknown>) => Promise<SystemToolResult>;
+  execute: (params: Record<string, unknown>, options?: { signal?: AbortSignal }) => Promise<SystemToolResult>;
 }
 
 export interface SystemToolResult {

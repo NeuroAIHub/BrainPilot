@@ -98,6 +98,24 @@ describe("McpBridge", () => {
     expect(res.isError).toBe(false);
   });
 
+  it("forwards workflow cancellation to the existing MCP request and rejects pre-cancelled calls", async () => {
+    const callTool = vi.fn(async (_args: unknown, _schema: unknown, options?: { signal?: AbortSignal }) => {
+      return new Promise<never>((_resolve, reject) => options?.signal?.addEventListener("abort", () => reject(options.signal!.reason), { once: true }));
+    });
+    const bridge = new McpBridge(async () => fakeClient({ callTool }));
+    const [tool] = await bridge.connectAll({ mcpServers: { "preset-tavily": { command: "fixture" } } });
+    const cancelled = new AbortController(); cancelled.abort(new Error("already stopped"));
+    await expect(tool!.execute({ query: "EEG" }, { signal: cancelled.signal })).rejects.toThrow("already stopped");
+    expect(callTool).not.toHaveBeenCalled();
+    const active = new AbortController();
+    const request = tool!.execute({ query: "EEG" }, { signal: active.signal });
+    const rejection = expect(request).rejects.toThrow("workflow stopped");
+    active.abort(new Error("workflow stopped")); await rejection;
+    expect(callTool).toHaveBeenCalledWith({ name: "search", arguments: { query: "EEG" } }, undefined,
+      { signal: active.signal, timeout: MCP_TOOL_CALL_TIMEOUT_MS, resetTimeoutOnProgress: true });
+    await bridge.close();
+  });
+
   it("maps MCP isError through to SystemToolResult", async () => {
     const bridge = new McpBridge(async () =>
       fakeClient({ callTool: async () => ({ content: [{ type: "text", text: "boom" }], isError: true }) }),

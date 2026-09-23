@@ -51,6 +51,9 @@ export type { ImportablePluginSourceFormat, PluginSourceFormat, ResolvedPlugin }
 export type InstalledPlugin = SdkInstalledPlugin & {
   sourceFormat?: PluginSourceFormat;
   unsupported?: string[];
+  /** Curated artifact provenance, assigned by installation rather than the manifest. */
+  builtinSource?: string;
+  previousBuiltinSource?: string;
 };
 
 interface PluginRuntimeProjection {
@@ -66,8 +69,17 @@ interface PluginRuntimeProjection {
 }
 
 interface RegistryFile {
+  /** Persisted so backend/runtime restarts cannot replay an older availability snapshot. */
+  revision: number;
   plugins: Record<string, InstalledPlugin>;
 }
+
+export interface WorkflowAvailabilitySnapshot {
+  revision: number;
+  enabledWorkflowIds: string[];
+}
+
+export const PAPERORCHESTRA_PLUGIN_ID = "org.brainpilot.paperorchestra";
 
 interface PluginBundle {
   manifest: PluginManifest;
@@ -92,12 +104,31 @@ interface BuiltinPluginRelease {
   requirements?: string[];
   executesLocalCode?: boolean;
   status?: "test";
+  /** Only these curated contributions can authorize trusted runtime implementations. */
+  workflowIds?: readonly string[];
 }
 
 // PR4 adds immutable built-in release directories here. Every source directory
 // contains the exact manifest and files for that version; versions are never
 // synthesized by rewriting the current bundle.
 const BUILTIN_PLUGIN_RELEASES: readonly BuiltinPluginRelease[] = [
+  {
+    plugin: "paper-writing",
+    source: "paper-writing/0.1.0",
+    version: "0.1.0",
+    publishedAt: "2026-09-08T00:00:00.000Z",
+    releaseNotes: "Experimental native TS/Pi port of PaperOrchestra's default PlotOff workflow, with automatic full-manuscript refinement and compiled PDF delivery. Installation is disabled by default.",
+    publisher: "BrainPilot",
+    verified: true,
+    sourceFormat: "brainpilot",
+    repositoryUrl: "https://github.com/NeuroAIHub/BrainPilot",
+    license: "AGPL-3.0-only",
+    upstreamCommit: "ca1b3fa01c2970fc7cda32d16245db38d57b3f56",
+    requirements: ["Declared single-user local deployment (including a dedicated Linux instance)", "Shared, per-user Docker, and undeclared external runtimes are not supported", "Research materials, template.tex and venue guidelines", "The current Pi model must accept images", "pdflatex, bibtex, pdftotext and pdftoppm on PATH"],
+    executesLocalCode: true,
+    status: "test",
+    workflowIds: ["paper-writing"],
+  },
   {
     plugin: "monitor",
     source: "monitor/0.2.0",
@@ -288,6 +319,18 @@ async function writeJsonAtomic(file: string, value: unknown): Promise<void> {
   const tmp = `${file}.${process.pid}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(value, null, 2) + "\n", { encoding: "utf8", mode: 0o600 });
   await fs.rename(tmp, file);
+}
+
+async function writeRegistry(dataDir: string, registry: RegistryFile): Promise<void> {
+  if (registry.revision >= Number.MAX_SAFE_INTEGER) throw new Error("plugin registry revision exhausted");
+  registry.revision += 1;
+  await writeJsonAtomic(registryPath(dataDir), registry);
+}
+
+function builtinSourceForRelease(release: MarketplaceRelease): string | undefined {
+  return BUILTIN_PLUGIN_RELEASES.find((builtin) =>
+    builtin.version === release.version && builtinArtifactUrl(builtin) === release.artifact.url,
+  )?.source;
 }
 
 const registryMutationQueues = new Map<string, Promise<void>>();
@@ -484,7 +527,9 @@ export async function preflightPluginCompatibility(dataDir: string, targetVersio
 
 async function readRegistry(dataDir: string): Promise<RegistryFile> {
   const raw = await readJson(registryPath(dataDir));
-  if (!isObject(raw) || !isObject(raw.plugins)) return { plugins: {} };
+  if (!isObject(raw) || !isObject(raw.plugins)) return { revision: 0, plugins: {} };
+  const revision = typeof raw.revision === "number" && Number.isSafeInteger(raw.revision) && raw.revision >= 0
+    ? raw.revision : 0;
   const plugins: Record<string, InstalledPlugin> = {};
   for (const [id, item] of Object.entries(raw.plugins)) {
     if (!isObject(item)) continue;
@@ -510,10 +555,12 @@ async function readRegistry(dataDir: string): Promise<RegistryFile> {
         : {}),
       ...(repositoryUrl ? { repositoryUrl } : {}),
       ...(typeof item.executesLocalCode === "boolean" ? { executesLocalCode: item.executesLocalCode } : {}),
+      ...(typeof item.builtinSource === "string" ? { builtinSource: item.builtinSource } : {}),
+      ...(typeof item.previousBuiltinSource === "string" ? { previousBuiltinSource: item.previousBuiltinSource } : {}),
     };
   }
   for (const plugin of Object.values(plugins)) plugin.compatibility = compatibilityFor(plugin.manifest, plugins);
-  return { plugins };
+  return { revision, plugins };
 }
 
 export async function listMarketplace(dataDir: string): Promise<MarketplaceEntry[]> {
@@ -587,6 +634,26 @@ export async function listEnabledRuntimeTools(dataDir: string): Promise<string[]
       ? (plugin.manifest.contributes?.runtimeTools ?? []).map((tool) => tool.capability)
       : [],
   ))];
+}
+
+/**
+ * Atomic availability projection. Descriptions and executable definitions stay
+ * in the runtime's trusted registry; arbitrary marketplace manifests cannot
+ * grant access to a builtin implementation by merely reusing its workflow ID.
+ */
+export async function readWorkflowAvailability(dataDir: string): Promise<WorkflowAvailabilitySnapshot> {
+  const registry = await readRegistry(dataDir);
+  const enabledWorkflowIds = new Set<string>();
+  for (const installed of Object.values(registry.plugins)) {
+    if (!installed.enabled || installed.compatibility?.compatible !== true || !installed.builtinSource) continue;
+    const release = BUILTIN_PLUGIN_RELEASES.find((candidate) =>
+      candidate.source === installed.builtinSource && candidate.version === installed.activeVersion,
+    );
+    if (!release?.workflowIds?.length) continue;
+    const declared = new Set(installed.manifest.contributes?.workflows?.map((workflow) => workflow.id));
+    for (const id of release.workflowIds) if (declared.has(id)) enabledWorkflowIds.add(id);
+  }
+  return { revision: registry.revision, enabledWorkflowIds: [...enabledWorkflowIds].sort() };
 }
 
 /** Opt-in gate for sharing the active file/preview context with chat. */
@@ -1034,7 +1101,7 @@ export async function importExternalPlugin(
     };
     installed.compatibility = compatibilityFor(manifest, { ...registry.plugins, [manifest.id]: installed });
     registry.plugins[manifest.id] = installed;
-    await writeJsonAtomic(registryPath(dataDir), registry);
+    await writeRegistry(dataDir, registry);
     return installed;
   });
 }
@@ -1085,13 +1152,14 @@ export async function installPlugin(dataDir: string, id: string, requestedVersio
       installedAt: new Date().toISOString(),
       activeVersion: release.version,
       sourceFormat: entry.sourceFormat ?? "brainpilot",
+      ...(builtinSourceForRelease(release) ? { builtinSource: builtinSourceForRelease(release) } : {}),
       executesLocalCode: entry.executesLocalCode ?? Boolean(entry.capabilities?.some((capability) => capability === "mcp" || capability === "hooks")),
       ...(entry.repositoryUrl ? { repositoryUrl: entry.repositoryUrl } : {}),
       ...(entry.unsupported?.length ? { unsupported: entry.unsupported } : {}),
     };
     installed.compatibility = compatibilityFor(release.manifest, { ...registry.plugins, [id]: installed });
     registry.plugins[id] = installed;
-    await writeJsonAtomic(registryPath(dataDir), registry);
+    await writeRegistry(dataDir, registry);
     return installed;
   });
 }
@@ -1140,6 +1208,8 @@ export async function updatePlugin(dataDir: string, id: string): Promise<Install
     if (!release) throw new Error("no compatible plugin update is available");
     await installBundle(dataDir, await downloadRelease(dataDir, release));
     const previousVersion = installed.activeVersion;
+    installed.previousBuiltinSource = installed.builtinSource;
+    installed.builtinSource = builtinSourceForRelease(release);
     installed.manifest = release.manifest;
     installed.activeVersion = release.version;
     installed.previousVersion = previousVersion;
@@ -1148,7 +1218,7 @@ export async function updatePlugin(dataDir: string, id: string): Promise<Install
     installed.compatibility = compatibilityFor(release.manifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
     if (installed.enabled) await syncDeclarativeContributions(dataDir, installed.manifest, true);
-    await writeJsonAtomic(registryPath(dataDir), registry);
+    await writeRegistry(dataDir, registry);
     await pruneInstalledVersions(dataDir, id, [installed.activeVersion, previousVersion]);
     return installed;
   });
@@ -1165,6 +1235,9 @@ export async function rollbackPlugin(dataDir: string, id: string): Promise<Insta
     const rollbackCompatibility = compatibilityFor(previousManifest, registry.plugins);
     if (!rollbackCompatibility.compatible) throw new Error(rollbackCompatibility.issues.map((issue) => issue.message).join(" "));
     const replacedVersion = installed.activeVersion;
+    const replacedBuiltinSource = installed.builtinSource;
+    installed.builtinSource = installed.previousBuiltinSource;
+    installed.previousBuiltinSource = replacedBuiltinSource;
     installed.manifest = previousManifest;
     installed.activeVersion = previousManifest.version;
     installed.previousVersion = replacedVersion;
@@ -1172,7 +1245,7 @@ export async function rollbackPlugin(dataDir: string, id: string): Promise<Insta
     installed.compatibility = compatibilityFor(previousManifest, registry.plugins);
     assertEnabledPluginsCompatible(registry.plugins);
     if (installed.enabled) await syncDeclarativeContributions(dataDir, installed.manifest, true);
-    await writeJsonAtomic(registryPath(dataDir), registry);
+    await writeRegistry(dataDir, registry);
     return installed;
   });
 }
@@ -1275,7 +1348,7 @@ export async function setPluginEnabled(dataDir: string, id: string, enabled: boo
     }
     installed.enabled = enabled;
     installed.compatibility = compatibilityFor(installed.manifest, registry.plugins);
-    await writeJsonAtomic(registryPath(dataDir), registry);
+    await writeRegistry(dataDir, registry);
     return installed;
   });
 }
@@ -1289,7 +1362,7 @@ export async function uninstallPlugin(dataDir: string, id: string): Promise<bool
     await syncExternalRuntimeProjection(dataDir, installed.manifest, false);
     delete registry.plugins[id];
     assertEnabledPluginsCompatible(registry.plugins);
-    await writeJsonAtomic(registryPath(dataDir), registry);
+    await writeRegistry(dataDir, registry);
     await fs.rm(path.join(pluginsDir(dataDir), "installed", installed.manifest.id), { recursive: true, force: true });
     await fs.rm(path.join(pluginsDir(dataDir), "execution", installed.manifest.id), { recursive: true, force: true });
     await fs.rm(path.join(pluginsDir(dataDir), "data", installed.manifest.id), { recursive: true, force: true });

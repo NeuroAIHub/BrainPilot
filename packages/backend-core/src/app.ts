@@ -27,7 +27,7 @@ import {
 } from "@brainpilot/protocol";
 import { RuntimeClient } from "./runtime-client.js";
 import { probeProvider } from "./provider-probe.js";
-import type { Orchestrator } from "./orchestrator.js";
+import { resolveOrchestratorMode, type Orchestrator } from "./orchestrator.js";
 import {
   readLocalSettings,
   writeLocalSettings,
@@ -76,11 +76,14 @@ import {
   listMarketplaceSourceStatuses,
   listPluginUpdates,
   preflightPluginCompatibility,
+  PAPERORCHESTRA_PLUGIN_ID,
   readEnabledPluginAsset,
+  readWorkflowAvailability,
   rollbackPlugin,
   setPluginEnabled,
   uninstallPlugin,
   updatePlugin,
+  type WorkflowAvailabilitySnapshot,
 } from "./plugins.js";
 import { listDatasetJobs, listDatasets, startDatasetDownload } from "./datasets.js";
 
@@ -126,6 +129,8 @@ const pkg = createRequire(import.meta.url)("../package.json") as {
   version: string;
 };
 
+class WorkflowAvailabilitySyncError extends Error {}
+
 export function createApp(options: CreateAppOptions): Hono {
   const dataDir = options.dataDir ?? process.env.BP_DATA_DIR ?? "./brainpilot";
   const webRoot = options.webRoot ?? process.env.BP_WEB_ROOT ?? "packages/web/dist";
@@ -150,6 +155,13 @@ export function createApp(options: CreateAppOptions): Hono {
   const clients = new Map<string, RuntimeConnection>();
   let runtimeCapabilityVersion = 0;
 
+  function workflowScopeAvailable(): boolean {
+    const deploymentEnv = { ...process.env, ...options.env };
+    return orchestrator.workflowSettingsScope === "single-user"
+      && deploymentEnv.BP_LOCAL_MODE !== "0"
+      && resolveOrchestratorMode(deploymentEnv) !== "docker";
+  }
+
   async function getClient(c?: import("hono").Context): Promise<RuntimeClient> {
     const userId = c ? resolveUserId(c) : undefined;
     const handle = await orchestrator.ensureRuntime(userId ? { userId } : undefined);
@@ -166,11 +178,51 @@ export function createApp(options: CreateAppOptions): Hono {
     // A legacy/third-party orchestrator without instance identity keeps the
     // pre-handshake proxy behavior. Official orchestrators always identify new
     // Runtime instances, including restarts on the same URL.
-    if (connection.currentInstanceId) await ensureRuntimeCapabilities(connection);
+    if (connection.currentInstanceId) {
+      await ensureRuntimeCapabilities(connection);
+    } else {
+      // With no instance identity we cannot detect a replacement process.
+      // Preserve legacy proxy behavior for untouched installations, but once
+      // plugin state exists, re-send its durable workflow gate before proxying.
+      const availability = await readWorkflowAvailability(dataDir);
+      if (availability.revision > 0) await syncWorkflowAvailability(connection.client, availability);
+    }
     return connection.client;
   }
 
+  async function syncWorkflowAvailability(
+    client: RuntimeClient,
+    snapshot?: WorkflowAvailabilitySnapshot,
+  ): Promise<void> {
+    try {
+      const availability = snapshot ?? await readWorkflowAvailability(dataDir);
+      if (availability.enabledWorkflowIds.length && !workflowScopeAvailable()) {
+        throw new Error("Workflow plugins require declared single-user settings in a local deployment; shared, per-user Docker, and undeclared external runtimes are not supported. Disable the plugin before continuing in this deployment.");
+      }
+      const response = await client.forward("setWorkflowAvailability", {
+        body: JSON.stringify(availability),
+        headers: { "content-type": "application/json" },
+        signal: AbortSignal.timeout(5_000),
+      });
+      if (!response.ok) throw new Error(`runtime rejected workflow availability (${response.status})`);
+      const ack = await response.json() as Partial<WorkflowAvailabilitySnapshot>;
+      if (!Number.isSafeInteger(ack.revision) || (ack.revision ?? -1) < availability.revision
+        || !Array.isArray(ack.enabledWorkflowIds) || !ack.enabledWorkflowIds.every((id) => typeof id === "string")) {
+        throw new Error("runtime did not acknowledge the workflow availability revision");
+      }
+      if (ack.revision === availability.revision
+        && JSON.stringify([...ack.enabledWorkflowIds].sort()) !== JSON.stringify(availability.enabledWorkflowIds)) {
+        throw new Error("runtime acknowledged a different workflow availability snapshot");
+      }
+      // A newer acknowledged revision means this delayed update has already
+      // been superseded. Never overwrite it or mistake it for a sync failure.
+    } catch (error) {
+      throw new WorkflowAvailabilitySyncError(error instanceof Error ? error.message : String(error));
+    }
+  }
+
   async function syncRuntimeCapabilities(client: RuntimeClient): Promise<void> {
+    await syncWorkflowAvailability(client);
     const capabilities = await listEnabledRuntimeTools(dataDir);
     const response = await client.forward("setRuntimeCapabilities", {
       body: JSON.stringify({ capabilities }),
@@ -217,6 +269,17 @@ export function createApp(options: CreateAppOptions): Hono {
         ? ensureRuntimeCapabilities(connection)
         : syncRuntimeCapabilities(connection.client)
     ));
+  }
+
+  function pluginMutationError(c: import("hono").Context, error: unknown): Response {
+    if (error instanceof WorkflowAvailabilitySyncError) {
+      return c.json({
+        error: `Plugin state was saved, but runtime workflow availability was not synchronized: ${error.message}. Retry this action to synchronize it.`,
+        code: "WORKFLOW_SYNC_FAILED",
+        stateSaved: true,
+      }, 502);
+    }
+    return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
   }
 
   const app = new Hono();
@@ -328,6 +391,7 @@ export function createApp(options: CreateAppOptions): Hono {
   api.put("/sessions/:id", forward("updateSession", { idParam: "id", withBody: true }));
   api.delete("/sessions/:id", forward("deleteSession", { idParam: "id" }));
   api.get("/sessions/:id/state", forward("getSessionState", { idParam: "id" }));
+  api.get("/sessions/:id/workflows", forward("getSessionWorkflows", { idParam: "id" }));
   api.get("/sessions/:id/trace", forward("getTrace", { idParam: "id" }));
   api.get("/sessions/:id/trace/changes", forward("getTraceChanges", { idParam: "id", withQuery: true }));
   api.get("/sessions/:id/audits", forward("getAuditReports", { idParam: "id" }));
@@ -615,9 +679,10 @@ export function createApp(options: CreateAppOptions): Hono {
     if (typeof body.id !== "string" || !body.id) return c.json({ error: "plugin id is required" }, 400);
     try {
       const installed = await installPlugin(dataDir, body.id, typeof body.version === "string" ? body.version : undefined);
+      if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed, 201) : c.json({ error: "plugin not found in marketplace" }, 404);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return pluginMutationError(c, error);
     }
   });
   api.post("/plugins/import", async (c) => {
@@ -630,20 +695,28 @@ export function createApp(options: CreateAppOptions): Hono {
     if (!format) return c.json({ error: "format must be auto, codex, claude-code, or pi-package" }, 400);
     try {
       const environment = (options.env?.BP_LOCAL_MODE ?? process.env.BP_LOCAL_MODE) === "0" ? "cloud" as const : "local" as const;
-      return c.json(await importExternalPlugin(dataDir, directory, format, environment), 201);
+      const installed = await importExternalPlugin(dataDir, directory, format, environment);
+      await syncKnownRuntimes();
+      return c.json(installed, 201);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return pluginMutationError(c, error);
     }
   });
   api.put("/plugins/:id/enabled", async (c) => {
     const body = await safeJson(c);
     if (typeof body.enabled !== "boolean") return c.json({ error: "enabled must be boolean" }, 400);
+    if (body.enabled && c.req.param("id") === PAPERORCHESTRA_PLUGIN_ID && !workflowScopeAvailable()) {
+      return c.json({
+        error: "This workflow requires an orchestrator with declared single-user settings and a local deployment. Shared, per-user Docker, and undeclared external runtimes cannot enable it yet.",
+        code: "WORKFLOW_DEPLOYMENT_UNSUPPORTED",
+      }, 409);
+    }
     try {
       const installed = await setPluginEnabled(dataDir, c.req.param("id"), body.enabled);
       if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return pluginMutationError(c, error);
     }
   });
   api.post("/plugins/:id/update", async (c) => {
@@ -652,7 +725,7 @@ export function createApp(options: CreateAppOptions): Hono {
       if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return pluginMutationError(c, error);
     }
   });
   api.post("/plugins/:id/rollback", async (c) => {
@@ -661,14 +734,18 @@ export function createApp(options: CreateAppOptions): Hono {
       if (installed) await syncKnownRuntimes();
       return installed ? c.json(installed) : c.json({ error: "plugin not installed" }, 404);
     } catch (error) {
-      return c.json({ error: error instanceof Error ? error.message : String(error) }, 400);
+      return pluginMutationError(c, error);
     }
   });
   api.delete("/plugins/:id", async (c) => {
-    const removed = await uninstallPlugin(dataDir, c.req.param("id"));
-    if (!removed) return c.json({ error: "plugin not installed" }, 404);
-    await syncKnownRuntimes();
-    return c.body(null, 204);
+    try {
+      const removed = await uninstallPlugin(dataDir, c.req.param("id"));
+      if (!removed) return c.json({ error: "plugin not installed" }, 404);
+      await syncKnownRuntimes();
+      return c.body(null, 204);
+    } catch (error) {
+      return pluginMutationError(c, error);
+    }
   });
   api.get("/plugins/:id/:version/assets/*", async (c) => {
     const encodedAsset = c.req.path.split("/assets/")[1] ?? "";
@@ -1230,6 +1307,7 @@ function toHttpProfile(
     models: p.models,
     context_window: p.contextWindow ?? undefined,
     reasoning_models: p.reasoningModels ?? p.models,
+    input_modalities: p.inputModalities,
     icon: p.icon ?? "circle",
     icon_color: p.iconColor ?? "#111111",
     notes: p.notes ?? "",
@@ -1285,6 +1363,7 @@ function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProf
     reasoningModels: Array.isArray(body.reasoning_models)
       ? (body.reasoning_models as string[])
       : Array.isArray(body.reasoningModels) ? (body.reasoningModels as string[]) : undefined,
+    inputModalities: (body.input_modalities ?? body.inputModalities) as StoredProviderProfile["inputModalities"],
     icon: str(body.icon),
     iconColor: str(body.icon_color) ?? str(body.iconColor),
     notes: str(body.notes),

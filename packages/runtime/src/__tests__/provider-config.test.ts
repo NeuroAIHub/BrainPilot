@@ -27,6 +27,19 @@ describe("resolveSessionProvider", () => {
     expect(cfg?.reasoningEnabled).toBe(true);
   });
 
+  it("selects only the bound model's explicit input modalities in a mixed provider", async () => {
+    const root = await dataRootWith({ profiles: [{ id: "mixed", apiKey: "key", baseUrl: "https://gateway.example", models: ["vision", "plain", "unknown"],
+      inputModalities: { vision: ["text", "image"], plain: ["text"] } }] });
+    expect((await resolveSessionProvider(root, { providerId: "mixed", modelId: "vision" }))?.inputModalities).toEqual(["text", "image"]);
+    expect((await resolveSessionProvider(root, { providerId: "mixed", modelId: "plain" }))?.inputModalities).toEqual(["text"]);
+    expect((await resolveSessionProvider(root, { providerId: "mixed", modelId: "unknown" }))?.inputModalities).toBeUndefined();
+  });
+
+  it("rejects malformed persisted modality declarations", async () => {
+    const root = await dataRootWith({ profiles: [{ id: "p", apiKey: "key", models: ["m"], inputModalities: { m: ["vision"] } }] });
+    await expect(resolveSessionProvider(root, { providerId: "p", modelId: "m" })).rejects.toThrow();
+  });
+
   it("carries the provider context window into the session config", async () => {
     const root = await dataRootWith({
       profiles: [

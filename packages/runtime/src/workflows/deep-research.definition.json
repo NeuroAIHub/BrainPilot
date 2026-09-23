@@ -1,0 +1,182 @@
+{
+  "schemaVersion": 1,
+  "id": "deep-research",
+  "version": "0.1.0",
+  "title": "Deep Research",
+  "description": "Run a bounded, evidence-grounded research investigation over BrainPilot's enabled paper library and Tavily search, inspired by the pinned GPT Researcher approach: plan a small set of research branches, gather and read sources, record every claim against the source that supports it, and produce a literature/research report with its source list, claim-to-source map, research tree, and the questions that remained unresolved.",
+  "applicableWhen": [
+    "The user requests a bounded literature synthesis, research comparison, or state-of-the-art overview that must be supported by identifiable sources.",
+    "The current host and PI model can reach source-supported evidence through the enabled paper library or Tavily tools and can write report artifacts."
+  ],
+  "notApplicableWhen": [
+    "A simple fact lookup, definition, or single-source answer would satisfy the request.",
+    "Drafting or revising a research manuscript, which the paper-writing workflow covers.",
+    "Running dataset experiments or analyses, or producing clinical, diagnostic, or treatment recommendations."
+  ],
+  "requiredCapabilities": [
+    "agent",
+    "readText",
+    "writeArtifact",
+    "network",
+    "runTool"
+  ],
+  "resume": false,
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "question",
+      "scope",
+      "cutoffDate"
+    ],
+    "properties": {
+      "question": {
+        "type": "string",
+        "description": "The single research question the report must answer.",
+        "minLength": 1,
+        "maxLength": 4000
+      },
+      "scope": {
+        "type": "string",
+        "description": "What the investigation must cover: topics, populations, methods, comparisons, and the depth expected.",
+        "minLength": 1,
+        "maxLength": 8000
+      },
+      "exclusions": {
+        "type": "string",
+        "description": "Topics, sources, or directions the investigation must stay out of.",
+        "minLength": 1,
+        "maxLength": 4000
+      },
+      "cutoffDate": {
+        "type": "string",
+        "description": "Inclusive evidence cutoff as YYYY-MM-DD; sources published after this date are excluded. Calendar validity is checked outside this schema.",
+        "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])-(?:0[1-9]|[12]\\d|3[01])$"
+      },
+      "language": {
+        "type": "string",
+        "description": "Language of the written report. Evidence may be in any language.",
+        "enum": [
+          "en",
+          "zh-CN"
+        ]
+      },
+      "inputPaths": {
+        "type": "array",
+        "description": "Existing workspace text files to read as starting material.",
+        "maxItems": 8,
+        "uniqueItems": true,
+        "items": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 2000
+        }
+      },
+      "budget": {
+        "type": "object",
+        "description": "Orchestration and research-call limits for this run. These bound branches, stages, and research tool calls; they are not a token budget and not a cap on the HTTP calls a single research tool makes internally. Effective defaults are applied by the implementation; omitted fields are not filled in by this schema.",
+        "additionalProperties": false,
+        "properties": {
+          "maxBranches": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 3
+          },
+          "maxFollowups": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 3
+          },
+          "maxModelStages": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 16
+          },
+          "maxResearchCalls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 24
+          },
+          "maxExtractUrls": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 24
+          },
+          "maxDurationMs": {
+            "type": "integer",
+            "minimum": 60000,
+            "maximum": 14400000
+          }
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "description": "Successful completion only. A partial or failed run writes its diagnostic artifacts and then fails, and must not validate here.",
+    "additionalProperties": false,
+    "required": [
+      "status",
+      "question",
+      "reportPath",
+      "sourcesPath",
+      "claimsPath",
+      "researchTreePath",
+      "runSummaryPath",
+      "branchCount",
+      "sourceCount",
+      "claimCount",
+      "unresolvedGaps"
+    ],
+    "properties": {
+      "status": {
+        "type": "string",
+        "const": "completed"
+      },
+      "question": {
+        "type": "string"
+      },
+      "reportPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "sourcesPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "claimsPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "researchTreePath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "runSummaryPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "branchCount": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 6
+      },
+      "sourceCount": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "claimCount": {
+        "type": "integer",
+        "minimum": 1
+      },
+      "unresolvedGaps": {
+        "type": "array",
+        "description": "Questions the run could not settle from the evidence it gathered. Empty only when no gap remained.",
+        "items": {
+          "type": "string",
+          "minLength": 1
+        }
+      }
+    }
+  }
+}

@@ -15,6 +15,7 @@
  */
 import { readFile } from "node:fs/promises";
 import { join } from "node:path";
+import { ProviderInputModalitiesSchema, type ModelInputModalities, type ProviderInputModalities } from "@brainpilot/protocol";
 
 export interface ProviderConfig {
   providerId: string;
@@ -28,6 +29,7 @@ export interface ProviderConfig {
   modelId?: string;
   contextWindow?: number;
   reasoningEnabled?: boolean;
+  inputModalities?: ModelInputModalities;
 }
 
 interface StoredProfile {
@@ -40,6 +42,7 @@ interface StoredProfile {
   models?: string[];
   contextWindow?: number;
   reasoningModels?: string[];
+  inputModalities?: ProviderInputModalities;
 }
 
 async function readJson<T>(file: string): Promise<T | null> {
@@ -100,6 +103,7 @@ export async function resolveSessionProvider(
   // from the editor's current choices, but that must not silently switch an
   // existing conversation to the profile's first model.
   const modelId = ref.modelId ?? profile.models?.[0];
+  const modelInputs = profile.inputModalities === undefined ? undefined : ProviderInputModalitiesSchema.parse(profile.inputModalities);
 
   return {
     providerId: profile.id,
@@ -109,6 +113,7 @@ export async function resolveSessionProvider(
     apiKey,
     modelId,
     contextWindow: profile.contextWindow,
+    inputModalities: modelId ? modelInputs?.[modelId] : undefined,
     reasoningEnabled: modelId
       ? (profile.reasoningModels ?? profile.models ?? []).includes(modelId)
       : false,

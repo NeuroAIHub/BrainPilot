@@ -94,6 +94,7 @@ const sleepDefault = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
 
 export class LocalProcessOrchestrator implements Orchestrator {
+  readonly workflowSettingsScope = "single-user" as const;
   private readonly opts: Required<
     Omit<
       LocalOrchestratorOptions,

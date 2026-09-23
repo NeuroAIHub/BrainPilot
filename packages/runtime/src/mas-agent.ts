@@ -133,6 +133,11 @@ export interface MasAgentOpts {
 }
 
 export class MasAgent {
+  getWorkflowModelBinding(): import("./types.js").WorkflowAgentModelBinding {
+    const binding = this.session.getWorkflowModelBinding?.();
+    if (!binding) throw new Error("Principal model binding is unavailable");
+    return binding;
+  }
   readonly name: string;
   readonly role: AgentRole;
   private readonly sessionId: string;

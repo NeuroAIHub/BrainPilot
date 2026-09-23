@@ -909,6 +909,16 @@ export const ProviderContextWindowSchema = z.union([
 ]);
 export type ProviderContextWindow = z.infer<typeof ProviderContextWindowSchema>;
 
+/** Explicit language-model input support; metadata or a verified endpoint may declare images. */
+export const ModelInputModalitiesSchema = z.array(z.enum(["text", "image"]))
+  .min(1).max(2)
+  .refine((values) => values.includes("text") && new Set(values).size === values.length,
+    "inputModalities must include text and contain no duplicates")
+  .transform((values): Array<"text" | "image"> => values.includes("image") ? ["text", "image"] : ["text"]);
+export type ModelInputModalities = z.infer<typeof ModelInputModalitiesSchema>;
+export const ProviderInputModalitiesSchema = z.record(z.string().min(1), ModelInputModalitiesSchema);
+export type ProviderInputModalities = z.infer<typeof ProviderInputModalitiesSchema>;
+
 export const ProviderProfileSchema = z.object({
   id: z.string(),
   name: z.string(),
@@ -923,6 +933,7 @@ export const ProviderProfileSchema = z.object({
   contextWindow: ProviderContextWindowSchema.optional(),
   /** Model ids declared capable of Pi extended thinking. */
   reasoningModels: z.array(z.string()).optional(),
+  inputModalities: ProviderInputModalitiesSchema.optional(),
   icon: z.string(),
   iconColor: z.string(),
   notes: z.string(),
@@ -987,6 +998,8 @@ export const ProviderProfileCreateSchema = z.object({
   contextWindow: ProviderContextWindowSchema.nullable().optional(),
   reasoning_models: z.array(z.string().trim().min(1)).optional(),
   reasoningModels: z.array(z.string().trim().min(1)).optional(),
+  input_modalities: ProviderInputModalitiesSchema.optional(),
+  inputModalities: ProviderInputModalitiesSchema.optional(),
   icon: z.string().optional(),
   icon_color: z.string().optional(),
   iconColor: z.string().optional(),

@@ -1,0 +1,15 @@
+{
+  "data": [
+    {
+      "paperId": "synthetic-alpha-not-a-real-paper",
+      "title": "Synthetic Workflow Validation",
+      "authors": [{ "name": "Taylor Fixture" }],
+      "venue": "Synthetic Acceptance Fixtures",
+      "year": 2023,
+      "publicationDate": "2023-02-01",
+      "abstract": "Synthetic metadata supplied only to test title matching, abstract enrichment, citation-key generation, and manuscript execution. This is not a real publication or scientific evidence.",
+      "citationCount": 0,
+      "journal": null
+    }
+  ]
+}

@@ -91,6 +91,18 @@ describe("Hono app — REST forwarding", () => {
     expect(fetchFn).toHaveBeenCalledTimes(1);
   });
 
+  it("forwards the session workflow catalog and accepted run history", async () => {
+    const payload = { definitions: [{ id: "paper-writing", enabled: false }], runs: [{ id: "wf_old", status: "running" }] };
+    const fetchFn = vi.fn(async (url: string) => {
+      expect(url).toBe("http://runtime.test/sessions/abc/workflows");
+      return new Response(JSON.stringify(payload), { headers: { "content-type": "application/json" } });
+    });
+    const app = createApp({ orchestrator: fakeOrchestrator(), fetchFn: fetchFn as never, serveWeb: false });
+    const response = await app.request("/api/sessions/abc/workflows");
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(payload);
+  });
+
   it("POST /api/sessions/:id/messages forwards body + path param", async () => {
     const fetchFn = vi.fn(async (url: string, init: RequestInit) => {
       expect(url).toBe("http://runtime.test/sessions/abc/messages");
@@ -554,6 +566,29 @@ describe("Hono app — static serving", () => {
 });
 
 describe("Hono app — local config routes", () => {
+  it("round-trips per-model input modalities through provider CRUD and rejects malformed declarations", async () => {
+    const dir = await mkdtemp(path.join(tmpdir(), "bp-input-modalities-"));
+    const app = createApp({ orchestrator: fakeOrchestrator(), fetchFn: vi.fn() as never, serveWeb: false, dataDir: dir, env: {} });
+    const created = await app.request("/api/provider/profiles", { method: "POST", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Probed inputs", base_url: "https://gateway.example", api_key: "sk-test", models: ["vision", "plain"],
+        input_modalities: { vision: ["text", "image"], plain: ["text"] } }) });
+    expect(created.status).toBe(201);
+    const profile = await created.json() as { id: string; input_modalities: Record<string, string[]> };
+    expect(profile.input_modalities).toEqual({ vision: ["text", "image"], plain: ["text"] });
+    const updated = await app.request(`/api/provider/profiles/${profile.id}`, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ inputModalities: { vision: ["text"] } }) });
+    expect(updated.status).toBe(200);
+    expect((await updated.json() as { input_modalities: unknown }).input_modalities).toEqual({ vision: ["text"] });
+    const invalid = await app.request(`/api/provider/profiles/${profile.id}`, { method: "PUT", headers: { "content-type": "application/json" },
+      body: JSON.stringify({ input_modalities: { vision: ["video"] } }) });
+    expect(invalid.status).toBe(400);
+    const stored = JSON.parse(await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"));
+    expect(stored.profiles[0].inputModalities).toEqual({ vision: ["text"] });
+    const cleared = await app.request(`/api/provider/profiles/${profile.id}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ input_modalities: {} }) });
+    expect(cleared.status).toBe(200);
+    expect((await cleared.json() as { input_modalities: unknown }).input_modalities).toEqual({});
+  });
+
   it("GET /api/settings reads local config (masked key), not the runtime", async () => {
     const dir = await mkdtemp(path.join(tmpdir(), "bp-cfg-"));
     await mkdir(path.join(dir, "bp_template"), { recursive: true });

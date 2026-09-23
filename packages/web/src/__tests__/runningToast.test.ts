@@ -1,5 +1,30 @@
 import { describe, it, expect } from "vitest";
-import { runningToastLabel } from "../contexts/runningToast";
+import { runningToastLabel, runningToastState } from "../contexts/runningToast";
+
+describe("running toast execution ownership", () => {
+  it("keeps Stop available after PI has acknowledged a still-running workflow", () => {
+    // Workflow Pi sessions are intentionally absent from the agents panel.
+    expect(runningToastState({ workActive: { active: true }, hasAgentActivity: false,
+      waitingForUser: false, hasActiveScripts: false })).toEqual({ visible: true, showStop: true });
+  });
+
+  it("clears stale streaming UI after the host settles Stop", () => {
+    expect(runningToastState({ workActive: { active: false }, hasAgentActivity: true,
+      waitingForUser: false, hasActiveScripts: false })).toEqual({ visible: false, showStop: false });
+  });
+
+  it("does not offer a second Stop while waiting for an answer or while a script panel owns it", () => {
+    expect(runningToastState({ workActive: { active: true }, hasAgentActivity: true,
+      waitingForUser: true, hasActiveScripts: false })).toEqual({ visible: false, showStop: false });
+    expect(runningToastState({ workActive: { active: true }, hasAgentActivity: false,
+      waitingForUser: false, hasActiveScripts: true })).toEqual({ visible: true, showStop: false });
+  });
+
+  it("retains the streaming fallback before an authoritative work-state arrives", () => {
+    expect(runningToastState({ workActive: null, hasAgentActivity: true,
+      waitingForUser: false, hasActiveScripts: false })).toEqual({ visible: true, showStop: true });
+  });
+});
 
 describe("runningToastLabel (#76)", () => {
   it("names a single working agent", () => {

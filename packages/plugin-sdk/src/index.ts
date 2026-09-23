@@ -6,6 +6,7 @@ import {
 } from "./preview.js";
 
 export * from "./preview.js";
+export * from "./workflow.js";
 
 export const PLUGIN_API_VERSION = "1" as const;
 export const AGENT_INSTRUCTIONS_PROTOCOL_VERSION = "1" as const;
@@ -19,6 +20,7 @@ export const SUPPORTED_PLUGIN_PROTOCOLS = {
   knowledgeService: KNOWLEDGE_SERVICE_PROTOCOL_VERSION,
   literatureService: LITERATURE_SERVICE_PROTOCOL_VERSION,
   runtimeTools: RUNTIME_TOOLS_PROTOCOL_VERSION,
+  workflow: "1",
 } as const;
 
 export type PluginCategory = "skills" | "knowledge" | "visualization" | "analysis" | "workflow" | "other";

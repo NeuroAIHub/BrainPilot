@@ -1,0 +1,139 @@
+{
+  "schemaVersion": 1,
+  "id": "paper-writing",
+  "version": "0.1.0",
+  "title": "PaperOrchestra writing (native TS/Pi, PlotOff)",
+  "description": "Run the PaperOrchestra writing pipeline with BrainPilot's enabled paper library and Tavily search: outline, source-supported literature discovery and verification, section writing, automatic scored content refinement, and one formatting pass, producing editable LaTeX and a compiled PDF.",
+  "applicableWhen": [
+    "The user requests a complete research manuscript from supplied methodology and experimental results, a LaTeX template and venue guidelines.",
+    "The current host and PI model can compile LaTeX, extract PDF text, inspect rendered page images, and access source-supported scholarly metadata through the enabled paper library or Tavily tools."
+  ],
+  "notApplicableWhen": [
+    "Ordinary questions, workflow explanations, short reports, local edits, or discussions that do not request executing a complete manuscript workflow.",
+    "Missing required research materials or requesting fabrication of experiments/results.",
+    "Generating new plots or diagrams: this implementation restores the upstream default PlotOff path."
+  ],
+  "requiredCapabilities": [
+    "agent",
+    "readText",
+    "writeArtifact",
+    "network",
+    "runTool",
+    "images",
+    "compile_latex",
+    "render_pdf",
+    "copy_files",
+    "list_files"
+  ],
+  "resume": false,
+  "inputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "raw_materials_dir",
+      "latex_template_dir"
+    ],
+    "properties": {
+      "raw_materials_dir": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "latex_template_dir": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 2000
+      },
+      "idea_filename": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "pattern": "^[^/\\\\]+$"
+      },
+      "experimental_log_filename": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 255,
+        "pattern": "^[^/\\\\]+$"
+      },
+      "research_cutoff": {
+        "type": "string",
+        "description": "Exclusive publication cutoff at the first day of YYYY-MM. To include an entire month, pass the following month; for example, 2025-06 includes May 2025 and excludes publications on or after June 1, 2025. Records need a known publication year; same-year records with only a year cannot establish that they precede this cutoff.",
+        "pattern": "^\\d{4}-(?:0[1-9]|1[0-2])$"
+      },
+      "use_plotting": {
+        "type": "boolean",
+        "const": false
+      }
+    }
+  },
+  "outputSchema": {
+    "type": "object",
+    "additionalProperties": false,
+    "required": [
+      "finalTexPath",
+      "finalPdfPath",
+      "bibliographyPath",
+      "outlinePath",
+      "citationMapPath",
+      "contentWorklogPath",
+      "formatWorklogPath",
+      "finalReviewPath",
+      "finalScore",
+      "status",
+      "plottingMode",
+      "upstreamCommit"
+    ],
+    "properties": {
+      "finalTexPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "finalPdfPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "bibliographyPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "outlinePath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "citationMapPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "contentWorklogPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "formatWorklogPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "finalReviewPath": {
+        "type": "string",
+        "minLength": 1
+      },
+      "finalScore": {
+        "type": "number",
+        "minimum": 0,
+        "maximum": 10
+      },
+      "status": {
+        "type": "string",
+        "const": "completed"
+      },
+      "plottingMode": {
+        "type": "string",
+        "const": "off"
+      },
+      "upstreamCommit": {
+        "type": "string",
+        "const": "ca1b3fa01c2970fc7cda32d16245db38d57b3f56"
+      }
+    }
+  }
+}

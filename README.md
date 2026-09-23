@@ -41,6 +41,8 @@ BrainPilot is an open-source, human-in-the-loop agentic system for brain science
 
 ---
 
+> **Workflow development branch:** Start with the [contributor guide](WORKFLOW_DEVELOPMENT.md) for setup, test commands, implementation status, and follow-up work.
+
 ## 📰 News
 
 - **2026-08-22** — [BrainPilot v0.2.2](https://github.com/NeuroAIHub/BrainPilot/releases/tag/v0.2.2) aligns the hosted interface with currently available Cloud capabilities and removes unsupported control-plane requests. See the [changelog](CHANGELOG.md#022---2026-08-22).

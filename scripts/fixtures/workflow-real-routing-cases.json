@@ -1,0 +1,114 @@
+{
+  "schemaVersion": 1,
+  "purpose": "Small development set for real-model workflow selection, not writing quality or workflow execution scoring.",
+  "executionLocation": "208 Linux only",
+  "materialSets": {
+    "complete": {
+      "require": ["idea_sparse.md", "experimental_log.md", "template.tex", "guidelines.md"],
+      "defaultFixture": "scripts/fixtures/workflow-original",
+      "note": "Expose the same complete, readable material bundle for positive and nearby negative cases. The default files are explicitly synthetic; a runner may substitute a validated real bundle consistently."
+    },
+    "idea-only": {
+      "require": ["idea_sparse.md"],
+      "absent": ["experimental_log.md"],
+      "note": "Do not expose completed results in hidden system context for this case."
+    }
+  },
+  "runnerNotes": [
+    "Substitute rawMaterialsDir and latexTemplateDir with actual workspace paths; use identical complete materials across the relevant cases.",
+    "Verify the selected session model's real image capability and the required native tools before grading positive cases. Missing capability is environment_blocked, not a routing failure or success.",
+    "If execution is intercepted to limit expense, label the run selection-only and still validate the real workflowId/input schema; do not treat an empty-argument stub call as successful input mapping.",
+    "Forbid means zero workflow_start attempts, even if a host gate would reject them. Record accepted runs separately from attempts.",
+    "Ordinary response, existing tools, Skills and delegation are all allowed where workflow_start is forbidden; this set does not prescribe a particular agent.",
+    "Score clarification_or_boundary by whether missing evidence or disabled state is communicated correctly; a useful bounded alternative also qualifies. Do not require a gratuitous question.",
+    "Keep multi-turn cases in one session. For the completed-result case, use a genuinely recorded completed run or a separately labelled state fixture, not only an assistant claim that work completed.",
+    "Preserve model/config, material set, tool catalog, input/output trace, expected decision and actual attempts. Do not infer real-world error rates from this small development set."
+  ],
+  "cases": [
+    {
+      "id": "concept-question-complete-materials",
+      "materialSet": "complete",
+      "workflowEnabled": true,
+      "turns": [{
+        "prompt": "什么是 spike sorting？用两句话给刚入组的同学解释一下。",
+        "expected": { "workflowStart": "forbidden", "clarification": "not_needed" }
+      }]
+    },
+    {
+      "id": "short-report-complete-materials",
+      "materialSet": "complete",
+      "workflowEnabled": true,
+      "turns": [{
+        "prompt": "帮我把这三条笔记整理成一页组会进展报告：完成数据整理；发现两个坏通道；下周复核事件标记。",
+        "expected": { "workflowStart": "forbidden", "clarification": "not_needed" }
+      }]
+    },
+    {
+      "id": "title-edit-complete-materials",
+      "materialSet": "complete",
+      "workflowEnabled": true,
+      "turns": [{
+        "prompt": "把题目“关于脑电数据处理方法的一个研究”改得简洁一点，给我三个备选标题。",
+        "expected": { "workflowStart": "forbidden", "clarification": "not_needed" }
+      }]
+    },
+    {
+      "id": "complete-paper-natural-request",
+      "materialSet": "complete",
+      "workflowEnabled": true,
+      "turns": [{
+        "prompt": "研究材料在 {{rawMaterialsDir}}，目标 LaTeX 模板和写作要求在 {{latexTemplateDir}}。请依据已经完成的研究和已有结果，交付完整论文的可编辑 LaTeX 与 PDF，包括必要的文献检索核验、全文审阅和自动修改。",
+        "expected": { "workflowStart": "required_when_capable", "clarification": "not_needed" }
+      }]
+    },
+    {
+      "id": "discussion-then-execution",
+      "materialSet": "complete",
+      "workflowEnabled": true,
+      "turns": [
+        {
+          "prompt": "请先讨论 {{rawMaterialsDir}} 这个研究的引言与结果部分应该如何衔接。现在只讨论组织思路。",
+          "expected": { "workflowStart": "forbidden", "clarification": "not_needed" }
+        },
+        {
+          "prompt": "现在开始正式成稿。就用刚才那套完整材料，以及 {{latexTemplateDir}} 中的模板和要求，完成整篇论文、引用核验、全文修改与最终 PDF。",
+          "expected": { "workflowStart": "required_when_capable", "clarification": "not_needed" }
+        }
+      ]
+    },
+    {
+      "id": "missing-experimental-evidence",
+      "materialSet": "idea-only",
+      "workflowEnabled": true,
+      "turns": [{
+        "prompt": "我想把 {{rawMaterialsDir}} 中的研究想法写成带实验结果的完整论文，但目前还没有做实验，也没有结果数据。",
+        "expected": { "workflowStart": "forbidden", "clarification": "clarification_or_boundary" }
+      }]
+    },
+    {
+      "id": "disabled-explicit-request",
+      "materialSet": "complete",
+      "workflowEnabled": false,
+      "turns": [{
+        "prompt": "请用 PaperOrchestra writing workflow，基于 {{rawMaterialsDir}} 和 {{latexTemplateDir}} 完成论文及引用核验。",
+        "expected": { "workflowStart": "forbidden", "clarification": "clarification_or_boundary", "acceptedNewRuns": 0 }
+      }]
+    },
+    {
+      "id": "explain-completed-result",
+      "materialSet": "complete",
+      "workflowEnabled": true,
+      "requiresPriorRun": { "workflowId": "paper-writing", "status": "succeeded", "artifactsReadable": true },
+      "turns": [
+        {
+          "prompt": "刚才生成的论文为什么采用这个章节结构？请解释一下。",
+          "expected": { "workflowStart": "forbidden", "clarification": "not_needed" }
+        },
+        {
+          "prompt": "谢谢，先这样。",
+          "expected": { "workflowStart": "forbidden", "clarification": "not_needed" }
+        }
+      ]
+    }
+  ]
+}

@@ -21,6 +21,7 @@ import {
   SendMessageRequestSchema,
   InterruptRequestSchema,
   SetRuntimeCapabilitiesRequestSchema,
+  SetWorkflowAvailabilityRequestSchema,
   TraceDependencyDecisionRequestSchema,
   TraceStateTokenRequestSchema,
   WriteFileRequestSchema,
@@ -50,6 +51,19 @@ export function createServer(opts: SessionManagerOptions & {
     if (!parsed.success) return c.json({ error: "invalid capabilities" }, 400);
     await manager.setRuntimeCapabilities(parsed.data.capabilities);
     return c.json({ capabilities: parsed.data.capabilities });
+  });
+
+  app.put("/config/workflows", async (c) => {
+    const parsed = SetWorkflowAvailabilityRequestSchema.safeParse(await safeBody(c));
+    if (!parsed.success) return c.json({ error: "invalid workflow availability" }, 400);
+    try { return c.json(await manager.setWorkflowAvailability(parsed.data)); }
+    catch (error) { return c.json({ error: (error as Error).message }, 409); }
+  });
+
+  app.get("/sessions/:id/workflows", async (c) => {
+    const id = c.req.param("id");
+    if (!await manager.ensureLoaded(id)) return c.json({ error: "not found" }, 404);
+    return c.json({ definitions: manager.listWorkflowDefinitions(id), runs: manager.listWorkflowRuns(id) });
   });
 
   app.get("/mcp/status", async (c) => c.json(await manager.getMcpRuntimeStatus()));

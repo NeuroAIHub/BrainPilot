@@ -557,13 +557,18 @@ export function SessionProvider({ children }: { children: ReactNode }) {
 
   const selectSession = useCallback((sessionId: string) => {
     console.log(`[SessionContext] selectSession: ${sessionId}`);
+    const changedSession = currentSessionIdRef.current !== sessionId;
     setIsDraft(false);
     setCurrentSessionId(sessionId);
     saveLastSessionId(sessionId);
     setCurrentView("chat");
-    setRunActive(null); // #99: drop the previous session's turn-active signal
-    setWorkActive(null);
-    setTokenUsage(null); // drop the previous session's token totals
+    // Returning from another page to the already-selected session reuses its
+    // SSE connection; no new initial frame is guaranteed. Keep its live state.
+    if (changedSession) {
+      setRunActive(null); // #99: drop another session's turn-active signal
+      setWorkActive(null);
+      setTokenUsage(null);
+    }
     connectSession(sessionId);
   }, [connectSession]);
 

@@ -10,6 +10,8 @@ docs/*
 docs/plan/*
 !docs/plan/task-ledger.md
 !docs/plan/subagents.md
+!docs/workflow/
+!docs/workflow/**
 !packages/docs/
 !packages/docs/**
 plans/

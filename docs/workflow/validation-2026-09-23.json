@@ -1,0 +1,47 @@
+{
+  "schemaVersion": 1,
+  "date": "2026-09-23",
+  "scope": "Fresh deterministic validation of imported workflow sources and collaboration additions. No new paid-model acceptance run.",
+  "environment": {
+    "os": "Linux",
+    "node": "22.23.1",
+    "install": "clean npm ci --no-audit --no-fund"
+  },
+  "command": "npm run check:workflows",
+  "result": "passed",
+  "checks": {
+    "workspaceTypecheck": "passed",
+    "runtimeBuild": "passed",
+    "vitestNonWeb": {
+      "files": 29,
+      "tests": 667,
+      "passed": 667
+    },
+    "vitestWeb": {
+      "files": 1,
+      "tests": 10,
+      "passed": 10
+    },
+    "webBuild": "passed",
+    "writingAccountingCases": 18,
+    "writingFinalizationCases": 7,
+    "streamObserverTests": 4
+  },
+  "additionalChecks": {
+    "explicitProviderReference": [
+      "missing argument rejected before output directory creation",
+      "relative path rejected before output directory creation"
+    ],
+    "originalWorktreeFilesUnchanged": 137,
+    "historicalResearchCandidateSourceHashesMatched": 5
+  },
+  "logSha256": "d4c26a413b02da5925d2e348a8b1ddd4a6da3e4a6a5ea6821125182c2354377c",
+  "newTests": "packages/runtime/src/__tests__/deep-research-loop.test.ts",
+  "notRun": [
+    "Fresh real-model writing/research acceptance",
+    "Scientific workflow comparison",
+    "Live retrieval comparison",
+    "Production deployment"
+  ],
+  "githubCI": "This record describes the independent Linux run. GitHub Actions records validate the pushed commit separately."
+}

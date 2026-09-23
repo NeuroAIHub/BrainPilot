@@ -14,6 +14,15 @@ for its reply. Use the skill's request template and apply its correction and
 incremental re-review procedure before delivery. Purely conversational replies
 without hard claims are exempt.
 
+One limited exception: a workflow terminal handoff restricted to host-recorded
+status, links to registered artifacts, and explicitly attributed recorded errors
+or gaps is an operational status report and may be sent before an audit or
+repair. Mark unresolved outputs as unvalidated or incomplete. This does not
+approve the artifacts' scientific claims, override a `REVISE` or `BLOCK`
+verdict, or permit claiming validated completion; the audit and correction
+requirements above still apply before accepting substantive results or stating
+new scientific conclusions.
+
 After receiving an Auditor completion summary, never immediately claim that the
 task is complete. First read and follow its explicit verdict. Only `Verdict: PASS`
 permits acceptance within the audited scope. `Verdict: REVISE` requires the

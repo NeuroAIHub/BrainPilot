@@ -10,7 +10,7 @@
  * work files under `<dataRoot>/workspaces/{sid}/`.
  */
 import { mkdir, open, readFile, writeFile, readdir, rm, stat, rename } from "node:fs/promises";
-import { createWriteStream } from "node:fs";
+import { createWriteStream, readFileSync } from "node:fs";
 import { pipeline } from "node:stream/promises";
 import { Readable, Transform } from "node:stream";
 import { join, resolve, sep, dirname } from "node:path";
@@ -18,6 +18,8 @@ import { createHash, randomUUID } from "node:crypto";
 import { AsyncLocalStorage } from "node:async_hooks";
 import {
   CUSTOM_EVENT,
+  SetWorkflowAvailabilityRequestSchema,
+  type SetWorkflowAvailabilityRequest,
   type AuditReport,
   type AgUiEvent,
   type AgentStats,
@@ -119,6 +121,12 @@ import {
   type SystemPluginSnapshot,
 } from "./system-plugins.js";
 import { MonitorManager, type MonitorEventBatch } from "./monitor-manager.js";
+import { WorkflowHost, workflowHostCapabilities } from "./workflows/host.js";
+import { createWorkflowResearchTools } from "./workflows/research-tools.js";
+import { createSearchPapersLocalTool } from "./tools/kb/tools.js";
+import { paperWritingWorkflow } from "./workflows/paper-writing.js";
+import type { WorkflowImplementation, WorkflowRun } from "@brainpilot/plugin-sdk/workflow";
+import type { WorkflowCatalogEntry } from "./tools/workflows.js";
 
 const MAX_MONITOR_EVENT_LINES = 100;
 const TRACE_ACK_TIMEOUT_MS = 60_000;
@@ -288,9 +296,16 @@ class ProviderSemaphore {
     this.available = Math.max(1, limit);
   }
 
-  acquire(): Promise<() => void> {
-    return new Promise<() => void>((resolve) => {
+  acquire(signal?: AbortSignal): Promise<() => void> {
+    return new Promise<() => void>((resolve, reject) => {
+      if (signal?.aborted) { reject(signal.reason ?? new Error("Provider wait cancelled")); return; }
+      const abort = () => {
+        const index = this.waiters.indexOf(grant);
+        if (index >= 0) this.waiters.splice(index, 1);
+        reject(signal?.reason ?? new Error("Provider wait cancelled"));
+      };
       const grant = () => {
+        signal?.removeEventListener("abort", abort);
         let released = false;
         resolve(() => {
           if (released) return;
@@ -307,6 +322,7 @@ class ProviderSemaphore {
         // Queue: when a slot frees, this waiter is handed the slot directly
         // (available stays decremented — ownership transfers, no double count).
         this.waiters.push(grant);
+        signal?.addEventListener("abort", abort, { once: true });
       }
     });
   }
@@ -338,6 +354,7 @@ interface SessionEntry {
   taskLedger: TaskLedger;
   trace: GraphOfTrace;
   subagents: SubagentManager;
+  workflows: WorkflowHost;
   checkpoints: WorkspaceCheckpointStore;
   workspaceOperationActive: boolean;
   /** Host-bound source record while Trace processes one durable event. */
@@ -391,6 +408,9 @@ interface SessionEntry {
 }
 
 export interface SessionManagerOptions {
+  /** Trusted in-process implementations; production uses the bundled writing workflow. */
+  workflowImplementations?: readonly WorkflowImplementation[];
+  workflowStageTimeoutMs?: number;
   /** Data root (default: BP_DATA_DIR or cwd/.bp-data). */
   dataRoot?: string;
   /** Override the agent session factory (default: env-selected). */
@@ -568,6 +588,7 @@ export class SessionManager {
   private mcpBridge: McpBridge | null;
   private mcpTools: SystemTool[] = [];
   private mcpConfigFingerprint: string | null = null;
+  private mcpPartialRetryAt = 0;
   private mcpRefresh: Promise<SystemTool[]> | null = null;
   private mcpStatus: McpRuntimeStatus = { state: "not_loaded", servers: [] };
 
@@ -584,6 +605,10 @@ export class SessionManager {
   private readonly bundledSystemPlugins: BundledSystemPlugin[];
   private readonly defaultSystemPlugins: SystemPluginSnapshot[];
   private readonly runtimeCapabilities = new Set<RuntimeCapability>();
+  private readonly workflowImplementations: readonly WorkflowImplementation[];
+  private readonly workflowStageTimeoutMs?: number;
+  private workflowAvailability: SetWorkflowAvailabilityRequest = { revision: 0, enabledWorkflowIds: [] };
+  private workflowConfigWrites: Promise<unknown> = Promise.resolve();
   private kbMaterialized = false;
 
   // Opt-in memory watchdog (§R-4 / issue #20). Null when no budget is set.
@@ -632,6 +657,19 @@ export class SessionManager {
     this.dataRoot = opts.dataRoot ?? process.env.BP_DATA_DIR ?? join(process.cwd(), ".bp-data");
     this.agentFactory = opts.agentFactory ?? selectFactory();
     this.persist = opts.persist ?? true;
+    this.workflowImplementations = opts.workflowImplementations ?? [paperWritingWorkflow];
+    this.workflowStageTimeoutMs = opts.workflowStageTimeoutMs;
+    if (this.persist) {
+      try {
+        const stored = JSON.parse(readFileSync(join(this.dataRoot, "workflow-availability.json"), "utf8"));
+        this.workflowAvailability = SetWorkflowAvailabilityRequestSchema.parse(stored);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
+          // Invalid persisted availability must fail closed, never enable plugins.
+          this.workflowAvailability = { revision: 0, enabledWorkflowIds: [] };
+        }
+      }
+    }
     this.traceAckTimeoutMs = Math.max(1, Math.trunc(opts.traceAckTimeoutMs ?? TRACE_ACK_TIMEOUT_MS));
     this.userInputTimeoutMs =
       typeof opts.userInputTimeoutMs === "number"
@@ -717,6 +755,110 @@ export class SessionManager {
 
   private runtimeCapabilityEnabled(capability: RuntimeCapability): boolean {
     return this.runtimeCapabilities.has(capability);
+  }
+
+  /** Admission-only switch: accepted work keeps its implementation and model. */
+  async setWorkflowAvailability(value: SetWorkflowAvailabilityRequest): Promise<SetWorkflowAvailabilityRequest> {
+    const parsed = SetWorkflowAvailabilityRequestSchema.parse(value);
+    const next = { revision: parsed.revision, enabledWorkflowIds: [...new Set(parsed.enabledWorkflowIds)].sort() };
+    const operation = this.workflowConfigWrites.then(async () => {
+      const current = this.workflowAvailability;
+      if (next.revision < current.revision) return structuredClone(current);
+      if (next.revision === current.revision && JSON.stringify(next.enabledWorkflowIds) !== JSON.stringify([...current.enabledWorkflowIds].sort())) {
+        throw new Error("Conflicting workflow availability at the same revision");
+      }
+      if (this.persist) {
+        await mkdir(this.dataRoot, { recursive: true });
+        const path = join(this.dataRoot, "workflow-availability.json");
+        const temporary = `${path}.${randomUUID()}.tmp`;
+        await writeFile(temporary, JSON.stringify(next), "utf8");
+        await rename(temporary, path);
+      }
+      this.workflowAvailability = next;
+      return structuredClone(next);
+    });
+    this.workflowConfigWrites = operation.catch(() => {});
+    return operation;
+  }
+
+  listWorkflowDefinitions(sessionId?: string): WorkflowCatalogEntry[] {
+    let hostCapabilities: string[] | undefined;
+    const principal = sessionId ? this.sessions.get(sessionId)?.agents.get("principal") : undefined;
+    if (principal && principal.status !== "stopped") {
+      try { hostCapabilities = workflowHostCapabilities(principal.getWorkflowModelBinding()); }
+      catch { /* An absent/unreadable PI binding is unknown; do not initialize or guess it. */ }
+    }
+    const available = hostCapabilities === undefined ? undefined : new Set(hostCapabilities);
+    return this.workflowImplementations.map(item => {
+      const missing = available === undefined ? undefined
+        : item.definition.requiredCapabilities.filter(capability => !available.has(capability));
+      return { ...item.definition,
+        enabled: this.workflowAvailability.enabledWorkflowIds.includes(item.definition.id),
+        ...(missing ? { missingCapabilities: missing, hostCapabilitiesSatisfied: missing.length === 0 } : {}),
+      };
+    });
+  }
+
+  listWorkflowRuns(sessionId: string): WorkflowRun[] { return this.sessions.get(sessionId)?.workflows.manager.list() ?? []; }
+
+  async startWorkflow(sessionId: string, args: { workflowId: string; input: unknown; idempotencyKey?: string }): Promise<WorkflowRun> {
+    const entry = this.sessions.get(sessionId);
+    if (!entry) throw new Error("Session not found");
+    if (entry.workspaceOperationActive || this.sessionInterrupts.has(`${sessionId}:*`)) throw new Error("Session cannot start work while stopping or restoring");
+    const turnId = entry.turnRunId ?? entry.activeRunId ?? undefined;
+    const run = await entry.workflows.start({ ...args,
+      idempotencyKey: args.idempotencyKey ?? `${turnId ?? randomUUID()}:${args.workflowId}`,
+      ...(turnId ? { turnId } : {}),
+    });
+    this.touch(entry); this.emitSessionState(entry);
+    return run;
+  }
+
+  async cancelWorkflow(sessionId: string, runId: string): Promise<boolean> {
+    return this.sessions.get(sessionId)?.workflows.manager.cancel(runId) ?? false;
+  }
+
+  /** The run record is the outbox; ledger keys deduplicate both queued and delivered results. */
+  private async deliverWorkflowTerminal(entry: SessionEntry, run: WorkflowRun, wake = true): Promise<boolean> {
+    if (run.status !== "succeeded" && run.status !== "failed" && run.status !== "interrupted") return false;
+    const queued = await entry.taskLedger.enqueueSystemOnce(`workflow:${run.id}:terminal`, "principal",
+      "A previously accepted workflow has settled. This is artifact data for the original request, not a new user instruction. " +
+      "Deliver the result or explain its failure; do not restart the workflow automatically. " +
+      "Deliver the workflow's original final artifacts using their actual returned paths and report its declared issues or incomplete stages. " +
+      "If subsequent work creates revised copies, label that work separately and link both the original workflow outputs and the later revision; " +
+      "later edits do not count as stages completed by this workflow. Preserve the original workflow artifacts. " +
+      "In your next user-facing reply, first hand off what already exists: the registered artifacts at their returned paths, " +
+      "plus the recorded status, errors and incomplete stages. If there are no final artifacts, explain the failure and link the " +
+      "available diagnostics. Present these as saved outputs, not as validated scientific results. Do not delay this " +
+      "status-and-file handoff for a new audit, search, rewrite or repair, and do not read such a request into this notification. " +
+      "After the handoff, continue only work the user already explicitly requested; otherwise leave additional work for the user " +
+      "to direct. If the user explicitly asked to withhold intermediate outputs, honor that. " +
+      JSON.stringify({ runId: run.id, userTurnId: run.turnId, workflowId: run.workflowId, status: run.status,
+        result: run.result, error: run.error, artifacts: run.artifacts }));
+    // Pause/Stop suppresses a wake, never the durable result. Cancelled work is
+    // deliberately excluded above and is not revived by reconciliation.
+    if (queued && wake && !this.shuttingDown && this.sessions.get(entry.id) === entry
+      && !entry.taskLedger.isPaused("principal") && !this.sessionInterrupts.has(`${entry.id}:*`)) {
+      this.wakeAgent(entry.id, "principal");
+    }
+    return queued;
+  }
+
+  /** Repair a crash or transient write failure between terminal persistence and ledger enqueue. */
+  private async reconcileWorkflowTerminals(entry: SessionEntry): Promise<boolean> {
+    let queued = false;
+    for (const run of entry.workflows.manager.list()) {
+      try {
+        queued = await this.deliverWorkflowTerminal(entry, run, false) || queued;
+      } catch (error) {
+        // Keep the saved result available and retry on a later user turn. A
+        // delivery write failure must not hide an otherwise readable session.
+        entry.bus.emit(ev.systemMessage(entry.id, "error",
+          `Workflow ${run.id} has a saved result, but its notification is pending: ${(error as Error).message}`,
+          { agent: "principal", id: `workflow:${run.id}:delivery-pending`, code: "workflow_delivery_pending", recoverable: true }));
+      }
+    }
+    return queued;
   }
 
   /**
@@ -837,7 +979,7 @@ export class SessionManager {
         const fingerprint = createHash("sha256")
           .update(JSON.stringify(cfg))
           .digest("hex");
-        if (fingerprint === this.mcpConfigFingerprint) return this.mcpTools;
+        if (fingerprint === this.mcpConfigFingerprint && (!this.mcpPartialRetryAt || Date.now() < this.mcpPartialRetryAt)) return this.mcpTools;
 
         if (!cfg) {
           // Do not close the previous generation here: existing Pi sessions
@@ -846,6 +988,7 @@ export class SessionManager {
           this.mcpTools = [];
           this.mcpStatus = { state: "unconfigured", servers: [] };
           this.mcpConfigFingerprint = fingerprint;
+          this.mcpPartialRetryAt = 0;
           return this.mcpTools;
         }
 
@@ -876,6 +1019,9 @@ export class SessionManager {
         }
         this.mcpTools = result.tools;
         this.mcpConfigFingerprint = fingerprint;
+        // A partial connection generation must not hide a recovered source
+        // forever. Bound retries while preserving working tool closures.
+        this.mcpPartialRetryAt = result.failures.length ? Date.now() + 30_000 : 0;
         return this.mcpTools;
       } catch (err) {
         // A failed refresh is not committed: the next agent/status request
@@ -1642,6 +1788,46 @@ export class SessionManager {
       },
     });
 
+    const workflows = new WorkflowHost({
+      sessionId: id,
+      workspaceDir: this.workspaceDir(id),
+      stateDir: persistBase ?? join(this.dataRoot, ".bp", id),
+      persist: this.persist,
+      implementations: () => this.workflowImplementations,
+      isEnabled: (workflowId) => this.workflowAvailability.enabledWorkflowIds.includes(workflowId),
+      captureBinding: async () => (await this.ensureAgent(id, "principal")).getWorkflowModelBinding(),
+      runResearchTool: createWorkflowResearchTools({
+        getMcpTools: () => this.ensureMcpTools(),
+        getPaperTool: async () => {
+          const toggles = toolTogglesForDomainResources(entry.domainResources, await this.ensureToolToggles());
+          if (!isToolEnabled(toggles, "search_papers_local")) return undefined;
+          // Hosted BrainPilot installations expose the same paper-library
+          // contract through their existing configured MCP projection.
+          const configured = await this.ensureMcpTools().catch(() => []);
+          const hosted = configured.find(tool => /^mcp__(?:preset-)?neuro_sci_papersearch__search_papers$/u.test(tool.name));
+          return hosted ?? createSearchPapersLocalTool();
+        },
+      }),
+      agentFactory: this.agentFactory,
+      runWithCapacity: (fn, signal) => this.withProviderSlot(id, fn, false, false, undefined, signal),
+      stageTimeoutMs: this.workflowStageTimeoutMs,
+      onUsage: (stageId, usage) => {
+        const name = `workflow:${stageId}`;
+        const total = entry.tokenUsage.byAgent[name] ?? emptyTokenUsage();
+        addUsage(total, usage);
+        entry.tokenUsage.byAgent[name] = total;
+        entry.tokenUsage.total = sumAgentUsage(entry.tokenUsage.byAgent);
+        const stats = emptyAgentStats(); stats.tokens = { ...total };
+        entry.stats.byAgent[name] = stats; recomputeSessionTotal(entry.stats);
+        void this.writeUsage(entry); void this.writeStats(entry);
+      },
+      onChanged: () => {
+        if (!entry) return;
+        this.touch(entry); this.emitSessionState(entry);
+      },
+      onTerminal: async (run) => { await this.deliverWorkflowTerminal(entry, run); },
+    });
+
     entry = {
       id,
       title: input.title ?? "Untitled session",
@@ -1652,6 +1838,7 @@ export class SessionManager {
       taskLedger,
       trace,
       subagents,
+      workflows,
       checkpoints,
       workspaceOperationActive: false,
       currentTraceRecord: undefined,
@@ -1723,6 +1910,8 @@ export class SessionManager {
       if (_restore) await this.cancelRestoredOrphanInputs(entry);
     }
     await subagents.restore();
+    await workflows.manager.restore();
+    await this.reconcileWorkflowTerminals(entry);
     if (!_restore) {
       await this.drainLocalUploads(id);
     }
@@ -1829,6 +2018,7 @@ export class SessionManager {
     if (!e) return false;
     await this.discardUserInputs(e);
     await e.monitorManager.stopAll();
+    await e.workflows.manager.cancelAll();
     for (const a of e.agents.values()) a.stop();
     await e.subagents.dispose();
     e.bus.clear();
@@ -1850,6 +2040,8 @@ export class SessionManager {
     // already finished, leaving an unanswered request in replay forever.
     await this.cancelUserInputs(e, () => true, "evicted", false);
     const monitorsKilled = await e.monitorManager.stopAll();
+    await e.workflows.manager.cancelAll();
+    await e.workflows.manager.flush();
     let killed = 0;
     for (const a of e.agents.values()) {
       a.stop();
@@ -1930,7 +2122,11 @@ export class SessionManager {
     // immediately; this target waits until its direct turn settles so prompts
     // never overlap.
     const resumedAfterWholeSessionStop = entry.taskLedger.isDeliveryPausedGlobally();
-    const resumeTargetAfterRun = await this.resumeTaskDelivery(entry, agentName);
+    const resumedTargetDelivery = await this.resumeTaskDelivery(entry, agentName);
+    // Queue recovered results before the new user prompt; let its existing
+    // completion path deliver them afterwards instead of racing a plain prompt.
+    const reconciledWorkflowResults = agentName === "principal" && await this.reconcileWorkflowTerminals(entry);
+    const resumeTargetAfterRun = resumedTargetDelivery || reconciledWorkflowResults;
     const modelInput = resumedAfterWholeSessionStop
       ? `${INTERRUPTED_TURN_BOUNDARY}\n\n${content}`
       : content;
@@ -2313,11 +2509,13 @@ export class SessionManager {
       key.startsWith(`${sessionId}:`) && (!agentName || key === `${sessionId}:${agentName}`)
     );
     const hasMonitors = entry.monitorManager.hasRunning(agentName);
+    const hasWorkflows = wholeSession && entry.workflows.manager.hasActive();
     if (
       !hasTargetActivity
       && !hasSubagentActivity
       && !hasDelivery
       && !hasMonitors
+      && !hasWorkflows
       && !hasTargetInput
       && !(wholeSession && (entry.runActive || hasPendingInput))
     ) {
@@ -2343,6 +2541,7 @@ export class SessionManager {
     // to unwind. The batch already being processed may settle, but later queued
     // events remain durable for the next explicit user turn.
     if (wholeSession) await entry.taskLedger.pauseDelivery();
+    const workflowCancellation = wholeSession ? entry.workflows.manager.cancelAll() : Promise.resolve(0);
     // A caller blocked inside record_trace cannot finish abort() while Trace
     // delivery is paused. Release only the synchronous acknowledgement wait;
     // keep the durable notification and submission state so a later resumed
@@ -2356,7 +2555,7 @@ export class SessionManager {
       : await entry.subagents.cancelAll();
     // Abort every target and WAIT for each in-flight run to fully settle (#101)
     // — RUN_FINISHED emitted, status settled, provider stream fenced.
-    await Promise.all(targets.map((a) => a!.abort()));
+    await Promise.all([...targets.map((a) => a!.abort()), workflowCancellation]);
     if (wholeSession) {
       entry.runActive = false;
       entry.activeRunId = null;
@@ -2375,7 +2574,7 @@ export class SessionManager {
       this.emitSessionState(entry);
     }
     await entry.bus.flush();
-    return targets.length > 0 || childrenCancelled > 0 || monitorsStopped > 0;
+    return targets.length > 0 || childrenCancelled > 0 || monitorsStopped > 0 || hasWorkflows;
   }
 
   /** Interrupt exactly one currently executing, locally-cancellable tool. */
@@ -2625,6 +2824,10 @@ export class SessionManager {
       } : undefined,
       listMonitors: monitorEnabled ? () => entry.monitorManager.list(name) : undefined,
       stopMonitor: monitorEnabled ? (monitorId) => entry.monitorManager.stop(monitorId, name) : undefined,
+      listWorkflows: name === "principal" ? () => this.listWorkflowDefinitions(sessionId) : undefined,
+      startWorkflow: name === "principal" ? (args) => this.startWorkflow(sessionId, args) : undefined,
+      getWorkflows: name === "principal" ? () => this.listWorkflowRuns(sessionId) : undefined,
+      cancelWorkflow: name === "principal" ? (runId) => this.cancelWorkflow(sessionId, runId) : undefined,
       routerSkillsDir: this.routerSkillsDir,
       spawnSubagents: role === "expert" ? ({ context, tasks }) => entry.subagents.runBatch({
         parentAgent: name,
@@ -2835,7 +3038,8 @@ export class SessionManager {
       entry.agents.values(),
       (name) => entry.taskLedger.count(name),
     );
-    return renderAgentStatusBlock(lines);
+    const work = entry.workflows.manager.list().filter(run => run.status === "queued" || run.status === "running");
+    return renderAgentStatusBlock(lines) + (work.length ? "\n<active_workflows>\n" + work.map(run => `${run.id}: ${run.workflowId} ${run.status}; already accepted, do not duplicate`).join("\n") + "\n</active_workflows>" : "");
   }
 
   private renderTaskContext(entry: SessionEntry, name: string): string {
@@ -2847,6 +3051,7 @@ export class SessionManager {
   }
 
   private hasQualifyingPrincipalDelegation(entry: SessionEntry): boolean {
+    if (entry.turnRunId && entry.workflows.manager.list().some(run => run.turnId === entry.turnRunId)) return true;
     const nonSubstantiveTargets = new Set(["principal", "trace", "auditor", "writer"]);
     return entry.taskLedger.list().some((task) =>
       task.created_by === "principal"
@@ -2938,14 +3143,16 @@ export class SessionManager {
     borrowParent = false,
     allowNestedBorrow = false,
     parentPromotion?: Promise<object>,
+    signal?: AbortSignal,
   ): Promise<T> {
+    signal?.throwIfAborted();
     if (this.maxConcurrentAgents <= 0) return fn();
     // A custom tool runs inside the owning prompt's async chain. Its first
     // child may borrow that already-counted provider lease, avoiding deadlock
     // when the configured provider concurrency is one.
     const inherited = this.providerLease.getStore();
     if (inherited?.sessionId === sessionId && (borrowParent || (allowNestedBorrow && this.maxConcurrentAgents === 1))) {
-      const releaseBorrowed = await inherited.childLane.acquire();
+      const releaseBorrowed = await inherited.childLane.acquire(signal);
       try {
         return await fn();
       } finally {
@@ -2957,7 +3164,7 @@ export class SessionManager {
       sem = new ProviderSemaphore(this.maxConcurrentAgents);
       this.providerSlots.set(sessionId, sem);
     }
-    const slot = sem.acquire();
+    const slot = sem.acquire(signal);
     if (parentPromotion && inherited?.sessionId === sessionId) {
       const winner = await Promise.race([
         slot.then((release) => ({ kind: "slot" as const, release })),
@@ -3564,6 +3771,7 @@ export class SessionManager {
    * and delivery-loop handoffs so external harnesses can await quiescence.
    */
   private deriveWorkActive(entry: SessionEntry): boolean {
+    if (entry.workflows.manager.hasActive()) return true;
     if (this.deriveRunActive(entry)) return true;
     // Covers the acceptance→agent-running gap for a direct expert prompt.
     if (entry.activeRunId !== null) return true;
@@ -3898,6 +4106,7 @@ export class SessionManager {
   } {
     let runningAgents = 0;
     for (const e of this.sessions.values()) {
+      if (e.workflows.manager.hasActive()) runningAgents++;
       for (const a of e.agents.values()) if (a.status === "running") runningAgents++;
     }
     const snap = this.memWatchdog?.snapshot() ?? null;

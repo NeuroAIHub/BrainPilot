@@ -47,6 +47,7 @@ interface StoredLedger {
   notifications: TaskNotification[];
   delivery_paused: boolean;
   paused_agents: string[];
+  system_keys?: string[];
 }
 
 export const MAX_PENDING_NOTIFICATIONS = 20;
@@ -116,6 +117,8 @@ function validateStoredLedger(value: unknown): StoredLedger {
   if (Number(nextNotificationSeq) <= maxNotificationSeq) throw new Error("next_notification_seq does not exceed existing notifications");
   const pausedAgents = value.paused_agents ?? [];
   if (!Array.isArray(pausedAgents) || pausedAgents.some((agent) => typeof agent !== "string")) throw new Error("paused_agents must be a string array");
+  const systemKeys = value.system_keys ?? [];
+  if (!Array.isArray(systemKeys) || systemKeys.some((key) => typeof key !== "string" || key.length === 0)) throw new Error("system_keys must be a nonempty string array");
   if (value.delivery_paused !== undefined && typeof value.delivery_paused !== "boolean") throw new Error("delivery_paused must be boolean");
   return {
     next_task_seq: Number(nextTaskSeq),
@@ -124,6 +127,7 @@ function validateStoredLedger(value: unknown): StoredLedger {
     notifications: normalizedNotifications,
     delivery_paused: value.delivery_paused === true,
     paused_agents: [...new Set(pausedAgents)],
+    ...(systemKeys.length ? { system_keys: [...new Set(systemKeys)] } : {}),
   };
 }
 
@@ -133,6 +137,7 @@ export class TaskLedger {
   private tasks: StoredTask[] = [];
   private notifications: TaskNotification[] = [];
   private deliveryPaused = false;
+  private readonly systemKeys = new Set<string>();
   private pausedAgents = new Set<string>();
   private operations: Promise<void> = Promise.resolve();
 
@@ -189,6 +194,7 @@ export class TaskLedger {
         notifications: structuredClone(this.notifications),
         deliveryPaused: this.deliveryPaused,
         pausedAgents: new Set(this.pausedAgents),
+        systemKeys: new Set(this.systemKeys),
       };
       try {
         result = fn();
@@ -200,6 +206,8 @@ export class TaskLedger {
         this.notifications = before.notifications;
         this.deliveryPaused = before.deliveryPaused;
         this.pausedAgents = before.pausedAgents;
+        this.systemKeys.clear();
+        for (const key of before.systemKeys) this.systemKeys.add(key);
         failure = err;
       }
     });
@@ -308,6 +316,16 @@ export class TaskLedger {
 
   async enqueueSystem(toAgent: string, content: string, taskId?: string): Promise<void> {
     await this.mutate(() => { this.enqueue("system", toAgent, "system", content, taskId); });
+  }
+
+  /** Atomic durable deduplication for host terminal notifications, even after delivery. */
+  async enqueueSystemOnce(key: string, toAgent: string, content: string): Promise<boolean> {
+    return this.mutate(() => {
+      if (this.systemKeys.has(key)) return false;
+      this.enqueue("system", toAgent, "system", content);
+      this.systemKeys.add(key);
+      return true;
+    });
   }
 
   /** Claim the one allowed reminder for every pending assignment of an agent. */
@@ -460,6 +478,8 @@ export class TaskLedger {
       this.notifications = parsed.notifications;
       this.deliveryPaused = parsed.delivery_paused;
       this.pausedAgents = new Set(parsed.paused_agents);
+      this.systemKeys.clear();
+      for (const key of parsed.system_keys ?? []) this.systemKeys.add(key);
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === "ENOENT") return;
       throw new TaskLedgerCorruptError(this.persistPath, err);
@@ -480,6 +500,7 @@ export class TaskLedger {
       notifications: this.notifications,
       delivery_paused: this.deliveryPaused,
       paused_agents: [...this.pausedAgents],
+      ...(this.systemKeys.size ? { system_keys: [...this.systemKeys] } : {}),
     };
     const tmp = `${this.persistPath}.${process.pid}.tmp`;
     await writeFile(tmp, JSON.stringify(snapshot, null, 2), "utf8");
