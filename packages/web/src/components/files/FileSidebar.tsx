@@ -30,7 +30,7 @@ import { downloadBlob } from "../../utils/download";
 import { createZipBlob, type ZipEntry } from "../../utils/zip";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
-import { ONE_MB, MAX_BINARY_PREVIEW, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
+import { ONE_MB, MAX_BINARY_PREVIEW, blobForPreview, formatBytes, formatModified, getPreviewKind, isMarkdown } from "./filePreview";
 import {
   applyDirectoryListing,
   createFileSidebarRoot,
@@ -1375,7 +1375,7 @@ function FilePreviewPanel({
         if (isCancelled) {
           return;
         }
-        objectUrl = URL.createObjectURL(blob);
+        objectUrl = URL.createObjectURL(blobForPreview(blob, previewKind));
         setBlobUrl(objectUrl);
         if (restoreRequest) onRestoreReloaded(restoreRequest);
       })

@@ -15,6 +15,11 @@ export const MAX_BINARY_PREVIEW = 50 * ONE_MB;
 
 export type PreviewKind = "text" | "image" | "pdf" | "download";
 
+/** Give the browser PDF viewer the correct MIME without changing file bytes. */
+export function blobForPreview(blob: Blob, kind: PreviewKind): Blob {
+  return kind === "pdf" ? blob.slice(0, blob.size, "application/pdf") : blob;
+}
+
 export function getPreviewKind(fileName: string): PreviewKind {
   if (/\.(png|jpg|jpeg|gif|webp|svg)$/i.test(fileName)) {
     return "image";

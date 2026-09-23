@@ -23,6 +23,7 @@ const tests = [
   "packages/runtime/src/__tests__/pi-provider.test.ts",
   "packages/runtime/src/__tests__/provider-config.test.ts",
   "packages/runtime/src/__tests__/session-manager.test.ts",
+  "packages/runtime/src/__tests__/server.test.ts",
   "packages/runtime/src/__tests__/workflow-host.test.ts",
   "packages/runtime/src/__tests__/workflow-native-tools.test.ts",
   "packages/runtime/src/__tests__/workflow-research-tools.test.ts",
@@ -43,8 +44,8 @@ const tests = [
   "packages/backend-core/test/config.test.ts",
   "packages/backend-core/test/plugins.test.ts",
 ];
-const webTest = "packages/web/src/__tests__/runningToast.test.ts";
-for (const file of [...tests, webTest]) {
+const webTests = ["src/__tests__/runningToast.test.ts", "src/__tests__/filePreviewBlob.test.ts"];
+for (const file of [...tests, ...webTests.map(file => `packages/web/${file}`)]) {
   try {
     if (!statSync(join(root, file)).isFile()) throw new Error("not a file");
   } catch {
@@ -66,7 +67,7 @@ const steps = [
   ["Workspace typecheck", npm, ["run", "typecheck"]],
   ["Runtime build", npm, ["run", "build", "-w", "@brainpilot/runtime"]],
   ["Workflow unit tests", npm, ["test", "--", ...tests]],
-  ["Web running toast test", npm, ["run", "test", "-w", "@brainpilot/web", "--", "src/__tests__/runningToast.test.ts"]],
+  ["Web workflow and file preview tests", npm, ["run", "test", "-w", "@brainpilot/web", "--", ...webTests]],
   ["Web build", npm, ["run", "build", "-w", "@brainpilot/web"]],
   ["Writing acceptance accounting", process.execPath, ["scripts/workflow-writing-acceptance.mjs"]],
   ["Writing finalization accounting", process.execPath, ["scripts/workflow-writing-finalization.mjs"]],

@@ -451,6 +451,8 @@ async function safeBody(c: { req: { json: () => Promise<unknown> } }): Promise<u
 
 export interface StartServerOptions extends SessionManagerOptions {
   port?: number;
+  /** Optional bind address; BP_RUNTIME_HOST is used when no option is given. */
+  hostname?: string;
   manager?: SessionManager;
   /** Stable identity for this Runtime process; generated when omitted. */
   instanceId?: string;
@@ -517,12 +519,13 @@ export async function startServer(opts: StartServerOptions = {}): Promise<{
     (process.env.PORT ? Number(process.env.PORT) : undefined) ??
     (process.env.BP_RUNTIME_PORT ? Number(process.env.BP_RUNTIME_PORT) : undefined) ??
     8081;
+  const hostname = opts.hostname ?? process.env.BP_RUNTIME_HOST;
 
   // Wait for the socket to be bound so callers (and tests using `port: 0`)
   // can talk to the server / read the kernel-assigned port immediately.
   let boundPort = port;
   const server = await new Promise<ReturnType<typeof serve>>((resolve) => {
-    const s = serve({ fetch: app.fetch, port }, (info) => {
+    const s = serve({ fetch: app.fetch, port, ...(hostname ? { hostname } : {}) }, (info) => {
       boundPort = info.port;
       resolve(s);
     });

@@ -24,6 +24,8 @@ Describe the changed behavior, test commands, and remaining validation in each P
 Keep runtime, plugin, UI, and evaluation changes in separate commits where practical.
 The branch CI checks pushes and contribution PRs.
 
+For a single-operator presentation, use the [live demo guide](docs/workflow/DEMO.md).
+
 ## Current implementation
 
 | Component | Entry point | Status |

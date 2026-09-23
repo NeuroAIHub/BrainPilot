@@ -3,7 +3,7 @@
  * 208/Linux only. UI access check for already saved real workflow artifacts.
  * Copies one settled session into a new directory; never re-runs its model.
  * Usage: --source <completed-driver-output> --output <NEW-replay-directory>
- *        [--source-kind writing-acceptance|draft-delivery]
+ *        [--source-kind writing-acceptance|draft-delivery] [--ttl-minutes 30]
  */
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
@@ -15,13 +15,15 @@ import { fileURLToPath } from "node:url";
 assert.equal(process.platform, "linux", "Use only the isolated 208 Linux host.");
 const args = new Map();
 for (let i = 2; i < process.argv.length; i += 2) {
-  assert(["--source", "--output", "--source-kind"].includes(process.argv[i]) && process.argv[i + 1], "Usage: --source completed-output --output NEW-replay-dir [--source-kind writing-acceptance|draft-delivery]");
+  assert(["--source", "--output", "--source-kind", "--ttl-minutes"].includes(process.argv[i]) && process.argv[i + 1], "Usage: --source completed-output --output NEW-replay-dir [--source-kind writing-acceptance|draft-delivery] [--ttl-minutes 30]");
   args.set(process.argv[i], process.argv[i + 1]);
 }
 assert(args.has("--source") && args.has("--output"));
 const sourceKind = args.get("--source-kind") ?? "writing-acceptance";
 assert(["writing-acceptance", "draft-delivery"].includes(sourceKind), "Unsupported replay source kind.");
 const draftDelivery = sourceKind === "draft-delivery";
+const ttlMinutes = Number(args.get("--ttl-minutes") ?? 30);
+assert(Number.isSafeInteger(ttlMinutes) && ttlMinutes >= 1 && ttlMinutes <= 1440, "--ttl-minutes must be an integer from 1 to 1440.");
 const source = await realpath(args.get("--source")); const output = resolve(args.get("--output"));
 assert(!output.startsWith(source + sep) && output !== source, "Replay must be separate from the original run.");
 const sourceReportPath = join(source, draftDelivery ? "recovery-report.json" : "real-acceptance-report.json");
@@ -40,7 +42,7 @@ if (draftDelivery) {
   assert.equal(sourceReport.cleanupComplete, true, "Wait for the recovery driver to finish cleanup.");
   assert(Number.isFinite(Date.parse(sourceReport.finishedAt)), "Recovery has no completed timestamp.");
 } else {
-  assert(sourceReport.scenario === "positive" && sourceReport.runtimeStatus === "succeeded", "Wait for the original workflow to finish and write its final report.");
+  assert(["positive", "explicit-positive"].includes(sourceReport.scenario) && sourceReport.runtimeStatus === "succeeded", "Wait for the original workflow to finish and write its final report.");
   const sourceStatus = JSON.parse(await readFile(join(source, "status.json"), "utf8"));
   assert.equal(sourceStatus.workState?.workState?.active, false, "Source driver still has active work; do not copy a live run.");
 }
@@ -123,6 +125,13 @@ for (const name of ["meta.json", "events.jsonl", "tasks.json", "trace.json", "us
   try { const info = await lstat(from); assert(info.isFile() && !info.isSymbolicLink()); await cp(from, join(replayState, name), { errorOnExist: true, force: false }); }
   catch (error) { if (error.code !== "ENOENT") throw error; }
 }
+// Label only the copied session. Its original messages and artifact bytes stay
+// unchanged, and viewers can distinguish this result from a fresh live run.
+const replayMetaPath = join(replayState, "meta.json");
+const replayMeta = JSON.parse(await readFile(replayMetaPath, "utf8"));
+const originalDate = typeof replayMeta.createdAt === "string" ? replayMeta.createdAt.slice(0, 10) : "historical";
+replayMeta.title = `[Read-only result ${originalDate}] ${replayMeta.title ?? "Writing workflow"}`;
+await writeFile(replayMetaPath, JSON.stringify(replayMeta, null, 2) + "\n");
 let files = 0, bytes = 0;
 async function inspectWorkspace(path) {
   const info = await lstat(path); assert(!info.isSymbolicLink(), "Replay does not follow links back into original or external data.");
@@ -194,10 +203,10 @@ try {
   const backendApp = createApp({ orchestrator: new StaticRuntimeOrchestrator({ baseUrl: "http://127.0.0.1:19333" }),
     dataDir: dataRoot, env, serveWeb: true, webRoot: join(checkout, "packages/web/dist"), kbManagementEnabled: false, shutdownSignal: shutdown.signal });
   backendServer = serve({ fetch: readOnlyFetch(backendApp), hostname: "127.0.0.1", port: 19332 }); await ready(backendServer);
-  const manifest = { boundary, sourceKind, status: "ready", source, output, pid: process.pid, sessionId, runId, backendUrl: "http://127.0.0.1:19332", originals,
+  const manifest = { boundary, sourceKind, status: "ready", source, output, pid: process.pid, sessionId, runId, backendUrl: "http://127.0.0.1:19332", originals, ttlMinutes,
     sourceHistorySha256: sourceEventsHash, sourceReportSha256: sourceReportHash, sourceDeliveryMessages,
     expected: "Open the original completed assistant delivery message and click its existing TeX/PDF links. Do not synthesize a replacement message or treat draft access as complete writing acceptance." };
   await writeFile(join(output, "replay-ready.json"), JSON.stringify(manifest, null, 2)); console.log(JSON.stringify(manifest));
   for (const signal of ["SIGINT", "SIGTERM"]) process.once(signal, () => { void stop(signal).then(() => process.exit(0), error => { console.error(error); process.exit(1); }); });
-  expiry = setTimeout(() => { void stop("expired").then(() => process.exit(0)); }, 30 * 60_000); expiry.unref();
+  expiry = setTimeout(() => { void stop("expired").then(() => process.exit(0)); }, ttlMinutes * 60_000); expiry.unref();
 } catch (error) { console.error(error); await stop("startup-failed"); process.exitCode = 1; }
