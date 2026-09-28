@@ -45,7 +45,7 @@
     "@brainpilot/plugin-sdk": "^0.2.3",
     "@brainpilot/protocol": "^0.2.3",
     "@brainpilot/skills": "^0.2.3",
-    "@earendil-works/pi-coding-agent": "0.84.2",
+    "@earendil-works/pi-coding-agent": "0.87.1",
     "@hono/node-server": "^2.1.0",
     "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.13.0",
