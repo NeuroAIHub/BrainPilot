@@ -67,11 +67,11 @@ export function formatBytes(bytes: number): string {
   return `${value >= 10 ? value.toFixed(0) : value.toFixed(1)} ${units[index]}`;
 }
 
-export function formatModified(timestamp: number): string {
-  if (!timestamp) {
+export function formatModified(timestamp: number, locale?: string): string {
+  if (!timestamp || !Number.isFinite(timestamp) || !Number.isFinite(new Date(timestamp * 1000).getTime())) {
     return "-";
   }
-  return new Intl.DateTimeFormat("en", {
+  return new Intl.DateTimeFormat(locale, {
     month: "short",
     day: "numeric",
     hour: "2-digit",

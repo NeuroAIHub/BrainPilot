@@ -113,6 +113,43 @@ export function DesktopShell() {
     if (currentSession?.id) writeWorkspaceLocation(buildWorkspaceFileDeepLink(currentSession.id, target), true);
   }, [currentSession?.id]);
 
+  /**
+   * The single exit for every *explicit* close / hand-off of the Files pane
+   * (pane close, preview close, "Use in conversation"). Each of those used to
+   * drop the open request but leave `/sessions/:id/files?path=…` in the address
+   * bar, so a reload — or just reading the URL — claimed a file the workspace
+   * was no longer showing. Only called after the existing unsaved-changes
+   * confirmation, and never from a state sync, so an initial deep link that has
+   * not been applied yet is never wiped by the Files panel's transient empty
+   * selection.
+   */
+  const clearWorkspaceFileLocation = useCallback(() => {
+    setOpenFileRequest(null);
+    // An explicit close also retires a deep link that is still pending: the user
+    // has said what they want to look at, and it isn't that file.
+    deepLinkHandledRef.current = true;
+    if (typeof window === "undefined" || !parseWorkspaceFileLocation(window.location)) return;
+    writeWorkspaceLocation(runtimeConfig.localMode ? "/" : "/app", true);
+  }, []);
+
+  /**
+   * The Files tree reporting which file it is *showing*. Only updates the URL —
+   * it must not feed `openFileRequest`, or the panel would be re-driven by its
+   * own selection on every click.
+   */
+  const handleFileSelectionLocation = useCallback((target: WorkspaceFileTarget | null) => {
+    if (!target) {
+      clearWorkspaceFileLocation();
+      return;
+    }
+    if (!currentSession?.id) return;
+    // A user-selected tree file supersedes a still-loading link to another file.
+    // Clearing the request cancels that effect; do not create a feedback request.
+    setOpenFileRequest((current) => current?.path === target.path ? current : null);
+    deepLinkHandledRef.current = true;
+    writeWorkspaceLocation(buildWorkspaceFileDeepLink(currentSession.id, target), true);
+  }, [clearWorkspaceFileLocation, currentSession?.id]);
+
   useEffect(() => {
     const previousSessionId = previousSessionIdRef.current;
     const nextSessionId = currentSession?.id;
@@ -136,7 +173,7 @@ export function DesktopShell() {
       appendFileReference(draftStore.get(composerScope), path),
     );
     setCurrentView("chat");
-    setOpenFileRequest(null);
+    clearWorkspaceFileLocation();
     setIsFilesOpen(false);
     requestAnimationFrame(() => {
       const input = document.getElementById("prompt-input") as HTMLTextAreaElement | null;
@@ -144,7 +181,7 @@ export function DesktopShell() {
       input.focus();
       input.setSelectionRange(input.value.length, input.value.length);
     });
-  }, [currentSession?.id, isDraft, setCurrentView]);
+  }, [clearWorkspaceFileLocation, currentSession?.id, isDraft, setCurrentView]);
 
   const useDataset = (path: string) => {
     if (!confirmFileNavigation()) return;
@@ -306,24 +343,8 @@ export function DesktopShell() {
         <Suspense fallback={<main className="plugin-market__empty" role="status">{t("sidebar.loading")}</main>}>
           <DemoView resetSignal={demoResetSignal} />
         </Suspense>
-      ) : activePage === "plugins" ? pluginMarketplaceSurface(runtimeConfig.localMode) === "cloud-unavailable" ? (
-        <main className="plugin-market" aria-labelledby="plugin-market-title">
-          <header className="plugin-market__hero">
-            <div>
-              <span className="plugin-market__eyebrow">BrainPilot Cloud</span>
-              <h1 id="plugin-market-title">{t("marketplace.title")}</h1>
-            </div>
-          </header>
-          <section className="plugin-market__catalog">
-            <div className="plugin-market__cloud-unavailable" role="status">
-              <span className="plugin-market__cloud-unavailable-icon" aria-hidden="true"><CloudOff size={20} /></span>
-              <div>
-                <h2>{t("marketplace.cloudUnavailable.title")}</h2>
-                <p>{t("marketplace.cloudUnavailable.description")}</p>
-              </div>
-            </div>
-          </section>
-        </main>
+      ) : activePage === "plugins" ? pluginMarketplaceSurface(runtimeConfig.pluginsSettingsEnabled) === "unavailable" ? (
+        <ResourcesUnavailablePage onReturnToWorkspace={() => setActivePage("workspace")} t={t} />
       ) : (
         <Suspense fallback={<main className="plugin-market"><div className="plugin-market__empty"><strong>{t("marketplace.loading")}</strong></div></main>}>
           <PluginMarketplace
@@ -347,9 +368,10 @@ export function DesktopShell() {
         <header className="workspace-toolbar" aria-label={t("shell.aria.toolbarActions")}>
           <div className="session-title" aria-label={t("shell.aria.activeSession")}>
             {/* #105: foreground the human-readable session title (same source as
-                the sidebar). The id is debug-only metadata now — surfaced as a
-                hover tooltip + muted short id, never the primary label. Falls
-                back to `Session <id8>` when the title is missing. */}
+                the sidebar). The id is debug-only metadata — it stays available
+                as the hover tooltip, but is no longer printed in the toolbar,
+                where a truncated hash read as part of the conversation's name.
+                Falls back to `Session <id8>` when the title is missing. */}
             <span
               className="session-title__name"
               title={currentSession?.id ?? undefined}
@@ -359,14 +381,11 @@ export function DesktopShell() {
                   ? `${t("shell.sessionLabel")} ${currentSession.id.slice(0, 8)}`
                   : t("shell.defaultWorkspace"))}
             </span>
-            {currentSession?.id ? (
-              <span className="session-title__id">{currentSession.id.slice(0, 8)}</span>
-            ) : null}
           </div>
           <div className="workspace-toolbar__actions">
-            {/* #104: icon-only nav. The label stays in the DOM (visually
-                hidden) so it remains the button's accessible name, and `title`
-                gives a hover/focus tooltip — no separate aria-label needed. */}
+            {/* #104 kept the view switcher compact, but icon-only tabs left the
+                three main surfaces unlabeled until hover. The short label now
+                renders next to the icon (badges and tooltips unchanged). */}
             <WorkspaceViewTabs
               currentView={currentView}
               onSelect={setCurrentView}
@@ -394,7 +413,10 @@ export function DesktopShell() {
               className={isFilesOpen ? "is-active" : ""}
               label={isFilesOpen ? t("shell.files.close") : t("shell.files.open")}
               onClick={() => {
-                if (isFilesOpen && !confirmFileNavigation()) return;
+                if (isFilesOpen) {
+                  if (!confirmFileNavigation()) return;
+                  clearWorkspaceFileLocation();
+                }
                 setIsFilesOpen((current) => !current);
               }}
             >
@@ -423,9 +445,11 @@ export function DesktopShell() {
           openFileRequest={fileRequestForScope(openFileRequest, currentSession?.id)}
           onClose={() => {
             if (!confirmFileNavigation()) return;
+            clearWorkspaceFileLocation();
             setIsFilesOpen(false);
           }}
           onDirtyChange={setHasUnsavedFileChanges}
+          onSelectionLocationChange={handleFileSelectionLocation}
           onUseInConversation={useFileInConversation}
           onResize={setFileSidebarWidth}
           onResizeEnd={() => setIsFileSidebarResizing(false)}
@@ -467,6 +491,48 @@ export function DesktopShell() {
 }
 
 /**
+ * The `?page=plugins` route for a deployment where the Resources capability is
+ * switched off. A direct/bookmarked link has to land somewhere truthful: it says
+ * the page is unavailable in *this* deployment (it no longer promises a launch
+ * that this build knows nothing about) and offers the one action that works.
+ */
+export function ResourcesUnavailablePage({
+  onReturnToWorkspace,
+  t,
+}: {
+  onReturnToWorkspace: () => void;
+  t: (key: string) => string;
+}) {
+  return (
+    <main className="plugin-market" aria-labelledby="plugin-market-title">
+      <header className="plugin-market__hero">
+        <div>
+          <span className="plugin-market__eyebrow">{t("marketplace.eyebrow")}</span>
+          <h1 id="plugin-market-title">{t("marketplace.title")}</h1>
+        </div>
+      </header>
+      <section className="plugin-market__catalog">
+        <div className="plugin-market__unavailable" role="status">
+          <span className="plugin-market__unavailable-icon" aria-hidden="true"><CloudOff size={20} /></span>
+          <div>
+            <h2>{t("marketplace.unavailable.title")}</h2>
+            <p>{t("marketplace.unavailable.description")}</p>
+            <button
+              className="plugin-market__unavailable-cta"
+              data-testid="resources-unavailable-return"
+              onClick={onReturnToWorkspace}
+              type="button"
+            >
+              {t("marketplace.unavailable.returnToWorkspace")}
+            </button>
+          </div>
+        </div>
+      </section>
+    </main>
+  );
+}
+
+/**
  * Extracted so its badge behavior (#134 trace-updated dot, #278 hidden-errors
  * dot) is unit-testable without pulling the full DesktopShell surface + its
  * SSE/Auth/Sandbox context tree. Pure props in, JSX out.
@@ -485,7 +551,7 @@ export function WorkspaceViewTabs({
   t: (key: string) => string;
 }) {
   return (
-    <div className="workspace-view-tabs workspace-view-tabs--icon-only" role="tablist" aria-label={t("shell.aria.viewTabs")}>
+    <div className="workspace-view-tabs" role="tablist" aria-label={t("shell.aria.viewTabs")}>
       <button
         aria-selected={currentView === "chat"}
         className={currentView === "chat" ? "is-active" : ""}
@@ -495,7 +561,7 @@ export function WorkspaceViewTabs({
         type="button"
       >
         <MessageSquare size={14} />
-        <span className="sr-only">{t("shell.view.chat")}</span>
+        <span className="workspace-view-tab__label">{t("shell.view.chat")}</span>
       </button>
       <button
         aria-selected={currentView === "agents"}
@@ -506,7 +572,7 @@ export function WorkspaceViewTabs({
         type="button"
       >
         <Bot size={14} />
-        <span className="sr-only">{t("shell.view.agents")}</span>
+        <span className="workspace-view-tab__label">{t("shell.view.agents")}</span>
         {/* Issue #278 — quiet red dot: non-fatal errors were folded out
             of the chat stream for this session and the user hasn't
             opened the Agents view since. Cleared on open. */}
@@ -527,7 +593,7 @@ export function WorkspaceViewTabs({
         type="button"
       >
         <GitBranch size={14} />
-        <span className="sr-only">{t("shell.view.trace")}</span>
+        <span className="workspace-view-tab__label">{t("shell.view.trace")}</span>
         {/* #134 — quiet unread dot: trace changed for this session and
             the user hasn't opened the Trace view since. Cleared on open. */}
         {traceUnread && currentView !== "trace" ? (

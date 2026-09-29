@@ -2,6 +2,11 @@ import { defineMessages } from "../types";
 
 export default defineMessages(
   {
+    "trace.details.reasoning": "推理与背景",
+    "trace.details.execution": "执行与关联详情",
+    "trace.details.recovery": "工作区变更与恢复",
+    "trace.details.controls": "筛选选项",
+    "trace.details.adjusted": "已调整",
     // AgentsPanel
     "trace.agents.eyebrow": "实时智能体网络",
     "trace.agents.emptyNoSession": "创建或选择会话后，这里会显示参与当前任务的智能体与它们之间的消息流。",
@@ -159,6 +164,11 @@ export default defineMessages(
       "trace.artifact.paper": "论文",
     },
     {
+    "trace.details.reasoning": "Reasoning and context",
+    "trace.details.execution": "Execution and dependencies",
+    "trace.details.recovery": "Workspace changes and recovery",
+    "trace.details.controls": "Filter options",
+    "trace.details.adjusted": "Modified",
     "trace.agents.eyebrow": "Live agent network",
     "trace.agents.emptyNoSession": "Once you create or select a session, the agents involved in the current task and the message flow between them will appear here.",
     "trace.agents.emptyNoEvents": "No agent status events in this session yet.",

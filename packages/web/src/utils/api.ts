@@ -734,9 +734,11 @@ export const api = {
         return mockBackend.listSessions();
       }
       // Runtime returns the protocol envelope `{ sessions: [...] }` (see
-      // ListSessionsResponseSchema). Unwrap it; tolerate a bare array (legacy /
-      // mock) and fall back to [] so an unexpected shape never throws
-      // `.map is not a function` into SessionContext's error banner.
+      // ListSessionsResponseSchema). Unwrap it and tolerate a bare array
+      // (legacy / mock). A 200 whose body is neither shape is a real failure:
+      // returning [] here used to render "No conversations yet" over a broken
+      // endpoint, so reject instead and let the caller show a load error with
+      // Retry (cached rows stay on screen).
       const raw = await handleJson<{ sessions?: unknown[] } | unknown[]>(
         await apiFetch(`${API_BASE}/sessions`, { headers: authHeaders() }),
       );
@@ -744,7 +746,12 @@ export const api = {
         ? raw
         : Array.isArray((raw as { sessions?: unknown[] })?.sessions)
           ? (raw as { sessions: unknown[] }).sessions
-          : [];
+          : null;
+      if (!list) {
+        throw new Error(
+          "The server returned an unexpected session list payload (expected an array or { sessions: [...] }).",
+        );
+      }
       return list.map((item) => normalizeSession(item as Parameters<typeof normalizeSession>[0]));
     },
 
@@ -1074,7 +1081,7 @@ export const api = {
         | { events?: unknown[]; total?: number | null; truncated?: boolean; nextCursor?: string }
         | null;
       if (!raw || !Array.isArray(raw.events)) {
-        throw new Error("history fetch failed: malformed response");
+        throw new Error("The server returned an unexpected history payload (malformed response; expected { events: [...] }).");
       }
       return {
         events: raw.events as RawAgUiEvent[],

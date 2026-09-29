@@ -1,3 +1,5 @@
+import { DetailsSection } from "../primitives/DetailsSection";
+import { usePreferences } from "../../contexts/PreferencesContext";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
@@ -81,6 +83,15 @@ type FileSidebarProps = {
   openFileRequest?: { path: string; line?: number; requestId: number } | null;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The file this panel is *showing*, after an explicit user action (picking a
+   * file in the tree, closing the preview, reopening the pane on a preserved
+   * one). The host uses it to keep the address bar honest; it must never be fed
+   * back in as `openFileRequest`, or the panel would re-drive itself on every
+   * click. Never called for the transient empty selection before an async load
+   * completes, so an unapplied deep link is not cleared out from under the user.
+   */
+  onSelectionLocationChange?: (target: { path: string; line?: number } | null) => void;
   onUseInConversation?: (path: string) => void;
   onResize: (width: number) => void;
   onResizeEnd: () => void;
@@ -236,6 +247,7 @@ export function FileSidebar({
   openFileRequest,
   onClose,
   onDirtyChange,
+  onSelectionLocationChange,
   onUseInConversation,
   onResize,
   onResizeEnd,
@@ -287,6 +299,12 @@ export function FileSidebar({
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const dataUploadInputRef = useRef<HTMLInputElement | null>(null);
   const isDirty = selectedContent !== null && draftContent !== selectedContent.content;
+  // Numbers the selections whose content is read asynchronously. A read for A
+  // that answers after the user picked B — or closed the preview — must not
+  // write A's content or A's error over what is on screen now.
+  const selectionRequestRef = useRef(0);
+  const beginSelectionRequest = () => (selectionRequestRef.current += 1);
+  const isLatestSelectionRequest = (seq: number) => selectionRequestRef.current === seq;
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -528,6 +546,11 @@ export function FileSidebar({
       void loadDirectory(DATA_ROOT_PATH);
     }
     if (!isOpen || currentSandbox?.status !== "running") {
+      // Dropping the selection also retires its pending read, so a late reply
+      // cannot repopulate the preview after the pane closed. The URL is left
+      // alone on purpose: this also runs while the sandbox is not yet running,
+      // and a deep link must survive until it can be applied.
+      selectionRequestRef.current += 1;
       setSelectedDownloadPaths(new Set());
       setSelectedPath(null);
       setSelectedContent(null);
@@ -642,13 +665,16 @@ export function FileSidebar({
         (selectedPath != null && isPathUnderOrEqual(selectedPath, deletedPath)) ||
         (selectedContent != null && isPathUnderOrEqual(selectedContent.path, deletedPath));
       if (closesPreview) {
+        // Retire any read still in flight for the file we are closing.
+        selectionRequestRef.current += 1;
         setSelectedPath(null);
         setSelectedContent(null);
         setIsPreviewMaximized(false);
+        onSelectionLocationChange?.(null);
       }
       notifyFileSourcesChanged();
     },
-    [selectedPath, selectedContent],
+    [selectedPath, selectedContent, onSelectionLocationChange],
   );
 
   const markDeleting = useCallback((paths: string[], on: boolean) => {
@@ -866,12 +892,26 @@ export function FileSidebar({
     return !isDirty || window.confirm(t("files.editor.confirmDiscard"));
   }, [isDirty, t]);
 
-  const selectFile = async (node: FileNode, line?: number, discardConfirmed = false) => {
+  /**
+   * `discardConfirmed`: the caller already ran the unsaved-changes prompt.
+   * `publishLocation`: report the new selection to the host so it can update the
+   * URL. Off for a link-driven open, whose URL the host wrote before asking.
+   */
+  type SelectFileOptions = { discardConfirmed?: boolean; publishLocation?: boolean };
+
+  const selectFile = async (node: FileNode, line?: number, options: SelectFileOptions = {}) => {
+    const { discardConfirmed = false, publishLocation = true } = options;
     if (node.path === selectedPath) {
-      setRequestedLine(line);
+      // Re-selecting the open file keeps whatever line target it already has
+      // (a plain tree click carries none), so a deep link's line is not lost.
+      if (line !== undefined) setRequestedLine(line);
+      if (publishLocation) {
+        onSelectionLocationChange?.({ path: node.path, line: line ?? requestedLine });
+      }
       return;
     }
     if (!discardConfirmed && !confirmDiscard()) return;
+    const seq = beginSelectionRequest();
     setSelectedPath(node.path);
     setSelectedContent(null);
     setDraftContent("");
@@ -880,6 +920,8 @@ export function FileSidebar({
     setConflictContent(null);
     setRestoreNotice(null);
     setRequestedLine(line);
+    // A different file replaces the previous line target — including "none".
+    if (publishLocation) onSelectionLocationChange?.({ path: node.path, line });
     if (!sandboxId) {
       return;
     }
@@ -891,9 +933,11 @@ export function FileSidebar({
     }
     try {
       const loaded = await api.sandbox.readFile(sandboxId, node.path);
+      if (!isLatestSelectionRequest(seq)) return;
       setSelectedContent(loaded);
       setDraftContent(loaded.content);
     } catch (err) {
+      if (!isLatestSelectionRequest(seq)) return;
       setEditError(err instanceof Error ? err.message : t("files.error.previewFailed"));
     }
   };
@@ -929,7 +973,12 @@ export function FileSidebar({
             }
             if (child.type !== "file") throw new Error(t("files.error.linkNotFile"));
             setExpandedPaths((current) => new Set([...current, ...expanded]));
-            await selectFile(child, openFileRequest.line, true);
+            // The host wrote this URL before asking, and re-publishing it here
+            // would feed a fresh `openFileRequest` back into this effect.
+            await selectFile(child, openFileRequest.line, {
+              discardConfirmed: true,
+              publishLocation: false,
+            });
             return;
           }
           if (child.type !== "folder" && child.type !== "symlink") {
@@ -1238,7 +1287,11 @@ export function FileSidebar({
             : null
         }
         onClose={() => {
+          // A canceled discard prompt must leave every bit of state — including
+          // the URL and the in-flight read guard — exactly as it was.
           if (!confirmDiscard()) return;
+          beginSelectionRequest();
+          onSelectionLocationChange?.(null);
           setSelectedPath(null);
           setSelectedContent(null);
           setDraftContent("");
@@ -1318,6 +1371,7 @@ function FilePreviewPanel({
   onToggleMaximize: () => void;
 }) {
   const t = useT();
+  const { language } = usePreferences();
   const [previewWidth, setPreviewWidth] = useState(DEFAULT_PREVIEW_WIDTH);
   const [isResizingPreview, setIsResizingPreview] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -1548,6 +1602,7 @@ function FilePreviewPanel({
         </div>
       ) : null}
 
+      <DetailsSection className="file-preview__information" summary={<>{t("files.preview.info")} · {formatBytes(file.size)} · {formatModified(file.modified, language)}</>}>
       <dl className="file-preview__meta">
         <div>
           <dt>{t("files.preview.path")}</dt>
@@ -1559,13 +1614,14 @@ function FilePreviewPanel({
         </div>
         <div>
           <dt>{t("files.preview.modified")}</dt>
-          <dd>{formatModified(file.modified)}</dd>
+          <dd>{formatModified(file.modified, language)}</dd>
         </div>
         <div>
           <dt>{t("files.preview.mode")}</dt>
           <dd>{file.permissions || "-"}</dd>
         </div>
       </dl>
+      </DetailsSection>
 
       <div className="file-preview__body">
         {editError ? <p className="file-editor__error" role="alert">{editError}</p> : null}

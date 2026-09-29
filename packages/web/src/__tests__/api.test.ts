@@ -90,7 +90,7 @@ describe("provider token-limit contract", () => {
   });
 });
 
-describe("api.sessions.list — unwraps { sessions } and tolerates shape", () => {
+describe("api.sessions.list — unwraps valid session lists and rejects malformed payloads", () => {
   it("unwraps the runtime's { sessions: [...] } envelope", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({ contentType: "application/json", json: { sessions: [{ id: "a" }, { id: "b" }] } }),
@@ -109,14 +109,14 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
     expect(out[0].id).toBe("x");
   });
 
-  it("returns [] (never throws .map) for an unexpected shape", async () => {
+  it("rejects an unexpected shape instead of claiming an empty list", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: {} }));
-    await expect(api.sessions.list()).resolves.toEqual([]);
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected session list payload/i);
   });
 
-  it("returns [] for a null body", async () => {
+  it("rejects a null list body", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
-    await expect(api.sessions.list()).resolves.toEqual([]);
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected session list payload/i);
   });
 
   // handleJson guard: a 200 that isn't JSON (SPA index.html fallback for an
