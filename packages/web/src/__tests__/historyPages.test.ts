@@ -1,7 +1,7 @@
 import { describe, expect, it, vi } from "vitest";
 import { normalizeWebSocketEvent } from "../contracts/backend";
 import { reduceMessagesForEvent } from "../contexts/messageReducer";
-import { consumeHistoryPages, type EventHistoryPage } from "../utils/historyPages";
+import { consumeHistoryPages, HistoryPaginationUnavailableError, type EventHistoryPage } from "../utils/historyPages";
 
 type Event = Record<string, unknown>;
 const message = (type: string, delta?: string): Event => ({
@@ -57,7 +57,7 @@ describe("consumeHistoryPages", () => {
     const consume = vi.fn();
     await expect(consumeHistoryPages(async () => ({
       events: [1], total: null, truncated: true,
-    }), consume)).rejects.toThrow(/incomplete history/);
+    }), consume)).rejects.toBeInstanceOf(HistoryPaginationUnavailableError);
     expect(consume).not.toHaveBeenCalled();
   });
 

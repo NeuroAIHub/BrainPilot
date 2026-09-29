@@ -2,7 +2,7 @@ import { createContext, ReactNode, useCallback, useContext, useEffect, useMemo, 
 // TODO(dead-code): SessionEventEntry removed with pre-AG-UI polling protocol.
 import { AgentStatus, SubagentStatus, ChatMessage, DomainResources, MessageFilterConfig, MessageFilterRule, Session, SessionTokenUsage, ThinkingLevel, TraceGraph, normalizeSessionState, normalizeWebSocketEvent } from "../contracts/backend";
 import { api } from "../utils/api";
-import { consumeHistoryPages } from "../utils/historyPages";
+import { consumeHistoryPages, HistoryPaginationUnavailableError } from "../utils/historyPages";
 import { tg } from "../i18n/translate";
 import { useAuth } from "./AuthContext";
 import { useSandbox } from "./SandboxContext";
@@ -28,7 +28,7 @@ import {
   terminalIdentityIds,
 } from "./messageReducer";
 import { reduceAgentsForEvent } from "./agentsReducer";
-import { reduceTraceForEvent } from "./traceReducer";
+import { isNewTraceActivity, reduceTraceForEvent } from "./traceReducer";
 import { deriveSessionTitle } from "./sessionTitle";
 
 export interface AgentMessageFilter {
@@ -57,6 +57,8 @@ interface SessionContextValue {
    * the composer shows a localized notice with Retry (refreshMessages).
    */
   historyLoadError: string | null;
+  /** The active session needs a newer runtime for complete paged history. */
+  historyUpdateRequired: boolean;
   isLoading: boolean;
   isSending: boolean;
   isRefreshingMessages: boolean;
@@ -340,6 +342,11 @@ interface FoldedSessionHistory {
   tokenUsage: SessionTokenUsage | null;
 }
 
+interface HistoryLoadFailure {
+  detail: string;
+  updateRequired: boolean;
+}
+
 function foldSessionHistory(events: unknown[], sessionId: string, previous?: FoldedSessionHistory): FoldedSessionHistory {
   let messages: ChatMessage[] = previous?.messages ?? [];
   let trace: TraceGraph | null = previous?.trace ?? null;
@@ -441,7 +448,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const [sessionsListError, setSessionsListError] = useState<string | null>(null);
   // Scoped history-load failure detail, keyed by session id so a failure on an
   // old session never leaks into the newly selected one.
-  const [historyErrorBySession, setHistoryErrorBySession] = useState<Record<string, string>>({});
+  const [historyErrorBySession, setHistoryErrorBySession] = useState<Record<string, HistoryLoadFailure>>({});
   // Mirror of isDraft for reading inside callbacks that must not re-create when
   // the draft flag flips (e.g. refreshSessions, keyed only on isAuthReady).
   const isDraftRef = useRef(false);
@@ -748,7 +755,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         if (stale()) return;
         console.warn(`[SessionContext] history rehydrate failed for ${sessionId}:`, err);
         const detail = err instanceof Error ? err.message : String(err);
-        setHistoryErrorBySession((current) => ({ ...current, [sessionId]: detail }));
+        setHistoryErrorBySession((current) => ({
+          ...current, [sessionId]: { detail, updateRequired: err instanceof HistoryPaginationUnavailableError },
+        }));
       } finally {
         // Unconditional: this request settles its own pending record even when
         // it was cancelled or superseded, so the session it belongs to never
@@ -1217,7 +1226,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
         // re-flag a session a newer read already loaded successfully.
         if (!isLatestHistoryRequest(sessionId, seq)) return;
         const detail = err instanceof Error ? err.message : tg("ctx.session.refreshFailed");
-        setHistoryErrorBySession((current) => ({ ...current, [sessionId]: detail }));
+        setHistoryErrorBySession((current) => ({
+          ...current, [sessionId]: { detail, updateRequired: err instanceof HistoryPaginationUnavailableError },
+        }));
       } finally {
         // Loading is owned per session, so this read always releases its own
         // pending record — even when the user has since switched away. The old
@@ -1455,15 +1466,16 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setTraceBySession((current) => {
       const start = current[sid] ?? null;
       let graph: TraceGraph | null = start;
+      let newActivity = false;
       for (const event of queue) {
-        graph = reduceTraceForEvent(graph, event, sid);
+        const next = reduceTraceForEvent(graph, event, sid);
+        newActivity ||= isNewTraceActivity(graph, next, event);
+        graph = next;
       }
       if (graph && graph !== start) {
-        // #134 — a live trace update landed. Raise the per-session unread dot
-        // unless the user is already looking at this session's Trace view (then
-        // it's seen). Hydration/seed go through other code paths, so this only
-        // ever fires for genuine post-open SSE trace_node events.
-        if (currentViewRef.current !== "trace") {
+        // The SSE stream now also seeds a current snapshot on reconnect. Only
+        // new activity should raise a dot, not that initial authoritative seed.
+        if (newActivity && currentViewRef.current !== "trace") {
           setTraceUnreadBySession((u) => (u[sid] ? u : { ...u, [sid]: true }));
         }
         return { ...current, [sid]: graph };
@@ -1607,7 +1619,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const hiddenErrorsCount = hiddenErrorsEntry?.count ?? 0;
   const hiddenErrorsUnread = !!(hiddenErrorsEntry && hiddenErrorsEntry.count > 0 && !hiddenErrorsEntry.seen);
   // Per-session history failure, resolved for the active session only.
-  const historyLoadError = currentSessionId ? (historyErrorBySession[currentSessionId] ?? null) : null;
+  const historyFailure = currentSessionId ? historyErrorBySession[currentSessionId] : undefined;
+  const historyLoadError = historyFailure?.detail ?? null;
+  const historyUpdateRequired = historyFailure?.updateRequired ?? false;
   // Busy only when the conversation on screen has a history read of its own
   // outstanding. A draft (or no selection) has nothing to load, so it reports
   // false no matter what is still in flight for a session in the background.
@@ -1623,6 +1637,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       currentSession,
       messages,
       historyLoadError,
+      historyUpdateRequired,
       isLoading,
       isSending,
       isRefreshingMessages,
@@ -1668,6 +1683,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       currentSession,
       messages,
       historyLoadError,
+      historyUpdateRequired,
       isLoading,
       isSending,
       isRefreshingMessages,

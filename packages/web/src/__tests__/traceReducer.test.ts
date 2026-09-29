@@ -1,8 +1,23 @@
 import { describe, it, expect } from "vitest";
-import { reduceTraceForEvent } from "../contexts/traceReducer";
+import { isNewTraceActivity, reduceTraceForEvent } from "../contexts/traceReducer";
 import { normalizeTraceGraph, type TraceGraph, type WebSocketEvent } from "../contracts/backend";
 
 // #79: trace nodes arrive live as CUSTOM { name:"trace_node", value:{ op, node } }.
+
+describe("trace activity on reconnect", () => {
+  const graph: TraceGraph = { meta: { sessionId: "s" }, nodes: [], revision: 3 };
+  const snapshot = { type: "CUSTOM", name: "trace_delta", value: { op: "snapshot" } } as WebSocketEvent;
+  it("does not badge an initial or unchanged reconnect snapshot", () => {
+    expect(isNewTraceActivity(null, graph, snapshot)).toBe(false);
+    expect(isNewTraceActivity(graph, { ...graph }, snapshot)).toBe(false);
+  });
+  it("badges a missed newer revision or a live patch", () => {
+    expect(isNewTraceActivity(graph, { ...graph, revision: 4 }, snapshot)).toBe(true);
+    expect(isNewTraceActivity(graph, { ...graph, revision: 4 }, {
+      type: "CUSTOM", name: "trace_delta", value: { op: "patch" },
+    } as WebSocketEvent)).toBe(true);
+  });
+});
 
 const node = (id: string, extra: Record<string, unknown> = {}) => ({
   id,

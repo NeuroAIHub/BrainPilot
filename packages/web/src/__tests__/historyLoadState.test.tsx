@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { ChatMessage, Session } from "../contracts/backend";
+import { HistoryPaginationUnavailableError } from "../utils/historyPages";
 
 // A transcript that cannot be read is a reportable failure, not an empty
 // conversation: SessionContext records a per-session history error, keeps the
@@ -190,6 +191,48 @@ describe("session-list load failure is scoped to the list", () => {
 });
 
 describe("history load failure is scoped to the active session", () => {
+  it("scopes the update-required flag and clears it after a successful retry", async () => {
+    mocks.list.mockResolvedValueOnce([
+      session("s1", "2026-02-02T00:00:00.000Z"),
+      session("s2", "2026-02-01T00:00:00.000Z"),
+    ]);
+    mocks.getHistory.mockResolvedValueOnce({ events: [textEvent("m1", "cached")], total: null, truncated: true });
+    const renderer = await mount();
+    expect(value().historyUpdateRequired).toBe(true);
+    expect(value().historyLoadError).toMatch(/incomplete history/);
+    expect(value().messages).toEqual([]); // no partial tail was published
+
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m2", "other")]));
+    await act(async () => { value().selectSession("s2"); });
+    await flush();
+    expect(value().historyUpdateRequired).toBe(false);
+    expect(value().historyLoadError).toBeNull();
+
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m1", "complete")]));
+    await act(async () => { value().selectSession("s1"); });
+    await flush();
+    expect(value().historyUpdateRequired).toBe(false);
+    expect(value().historyLoadError).toBeNull();
+    expect(value().messages.map((message) => message.content)).toEqual(["complete"]);
+    await act(async () => renderer.unmount());
+  });
+
+  it("sets update-required on manual refresh and clears it for a later ordinary failure", async () => {
+    mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m1", "cached")]));
+    const renderer = await mount();
+    mocks.getHistory.mockRejectedValueOnce(new HistoryPaginationUnavailableError());
+    await act(async () => { await value().refreshMessages(); });
+    expect(value().historyUpdateRequired).toBe(true);
+    expect(value().messages.map((message) => message.content)).toEqual(["cached"]);
+
+    mocks.getHistory.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => { await value().refreshMessages(); });
+    expect(value().historyLoadError).toBe("offline");
+    expect(value().historyUpdateRequired).toBe(false);
+    await act(async () => renderer.unmount());
+  });
+
   it("keeps a fresher live message and live-only rows when history froze earlier", () => {
     const persisted: ChatMessage = { id: "m1", role: "assistant", content: "Hello ", createdAt: "2026-01-02T00:00:00Z" };
     const live = [{ ...persisted, content: "Hello world", streaming: true },
@@ -301,11 +344,12 @@ describe("history load failure is scoped to the active session", () => {
     await flush();
     expect(value().currentSession?.id).toBe("s2");
 
-    pending.reject(new Error("s1 history fetch failed"));
+    pending.reject(new HistoryPaginationUnavailableError());
     await flush();
 
     // s2 is healthy: no inherited error, and its own messages are intact.
     expect(value().historyLoadError).toBeNull();
+    expect(value().historyUpdateRequired).toBe(false);
     expect(value().messages.map((m) => m.content)).toEqual(["second"]);
     await act(async () => renderer.unmount());
   });

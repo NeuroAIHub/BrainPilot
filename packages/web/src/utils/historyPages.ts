@@ -5,6 +5,14 @@ export interface EventHistoryPage<T> {
   nextCursor?: string;
 }
 
+/** The endpoint returned a sliced tail but cannot continue from a cursor. */
+export class HistoryPaginationUnavailableError extends Error {
+  constructor() {
+    super("The server returned incomplete history. Update the server to load the full conversation safely.");
+    this.name = "HistoryPaginationUnavailableError";
+  }
+}
+
 /** Consume and release each page before asking for more. Cursor freezes EOF. */
 export async function consumeHistoryPages<T>(
   fetchPage: (cursor: string) => Promise<EventHistoryPage<T>>,
@@ -20,7 +28,7 @@ export async function consumeHistoryPages<T>(
     const page = await fetchPage(cursor);
     signal?.throwIfAborted();
     if (page.truncated && !page.nextCursor) {
-      throw new Error("The server returned incomplete history. Update the server to load the full conversation safely.");
+      throw new HistoryPaginationUnavailableError();
     }
     await consume(page.events);
     signal?.throwIfAborted();

@@ -10,6 +10,7 @@ import { writeRecoveryDraft } from "../../contexts/errorRecovery";
 import { applyMessageFilters } from "../../contexts/messageFilters";
 import { runningToastLabel } from "../../contexts/runningToast";
 import { useT } from "../../i18n/useT";
+import { runtimeConfig } from "../../config";
 import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
@@ -156,6 +157,44 @@ type PromptComposerProps = {
   onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 };
 
+export function HistoryLoadNotice({
+  error, updateRequired, hasMessages, isRefreshingMessages, localMode, onRetry, t,
+}: {
+  error: string;
+  updateRequired: boolean;
+  hasMessages: boolean;
+  isRefreshingMessages: boolean;
+  localMode: boolean;
+  onRetry: () => void;
+  t: (key: string) => string;
+}) {
+  const messageKey = updateRequired
+    ? localMode ? "chat.history.updateLocal" : "chat.history.updateHosted"
+    : hasMessages ? "chat.history.refreshFailed" : "chat.history.loadFailed";
+  return (
+    <div className="composer-notice" role="alert" data-testid="history-load-failed">
+      <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
+      <span className="composer-notice__text">
+        {t(messageKey)}
+        <details>
+          <summary>{t("chat.system.details")}</summary>
+          <code>{error}</code>
+        </details>
+      </span>
+      <button
+        type="button"
+        className="composer-notice__cta"
+        aria-busy={isRefreshingMessages}
+        aria-disabled={isRefreshingMessages}
+        data-testid="history-load-retry"
+        onClick={() => { if (!isRefreshingMessages) onRetry(); }}
+      >
+        {t(isRefreshingMessages ? "chat.history.retrying" : updateRequired ? "chat.history.retryAfterUpdate" : "chat.history.retry")}
+      </button>
+    </div>
+  );
+}
+
 export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: PromptComposerProps = {}) {
   const t = useT();
   const [suggestedTasks, setSuggestedTasks] = useState<string[]>([]);
@@ -196,7 +235,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const [draftStagingReady, setDraftStagingReady] = useState(false);
   const [removingAttachmentKeys, setRemovingAttachmentKeys] = useState<ReadonlySet<string>>(new Set());
   const uploading = uploadState != null || queuedUploadCount > 0;
-  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters, historyLoadError, isRefreshingMessages, refreshMessages } = useSessions();
+  const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters, historyLoadError, historyUpdateRequired, isRefreshingMessages, refreshMessages } = useSessions();
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
   const persistedAttachmentNames = useAttachments(sessionId);
   const attachmentScopeRef = useRef<string | null>(sessionId);
@@ -1060,27 +1099,15 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             fetch is a data-load problem, not a new runtime error card, and the
             messages already on screen (SSE / optimistic / cached) stay put. */}
         {historyLoadError ? (
-          <div className="composer-notice" role="alert" data-testid="history-load-failed">
-            <CircleAlert aria-hidden="true" className="composer-notice__icon" size={16} />
-            <span className="composer-notice__text">
-              {t(hasMessages ? "chat.history.refreshFailed" : "chat.history.loadFailed")}
-              <details>
-                <summary>{t("chat.system.details")}</summary>
-                <code>{historyLoadError}</code>
-              </details>
-            </span>
-            {/* Stays mounted while the retry runs, so focus is not lost. */}
-            <button
-              type="button"
-              className="composer-notice__cta"
-              aria-busy={isRefreshingMessages}
-              aria-disabled={isRefreshingMessages}
-              data-testid="history-load-retry"
-              onClick={() => { if (!isRefreshingMessages) void refreshMessages(); }}
-            >
-              {t(isRefreshingMessages ? "chat.history.retrying" : "chat.history.retry")}
-            </button>
-          </div>
+          <HistoryLoadNotice
+            error={historyLoadError}
+            updateRequired={historyUpdateRequired}
+            hasMessages={hasMessages}
+            isRefreshingMessages={isRefreshingMessages}
+            localMode={runtimeConfig.localMode}
+            onRetry={() => void refreshMessages()}
+            t={t}
+          />
         ) : isRefreshingMessages && currentSession ? (
           <div className="composer-notice" role="status" data-testid="history-loading">
             <span className="composer-notice__text">{t("chat.history.loading")}</span>

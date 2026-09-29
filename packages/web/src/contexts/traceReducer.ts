@@ -2,6 +2,16 @@ import { CUSTOM_EVENT } from "@brainpilot/protocol";
 import type { TraceGraph, TraceNode, TraceDeltaV2, WebSocketEvent } from "../contracts/backend";
 import { normalizeTraceGraph, normalizeTraceNode } from "../contracts/backend";
 
+/** A reconnect seed is not a new activity unless it advances a known graph. */
+export function isNewTraceActivity(previous: TraceGraph | null, next: TraceGraph | null, event: WebSocketEvent): boolean {
+  if (!next || next === previous) return false;
+  if (event.type === "CUSTOM" && event.name === CUSTOM_EVENT.TRACE_DELTA
+    && (event.value as { op?: string } | undefined)?.op === "snapshot") {
+    return previous?.revision !== undefined && (next.revision ?? -1) > previous.revision;
+  }
+  return true;
+}
+
 /**
  * #79: merge a single `CUSTOM:trace_node` event into the live Graph of Trace.
  *
