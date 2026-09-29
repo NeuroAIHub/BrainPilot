@@ -73,7 +73,7 @@ describe("GET /sessions/:id/history", () => {
     expect(body.events[9]!.delta).toBe("msg-14");
   });
 
-  it("returns the full log when limit=0", async () => {
+  it("returns a small log within the bounded default when limit=0", async () => {
     const lines = Array.from({ length: 15 }, (_, i) => mkEvent(i));
     const { app, manager } = await appWithRestored("33333333-3333-3333-3333-333333333333", lines);
 
@@ -87,6 +87,32 @@ describe("GET /sessions/:id/history", () => {
     expect(body.total).toBe(15);
     expect(body.truncated).toBe(false);
     expect(body.events.map((e) => e.delta)).toEqual(lines.map((_, i) => `msg-${i}`));
+  });
+
+  it("bounds limit=0 and exposes a complete forward walk through the HTTP route", async () => {
+    const sid = "77777777-7777-7777-7777-777777777777";
+    const { app } = await appWithRestored(sid, Array.from({ length: 2202 }, (_, i) => mkEvent(i)));
+    const tail = await (await app.request(`/sessions/${sid}/history?limit=0`)).json();
+    expect(tail).toMatchObject({ total: 2202, truncated: true });
+    expect(tail.events).toHaveLength(1000);
+    let cursor: string | undefined = "start";
+    const deltas: string[] = [];
+    while (cursor) {
+      const page = await (await app.request(`/sessions/${sid}/history?cursor=${encodeURIComponent(cursor)}`)).json();
+      expect(page.events.length).toBeLessThanOrEqual(1000);
+      deltas.push(...page.events.map((event: { delta: string }) => event.delta));
+      cursor = page.nextCursor;
+    }
+    expect(deltas).toEqual(Array.from({ length: 2202 }, (_, i) => `msg-${i}`));
+    expect((await app.request(`/sessions/${sid}/history?cursor=invalid`)).status).toBe(400);
+  });
+
+  it("bounds concurrent disk readers and admits a subsequent retry", async () => {
+    const sid = "88888888-8888-8888-8888-888888888888";
+    const { app } = await appWithRestored(sid, [mkEvent(0)]);
+    const responses = await Promise.all(Array.from({ length: 3 }, () => app.request(`/sessions/${sid}/history?cursor=start`)));
+    expect(responses.map((response) => response.status).sort()).toEqual([200, 200, 429]);
+    expect((await app.request(`/sessions/${sid}/history?cursor=start`)).status).toBe(200);
   });
 
   it("clamps an absurd limit down to 5000", async () => {

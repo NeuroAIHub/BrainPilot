@@ -16,12 +16,16 @@ export class EventBus {
   /** Ring buffer of recent events for late SSE subscribers / replay. */
   private readonly buffer: AgUiEvent[] = [];
   private readonly maxBuffer: number;
+  private readonly maxBufferBytes: number;
+  private readonly bufferSizes: number[] = [];
+  private bufferedBytes = 0;
   private writeChain: Promise<void> = Promise.resolve();
 
   constructor(
-    private readonly opts: { persistPath?: string; maxBuffer?: number } = {},
+    private readonly opts: { persistPath?: string; maxBuffer?: number; maxBufferBytes?: number } = {},
   ) {
     this.maxBuffer = opts.maxBuffer ?? 500;
+    this.maxBufferBytes = opts.maxBufferBytes ?? 2 * 1024 * 1024;
   }
 
   subscribe(listener: EventListener): () => void {
@@ -44,6 +48,11 @@ export class EventBus {
     this.publish(event);
   }
 
+  /** Deliver a compatibility event to connected listeners only. */
+  emitLive(event: AgUiEvent): void {
+    this.notifyListeners(event);
+  }
+
   /**
    * Persist an event before publishing it. Unlike `emit`, write failures are
    * propagated to the caller so lifecycle endpoints cannot report success for
@@ -55,8 +64,22 @@ export class EventBus {
   }
 
   private publish(event: AgUiEvent): void {
-    this.buffer.push(event);
-    if (this.buffer.length > this.maxBuffer) this.buffer.shift();
+    const size = Buffer.byteLength(JSON.stringify(event), "utf8");
+    // A large event still reaches live listeners and durable history. The
+    // reconnect path seeds current state, so it need not live in this ring.
+    if (size <= this.maxBufferBytes && this.maxBuffer > 0) {
+      this.buffer.push(event);
+      this.bufferSizes.push(size);
+      this.bufferedBytes += size;
+      while (this.buffer.length > this.maxBuffer || this.bufferedBytes > this.maxBufferBytes) {
+        this.buffer.shift();
+        this.bufferedBytes -= this.bufferSizes.shift() ?? 0;
+      }
+    }
+    this.notifyListeners(event);
+  }
+
+  private notifyListeners(event: AgUiEvent): void {
     for (const l of this.listeners) {
       try {
         l(event);
@@ -86,5 +109,7 @@ export class EventBus {
   clear(): void {
     this.listeners.clear();
     this.buffer.length = 0;
+    this.bufferSizes.length = 0;
+    this.bufferedBytes = 0;
   }
 }

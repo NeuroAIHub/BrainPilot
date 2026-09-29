@@ -125,6 +125,19 @@ describe("normalizeAgentError — provider HTTP errors (#97)", () => {
   });
 });
 
+describe("compaction failure classification", () => {
+  it("keeps a provider error code when its HTTP body has no message", () => {
+    expect(normalizeAgentError('400 {"error":{"code":"data_inspection_failed"}}').message)
+      .toContain("data_inspection_failed");
+  });
+  it("treats a rejected summary as fatal while preserving Pi's narrow transient 400", () => {
+    expect(classifyAgentError('Context compaction failed: 400 {"error":"data_inspection_failed"}'))
+      .toBe("fatal");
+    expect(classifyAgentError('400 {"message":"invalid request error trace_id: abc","type":"invalid_request_error","param":"","code":null}'))
+      .toBe("retryable");
+  });
+});
+
 describe("classifyAgentError (#97)", () => {
   it("classifies auth/401/403 as fatal", () => {
     expect(classifyAgentError('401 {"error":{"message":"invalid api key"}}')).toBe("fatal");

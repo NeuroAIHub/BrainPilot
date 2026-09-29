@@ -178,10 +178,6 @@ function persistMessageFilters(rules: MessageFilterRule[]): void {
 }
 
 const SessionContext = createContext<SessionContextValue | null>(null);
-// Runtime treats `limit=0` as "return the full persisted event log". Rehydrate
-// must not use a fixed tail size because slicing through TEXT_MESSAGE_START /
-// CONTENT / END leaves old long sessions looking empty.
-const HISTORY_REHYDRATE_LIMIT = 0;
 
 /**
  * #194-B1: merge the full rehydrated history under whatever the live message
@@ -261,16 +257,18 @@ export function reconcileActiveTools(
   return changed ? next : messages;
 }
 
-function foldSessionHistory(events: unknown[], sessionId: string): {
+interface FoldedHistory {
   messages: ChatMessage[];
   trace: TraceGraph | null;
   agents: AgentStatus[] | null;
   tokenUsage: SessionTokenUsage | null;
-} {
-  let messages: ChatMessage[] = [];
-  let trace: TraceGraph | null = null;
-  let lastAgents: AgentStatus[] | null = null;
-  let lastUsage: SessionTokenUsage | null = null;
+}
+
+function foldSessionHistory(events: unknown[], sessionId: string, previous?: FoldedHistory): FoldedHistory {
+  let messages = previous?.messages ?? [];
+  let trace = previous?.trace ?? null;
+  let lastAgents = previous?.agents ?? null;
+  let lastUsage = previous?.tokenUsage ?? null;
 
   for (const raw of events) {
     const ev = normalizeWebSocketEvent(raw);
@@ -344,7 +342,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const { currentSandbox } = useSandbox();
   const { connectSession, disconnectSession, queueRef, tick, connections } = useSSE();
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+  const [currentSessionId, setCurrentSessionIdState] = useState<string | null>(null);
   const [isDraft, setIsDraft] = useState(false);
   // #324 — session-list readiness. Draft auto-open and selection restore must
   // wait until the first list request has finished; the initial empty in-memory
@@ -358,9 +356,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   }, [isDraft]);
   // Mirror of currentSessionId for refreshSessions selection resolve.
   const currentSessionIdRef = useRef<string | null>(null);
-  useEffect(() => {
-    currentSessionIdRef.current = currentSessionId;
-  }, [currentSessionId]);
+  const setCurrentSessionId = useCallback((next: string | null | ((current: string | null) => string | null)) => {
+    const value = typeof next === "function" ? next(currentSessionIdRef.current) : next;
+    currentSessionIdRef.current = value;
+    setCurrentSessionIdState(value);
+  }, []);
   const [messagesBySession, setMessagesBySession] = useState<Record<string, ChatMessage[]>>({});
   const [isLoading, setIsLoading] = useState(false);
   const [isSending, setIsSending] = useState(false);
@@ -369,6 +369,29 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const interruptingToolsRef = useRef<Set<string>>(new Set());
   const [interruptingToolIds, setInterruptingToolIds] = useState<ReadonlySet<string>>(new Set());
   const [isRefreshingMessages, setIsRefreshingMessages] = useState(false);
+  const historyRequestsRef = useRef(new Map<string, { controller: AbortController; promise: Promise<FoldedHistory> }>());
+  const readSessionHistory = useCallback((sessionId: string): Promise<FoldedHistory> => {
+    const existing = historyRequestsRef.current.get(sessionId);
+    if (existing) return existing.promise;
+    const controller = new AbortController();
+    const promise = (async () => {
+      let folded = foldSessionHistory([], sessionId);
+      await api.sessions.consumeHistory(sessionId, (events) => {
+        folded = foldSessionHistory(events, sessionId, folded);
+      }, controller.signal);
+      return folded;
+    })().finally(() => {
+      if (historyRequestsRef.current.get(sessionId)?.controller === controller) historyRequestsRef.current.delete(sessionId);
+    });
+    historyRequestsRef.current.set(sessionId, { controller, promise });
+    return promise;
+  }, []);
+  // A selection change cancels old disk reads and prevents their results from
+  // overwriting another session. Manual refresh shares the same in-flight read.
+  useEffect(() => () => {
+    for (const request of historyRequestsRef.current.values()) request.controller.abort();
+    historyRequestsRef.current.clear();
+  }, [currentSessionId]);
   const [error, setError] = useState<string | null>(null);
   const [currentView, setCurrentView] = useState<"chat" | "agents" | "trace">("chat");
   // #134 — read currentView inside the SSE queue-drain effect (keyed on
@@ -480,6 +503,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const hydratedSessionsRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
+    setIsRefreshingMessages(false);
     if (!currentSessionId) {
       return;
     }
@@ -492,20 +516,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     async function loadHistory() {
       setIsRefreshingMessages(true);
       try {
-        const { events } = await api.sessions.getHistory(sessionId, { limit: HISTORY_REHYDRATE_LIMIT });
-        if (cancelled) return;
-
         // Replay the persisted event stream through the same reducers SSE uses
         // (messageReducer / traceReducer / agents seed via session_state). The
         // SSE ring buffer that arrives next is deduped inside the reducer:
         // START/CHUNK by messageId/toolCallId, and CONTENT/ARGS by stable
         // event identity + finalized-message guard (#314), so overlap is a no-op.
         const { messages: nextMessages, trace: nextTrace, agents: lastAgents, tokenUsage: lastUsage } =
-          foldSessionHistory(events, sessionId);
+          await readSessionHistory(sessionId);
 
-        if (cancelled) return;
+        if (cancelled || currentSessionIdRef.current !== sessionId) return;
         hydratedSessionsRef.current.add(sessionId);
-        if (lastUsage) setTokenUsage(lastUsage);
+        if (lastUsage) setTokenUsage((current) => current ?? lastUsage);
 
         // Merge the full history under whatever SSE / optimistic messages have
         // already landed — do NOT bail just because the list is non-empty
@@ -541,9 +562,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
           });
         }
       } catch (err) {
-        // Best-effort. SSE will eventually drive the panel; we shouldn't surface
-        // a banner just because the history file was unreachable for a moment.
-        console.warn(`[SessionContext] history rehydrate failed for ${sessionId}:`, err);
+        if (!cancelled) setError(err instanceof Error ? err.message : tg("ctx.session.refreshFailed"));
       } finally {
         if (!cancelled) setIsRefreshingMessages(false);
       }
@@ -553,7 +572,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [currentSessionId]);
+  }, [currentSessionId, readSessionHistory]);
 
   const selectSession = useCallback((sessionId: string) => {
     console.log(`[SessionContext] selectSession: ${sessionId}`);
@@ -939,26 +958,27 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   );
 
   const refreshMessages = useCallback(async () => {
-    if (!currentSession) {
+    if (!currentSession || historyRequestsRef.current.has(currentSession.id)) {
       return;
     }
       console.log(`[SessionContext] refreshMessages: ${currentSession.id}`);
     setIsRefreshingMessages(true);
     setError(null);
     try {
-      const { events } = await api.sessions.getHistory(currentSession.id, {
-        limit: HISTORY_REHYDRATE_LIMIT,
-      });
       const { messages: nextMessages, trace: nextTrace, agents: nextAgents, tokenUsage: nextUsage } =
-        foldSessionHistory(events, currentSession.id);
+        await readSessionHistory(currentSession.id);
+      if (currentSessionIdRef.current !== currentSession.id) return;
 
-      if (nextUsage) setTokenUsage(nextUsage);
-      setMessagesBySession((current) => ({ ...current, [currentSession.id]: nextMessages }));
+      if (nextUsage) setTokenUsage((current) => current ?? nextUsage);
+      setMessagesBySession((current) => ({ ...current,
+        [currentSession.id]: mergeRehydratedMessages(current[currentSession.id] ?? [], nextMessages),
+      }));
       if (nextTrace) {
-        setTraceBySession((current) => ({ ...current, [currentSession.id]: nextTrace }));
+        setTraceBySession((current) => (current[currentSession.id]?.revision ?? -1) > (nextTrace.revision ?? -1)
+          ? current : { ...current, [currentSession.id]: nextTrace });
       }
       if (nextAgents && nextAgents.length > 0) {
-        setAgents(nextAgents);
+        setAgents((current) => current.length ? current : nextAgents);
         setAgentFilters((current) => {
           let changed = false;
           const next = { ...current };
@@ -978,11 +998,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       disconnectSession(currentSession.id);
       connectSession(currentSession.id);
     } catch (err) {
-      setError(err instanceof Error ? err.message : tg("ctx.session.refreshFailed"));
+      if (currentSessionIdRef.current === currentSession.id) setError(err instanceof Error ? err.message : tg("ctx.session.refreshFailed"));
     } finally {
-      setIsRefreshingMessages(false);
+      if (currentSessionIdRef.current === currentSession.id) setIsRefreshingMessages(false);
     }
-  }, [currentSession, disconnectSession, connectSession]);
+  }, [currentSession, disconnectSession, connectSession, readSessionHistory]);
 
   useEffect(() => {
     if (!currentSession?.id) {

@@ -147,6 +147,8 @@ export class MasAgent {
   private currentRetry: AgentRetryState | undefined;
   /** Provider errors are held until Pi either retries successfully or exhausts. */
   private pendingProviderError: string | undefined;
+  /** Pi's summary failure is authoritative even if the previous response hit length. */
+  private pendingCompactionError: string | undefined;
   /** True when the latest assistant turn stopped because it exhausted output tokens. */
   private outputLimitReached = false;
   /** True while an explicit BrainPilot interrupt is unwinding the active run. */
@@ -524,6 +526,7 @@ export class MasAgent {
     this._lastRunOutcome = undefined;
     this.currentRetry = undefined;
     this.pendingProviderError = undefined;
+    this.pendingCompactionError = undefined;
     this.outputLimitReached = false;
     // Snapshot cumulative stats BEFORE any events flow so the eventual delta
     // (`cumulative_after - snapshot`) captures exactly this run's contribution.
@@ -534,7 +537,7 @@ export class MasAgent {
     try {
       await this.session.prompt(text);
       this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
-      if (!this.abortRequested && this.outputLimitReached) {
+      if (!this.abortRequested && !this.pendingCompactionError && this.outputLimitReached) {
         // A length stop is a completed provider response, so Pi intentionally
         // does not auto-retry it. Continue the same agent history once with an
         // explicit, side-effect-aware instruction instead of replaying the
@@ -550,11 +553,31 @@ export class MasAgent {
         // out of the error/escalation path.
         this.currentRetry = undefined;
         this.pendingProviderError = undefined;
+        this.pendingCompactionError = undefined;
         this.outputLimitReached = false;
         runOutcome = "aborted";
         this.bus.emit(
           ev.runFinished({ sessionId: this.sessionId, agentName: this.name, runId }),
         );
+      } else if (this.pendingCompactionError) {
+        const raw = this.pendingCompactionError;
+        this.pendingCompactionError = undefined;
+        this.pendingProviderError = undefined;
+        this.outputLimitReached = false;
+        const normalized = normalizeAgentError(raw);
+        const cause = normalized.message.startsWith("Context compaction failed:")
+          ? normalized.message
+          : `Context compaction failed: ${normalized.message}`;
+        const message = `${cause} History remains saved; try another provider or start a new session.`;
+        const details = normalized.details;
+        this.recordError(message, details, raw);
+        this.bus.emit(ev.runError(
+          { sessionId: this.sessionId, agentName: this.name, runId },
+          message,
+          { code: "CONTEXT_COMPACTION_FAILED", terminal: this.currentErrorTerminal },
+        ));
+        this.setStatus("error");
+        runOutcome = "error";
       } else if (this.outputLimitReached) {
         this.outputLimitReached = false;
         this.recordError(OUTPUT_LIMIT_ERROR_MESSAGE, undefined, "output_limit_exceeded");
@@ -597,6 +620,7 @@ export class MasAgent {
       this.finishDanglingTools(this.abortRequested ? "task_interrupted" : undefined);
       this.currentRetry = undefined;
       this.pendingProviderError = undefined;
+      this.pendingCompactionError = undefined;
       this.outputLimitReached = false;
       if (this.abortRequested) {
         // Some session implementations reject prompt() on abort rather than
@@ -736,7 +760,7 @@ export class MasAgent {
   /** Emit a compaction-related system_message with the agent tag pre-filled. */
   private emitCompactionSystemMessage(level: "info" | "warning", message: string, details?: string): void {
     this.bus.emit(
-      ev.systemMessage(this.sessionId, level, message, { agent: this.name, details, recoverable: true }),
+      ev.systemMessage(this.sessionId, level, message, { agent: this.name, details, recoverable: level !== "warning" }),
     );
   }
 
@@ -751,7 +775,7 @@ export class MasAgent {
       ev.systemMessage(this.sessionId, "error", `⚠️ Agent ${this.name} 遇到错误: ${message}`, {
         agent: this.name,
         details,
-        recoverable: true,
+        recoverable: this._lastErrorKind === "retryable",
         terminal: this.currentErrorTerminal,
         id: `run-error:${this.sessionId}:${this.currentRunId ?? "unknown"}:${this.name}`,
       }),
@@ -807,10 +831,12 @@ export class MasAgent {
         );
         const label = COMPACTION_REASON_LABEL[reason];
         if (errorMessage) {
+          if (!aborted) this.pendingCompactionError = `Context compaction failed: ${errorMessage}`;
           this.emitCompactionSystemMessage("warning", `⚠️ Agent ${this.name} 上下文压缩失败 (${label})`, errorMessage);
         } else if (aborted) {
           this.emitCompactionSystemMessage("info", `🛑 Agent ${this.name} 上下文压缩已中止`);
         } else {
+          this.pendingCompactionError = undefined;
           const delta =
             r?.tokensBefore !== undefined && r?.estimatedTokensAfter !== undefined
               ? `：${r.tokensBefore.toLocaleString()} → ~${r.estimatedTokensAfter.toLocaleString()} tokens`
@@ -868,6 +894,9 @@ export class MasAgent {
           // error until session.prompt settles so transient attempts do not
           // produce red bubbles or briefly flip the agent out of "running".
           this.pendingProviderError = msg.errorMessage || "provider request failed";
+          if (msg.errorMessage?.startsWith("Context compaction failed:")) {
+            this.pendingCompactionError = msg.errorMessage;
+          }
           this.outputLimitReached = false;
         } else if (msg?.role === "assistant" && msg.stopReason === "length") {
           this.pendingProviderError = undefined;

@@ -54,6 +54,13 @@ describe("validateProviderForm (#328)", () => {
     expect(canSubmitProviderForm(validCreate, { isEdit: false })).toBe(true);
   });
 
+  it("accepts an empty output override and rejects invalid token limits", () => {
+    expect(validateProviderForm({ ...validCreate, maxTokens: "" }, { isEdit: false }).ok).toBe(true);
+    expect(validateProviderForm({ ...validCreate, maxTokens: "65536" }, { isEdit: false }).ok).toBe(true);
+    expect(validateProviderForm({ ...validCreate, maxTokens: "1.5" }, { isEdit: false }).errors.maxTokens).toBe(true);
+    expect(validateProviderForm({ ...validCreate, maxTokens: "1000001" }, { isEdit: false }).errors.maxTokens).toBe(true);
+  });
+
   it("maps fields to i18n error keys", () => {
     expect(providerFieldErrorKey("name")).toBe("settings.providerForm.error.name");
     expect(providerFieldErrorKey("apiKey")).toBe("settings.providerForm.error.apiKey");

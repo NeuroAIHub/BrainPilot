@@ -205,4 +205,38 @@ describe("buildDemoBundle file collection", () => {
       DemoBundleTooLargeError,
     );
   });
+
+  it("exports every ordered event when a message spans history pages", async () => {
+    getTrace.mockResolvedValue(traceWith([]));
+    const start = { type: "TEXT_MESSAGE_START", message_id: "m", role: "assistant" };
+    const content = { type: "TEXT_MESSAGE_CONTENT", message_id: "m", delta: "hello" };
+    const end = { type: "TEXT_MESSAGE_END", message_id: "m" };
+    getHistory.mockImplementation(async (_id: string, opts: { cursor: string }) => opts.cursor === "start"
+      ? { events: [start], total: null, truncated: true, nextCursor: "page-2" }
+      : { events: [content, end], total: null, truncated: false });
+
+    const bundle = await buildDemoBundle({ session: { id: "s", title: "S" } });
+    expect(bundle.timeline).toBe("timestamped");
+    expect(bundle.events).toEqual([start, content, end]);
+    expect(getHistory).toHaveBeenNthCalledWith(1, "s", expect.objectContaining({ cursor: "start", limit: 1000 }));
+    expect(getHistory).toHaveBeenNthCalledWith(2, "s", expect.objectContaining({ cursor: "page-2", limit: 1000 }));
+  });
+
+  it("rejects a truncated export instead of producing a partial replay", async () => {
+    getTrace.mockResolvedValue(traceWith([]));
+    getHistory.mockResolvedValue({ events: [{ type: "TEXT_MESSAGE_START", message_id: "m" }], total: null, truncated: true });
+    await expect(buildDemoBundle({ session: { id: "s", title: "S" } })).rejects.toThrow(/incomplete history/);
+  });
+
+  it("reports paged-export cancellation as PackAbortedError", async () => {
+    getTrace.mockResolvedValue(traceWith([]));
+    const controller = new AbortController();
+    getHistory.mockImplementation(async () => {
+      controller.abort();
+      throw new DOMException("cancelled", "AbortError");
+    });
+    await expect(buildDemoBundle({
+      session: { id: "s", title: "S" }, signal: controller.signal,
+    })).rejects.toBeInstanceOf(PackAbortedError);
+  });
 });

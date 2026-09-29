@@ -269,6 +269,7 @@ export type AgentSessionFactory = (params: {
     apiKey: string;
     modelId?: string;
     contextWindow?: number;
+    maxTokens?: number;
     reasoningEnabled?: boolean;
   };
 }) => Promise<IAgentSession>;

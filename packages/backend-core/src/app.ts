@@ -1240,6 +1240,7 @@ function toHttpProfile(
     is_shared: false,
     models: p.models,
     context_window: p.contextWindow ?? undefined,
+    max_tokens: p.maxTokens ?? undefined,
     reasoning_models: p.reasoningModels ?? p.models,
     icon: p.icon ?? "circle",
     icon_color: p.iconColor ?? "#111111",
@@ -1281,6 +1282,7 @@ function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProf
   const contextWindow = body.context_window !== undefined
     ? body.context_window
     : body.contextWindow;
+  const maxTokens = body.max_tokens !== undefined ? body.max_tokens : body.maxTokens;
   return {
     name: str(body.name),
     baseUrl: str(body.base_url) ?? str(body.baseUrl),
@@ -1292,6 +1294,11 @@ function fromHttpBody(body: Record<string, unknown>): Partial<StoredProviderProf
       ? null
       : typeof contextWindow === "number"
         ? contextWindow as StoredProviderProfile["contextWindow"]
+        : undefined,
+    maxTokens: maxTokens === null
+      ? null
+      : typeof maxTokens === "number"
+        ? maxTokens
         : undefined,
     reasoningModels: Array.isArray(body.reasoning_models)
       ? (body.reasoning_models as string[])

@@ -30,6 +30,7 @@ import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
 import { makeOpenAiToolSchemaCompatExt } from "./extensions/openai-tool-schema-compat.js";
 import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
+import { installContextCompactionGuard } from "./context-compaction.js";
 import {
   installBrainPilotRetryClassifier,
   PROVIDER_MAX_RETRIES,
@@ -68,14 +69,15 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // tool call can run. Pi increases the fixed 2s base exponentially, yielding
   // bounded waits of 2s, 4s, 8s, 16s, and 32s.
   const compaction = resolveCompactionSettings(params.providerConfig?.contextWindow);
-  settingsManager.applyOverrides({
+  const settingsOverrides = {
     retry: {
       enabled: true,
       maxRetries: PROVIDER_MAX_RETRIES,
       baseDelayMs: PROVIDER_RETRY_BASE_DELAY_MS,
     },
     ...(compaction ? { compaction } : {}),
-  });
+  };
+  settingsManager.applyOverrides(settingsOverrides);
 
   // Override Pi's built-in bash with the public factory so each invocation
   // gets a tool-local signal. Aborting this signal ends only that command;
@@ -208,9 +210,14 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
     ...(modelRuntime ? { modelRuntime } : {}),
   });
 
+  // Pi reloads SettingsManager during session creation, which discards the
+  // pre-creation overrides above. Restore them before the first model request.
+  settingsManager.applyOverrides(settingsOverrides);
+
   // #365: Pi's built-in classifier intentionally excludes most HTTP 400s.
   // Extend it for the narrow, trace-id-only transient shape seen in production.
   installBrainPilotRetryClassifier(session);
+  installContextCompactionGuard(session, sdk.estimateTokens);
 
   return new RealAgentSession(session, bashControllers);
 };
@@ -402,6 +409,7 @@ interface PiSession {
   dispose(): void;
 }
 interface PiSdk {
+  estimateTokens(message: unknown): number;
   createBashToolDefinition(
     cwd: string,
     options: { commandPrefix?: string; shellPath?: string },

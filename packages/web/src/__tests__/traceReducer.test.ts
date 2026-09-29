@@ -20,6 +20,45 @@ const traceEv = (op: string, n: Record<string, unknown>): WebSocketEvent =>
   ({ type: "CUSTOM", name: "trace_node", value: { op, node: n } } as unknown as WebSocketEvent);
 
 describe("reduceTraceForEvent (#79)", () => {
+  it("replays canonical patches and removes merged episodes without losing artifacts", () => {
+    const patch = (revision: number, value: Record<string, unknown>): WebSocketEvent => ({
+      type: "CUSTOM", name: "trace_delta", value: { schemaVersion: "2.0", revision, op: "patch", meta: { sessionId: "s", rootNodeId: "root" }, ...value },
+    } as unknown as WebSocketEvent);
+    let graph = reduceTraceForEvent(null, patch(1, {
+      nodes: [
+        { id: "root", title: "Session Start", type: "session_start", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], parents: [] },
+        { id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: ["artifact-a"], episodeTags: [], parents: [{ nodeId: "root", conclusion: "confirmed" }], report: { kind: "agent_report", summary: "Evidence" } },
+      ],
+      episodes: [{ id: "first", title: "First" }],
+      artifacts: [{ id: "artifact-a", producerNodeId: "a", path: "result.txt", kind: "file", exists: "present", verificationStatus: "verified" }],
+    }), "s");
+    expect(graph?.nodes.find((item) => item.id === "a")).toMatchObject({ summary: "Evidence", artifacts: [{ path: "result.txt" }] });
+    graph = reduceTraceForEvent(graph, patch(2, {
+      nodes: [{ id: "a", title: "A revised", type: "task", status: "completed", toolCalls: [], artifactIds: ["artifact-a"], episodeTags: [], parents: [{ nodeId: "root", conclusion: "confirmed" }] }],
+      episodes: [{ id: "second", title: "Second" }],
+      removed: { episodes: ["first"] },
+    }), "s");
+    expect(graph?.nodes.find((item) => item.id === "a")?.title).toBe("A revised");
+    expect(graph?.episodes?.map((item) => item.id)).toEqual(["second"]);
+    expect(graph?.nodes.find((item) => item.id === "a")?.artifacts).toEqual([{ path: "result.txt", type: "file" }]);
+    expect(graph?.revision).toBe(2);
+    expect(reduceTraceForEvent(graph, patch(4, { nodes: [] }), "s")).toBe(graph);
+  });
+
+  it("merges a live legacy trace_node before its canonical patch", () => {
+    const legacy = reduceTraceForEvent(null, traceEv("created", node("a", { status: "running" })), "s");
+    const patch = { type: "CUSTOM", name: "trace_delta", value: {
+      schemaVersion: "2.0", revision: 1, op: "patch", meta: { sessionId: "s" },
+      nodes: [{ id: "a", title: "A", type: "task", status: "completed", toolCalls: [], artifactIds: [], episodeTags: [], parents: [] }],
+    } } as unknown as WebSocketEvent;
+    const graph = reduceTraceForEvent(legacy, patch, "s");
+    expect(graph?.nodes).toHaveLength(1);
+    expect(graph?.nodes[0]).toMatchObject({ id: "a", status: "completed" });
+    expect(graph?.revision).toBe(1);
+    expect(reduceTraceForEvent(graph, traceEv("updated", node("a", { status: "stale" })), "s"))
+      .toBe(graph);
+  });
+
   it("preserves every canonical parent state from a materialized GET graph", () => {
     const graph = normalizeTraceGraph({
       schemaVersion: "2.0",
