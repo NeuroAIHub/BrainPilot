@@ -711,14 +711,25 @@ export type TraceGraphViewV2 = z.infer<typeof TraceGraphViewV2Schema>;
 export const TraceGraphV2Schema = TraceGraphViewV2Schema;
 export type TraceGraphV2 = z.infer<typeof TraceGraphV2Schema>;
 
-/** A V2 SSE update. Snapshot is intentionally supported during transition. */
+/** A V2 SSE update. Patch carries only changed records at one revision. */
 export const TraceDeltaV2Schema = z.object({
   schemaVersion: z.literal("2.0"),
   revision: z.number().int().nonnegative(),
-  op: z.enum(["snapshot", "upsert", "remove"]),
+  op: z.enum(["snapshot", "upsert", "remove", "patch"]),
   graph: TraceGraphV2Schema.optional(),
   entity: z.enum(["node", "dependency", "episode", "artifact"]).optional(),
   id: z.string().optional(),
+  meta: TraceMetaSchema.optional(),
+  nodes: z.array(TraceNodeV2Schema).optional(),
+  dependencies: z.array(TraceDependencySchema).optional(),
+  episodes: z.array(TraceEpisodeSchema).optional(),
+  artifacts: z.array(TraceArtifactV2Schema).optional(),
+  removed: z.object({
+    nodes: z.array(z.string()).optional(),
+    dependencies: z.array(z.string()).optional(),
+    episodes: z.array(z.string()).optional(),
+    artifacts: z.array(z.string()).optional(),
+  }).optional(),
 });
 export type TraceDeltaV2 = z.infer<typeof TraceDeltaV2Schema>;
 
@@ -908,6 +919,8 @@ export const ProviderContextWindowSchema = z.union([
   z.literal(1_000_000),
 ]);
 export type ProviderContextWindow = z.infer<typeof ProviderContextWindowSchema>;
+/** Optional per-profile output ceiling; omission keeps the runtime default. */
+export const ProviderMaxTokensSchema = z.number().int().min(1).max(1_000_000);
 
 export const ProviderProfileSchema = z.object({
   id: z.string(),
@@ -921,6 +934,7 @@ export const ProviderProfileSchema = z.object({
   isShared: z.boolean(),
   models: z.array(z.string()),
   contextWindow: ProviderContextWindowSchema.optional(),
+  maxTokens: ProviderMaxTokensSchema.optional(),
   /** Model ids declared capable of Pi extended thinking. */
   reasoningModels: z.array(z.string()).optional(),
   icon: z.string(),
@@ -985,6 +999,8 @@ export const ProviderProfileCreateSchema = z.object({
   models: modelsField,
   context_window: ProviderContextWindowSchema.nullable().optional(),
   contextWindow: ProviderContextWindowSchema.nullable().optional(),
+  max_tokens: ProviderMaxTokensSchema.nullable().optional(),
+  maxTokens: ProviderMaxTokensSchema.nullable().optional(),
   reasoning_models: z.array(z.string().trim().min(1)).optional(),
   reasoningModels: z.array(z.string().trim().min(1)).optional(),
   icon: z.string().optional(),

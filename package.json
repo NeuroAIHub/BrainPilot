@@ -8,6 +8,7 @@
   "workspaces": [
     "packages/protocol",
     "packages/plugin-sdk",
+    "packages/pi-sdk",
     "packages/runtime",
     "packages/backend-core",
     "packages/cli",
@@ -22,8 +23,8 @@
     "packages/docs"
   ],
   "scripts": {
-    "postinstall": "node scripts/patch-pi-ai.cjs",
-    "build": "npm run build --workspaces --if-present",
+    "postinstall": "node scripts/build-pi-sdk.mjs",
+    "build": "node scripts/build-pi-sdk.mjs && npm run build --workspaces --if-present",
     "docs:build": "npm run build -w @brainpilot/docs",
     "docs:check": "npm run check:secrets -w @brainpilot/docs && npm run typecheck -w @brainpilot/docs",
     "docs:dev": "npm run dev -w @brainpilot/docs --",
@@ -41,13 +42,13 @@
     "version:check": "node scripts/sync-versions.js --check",
     "release:build": "npm run build",
     "release:dry": "npm publish --workspaces --if-present --dry-run --access public",
-    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/plugin-auditor --workspace @brainpilot/plugin-got --workspace @brainpilot/plugin-research --workspace @brainpilot/plugin-monitor --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
+    "release": "npm run version:sync && npm run release:build && npm publish --workspace @brainpilot/plugin-sdk --workspace @brainpilot/skills --workspace @brainpilot/plugin-auditor --workspace @brainpilot/plugin-got --workspace @brainpilot/plugin-research --workspace @brainpilot/plugin-monitor --workspace @brainpilot/kb-scripts --workspace @brainpilot/protocol --workspace @brainpilot/pi-sdk --workspace @brainpilot/runtime --workspace @brainpilot/backend-core --workspace @brainpilot/web --workspace @brainpilot/app --access public"
   },
   "devDependencies": {
     "@types/node": "^22.10.0",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",
-    "vitest": "^3.0.0"
+    "vitest": "^5.0.2"
   },
   "overrides": {
     "@hono/node-server": "^2.1.0",

@@ -83,6 +83,8 @@ export interface SessionProviderConfig {
   modelId?: string;
   /** Provider-level override; absent preserves env/default behavior. */
   contextWindow?: number;
+  /** Provider-level output ceiling; absent preserves env/default behavior. */
+  maxTokens?: number;
   reasoningEnabled?: boolean;
 }
 
@@ -279,7 +281,7 @@ export async function resolveSessionModel(
               input: ["text"],
               contextWindow:
                 cfg.contextWindow ?? intEnv("ANTHROPIC_CONTEXT_WINDOW") ?? DEFAULT_CONTEXT_WINDOW,
-              maxTokens: intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
+              maxTokens: cfg.maxTokens ?? intEnv("ANTHROPIC_MAX_TOKENS") ?? DEFAULT_MAX_TOKENS,
             },
           ],
         },

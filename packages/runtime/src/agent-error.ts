@@ -20,6 +20,7 @@
  * the BrainPilot-authored shell; the provider's own error text is preserved
  * verbatim (we don't translate third-party messages — that loses fidelity).
  */
+import { isTransientInvalidRequest400 } from "./pi-retry.js";
 
 /** Normalized error: a short headline plus optional expandable raw detail. */
 export interface NormalizedAgentError {
@@ -44,7 +45,7 @@ export type AgentErrorKind = "retryable" | "fatal";
  * BEFORE the retryable set so a "401 ... rate limit ..." blob is fatal.
  */
 const FATAL_RE =
-  /\b(401|403)\b|invalid api key|no api key|api key (?:found|for)|no provider|unauthor|forbidden|authentication|permission denied/i;
+  /context compaction failed|auto-compaction failed|\b(400|401|403)\b|invalid api key|no api key|api key (?:found|for)|no provider|unauthor|forbidden|authentication|permission denied/i;
 
 /**
  * Transient failures worth a retry: explicit 408/429/5xx status codes, timeouts,
@@ -60,6 +61,7 @@ const RETRYABLE_RE =
  */
 export function classifyAgentError(raw: string): AgentErrorKind {
   if (!raw) return "retryable";
+  if (!/context compaction failed/i.test(raw) && isTransientInvalidRequest400(raw)) return "retryable";
   if (FATAL_RE.test(raw)) return "fatal";
   if (RETRYABLE_RE.test(raw)) return "retryable";
   return "retryable";
@@ -137,6 +139,7 @@ function pickMessage(obj: unknown): string | undefined {
   if (err && typeof err === "object") {
     const e = err as Record<string, unknown>;
     if (typeof e.message === "string") return e.message;
+    if (typeof e.code === "string") return e.code;
   }
   return undefined;
 }

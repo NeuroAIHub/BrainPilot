@@ -42,6 +42,7 @@ import {
   type UserInputCancellationReason,
 } from "@brainpilot/protocol";
 import { EventBus } from "./event-bus.js";
+import { HistoryReadError, pendingUserInputs, readHistoryPage, type HistoryPage } from "./event-history.js";
 import {
   TaskLedger,
   TASK_CONTEXT_MAX_CHARS,
@@ -539,6 +540,7 @@ function formatBytes(n: number): string {
 }
 
 export class SessionManager {
+  private activeHistoryReads = 0;
   private shuttingDown = false;
   private shutdownPromise: Promise<void> | null = null;
   private readonly sessions = new Map<string, SessionEntry>();
@@ -1566,7 +1568,7 @@ export class SessionManager {
       id,
       persistBase ? join(persistBase, "trace.json") : undefined,
       (op, node) => {
-        bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_NODE, { op, node }));
+        bus.emitLive(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_NODE, { op, node }));
       },
       (delta) => {
         bus.emit(ev.custom({ sessionId: id }, CUSTOM_EVENT.TRACE_DELTA, delta));
@@ -2242,18 +2244,7 @@ export class SessionManager {
 
   /** Close request events left orphaned by a previous process/container. */
   private async cancelRestoredOrphanInputs(entry: SessionEntry): Promise<void> {
-    const history = await this.readEventHistory(entry.id, { limit: 0 });
-    if (!history) return;
-    const pending = new Set<string>();
-    for (const event of history.events) {
-      const raw = event as unknown as Record<string, unknown>;
-      const requestId = raw.request_id ?? raw.requestId;
-      if (typeof requestId !== "string" || requestId.length === 0) continue;
-      if (event.type === "user_input_request") pending.add(requestId);
-      if (event.type === "user_input_response" || event.type === "user_input_cancelled") {
-        pending.delete(requestId);
-      }
-    }
+    const pending = await pendingUserInputs(join(this.bpDir(entry.id), "events.jsonl"));
     for (const requestId of pending) {
       try {
         await entry.bus.emitDurable(
@@ -3607,13 +3598,16 @@ export class SessionManager {
    * (`onStatusChange`), an initial frame in `sendMessage`, and on delivery-loop
    * entry/exit. `runState.active` is PI-only; `workState.active` is the
    * aggregate completion authority for the whole session. The
-   * ring buffer replays the last frame on reconnect, so a re-subscribing client
-   * recovers the current snapshot. Shape matches `SessionStateSnapshotSchema`.
+   * reconnect synthesizes the current snapshot from authoritative state.
+   * Shape matches `SessionStateSnapshotSchema`.
    */
   private emitSessionState(entry: SessionEntry): void {
     const runActive = this.deriveRunActive(entry);
     const workActive = this.deriveWorkActive(entry);
-    entry.bus.emit(
+    // Current state is independently persisted in meta/usage/tasks, and is
+    // explicitly seeded on reconnect. Repeating full token tables in the
+    // durable event timeline makes long multi-agent sessions grow quadratically.
+    entry.bus.emitLive(
       ev.custom({ sessionId: entry.id }, "session_state", {
         runState: { active: runActive, runId: entry.activeRunId },
         workState: { active: workActive },
@@ -3828,11 +3822,9 @@ export class SessionManager {
    * The file is read line-by-line and unparseable lines are skipped so a
    * single corrupt record doesn't poison the whole history.
    *
-   * `limit` caps the returned array; when total > limit we return the **tail**
-   * (most recent events) for lightweight callers. Default 1000, positive
-   * limits are capped at 5000. `limit <= 0` returns the full log and is used by
-   * the web rehydrate path so long sessions are not sliced through the middle
-   * of a streamed message.
+   * Legacy requests return a byte-bounded tail (default 1000, max 5000 events).
+   * Zero/negative limits use the same bounded default. `cursor=start` starts
+   * forward pagination at a frozen EOF; nextCursor preserves event boundaries.
    *
    * History is a **disk read** (`<dataRoot>/.bp/<sid>/events.jsonl`), so it does
    * NOT require the session to be live in memory: a session evicted by the idle
@@ -3847,45 +3839,18 @@ export class SessionManager {
    */
   async readEventHistory(
     sessionId: string,
-    opts: { limit?: number } = {},
-  ): Promise<{ events: AgUiEvent[]; total: number; truncated: boolean } | undefined> {
+    opts: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+  ): Promise<HistoryPage | undefined> {
     // Without persistence the only source of truth is memory.
     if (!this.persist && !this.sessions.has(sessionId)) return undefined;
-    const requestedLimit = opts.limit;
-    const limit =
-      requestedLimit === undefined || !Number.isFinite(requestedLimit)
-        ? 1000
-        : requestedLimit <= 0
-          ? null
-          : Math.max(1, Math.min(requestedLimit, 5000));
-    const path = join(this.bpDir(sessionId), "events.jsonl");
-    let raw: string;
+    if (this.activeHistoryReads >= 2) {
+      throw new HistoryReadError("History is already loading. Wait for the current reads to finish and retry.", 429);
+    }
+    this.activeHistoryReads++;
     try {
-      raw = await readFile(path, "utf8");
-    } catch {
-      // No events file. For a live (or persisting-but-new) session this is a
-      // valid empty history. For an unknown session with no transcript on disk
-      // there is nothing to serve → undefined so the route can 404.
-      if (!this.sessions.has(sessionId)) return undefined;
-      return { events: [], total: 0, truncated: false };
-    }
-    const lines = raw.split("\n");
-    const events: AgUiEvent[] = [];
-    let total = 0;
-    for (const line of lines) {
-      if (!line) continue;
-      let parsed: unknown;
-      try {
-        parsed = JSON.parse(line);
-      } catch {
-        continue; // skip malformed line
-      }
-      total++;
-      events.push(parsed as AgUiEvent);
-    }
-    const truncated = limit !== null && events.length > limit;
-    const out = truncated ? events.slice(events.length - limit!) : events;
-    return { events: out, total, truncated };
+      const result = await readHistoryPage(join(this.bpDir(sessionId), "events.jsonl"), opts);
+      return result ?? (this.sessions.has(sessionId) ? { events: [], total: 0, truncated: false } : undefined);
+    } finally { this.activeHistoryReads--; }
   }
 
   metrics(): {
@@ -3962,11 +3927,19 @@ export class SessionManager {
     const recent = entry.bus.recent().filter(
       (event) => !(
         event.type === "CUSTOM" &&
-        event.name === CUSTOM_EVENT.TASK_STATE &&
-        (event.value as { op?: string } | undefined)?.op === "snapshot"
+        (event.name === CUSTOM_EVENT.TRACE_NODE || event.name === CUSTOM_EVENT.TRACE_DELTA
+          || event.name === "session_state"
+          || (event.name === CUSTOM_EVENT.TASK_STATE &&
+            (event.value as { op?: string } | undefined)?.op === "snapshot"))
       ),
     );
+    const graph = entry.trace.getGraphV2();
     recent.push(
+      ev.custom({ sessionId }, CUSTOM_EVENT.TRACE_DELTA, {
+        schemaVersion: "2.0", revision: graph.revision,
+        op: "snapshot", graph,
+      }),
+      ev.custom({ sessionId }, "session_state", this.getSessionState(sessionId)),
       ev.custom({ sessionId }, CUSTOM_EVENT.TASK_STATE, {
         op: "snapshot",
         tasks: entry.taskLedger.list(),

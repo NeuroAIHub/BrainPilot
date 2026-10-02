@@ -181,6 +181,86 @@ function eventTimestamp(event: WebSocketEvent): string {
 }
 
 /**
+ * Stable identity of a terminal RUN_ERROR. Unlike stream keys this survives
+ * finalization: the recovery card it produced is replayed on every reload, and
+ * without the recorded identity a replay arriving after a later user turn falls
+ * outside the current-turn scan and appends a second, phantom failure card.
+ */
+function terminalEventId(event: WebSocketEvent): string | null {
+  const raw = (event as Record<string, unknown>)._eventId;
+  return typeof raw === "string" && raw ? raw : null;
+}
+
+function hasTerminalEventId(msg: ChatMessage, id: string): boolean {
+  return msg.id === id || !!msg.terminalEventIds?.includes(id);
+}
+
+function withTerminalEventId(msg: ChatMessage, id: string | null): ChatMessage {
+  if (!id || hasTerminalEventId(msg, id)) return msg;
+  const prev = msg.terminalEventIds;
+  return { ...msg, terminalEventIds: prev ? [...prev, id] : [id] };
+}
+
+/**
+ * Every stable id under which a terminal diagnostic can be recognized: its own
+ * row id plus the transport event ids it absorbed. Two rows describing the same
+ * failure overlap here even when their row ids differ — the rich
+ * `run-error:<session>:<run>:<agent>` diagnostic MasAgent persists and the
+ * standalone card the reducer keys by the RUN_ERROR event id. Returns null when
+ * the row carries no terminal identity, so legacy rows keep matching by id only.
+ */
+export function terminalIdentityIds(msg: ChatMessage): string[] | null {
+  if (msg.kind !== "system_message") return null;
+  const aliases = msg.terminalEventIds ?? [];
+  if (!msg.systemMessage?.terminal && aliases.length === 0) return null;
+  return aliases.includes(msg.id) ? aliases : [msg.id, ...aliases];
+}
+
+/**
+ * Merge two rows that turned out to describe the same terminal failure under
+ * different row ids (see `terminalIdentityIds`). The richer diagnostic — the one
+ * whose row id is not merely the transport event id — keeps its id, text,
+ * details and timestamp; the other row only contributes its identity, so a
+ * later replay of either event id is still recognized as already applied.
+ */
+export function mergeTerminalAliases(saved: ChatMessage, live: ChatMessage): ChatMessage {
+  if (saved.id === live.id) return mergeTerminalIdentity(saved, live);
+  const savedIsFallback = !!live.terminalEventIds?.includes(saved.id);
+  const liveIsFallback = !!saved.terminalEventIds?.includes(live.id);
+  const rich = savedIsFallback && !liveIsFallback ? live : saved;
+  const other = rich === saved ? live : saved;
+  const aliases = [
+    ...new Set([...(rich.terminalEventIds ?? []), ...(other.terminalEventIds ?? []), other.id]),
+  ].filter((id) => id !== rich.id);
+  const merged: ChatMessage = { ...rich };
+  if (aliases.length > 0) merged.terminalEventIds = aliases;
+  if (merged.systemMessage) {
+    merged.systemMessage = { ...merged.systemMessage, terminal: true };
+  }
+  return merged;
+}
+
+/**
+ * Merge a replayed system diagnostic onto the row already on screen. The replay
+ * carries the original (non-terminal) payload, so promotion state — terminal
+ * flag plus the recorded terminal identities — has to be carried over instead
+ * of being overwritten back to a plain error bubble.
+ */
+export function mergeTerminalIdentity(incoming: ChatMessage, existing: ChatMessage): ChatMessage {
+  const ids = [
+    ...(existing.terminalEventIds ?? []),
+    ...(incoming.terminalEventIds ?? []).filter((id) => !existing.terminalEventIds?.includes(id)),
+  ];
+  const terminal = existing.systemMessage?.terminal || incoming.systemMessage?.terminal;
+  const merged: ChatMessage = { ...incoming, id: existing.id };
+  if (ids.length > 0) merged.terminalEventIds = ids;
+  if (terminal && merged.systemMessage) {
+    merged.systemMessage = { ...merged.systemMessage, terminal: true };
+  }
+  return merged;
+}
+
+/**
  * Apply an AG-UI canonical event to the running messages array. Events are
  * keyed by `messageId` / `toolCallId`; START emits a placeholder, CONTENT
  * appends delta, END marks completion. MESSAGES_SNAPSHOT replaces state
@@ -502,6 +582,12 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
 
     case "RUN_ERROR": {
       const message = event.message ?? "Run error";
+      const eventId = terminalEventId(event);
+      // A replay of an already-applied terminal error must be a no-op. This runs
+      // BEFORE the retry clear + stream sweep: a reload replays the old failure
+      // after the user has asked something new, and sweeping there would kill the
+      // answer currently streaming for that newer turn.
+      if (eventId && existing.some((m) => hasTerminalEventId(m, eventId))) return existing;
       // Run is over → clear transient retry UI and sweep dangling streams.
       const swept = sweepStreaming(clearAutoRetry(existing, event.agentName), event.agentName);
       // Delegated delivery attempts have their own RUN_ERROR lifecycle, but an
@@ -527,6 +613,10 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
           && candidate.systemMessage
           && (candidate.systemMessage.level === "error" || candidate.systemMessage.level === "fatal")
           && (candidate.agent ?? "principal") === terminalAgent
+          // Already owned by a different failure: two distinct RUN_ERRORs in one
+          // turn stay two cards even when their text and agent match.
+          && !(candidate.terminalEventIds?.length && eventId
+            && !candidate.terminalEventIds.includes(eventId))
         ) {
           diagnosticIndex = index;
           break;
@@ -535,19 +625,19 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
       if (diagnosticIndex >= 0) {
         const next = [...swept];
         const diagnostic = next[diagnosticIndex]!;
-        next[diagnosticIndex] = {
+        // Keep the diagnostic's own id and rich details; only add terminal state.
+        next[diagnosticIndex] = withTerminalEventId({
           ...diagnostic,
           systemMessage: { ...diagnostic.systemMessage!, terminal: true },
-        };
+        }, eventId);
         return next;
       }
       const terminal: ChatMessage = {
-        id: typeof (event as Record<string, unknown>)._eventId === "string"
-          ? (event as Record<string, unknown>)._eventId as string
-          : generateUUID(),
+        id: eventId ?? generateUUID(),
         role: "system",
         content: String(message),
-        createdAt: new Date().toISOString(),
+        // Event time, not wall clock: a replayed card must not jump to "now".
+        createdAt: eventTimestamp(event),
         agent: terminalAgent,
         streaming: false,
         kind: "system_message",
@@ -592,12 +682,14 @@ export function reduceMessagesForEvent(existing: ChatMessage[], event: WebSocket
         );
         if (duplicateIndex >= 0) {
           return existing.map((candidate, index) => index === duplicateIndex
-            ? { ...msg, id: candidate.id }
+            ? mergeTerminalIdentity(msg, candidate)
             : candidate);
         }
       }
       const next = hasStableId && existing.some((m) => m.id === msg.id)
-        ? existing.map((m) => (m.id === msg.id ? msg : m))
+        // A replay of a diagnostic that RUN_ERROR already promoted carries the
+        // pre-promotion payload; keep the terminal identity it earned.
+        ? existing.map((m) => (m.id === msg.id ? mergeTerminalIdentity(msg, m) : m))
         : [...existing, msg];
       return isDelegatedFailure(msg) ? markLatestPrincipalAnswerPartial(next) : next;
     }

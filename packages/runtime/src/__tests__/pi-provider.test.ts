@@ -305,10 +305,21 @@ describe("resolveSessionModel (#63 per-session provider protocol)", () => {
       apiKey: "sk-long",
       modelId: "model-1m",
       contextWindow: 1_000_000,
+      maxTokens: 65_536,
     });
     const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
     expect(cfg.providers.long.models[0].contextWindow).toBe(1_000_000);
+    expect(cfg.providers.long.models[0].maxTokens).toBe(65_536);
     delete process.env.ANTHROPIC_CONTEXT_WINDOW;
+  });
+
+  it("retains the runtime output default when the profile has no maxTokens override", async () => {
+    const { sdk, lastPath } = sessionSdk();
+    await resolveSessionModel(sdk, agentDir, {
+      providerId: "default-output", baseUrl: "https://gw.example", apiKey: "key", modelId: "m",
+    });
+    const cfg = JSON.parse(readFileSync(lastPath()!, "utf8"));
+    expect(cfg.providers["default-output"].models[0].maxTokens).toBe(32_768);
   });
 
   it("writes openai-responses when selected", async () => {

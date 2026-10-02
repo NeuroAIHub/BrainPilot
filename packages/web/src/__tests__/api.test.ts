@@ -64,15 +64,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
-describe("provider context-window contract", () => {
+describe("provider token-limit contract", () => {
   it("serializes presets and uses null to restore automatic mode", () => {
     expect(serializeProviderCreate({
       name: "Long",
       baseUrl: "https://gw.example",
       apiKey: "key",
       contextWindow: 1_000_000,
-    })).toMatchObject({ context_window: 1_000_000 });
-    expect(serializeProviderUpdate({ contextWindow: null })).toEqual({ context_window: null });
+      maxTokens: 65_536,
+    })).toMatchObject({ context_window: 1_000_000, max_tokens: 65_536 });
+    expect(serializeProviderUpdate({ contextWindow: null, maxTokens: null }))
+      .toEqual({ context_window: null, max_tokens: null });
   });
 
   it("normalizes the provider context window from snake_case", () => {
@@ -81,12 +83,14 @@ describe("provider context-window contract", () => {
       name: "Long",
       models: ["m"],
       context_window: 262_144,
+      max_tokens: 65_536,
     });
     expect(profile.contextWindow).toBe(262_144);
+    expect(profile.maxTokens).toBe(65_536);
   });
 });
 
-describe("api.sessions.list — unwraps { sessions } and tolerates shape", () => {
+describe("api.sessions.list — unwraps valid session lists and rejects malformed payloads", () => {
   it("unwraps the runtime's { sessions: [...] } envelope", async () => {
     fetchMock.mockResolvedValueOnce(
       makeResponse({ contentType: "application/json", json: { sessions: [{ id: "a" }, { id: "b" }] } }),
@@ -105,14 +109,14 @@ describe("api.sessions.list — unwraps { sessions } and tolerates shape", () =>
     expect(out[0].id).toBe("x");
   });
 
-  it("returns [] (never throws .map) for an unexpected shape", async () => {
+  it("rejects an unexpected shape instead of claiming an empty list", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: {} }));
-    await expect(api.sessions.list()).resolves.toEqual([]);
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected session list payload/i);
   });
 
-  it("returns [] for a null body", async () => {
+  it("rejects a null list body", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
-    await expect(api.sessions.list()).resolves.toEqual([]);
+    await expect(api.sessions.list()).rejects.toThrow(/unexpected session list payload/i);
   });
 
   // handleJson guard: a 200 that isn't JSON (SPA index.html fallback for an
@@ -309,6 +313,19 @@ describe("api.sessions.getHistory — persisted events.jsonl rehydration", () =>
     expect(url).toContain("/sessions/s1/history?limit=42");
   });
 
+  it("forwards a page cursor and cancellation signal", async () => {
+    fetchMock.mockResolvedValueOnce(makeResponse({
+      contentType: "application/json",
+      json: { events: [], total: null, truncated: true, nextCursor: "next-page" },
+    }));
+    const controller = new AbortController();
+    const out = await api.sessions.getHistory("s1", { limit: 1000, cursor: "start", signal: controller.signal });
+    expect(out).toMatchObject({ total: null, truncated: true, nextCursor: "next-page" });
+    const [url, init] = fetchMock.mock.calls[0]!;
+    expect(String(url)).toContain("/sessions/s1/history?limit=1000&cursor=start");
+    expect(init.signal).toBe(controller.signal);
+  });
+
   it("returns the empty envelope on a 404 (session has no transcript)", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ ok: false, status: 404 }));
     const out = await api.sessions.getHistory("s1");
@@ -320,10 +337,11 @@ describe("api.sessions.getHistory — persisted events.jsonl rehydration", () =>
     await expect(api.sessions.getHistory("s1")).rejects.toThrow(/history fetch failed: 500/);
   });
 
-  it("returns the empty envelope when the body is null", async () => {
+  it("rejects a malformed success response instead of treating it as empty history", async () => {
     fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: null }));
-    const out = await api.sessions.getHistory("s1");
-    expect(out).toEqual({ events: [], total: 0, truncated: false });
+    await expect(api.sessions.getHistory("s1")).rejects.toThrow(/malformed response/);
+    fetchMock.mockResolvedValueOnce(makeResponse({ contentType: "application/json", json: { truncated: false } }));
+    await expect(api.sessions.getHistory("s1")).rejects.toThrow(/malformed response/);
   });
 });
 

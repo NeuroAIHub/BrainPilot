@@ -27,6 +27,7 @@ export interface ProviderConfig {
   apiKey: string;
   modelId?: string;
   contextWindow?: number;
+  maxTokens?: number;
   reasoningEnabled?: boolean;
 }
 
@@ -39,6 +40,7 @@ interface StoredProfile {
   apiKeyEnv?: string;
   models?: string[];
   contextWindow?: number;
+  maxTokens?: number;
   reasoningModels?: string[];
 }
 
@@ -109,6 +111,9 @@ export async function resolveSessionProvider(
     apiKey,
     modelId,
     contextWindow: profile.contextWindow,
+    maxTokens: Number.isInteger(profile.maxTokens) && (profile.maxTokens ?? 0) > 0
+      ? profile.maxTokens
+      : undefined,
     reasoningEnabled: modelId
       ? (profile.reasoningModels ?? profile.models ?? []).includes(modelId)
       : false,

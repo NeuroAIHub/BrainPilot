@@ -11,6 +11,7 @@ import {
   isDemoBundle,
 } from "../../contracts/demoBundle";
 import { api } from "../../utils/api";
+import { consumeHistoryPages } from "../../utils/historyPages";
 import { getPreviewKind, mimeFromName } from "../files/filePreview";
 
 export interface BuildDemoOptions {
@@ -343,16 +344,26 @@ export async function buildDemoBundle(opts: BuildDemoOptions): Promise<DemoBundl
   let timeline: DemoBundle["timeline"] = "timestamped";
   // Pull the persisted event timeline from the new history endpoint (the
   // legacy `/sessions/:id/events` path is an SSE alias and returns no JSON).
-  // Request the FULL log (`limit: 0`) — same as the live chat rehydrate path
-  // (HISTORY_REHYDRATE_LIMIT). A positive cap returns the *tail* of the log,
-  // which slices off the oldest events: the leading TEXT_MESSAGE_START of the
-  // earliest messages is dropped, leaving orphaned CONTENT/END that the
-  // reducer can't attach to anything, so the conversation's opening replies
-  // silently vanish from the replay. assertTimelineFits + the final whole-file
-  // cap below keep requesting the full history from producing an unbounded
-  // shareable bundle.
-  const historyEnvelope = await api.sessions.getHistory(session.id, { limit: 0 });
-  let events: typeof historyEnvelope.events | undefined = historyEnvelope.events;
+  // Walk bounded pages from the beginning. A tail-only request can omit an
+  // opening TEXT_MESSAGE_START and leave the replay incomplete. The timeline
+  // and whole-bundle limits below bound the resulting shareable file.
+  let events: Awaited<ReturnType<typeof api.sessions.getHistory>>["events"] | undefined = [];
+  let timelineBytes = 2;
+  try {
+    await consumeHistoryPages(
+      (cursor) => api.sessions.getHistory(session.id, { cursor, signal, limit: 1000 }),
+      (page) => {
+        for (const event of page) {
+          timelineBytes += utf8ByteLength(JSON.stringify(event)) + 1;
+          if (timelineBytes > MAX_TIMELINE_BYTES) throw new DemoBundleTooLargeError("timeline");
+          events!.push(event);
+        }
+      }, signal,
+    );
+  } catch (error) {
+    if (signal?.aborted) throw new PackAbortedError();
+    throw error;
+  }
   let messages: ChatMessage[] | undefined;
   if (!events || events.length === 0) {
     timeline = "ordered";

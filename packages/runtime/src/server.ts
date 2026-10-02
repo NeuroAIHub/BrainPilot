@@ -26,6 +26,7 @@ import {
   WriteFileRequestSchema,
 } from "@brainpilot/protocol";
 import { SessionManager, type SessionManagerOptions } from "./session-manager.js";
+import { HistoryReadError } from "./event-history.js";
 import { resolveKbPaths } from "./tools/kb/paths.js";
 import { ev } from "./events.js";
 
@@ -205,11 +206,17 @@ export function createServer(opts: SessionManagerOptions & {
     const id = c.req.param("id");
     const limitQ = c.req.query("limit");
     const limit = limitQ !== undefined ? Number(limitQ) : undefined;
-    const result = await manager.readEventHistory(id, {
-      limit: Number.isFinite(limit) ? (limit as number) : undefined,
-    });
-    if (!result) return c.json({ error: "not found" }, 404);
-    return c.json(result);
+    try {
+      const result = await manager.readEventHistory(id, {
+        limit: Number.isFinite(limit) ? (limit as number) : undefined,
+        cursor: c.req.query("cursor"), signal: c.req.raw.signal,
+      });
+      if (!result) return c.json({ error: "not found" }, 404);
+      return c.json(result);
+    } catch (error) {
+      if (error instanceof HistoryReadError) return c.json({ error: error.message }, error.status);
+      throw error;
+    }
   });
 
   app.post("/sessions/:id/messages", async (c) => {
@@ -398,12 +405,8 @@ export function createServer(opts: SessionManagerOptions & {
       // Replay buffered events, then live-subscribe.
       for (const e of manager.recentEvents(id)) send(e);
       const unsub = manager.subscribe(id, send);
-      // A reconnect must end with a fresh authority frame; the ring may have
-      // evicted the tool-start state after a long stream of partial events.
-      const currentState = manager.getSessionState(id);
-      if (currentState) {
-        send(ev.custom({ sessionId: id }, "session_state", currentState));
-      }
+      // recentEvents ends with fresh authority frames even when the byte-bound
+      // ring evicted older state or Trace deltas.
       s.onAbort(() => {
         closed = true;
         unsub?.();

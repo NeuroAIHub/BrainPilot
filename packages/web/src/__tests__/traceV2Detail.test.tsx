@@ -91,3 +91,24 @@ describe("TraceNodeDetail V2 sections", () => {
     expect(html).not.toContain(">host<");
   });
 });
+
+
+describe("Trace detail hierarchy", () => {
+  it("keeps errors, artifacts, reviews and pending decisions above optional detail groups", () => {
+    const node = { ...b, errorMessage: "A useful error", artifacts: [{ path: "/data/result.csv", type: "data" }] };
+    const html = renderToStaticMarkup(<TraceNodeDetail node={node} nodes={[a, node]} graph={graph} onSelectNode={() => {}} onSelectArtifact={() => {}} onDependencyDecision={() => {}} t={t} />);
+    const primary = html.slice(0, html.indexOf("<details"));
+    for (const text of ["A useful error", "result.csv", "Checked", "trace.node.acceptDependency", "trace.node.rejectDependency"]) expect(primary).toContain(text);
+    expect(primary).not.toContain("trace.node.contextTitle");
+    expect(html).toContain("Study");
+    expect(html).toContain("Evidence review");
+    expect(html).not.toMatch(/<details[^>]*\sopen/);
+  });
+  it("omits unavailable assessments and empty disclosures on a sparse node", () => {
+    const html = renderToStaticMarkup(<TraceNodeDetail node={a} onSelectNode={() => {}} t={t} />);
+    expect(html).not.toContain("trace.node.unassessed");
+    expect(html).not.toContain("trace.details.reasoning");
+    expect(html).not.toContain("trace.details.execution");
+    expect(html).not.toContain("trace.details.recovery");
+  });
+});

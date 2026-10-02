@@ -30,10 +30,10 @@ describe("resolveSessionProvider", () => {
   it("carries the provider context window into the session config", async () => {
     const root = await dataRootWith({
       profiles: [
-        { id: "long", apiKey: "key", models: ["m"], contextWindow: 1_000_000 },
+        { id: "long", apiKey: "key", models: ["m"], contextWindow: 1_000_000, maxTokens: 65_536 },
       ],
     });
-    expect(await resolveSessionProvider(root, {})).toMatchObject({ contextWindow: 1_000_000 });
+    expect(await resolveSessionProvider(root, {})).toMatchObject({ contextWindow: 1_000_000, maxTokens: 65_536 });
   });
 
   it("keeps context and reasoning metadata for an environment-backed profile", async () => {

@@ -43,7 +43,7 @@
     "@brainpilot/protocol": "^0.2.3",
     "@brainpilot/runtime": "^0.2.3",
     "@hono/node-server": "^2.1.0",
-    "hono": "^4.13.0"
+    "hono": "^4.13.7"
   },
   "optionalDependencies": {
     "dockerode": "^5.0.1"

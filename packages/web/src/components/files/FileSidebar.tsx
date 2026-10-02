@@ -1,4 +1,6 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { DetailsSection } from "../primitives/DetailsSection";
+import { usePreferences } from "../../contexts/PreferencesContext";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronRight,
   Database,
@@ -59,6 +61,23 @@ type DataUploadState = {
 
 type FileNode = FileSidebarTreeNode;
 
+/**
+ * Identity of the selection an asynchronous mutation was started for: the
+ * session, the file and the selection generation. A delete or a save that
+ * answers late may only touch the editor while all three still hold.
+ */
+type WorkspaceOwner = { sandboxId: string | null; epoch: number };
+type SelectionOwner = WorkspaceOwner & { path: string; seq: number };
+
+/** A save in flight; same-file reopen waits for its settled disk write. */
+type SaveOperation = SelectionOwner & {
+  sandboxId: string;
+  baseContent: string;
+  draft: string;
+  /** Resolves (never rejects) once the save settled, successfully or not. */
+  done: Promise<void>;
+};
+
 type WorkspaceRestoreNotice = {
   restoreKey: string;
   requestKey: string;
@@ -81,6 +100,15 @@ type FileSidebarProps = {
   openFileRequest?: { path: string; line?: number; requestId: number } | null;
   onClose: () => void;
   onDirtyChange?: (dirty: boolean) => void;
+  /**
+   * The file this panel is *showing*, after an explicit user action (picking a
+   * file in the tree, closing the preview, reopening the pane on a preserved
+   * one). The host uses it to keep the address bar honest; it must never be fed
+   * back in as `openFileRequest`, or the panel would re-drive itself on every
+   * click. Never called for the transient empty selection before an async load
+   * completes, so an unapplied deep link is not cleared out from under the user.
+   */
+  onSelectionLocationChange?: (target: { path: string; line?: number } | null) => void;
   onUseInConversation?: (path: string) => void;
   onResize: (width: number) => void;
   onResizeEnd: () => void;
@@ -236,6 +264,7 @@ export function FileSidebar({
   openFileRequest,
   onClose,
   onDirtyChange,
+  onSelectionLocationChange,
   onUseInConversation,
   onResize,
   onResizeEnd,
@@ -263,7 +292,7 @@ export function FileSidebar({
   const [selectedContent, setSelectedContent] = useState<FileContent | null>(null);
   const [draftContent, setDraftContent] = useState("");
   const [isEditing, setIsEditing] = useState(false);
-  const [isSaving, setIsSaving] = useState(false);
+  const [savingOwner, setSavingOwner] = useState<SaveOperation | null>(null);
   const [editError, setEditError] = useState<string | null>(null);
   const [conflictContent, setConflictContent] = useState<FileContent | null>(null);
   const [requestedLine, setRequestedLine] = useState<number | undefined>(undefined);
@@ -287,6 +316,100 @@ export function FileSidebar({
   const resizeStartRef = useRef<{ pointerX: number; width: number } | null>(null);
   const dataUploadInputRef = useRef<HTMLInputElement | null>(null);
   const isDirty = selectedContent !== null && draftContent !== selectedContent.content;
+  // Numbers the selections whose content is read asynchronously. A read for A
+  // that answers after the user picked B — or closed the preview — must not
+  // write A's content or A's error over what is on screen now.
+  const selectionRequestRef = useRef(0);
+  const beginSelectionRequest = () => (selectionRequestRef.current += 1);
+  const isLatestSelectionRequest = (seq: number) => selectionRequestRef.current === seq;
+  const workspaceEpochRef = useRef(0);
+  const directoryRequestsRef = useRef(new Map<string, number>());
+
+  // Synchronous mirrors of what the panel shows *right now*. React state is
+  // only current as of the last render, so a mutation that answers late has to
+  // consult these rather than the values its closure captured.
+  const isMountedRef = useRef(true);
+  const selectedPathRef = useRef<string | null>(null);
+  const sandboxIdRef = useRef<string | null>(sandboxId);
+  const isOpenRef = useRef(isOpen);
+  const sandboxReadyRef = useRef(currentSandbox?.status === "running");
+  const saveOperationsRef = useRef(new Map<string, SaveOperation>());
+  const saveKey = (id: string, path: string) => `${id}\0${path}`;
+  const isSaving = Boolean(
+    savingOwner
+    && savingOwner.sandboxId === sandboxId
+    && savingOwner.path === selectedPath
+    && savingOwner.seq === selectionRequestRef.current
+    && savingOwner.epoch === workspaceEpochRef.current,
+  );
+
+  /** Every selection change goes through here, so the mirror never lags. */
+  const setSelection = useCallback((path: string | null) => {
+    selectedPathRef.current = path;
+    setSelectedPath(path);
+  }, []);
+
+  /** True while the editor on screen is still the one that started the work. */
+  const ownsSelection = useCallback(
+    (owner: SelectionOwner) =>
+      isMountedRef.current
+      && isOpenRef.current
+      && sandboxReadyRef.current
+      && sandboxIdRef.current === owner.sandboxId
+      && workspaceEpochRef.current === owner.epoch
+      && selectedPathRef.current === owner.path
+      && selectionRequestRef.current === owner.seq,
+    [],
+  );
+
+  /**
+   * Weaker claim than `ownsSelection`: the panel is still mounted on the same
+   * session, so tree/error state may be updated even though the selection
+   * itself has moved on.
+   */
+  const ownsWorkspace = useCallback(
+    (owner: WorkspaceOwner) => isMountedRef.current
+      && sandboxIdRef.current === owner.sandboxId
+      && workspaceEpochRef.current === owner.epoch,
+    [],
+  );
+
+  useLayoutEffect(() => {
+    const nextReady = currentSandbox?.status === "running";
+    const workspaceChanged = sandboxIdRef.current !== sandboxId;
+    if (workspaceChanged || isOpenRef.current !== isOpen || sandboxReadyRef.current !== nextReady) {
+      workspaceEpochRef.current += 1;
+      selectionRequestRef.current += 1;
+      setIsDeleting(new Set());
+      setIsDeletingSelection(false);
+      setSavingOwner(null);
+    }
+    sandboxIdRef.current = sandboxId;
+    isOpenRef.current = isOpen;
+    sandboxReadyRef.current = nextReady;
+    if (workspaceChanged) {
+      // A new session must not display the previous workspace's tree or draft.
+      setTree(createFileSidebarRoot());
+      setSelection(null);
+      setSelectedContent(null);
+      setDraftContent("");
+      setIsEditing(false);
+      setEditError(null);
+      setConflictContent(null);
+      setSelectedDownloadPaths(new Set());
+    }
+  }, [currentSandbox?.status, isOpen, sandboxId, setSelection]);
+
+  useLayoutEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      // Retire every pending generation so a read or a save that answers after
+      // the panel is gone cannot call back into it.
+      selectionRequestRef.current += 1;
+      selectedPathRef.current = null;
+    };
+  }, []);
 
   useEffect(() => {
     onDirtyChange?.(isDirty);
@@ -351,8 +474,15 @@ export function FileSidebar({
 
   const loadDirectory = useCallback(
     async (path: string) => {
+      const owner: WorkspaceOwner = { sandboxId, epoch: workspaceEpochRef.current };
+      const request = (directoryRequestsRef.current.get(path) ?? 0) + 1;
+      directoryRequestsRef.current.set(path, request);
+      const isCurrent = () => ownsWorkspace(owner)
+        && isOpenRef.current
+        && sandboxReadyRef.current
+        && directoryRequestsRef.current.get(path) === request;
       if (!currentSession && path === WORKSPACE_ROOT_PATH) {
-        setTree(applyDirectoryListing(path, []));
+        if (isCurrent()) setTree(applyDirectoryListing(path, []));
         return;
       }
       if (!currentSandbox || currentSandbox.status !== "running" || !sandboxId) {
@@ -365,26 +495,26 @@ export function FileSidebar({
           hasSandbox: !!currentSandbox,
           sandboxStatus: currentSandbox?.status ?? null,
         });
-        setError(t("files.error.notRunning"));
+        if (ownsWorkspace(owner)) setError(t("files.error.notRunning"));
         return;
       }
-      setError(null);
+      if (isCurrent()) setError(null);
       try {
         // #193 diagnostics: log the exact request being addressed so an empty or
         // failing listing can be traced to the real sandboxId + path on the wire.
         console.debug("[FileSidebar] listFiles", { sandboxId, path });
         const entries = await api.sandbox.listFiles(sandboxId, path);
         console.debug("[FileSidebar] listFiles ok", { sandboxId, path, count: entries.length });
-        setTree(applyDirectoryListing(path, entries));
+        if (isCurrent()) setTree(applyDirectoryListing(path, entries));
       } catch (err) {
         // The runtime now returns a distinct error (instead of an empty array)
         // when readdir fails for a reason other than ENOENT (#193). Surface it
         // rather than leaving the panel stuck loading with no feedback.
         console.error("[FileSidebar] listFiles failed", { sandboxId, path, error: err });
-        setError(err instanceof Error ? err.message : t("files.error.loadFailed"));
+        if (isCurrent()) setError(err instanceof Error ? err.message : t("files.error.loadFailed"));
       }
     },
-    [currentSandbox, currentSession, sandboxId, t],
+    [currentSandbox, currentSession, ownsWorkspace, sandboxId, t],
   );
 
   const selectedNode = useMemo(() => findFileSidebarNode(tree, selectedPath), [selectedPath, tree]);
@@ -528,8 +658,13 @@ export function FileSidebar({
       void loadDirectory(DATA_ROOT_PATH);
     }
     if (!isOpen || currentSandbox?.status !== "running") {
+      // Dropping the selection also retires its pending read, so a late reply
+      // cannot repopulate the preview after the pane closed. The URL is left
+      // alone on purpose: this also runs while the sandbox is not yet running,
+      // and a deep link must survive until it can be applied.
+      selectionRequestRef.current += 1;
       setSelectedDownloadPaths(new Set());
-      setSelectedPath(null);
+      setSelection(null);
       setSelectedContent(null);
       setDraftContent("");
       setIsEditing(false);
@@ -537,7 +672,7 @@ export function FileSidebar({
       setConflictContent(null);
       setIsPreviewMaximized(false);
     }
-  }, [currentSandbox?.status, isOpen, loadDirectory]);
+  }, [currentSandbox?.status, isOpen, loadDirectory, setSelection]);
 
   useEffect(() => {
     const handlePointerMove = (event: PointerEvent) => {
@@ -632,23 +767,34 @@ export function FileSidebar({
     setSelectedDownloadPaths(new Set());
   }, []);
 
-  /** #307: after a successful delete, drop the node and any dependent UI state. */
+  /**
+   * #307: after a successful delete, drop the node and any dependent UI state.
+   *
+   * The file is already gone on the server. Pickers in the same workspace are
+   * notified. Whether the *preview* closes is decided against the selection as
+   * it stands now (`selectedPathRef`), never against the one captured when the
+   * request went out: deleting A must not close — or silently un-dirty — a B
+   * the user opened and edited while A was being deleted.
+   */
   const applyLocalDelete = useCallback(
-    (deletedPath: string) => {
-      setTree((current) => removeNode(current, deletedPath));
-      setExpandedPaths((current) => prunePathsUnder(current, deletedPath));
-      setSelectedDownloadPaths((current) => prunePathsUnder(current, deletedPath));
-      const closesPreview =
-        (selectedPath != null && isPathUnderOrEqual(selectedPath, deletedPath)) ||
-        (selectedContent != null && isPathUnderOrEqual(selectedContent.path, deletedPath));
-      if (closesPreview) {
-        setSelectedPath(null);
-        setSelectedContent(null);
-        setIsPreviewMaximized(false);
+    (deletedPath: string, owner: WorkspaceOwner) => {
+      if (ownsWorkspace(owner)) {
+        setTree((current) => removeNode(current, deletedPath));
+        setExpandedPaths((current) => prunePathsUnder(current, deletedPath));
+        setSelectedDownloadPaths((current) => prunePathsUnder(current, deletedPath));
+        const livePath = selectedPathRef.current;
+        if (livePath != null && isPathUnderOrEqual(livePath, deletedPath)) {
+          // Retire any read still in flight for the file we are closing.
+          selectionRequestRef.current += 1;
+          setSelection(null);
+          setSelectedContent(null);
+          setIsPreviewMaximized(false);
+          onSelectionLocationChange?.(null);
+        }
+        notifyFileSourcesChanged();
       }
-      notifyFileSourcesChanged();
     },
-    [selectedPath, selectedContent],
+    [onSelectionLocationChange, ownsWorkspace, setSelection],
   );
 
   const markDeleting = useCallback((paths: string[], on: boolean) => {
@@ -672,16 +818,19 @@ export function FileSidebar({
       }
       markDeleting([node.path], true);
       setError(null);
+      const owner: WorkspaceOwner = { sandboxId, epoch: workspaceEpochRef.current };
       try {
         await api.sandbox.deleteFile(sandboxId, node.path);
-        applyLocalDelete(node.path);
+        applyLocalDelete(node.path, owner);
       } catch (err) {
-        setError(err instanceof Error ? err.message : t("files.error.deleteFailed"));
+        if (ownsWorkspace(owner)) {
+          setError(err instanceof Error ? err.message : t("files.error.deleteFailed"));
+        }
       } finally {
-        markDeleting([node.path], false);
+        if (ownsWorkspace(owner)) markDeleting([node.path], false);
       }
     },
-    [sandboxId, isDeleting, t, markDeleting, applyLocalDelete],
+    [sandboxId, isDeleting, t, markDeleting, applyLocalDelete, ownsWorkspace],
   );
 
   const handleDeleteSelected = useCallback(async () => {
@@ -700,19 +849,24 @@ export function FileSidebar({
     setIsDeletingSelection(true);
     markDeleting(paths, true);
     setError(null);
+    const owner: WorkspaceOwner = { sandboxId, epoch: workspaceEpochRef.current };
     try {
       for (const path of paths) {
         try {
           await api.sandbox.deleteFile(sandboxId, path);
-          applyLocalDelete(path);
+          applyLocalDelete(path, owner);
         } catch (err) {
-          setError(err instanceof Error ? err.message : t("files.error.deleteFailed"));
+          if (ownsWorkspace(owner)) {
+            setError(err instanceof Error ? err.message : t("files.error.deleteFailed"));
+          }
           break;
         }
       }
     } finally {
-      markDeleting(paths, false);
-      setIsDeletingSelection(false);
+      if (ownsWorkspace(owner)) {
+        markDeleting(paths, false);
+        setIsDeletingSelection(false);
+      }
     }
   }, [
     sandboxId,
@@ -722,6 +876,7 @@ export function FileSidebar({
     t,
     markDeleting,
     applyLocalDelete,
+    ownsWorkspace,
   ]);
 
   const downloadPaths = useCallback(
@@ -866,13 +1021,27 @@ export function FileSidebar({
     return !isDirty || window.confirm(t("files.editor.confirmDiscard"));
   }, [isDirty, t]);
 
-  const selectFile = async (node: FileNode, line?: number, discardConfirmed = false) => {
+  /**
+   * `discardConfirmed`: the caller already ran the unsaved-changes prompt.
+   * `publishLocation`: report the new selection to the host so it can update the
+   * URL. Off for a link-driven open, whose URL the host wrote before asking.
+   */
+  type SelectFileOptions = { discardConfirmed?: boolean; publishLocation?: boolean };
+
+  const selectFile = async (node: FileNode, line?: number, options: SelectFileOptions = {}) => {
+    const { discardConfirmed = false, publishLocation = true } = options;
     if (node.path === selectedPath) {
-      setRequestedLine(line);
+      // Re-selecting the open file keeps whatever line target it already has
+      // (a plain tree click carries none), so a deep link's line is not lost.
+      if (line !== undefined) setRequestedLine(line);
+      if (publishLocation) {
+        onSelectionLocationChange?.({ path: node.path, line: line ?? requestedLine });
+      }
       return;
     }
     if (!discardConfirmed && !confirmDiscard()) return;
-    setSelectedPath(node.path);
+    const seq = beginSelectionRequest();
+    setSelection(node.path);
     setSelectedContent(null);
     setDraftContent("");
     setIsEditing(false);
@@ -880,6 +1049,8 @@ export function FileSidebar({
     setConflictContent(null);
     setRestoreNotice(null);
     setRequestedLine(line);
+    // A different file replaces the previous line target — including "none".
+    if (publishLocation) onSelectionLocationChange?.({ path: node.path, line });
     if (!sandboxId) {
       return;
     }
@@ -889,11 +1060,22 @@ export function FileSidebar({
     if (getPreviewKind(node.name) !== "text" || node.size > ONE_MB) {
       return;
     }
+    // Re-opening a file whose own save is still uploading: reading now would
+    // load the pre-save bytes and reinstate them as the baseline. Wait for that
+    // save to settle, then re-check that this selection still owns the read —
+    // the generation guard also covers unmount, which retires all of them.
+    const pendingSave = saveOperationsRef.current.get(saveKey(sandboxId, node.path));
+    if (pendingSave) {
+      await pendingSave.done;
+      if (!isLatestSelectionRequest(seq)) return;
+    }
     try {
       const loaded = await api.sandbox.readFile(sandboxId, node.path);
+      if (!isLatestSelectionRequest(seq)) return;
       setSelectedContent(loaded);
       setDraftContent(loaded.content);
     } catch (err) {
+      if (!isLatestSelectionRequest(seq)) return;
       setEditError(err instanceof Error ? err.message : t("files.error.previewFailed"));
     }
   };
@@ -929,7 +1111,12 @@ export function FileSidebar({
             }
             if (child.type !== "file") throw new Error(t("files.error.linkNotFile"));
             setExpandedPaths((current) => new Set([...current, ...expanded]));
-            await selectFile(child, openFileRequest.line, true);
+            // The host wrote this URL before asking, and re-publishing it here
+            // would feed a fresh `openFileRequest` back into this effect.
+            await selectFile(child, openFileRequest.line, {
+              discardConfirmed: true,
+              publishLocation: false,
+            });
             return;
           }
           if (child.type !== "folder" && child.type !== "symlink") {
@@ -949,24 +1136,59 @@ export function FileSidebar({
     };
   }, [openFileRequest?.requestId, isOpen, sandboxId, currentSandbox?.status]);
 
+  /**
+   * A save that lost its preview selection while this pane remains open must
+   * still be visible. Its inline slot belongs to another file or is hidden, so
+   * report it in the sidebar with the original path. Closing the entire pane
+   * retires its workspace epoch and drops that abandoned operation's UI result.
+   */
+  const reportBackgroundSaveFailure = (operation: SaveOperation, detail: string) => {
+    if (!ownsWorkspace(operation)) return;
+    setError(t("files.editor.backgroundSaveFailed", { path: toDisplayPath(operation.path), detail }));
+  };
+
+  /**
+   * A save belongs to the selection that started it. It may well finish in the
+   * background after the user moved on — the bytes still land on disk, and the
+   * tree is still refreshed — but its *editor* effects (baseline, conflict,
+   * inline error) only apply while that exact selection (session, file,
+   * selection generation) is still on screen.
+   */
   const saveSelectedFile = async (force = false) => {
     if (!sandboxId || !selectedFile || !selectedContent || !isInlineEditable(selectedFile.name)) return;
-    setIsSaving(true);
+    // Reject a duplicate for this file before React can disable the button.
+    const key = saveKey(sandboxId, selectedFile.path);
+    if (saveOperationsRef.current.has(key)) return;
+    let settle!: () => void;
+    const operation: SaveOperation = {
+      sandboxId,
+      epoch: workspaceEpochRef.current,
+      path: selectedFile.path,
+      seq: selectionRequestRef.current,
+      baseContent: selectedContent.content,
+      draft: draftContent,
+      done: new Promise<void>((resolve) => {
+        settle = resolve;
+      }),
+    };
+    saveOperationsRef.current.set(key, operation);
+    setSavingOwner(operation);
     setEditError(null);
     try {
       if (!force) {
-        const latest = await api.sandbox.readFile(sandboxId, selectedFile.path);
-        if (latest.content !== selectedContent.content) {
-          setConflictContent(latest);
+        const latest = await api.sandbox.readFile(operation.sandboxId, operation.path);
+        if (latest.content !== operation.baseContent) {
+          if (ownsSelection(operation)) setConflictContent(latest);
+          else reportBackgroundSaveFailure(operation, t("files.editor.conflict"));
           return;
         }
       }
-      const blob = new Blob([draftContent], { type: "text/plain;charset=utf-8" });
-      const saved = await api.sandbox.uploadFile(sandboxId, selectedFile.path, blob);
-      const nextContent = { path: selectedFile.path, content: draftContent, size: saved.size };
-      const relativePath = workspaceRelativePath(selectedFile.path);
+      const blob = new Blob([operation.draft], { type: "text/plain;charset=utf-8" });
+      const saved = await api.sandbox.uploadFile(operation.sandboxId, operation.path, blob);
+      const relativePath = workspaceRelativePath(operation.path);
       if (
-        latestRestoreIsLastMessage
+        ownsWorkspace(operation)
+        && latestRestoreIsLastMessage
         && latestRestoreKey
         && latestWorkspaceRestore?.restore.files.includes(relativePath)
       ) {
@@ -974,15 +1196,23 @@ export function FileSidebar({
         // before isDirty becomes false so the old restore is never re-badged.
         markRestorePathHandled(latestRestoreKey, relativePath);
       }
-      setSelectedContent(nextContent);
-      setRestoreNotice(null);
-      setConflictContent(null);
-      await loadDirectory(parentPath(selectedFile.path));
-      notifyFileSourcesChanged();
+      if (ownsSelection(operation)) {
+        setSelectedContent({ path: operation.path, content: operation.draft, size: saved.size });
+        setRestoreNotice(null);
+        setConflictContent(null);
+      }
+      // The bytes landed even if the user moved on, so keep the tree and the
+      // other file pickers honest — as long as this is still the same session.
+      if (ownsWorkspace(operation)) await loadDirectory(parentPath(operation.path));
+      if (ownsWorkspace(operation)) notifyFileSourcesChanged();
     } catch (err) {
-      setEditError(err instanceof Error ? err.message : t("files.editor.saveFailed"));
+      const message = err instanceof Error ? err.message : t("files.editor.saveFailed");
+      if (ownsSelection(operation)) setEditError(message);
+      else reportBackgroundSaveFailure(operation, message);
     } finally {
-      setIsSaving(false);
+      if (saveOperationsRef.current.get(key) === operation) saveOperationsRef.current.delete(key);
+      if (isMountedRef.current) setSavingOwner((current) => current === operation ? null : current);
+      settle();
     }
   };
 
@@ -1238,8 +1468,12 @@ export function FileSidebar({
             : null
         }
         onClose={() => {
+          // A canceled discard prompt must leave every bit of state — including
+          // the URL and the in-flight read guard — exactly as it was.
           if (!confirmDiscard()) return;
-          setSelectedPath(null);
+          beginSelectionRequest();
+          onSelectionLocationChange?.(null);
+          setSelection(null);
           setSelectedContent(null);
           setDraftContent("");
           setIsEditing(false);
@@ -1318,6 +1552,7 @@ function FilePreviewPanel({
   onToggleMaximize: () => void;
 }) {
   const t = useT();
+  const { language } = usePreferences();
   const [previewWidth, setPreviewWidth] = useState(DEFAULT_PREVIEW_WIDTH);
   const [isResizingPreview, setIsResizingPreview] = useState(false);
   const [blobUrl, setBlobUrl] = useState<string | null>(null);
@@ -1548,6 +1783,7 @@ function FilePreviewPanel({
         </div>
       ) : null}
 
+      <DetailsSection className="file-preview__information" summary={<>{t("files.preview.info")} · {formatBytes(file.size)} · {formatModified(file.modified, language)}</>}>
       <dl className="file-preview__meta">
         <div>
           <dt>{t("files.preview.path")}</dt>
@@ -1559,13 +1795,14 @@ function FilePreviewPanel({
         </div>
         <div>
           <dt>{t("files.preview.modified")}</dt>
-          <dd>{formatModified(file.modified)}</dd>
+          <dd>{formatModified(file.modified, language)}</dd>
         </div>
         <div>
           <dt>{t("files.preview.mode")}</dt>
           <dd>{file.permissions || "-"}</dd>
         </div>
       </dl>
+      </DetailsSection>
 
       <div className="file-preview__body">
         {editError ? <p className="file-editor__error" role="alert">{editError}</p> : null}

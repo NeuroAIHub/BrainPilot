@@ -343,8 +343,9 @@ export const RUNTIME_ROUTES = {
    * Persisted AG-UI event history from `events.jsonl`. The SPA calls this on
    * session activation to rehydrate chat after a runtime restart (the SSE
    * stream only replays the in-memory ring buffer). Query: `?limit=N`
-   * (default 1000, capped at 5000); returns the most recent N events when
-   * the file is longer.
+   * (default 1000, capped at 5000; zero/negative uses default). A byte cap also
+   * bounds reads. `cursor=start` walks from the beginning with nextCursor until
+   * the frozen EOF; total is null until known. No request materializes the log.
    */
   getSessionHistory: { method: "GET", path: "/sessions/:id/history" },
   interrupt: { method: "POST", path: "/sessions/:id/interrupt" },

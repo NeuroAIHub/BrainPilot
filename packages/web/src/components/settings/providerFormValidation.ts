@@ -7,9 +7,10 @@ export type ProviderFormFields = {
   baseUrl: string;
   apiKey: string;
   models: string[];
+  maxTokens?: string;
 };
 
-export type ProviderFieldError = "name" | "baseUrl" | "apiKey" | "models";
+export type ProviderFieldError = "name" | "baseUrl" | "apiKey" | "models" | "maxTokens";
 
 export type ProviderFormErrors = Partial<Record<ProviderFieldError, true>>;
 
@@ -25,6 +26,12 @@ export function validateProviderForm(
 
   const models = form.models.map((m) => m.trim()).filter(Boolean);
   if (models.length === 0) errors.models = true;
+  if (form.maxTokens?.trim()) {
+    const maxTokens = Number(form.maxTokens);
+    if (!Number.isInteger(maxTokens) || maxTokens < 1 || maxTokens > 1_000_000) {
+      errors.maxTokens = true;
+    }
+  }
 
   return { ok: Object.keys(errors).length === 0, errors };
 }
@@ -43,7 +50,8 @@ export function providerFieldErrorKey(
   | "settings.providerForm.error.name"
   | "settings.providerForm.error.baseUrl"
   | "settings.providerForm.error.apiKey"
-  | "settings.providerForm.error.models" {
+  | "settings.providerForm.error.models"
+  | "settings.providerForm.error.maxTokens" {
   switch (field) {
     case "name":
       return "settings.providerForm.error.name";
@@ -53,5 +61,7 @@ export function providerFieldErrorKey(
       return "settings.providerForm.error.apiKey";
     case "models":
       return "settings.providerForm.error.models";
+    case "maxTokens":
+      return "settings.providerForm.error.maxTokens";
   }
 }
