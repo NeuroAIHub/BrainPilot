@@ -2,7 +2,7 @@
  * Agent session factories.
  *
  *  - `mockAgentFactory`: deterministic, no API. Used when BP_MOCK=1.
- *  - `realAgentFactory`: wraps `@earendil-works/pi-coding-agent`'s AgentSession.
+ *  - `realAgentFactory`: wraps the vendored Pi SDK's AgentSession.
  *
  * `selectFactory()` picks based on env (BP_MOCK).
  *
@@ -28,6 +28,7 @@ import { makeTaskContextExt } from "./extensions/task-context.js";
 import { makeRouterSkillGuardExt } from "./extensions/router-skill-guard.js";
 import { makeManagedPathGuardExt } from "./extensions/managed-path-guard.js";
 import { makeOpenAiToolSchemaCompatExt } from "./extensions/openai-tool-schema-compat.js";
+import { makeAzureResponsesStatelessExt } from "./extensions/azure-responses-stateless.js";
 import { makePrincipalWorkflowGuardExt } from "./extensions/principal-workflow-guard.js";
 import { makeCompatHooksExt } from "./compat-hooks.js";
 import { installContextCompactionGuard } from "./context-compaction.js";
@@ -50,7 +51,7 @@ export const mockAgentFactory: AgentSessionFactory = async ({ sessionId, agentNa
  * (and never need API credentials).
  */
 export const realAgentFactory: AgentSessionFactory = async (params) => {
-  const sdk = (await import("@earendil-works/pi-coding-agent")) as unknown as PiSdk;
+  const sdk = (await import("@brainpilot/pi-sdk")) as unknown as PiSdk;
   const {
     createAgentSession,
     createBashToolDefinition,
@@ -179,7 +180,7 @@ export const realAgentFactory: AgentSessionFactory = async (params) => {
   // #452: keep this LAST. Pi has already combined built-in, custom, MCP, and
   // extension tools when before_provider_request runs, so one final rewrite
   // fixes every active tool source without changing their canonical schemas.
-  extensionFactories.push(makeOpenAiToolSchemaCompatExt());
+  extensionFactories.push(makeOpenAiToolSchemaCompatExt(), makeAzureResponsesStatelessExt());
   const additionalExtensionPaths = params.compatPluginProjections
     ?.flatMap((projection) => projection.extensionPaths ?? []);
   const resourceLoader = new DefaultResourceLoader({

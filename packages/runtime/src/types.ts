@@ -12,7 +12,7 @@ export type AgentRole = "principal" | "expert" | "trace";
 
 /**
  * Minimal surface of a Pi SDK `AgentSession` that the runtime depends on.
- * The real implementation wraps `@earendil-works/pi-coding-agent`'s
+ * The real implementation wraps `@brainpilot/pi-sdk`'s
  * `AgentSession`; the mock implementation (BP_MOCK=1) emits a scripted event
  * stream. Both speak the SAME Pi event vocabulary so the translator (§6) is
  * exercised identically in tests and production.

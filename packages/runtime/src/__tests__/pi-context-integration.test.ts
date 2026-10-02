@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import {
   createAgentSession, DefaultResourceLoader, defineTool, estimateTokens,
   ModelRuntime, SessionManager, SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+} from "@brainpilot/pi-sdk";
 import { installContextCompactionGuard } from "../context-compaction.js";
 import { resolveSessionModel } from "../pi-provider.js";
 import { MasAgent } from "../mas-agent.js";
@@ -78,7 +78,7 @@ async function primeHistory(
   await session.prompt("Earlier task with completed answer");
 }
 
-describe("Pi 0.84.2 context recovery integration (no network)", () => {
+describe("Pi 0.84.2 backport context recovery integration (no network)", () => {
   it("compacts before a second tool-loop request and retains the summary through later turns", async () => {
     const { session, manager, model } = await realPiHarness();
     await primeHistory(session, model);
