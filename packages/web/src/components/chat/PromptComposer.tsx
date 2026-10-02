@@ -14,6 +14,7 @@ import { runtimeConfig } from "../../config";
 import { api, isUploadAbortError, type UploadProgress } from "../../utils/api";
 import { IconButton } from "../primitives/IconButton";
 import { UploadProgressBar } from "../primitives/UploadProgressBar";
+import { useRetryFocus, type RememberRetryFocus, type RetryFocusResource } from "../primitives/useRetryFocus";
 import { AskUserComposer } from "./AskUserComposer";
 import {
   attachmentStore,
@@ -157,8 +158,34 @@ type PromptComposerProps = {
   onOpenWorkspaceFile?: (target: WorkspaceFileTarget) => void;
 };
 
+/** The ask_user takeover replaces the form, but the prompt region remains mounted. */
+export function rememberComposerRetryFocus(
+  remember: RememberRetryFocus,
+  trigger: HTMLElement,
+  form: HTMLFormElement | null,
+  region: HTMLElement | null,
+): void {
+  remember(trigger, form ?? region);
+}
+
+/** A null startup scope is valid; undefined means no retry has been recorded. */
+export function useScopedComposerRetryFocus(
+  scope: string | null,
+  resource: RetryFocusResource,
+): RememberRetryFocus {
+  const recordedScopeRef = useRef<string | null | undefined>(undefined);
+  const remember = useRetryFocus(
+    recordedScopeRef.current !== undefined && recordedScopeRef.current === scope,
+    resource,
+  );
+  return (trigger, target) => {
+    recordedScopeRef.current = scope;
+    remember(trigger, target);
+  };
+}
+
 export function HistoryLoadNotice({
-  error, updateRequired, hasMessages, isRefreshingMessages, localMode, onRetry, t,
+  error, updateRequired, hasMessages, isRefreshingMessages, localMode, onRetry, onRetryFocus, t,
 }: {
   error: string;
   updateRequired: boolean;
@@ -166,6 +193,7 @@ export function HistoryLoadNotice({
   isRefreshingMessages: boolean;
   localMode: boolean;
   onRetry: () => void;
+  onRetryFocus?: (trigger: HTMLElement) => void;
   t: (key: string) => string;
 }) {
   const messageKey = updateRequired
@@ -187,7 +215,11 @@ export function HistoryLoadNotice({
         aria-busy={isRefreshingMessages}
         aria-disabled={isRefreshingMessages}
         data-testid="history-load-retry"
-        onClick={() => { if (!isRefreshingMessages) onRetry(); }}
+        onClick={(event) => {
+          if (isRefreshingMessages) return;
+          onRetryFocus?.(event.currentTarget);
+          onRetry();
+        }}
       >
         {t(isRefreshingMessages ? "chat.history.retrying" : updateRequired ? "chat.history.retryAfterUpdate" : "chat.history.retry")}
       </button>
@@ -237,6 +269,8 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
   const uploading = uploadState != null || queuedUploadCount > 0;
   const { currentSession, messages, isSending, error, sendPrompt, updateSessionThinking, isConnected, isDraft, startDraftSession, agents, runActive, workActive, agentFilters, interruptCurrent, interruptTool, isInterrupting, interruptingToolIds, respondToInput, messageFilters, historyLoadError, historyUpdateRequired, isRefreshingMessages, refreshMessages } = useSessions();
   const sessionId = currentSession?.id ?? (isDraft ? DRAFT_SESSION_ID : null);
+  const promptRegionRef = useRef<HTMLElement | null>(null);
+  const composerFormRef = useRef<HTMLFormElement | null>(null);
   const persistedAttachmentNames = useAttachments(sessionId);
   const attachmentScopeRef = useRef<string | null>(sessionId);
   const activeTools = useMemo(
@@ -265,6 +299,11 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
     sessionModelId: currentSession?.modelId,
     fallbackError: t("chat.provider.loadFailed"),
   });
+  const rememberProviderRetryFocus = useScopedComposerRetryFocus(sessionId, providerList);
+  const rememberHistoryRetryFocus = useScopedComposerRetryFocus(
+    currentSession?.id ?? null,
+    { status: isRefreshingMessages ? "loading" : historyLoadError ? "error" : "ready" },
+  );
   const draftModelUnavailable = isDraft &&
     Boolean(activeProvider && selectedModel) &&
     selectedModelStatus(activeProvider, selectedModel) === "unavailable";
@@ -1040,7 +1079,13 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
 
   const recoveryBusy = !canSend || workActive?.active === true;
   return (
-    <section className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`} aria-labelledby="prompt-heading">
+    <section
+      ref={promptRegionRef}
+      className={`prompt-home ${hasMessages ? "prompt-home--active" : ""}`}
+      aria-labelledby={hasMessages ? undefined : "prompt-heading"}
+      aria-label={hasMessages ? t(askTakeover ? "chat.awaitingAnswer" : "chat.aria.newPrompt") : undefined}
+      tabIndex={-1}
+    >
       <div className="prompt-home__inner">
         {providerNotice.kind === "load-failed" ? (
           <div className="composer-notice" role="alert" data-testid="provider-load-failed">
@@ -1056,14 +1101,18 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
                 </details>
               ) : null}
             </span>
-            {/* Stays mounted while the retry runs, so focus is not lost. */}
+            {/* Stays mounted while retrying; success returns focus after the notice leaves. */}
             <button
               type="button"
               className="composer-notice__cta"
               aria-busy={providerNotice.busy}
               aria-disabled={providerNotice.busy}
               data-testid="provider-load-retry"
-              onClick={() => { if (!providerNotice.busy) void retryProviderLoad(); }}
+              onClick={(event) => {
+                if (providerNotice.busy) return;
+                rememberComposerRetryFocus(rememberProviderRetryFocus, event.currentTarget, composerFormRef.current, promptRegionRef.current);
+                void retryProviderLoad();
+              }}
             >
               {t(providerNotice.busy ? "chat.provider.retrying" : "chat.provider.retry")}
             </button>
@@ -1106,6 +1155,9 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             isRefreshingMessages={isRefreshingMessages}
             localMode={runtimeConfig.localMode}
             onRetry={() => void refreshMessages()}
+            onRetryFocus={(trigger) => {
+              rememberComposerRetryFocus(rememberHistoryRetryFocus, trigger, composerFormRef.current, promptRegionRef.current);
+            }}
             t={t}
           />
         ) : isRefreshingMessages && currentSession ? (
@@ -1193,7 +1245,7 @@ export function PromptComposer({ onOpenProviderSettings, onOpenWorkspaceFile }: 
             onSubmit={(requestId, answer) => void respondToInput(requestId, answer)}
           />
         ) : (
-        <form className="composer" aria-label={t("chat.aria.newPrompt")} onSubmit={handleSubmit}>
+        <form ref={composerFormRef} className="composer" aria-label={t("chat.aria.newPrompt")} tabIndex={-1} onSubmit={handleSubmit}>
           <ComposerInput
             sessionId={sessionId}
             placeholder={composerPlaceholder}

@@ -1277,7 +1277,13 @@ export function SessionProvider({ children }: { children: ReactNode }) {
   const refreshTrace = useCallback(async (sessionId: string) => {
     try {
       const graph = await api.sessions.getTrace(sessionId);
-      setTraceBySession((current) => ({ ...current, [sessionId]: graph }));
+      setTraceBySession((current) => {
+        const live = current[sessionId];
+        // SSE can advance while this request is in flight. Rolling back its
+        // revision would make every following patch look like a missing delta.
+        if (live && (live.revision ?? -1) > (graph.revision ?? -1)) return current;
+        return { ...current, [sessionId]: graph };
+      });
     } catch {
       // Non-fatal — the panel shows an empty graph until events arrive.
     }
