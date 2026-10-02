@@ -5,6 +5,7 @@ import {
   type RememberRetryFocus,
   type RetryFocusResource,
 } from "../components/primitives/useRetryFocus";
+import { rememberComposerRetryFocus, useScopedComposerRetryFocus } from "../components/chat/PromptComposer";
 
 /**
  * Focus recovery for a retry that its own success unmounts.
@@ -45,8 +46,27 @@ function mount(isOpen: boolean, resource: RetryFocusResource) {
   return {
     remember: (trigger: FakeElement, target: FakeElement | null) =>
       remember(asElement(trigger), target ? asElement(target) : null),
+    rememberElement: (trigger: HTMLElement, target: HTMLElement | null) => remember(trigger, target),
     update: (nextOpen: boolean, next: RetryFocusResource) =>
       act(() => renderer.update(<Harness isOpen={nextOpen} resource={next} />)),
+    unmount: () => act(() => renderer.unmount()),
+  };
+}
+
+function mountScoped(scope: string | null, resource: RetryFocusResource) {
+  let remember!: RememberRetryFocus;
+  const Harness = (props: { scope: string | null; resource: RetryFocusResource }) => {
+    remember = useScopedComposerRetryFocus(props.scope, props.resource);
+    return null;
+  };
+  let renderer!: ReactTestRenderer;
+  act(() => {
+    renderer = create(<Harness scope={scope} resource={resource} />);
+  });
+  return {
+    remember: (trigger: FakeElement, target: FakeElement) => remember(asElement(trigger), asElement(target)),
+    update: (nextScope: string | null, next: RetryFocusResource) =>
+      act(() => renderer.update(<Harness scope={nextScope} resource={next} />)),
     unmount: () => act(() => renderer.unmount()),
   };
 }
@@ -56,6 +76,77 @@ afterEach(() => {
 });
 
 describe("useRetryFocus", () => {
+  it("returns focus after a successful provider retry with no active session or draft", () => {
+    const body = element();
+    const form = element();
+    const trigger = element();
+    const doc = stubDocument(body, trigger);
+    const hook = mountScoped(null, failed());
+    try {
+      hook.remember(trigger, form);
+      hook.update(null, loading);
+      expect(form.focus).not.toHaveBeenCalled();
+
+      trigger.isConnected = false;
+      doc.activeElement = body;
+      hook.update(null, ready());
+      expect(form.focus).toHaveBeenCalledOnce();
+    } finally {
+      hook.unmount();
+    }
+  });
+
+  it("cancels a no-session retry focus record when a session opens", () => {
+    const body = element();
+    const form = element();
+    const trigger = element();
+    const doc = stubDocument(body, trigger);
+    const hook = mountScoped(null, failed());
+    try {
+      hook.remember(trigger, form);
+      hook.update(null, loading);
+      hook.update("new-session", loading);
+
+      trigger.isConnected = false;
+      doc.activeElement = body;
+      hook.update("new-session", ready());
+      expect(form.focus).not.toHaveBeenCalled();
+    } finally {
+      hook.unmount();
+    }
+  });
+
+  it("prefers the composer form when it is present", () => {
+    const remember = vi.fn();
+    const trigger = element();
+    const form = element();
+    const region = element();
+    rememberComposerRetryFocus(remember, asElement(trigger), asElement(form) as unknown as HTMLFormElement, asElement(region));
+    expect(remember).toHaveBeenCalledExactlyOnceWith(asElement(trigger), asElement(form));
+  });
+
+  it("uses the persistent prompt region when ask_user replaces the composer form", () => {
+    const body = element();
+    const region = element();
+    const trigger = element();
+    const doc = stubDocument(body, trigger);
+    const hook = mount(true, failed());
+    try {
+      const remember = vi.fn(hook.rememberElement);
+      rememberComposerRetryFocus(remember, asElement(trigger), null, asElement(region));
+      expect(remember).toHaveBeenCalledExactlyOnceWith(asElement(trigger), asElement(region));
+      hook.update(true, loading);
+      expect(region.focus).not.toHaveBeenCalled();
+
+      trigger.isConnected = false;
+      doc.activeElement = body;
+      hook.update(true, ready());
+      expect(region.focus).toHaveBeenCalledOnce();
+    } finally {
+      hook.unmount();
+    }
+  });
+
   it("holds focus during the retry and hands it to the target once the data lands", () => {
     const body = element();
     const heading = element();

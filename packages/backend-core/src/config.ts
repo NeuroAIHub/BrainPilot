@@ -146,6 +146,8 @@ export interface StoredProviderProfile {
   models: string[];
   /** Explicit model context window. Missing means runtime auto-detection/default. */
   contextWindow?: 262_144 | 1_000_000 | null;
+  /** Optional output ceiling in tokens; absent uses the runtime default. */
+  maxTokens?: number | null;
   /** Model ids that support extended thinking. Missing on legacy profiles means all configured models. */
   reasoningModels?: string[];
   icon?: string;
@@ -227,6 +229,7 @@ export async function createProfile(
     apiKeyEnv: input.apiKeyEnv,
     models: input.models ?? [],
     contextWindow: input.contextWindow ?? undefined,
+    maxTokens: input.maxTokens ?? undefined,
     reasoningModels: input.reasoningModels ?? input.models ?? [],
     icon: input.icon,
     iconColor: input.iconColor,
@@ -255,6 +258,8 @@ export async function updateProfile(
   }
   if (patch.contextWindow === null) delete profile.contextWindow;
   else if (patch.contextWindow !== undefined) profile.contextWindow = patch.contextWindow;
+  if (patch.maxTokens === null) delete profile.maxTokens;
+  else if (patch.maxTokens !== undefined) profile.maxTokens = patch.maxTokens;
   // V1 exposes one shared thinking selector rather than per-model capability
   // controls, so newly edited model lists remain reasoning-enabled by default.
   if (patch.models !== undefined && patch.reasoningModels === undefined) {

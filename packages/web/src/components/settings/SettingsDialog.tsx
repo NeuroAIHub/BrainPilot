@@ -107,6 +107,7 @@ const DEFAULT_PROVIDER_FORM = {
   apiKeyMasked: "",
   models: [EXAMPLE_MODEL],
   contextWindow: undefined as ProviderContextWindow | undefined,
+  maxTokens: "",
   iconColor: "#111111",
   notes: "",
 };
@@ -384,6 +385,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
             ...(providerForm.apiKey ? { apiKey: providerForm.apiKey } : {}),
             models,
             contextWindow: providerForm.contextWindow ?? null,
+            maxTokens: providerForm.maxTokens.trim() ? Number(providerForm.maxTokens) : null,
             iconColor: providerForm.iconColor,
             notes: providerForm.notes,
           })
@@ -394,6 +396,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
             apiKey: providerForm.apiKey,
             models,
             contextWindow: providerForm.contextWindow,
+            maxTokens: providerForm.maxTokens.trim() ? Number(providerForm.maxTokens) : undefined,
             iconColor: providerForm.iconColor,
             notes: providerForm.notes,
           });
@@ -419,6 +422,7 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
       apiKeyMasked: provider.apiKeyMasked || "",
       models: provider.models.length ? provider.models : [""],
       contextWindow: provider.contextWindow,
+      maxTokens: provider.maxTokens?.toString() ?? "",
       iconColor: provider.iconColor || "#111111",
       notes: provider.notes,
     });
@@ -1084,6 +1088,21 @@ export function SettingsDialog({ isOpen, onClose, initialTab, returnFocusTo }: S
                 />
                 <small>{t("settings.providerForm.contextWindowHint")}</small>
               </div>
+              <label className="provider-form__field">
+                <span>{t("settings.providerForm.maxTokens")}</span>
+                <input
+                  aria-invalid={Boolean(providerFieldErrors.maxTokens)}
+                  inputMode="numeric"
+                  max={1_000_000}
+                  min={1}
+                  onChange={(event) => setProviderForm({ ...providerForm, maxTokens: event.target.value })}
+                  placeholder={t("settings.providerForm.maxTokensAuto")}
+                  type="number"
+                  value={providerForm.maxTokens}
+                />
+                <small>{t("settings.providerForm.maxTokensHint")}</small>
+                {providerFieldErrors.maxTokens && <small role="alert">{t("settings.providerForm.error.maxTokens")}</small>}
+              </label>
               <label className="provider-form__key">
                 <span>
                   {t("settings.providerForm.apiKey")}{" "}

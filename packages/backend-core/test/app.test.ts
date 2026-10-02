@@ -633,36 +633,43 @@ describe("Hono app — local config routes", () => {
         api_key: "sk-secret",
         models: ["model-1m"],
         context_window: 1_000_000,
+        max_tokens: 65_536,
       }),
     });
     expect(created.status).toBe(201);
-    const profile = (await created.json()) as { id: string; context_window?: number };
+    const profile = (await created.json()) as { id: string; context_window?: number; max_tokens?: number };
     expect(profile.context_window).toBe(1_000_000);
+    expect(profile.max_tokens).toBe(65_536);
 
     const updated = await app.request(`/api/provider/profiles/${profile.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ context_window: 262_144 }),
+      body: JSON.stringify({ context_window: 262_144, max_tokens: 32_768 }),
     });
     expect(updated.status).toBe(200);
-    expect(((await updated.json()) as { context_window?: number }).context_window).toBe(262_144);
+    expect(((await updated.json()) as { context_window?: number; max_tokens?: number }))
+      .toMatchObject({ context_window: 262_144, max_tokens: 32_768 });
 
     const stored = JSON.parse(
       await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
-    ) as { profiles: Array<{ contextWindow?: number }> };
+    ) as { profiles: Array<{ contextWindow?: number; maxTokens?: number }> };
     expect(stored.profiles[0]?.contextWindow).toBe(262_144);
+    expect(stored.profiles[0]?.maxTokens).toBe(32_768);
 
     const automatic = await app.request(`/api/provider/profiles/${profile.id}`, {
       method: "PUT",
       headers: { "content-type": "application/json" },
-      body: JSON.stringify({ context_window: null }),
+      body: JSON.stringify({ context_window: null, max_tokens: null }),
     });
     expect(automatic.status).toBe(200);
-    expect((await automatic.json()) as Record<string, unknown>).not.toHaveProperty("context_window");
+    const automaticProfile = (await automatic.json()) as Record<string, unknown>;
+    expect(automaticProfile).not.toHaveProperty("context_window");
+    expect(automaticProfile).not.toHaveProperty("max_tokens");
     const cleared = JSON.parse(
       await readFile(path.join(dir, "bp_template", "providers.json"), "utf8"),
     ) as { profiles: Array<{ contextWindow?: number }> };
     expect(cleared.profiles[0]).not.toHaveProperty("contextWindow");
+    expect(cleared.profiles[0]).not.toHaveProperty("maxTokens");
   });
 
   it("rejects unsupported provider context windows", async () => {
@@ -680,6 +687,12 @@ describe("Hono app — local config routes", () => {
       body: JSON.stringify({ name: "Bad", models: ["m"], context_window: 500_000 }),
     });
     expect(response.status).toBe(400);
+    const invalidMax = await app.request("/api/provider/profiles", {
+      method: "POST",
+      headers: { "content-type": "application/json" },
+      body: JSON.stringify({ name: "Bad", models: ["m"], max_tokens: -1 }),
+    });
+    expect(invalidMax.status).toBe(400);
   });
 
   // #50: malformed provider profiles must 400, not silently create an unusable

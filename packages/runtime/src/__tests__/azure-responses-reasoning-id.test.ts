@@ -3,9 +3,10 @@ import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { describe, expect, it } from "vitest";
 
-// Regression guard for the Azure store:false reasoning-replay fix that
-// scripts/patch-pi-ai.cjs applies (postinstall) to @earendil-works/pi-ai's
-// Responses converter.
+import { makeAzureResponsesStatelessExt, normalizeAzureStatelessPayload } from "../extensions/azure-responses-stateless.js";
+
+// Exercise the installed Pi converter, then BrainPilot's final request hook.
+// The hook travels with @brainpilot/runtime to published npm consumers.
 //
 // Azure OpenAI Responses (api "azure-openai-responses") runs store:false, so the
 // server persists nothing between turns. The shared converter replays a captured
@@ -14,7 +15,7 @@ import { describe, expect, it } from "vitest";
 // persisted when store is set to false."). The fix, for azure only: drop reasoning
 // items lacking encrypted_content, and strip the rs_/fc_ server ids from items it
 // does replay (encrypted_content carries the state). Non-azure Responses providers
-// are untouched. This test fails if the postinstall patch did not apply.
+// are untouched.
 
 interface TestModel {
 	id: string;
@@ -74,7 +75,7 @@ function resolveSharedConverterPath(): string {
 	while (dirname(dir) !== dir) {
 		for (const sub of subs) {
 			const tail = join("@earendil-works", "pi-ai", "dist", sub, "openai-responses-shared.js");
-			const nested = join(dir, "node_modules", "@earendil-works", "pi-coding-agent", "node_modules", tail);
+			const nested = join(dir, "node_modules", "@brainpilot", "pi-sdk", "node_modules", tail);
 			const hoisted = join(dir, "node_modules", tail);
 			if (existsSync(nested)) return nested;
 			if (existsSync(hoisted)) return hoisted;
@@ -145,13 +146,15 @@ function thinkingContext(
 	};
 }
 
-describe("pi-ai azure responses store:false reasoning replay (postinstall patch)", () => {
+function finalAzureInput(context: TestContext): ResponsesItem[] {
+	const converted = convertResponsesMessages(model("azure-openai-responses", "azure"), context, AZURE_TOOL_CALL_PROVIDERS);
+	const payload = normalizeAzureStatelessPayload({ store: false, input: converted }) as { input: ResponsesItem[] };
+	return payload.input;
+}
+
+describe("pi-ai azure responses store:false reasoning replay (runtime hook)", () => {
 	it("strips the rs_ id for azure but keeps the encrypted_content payload", () => {
-		const items = convertResponsesMessages(
-			model("azure-openai-responses", "azure"),
-			thinkingContext("azure-openai-responses", "azure", "ENCRYPTED_BLOB"),
-			AZURE_TOOL_CALL_PROVIDERS,
-		);
+		const items = finalAzureInput(thinkingContext("azure-openai-responses", "azure", "ENCRYPTED_BLOB"));
 		const reasoning = items.find((item) => item.type === "reasoning");
 		expect(reasoning).toBeDefined();
 		expect(reasoning?.encrypted_content).toBe("ENCRYPTED_BLOB");
@@ -159,11 +162,7 @@ describe("pi-ai azure responses store:false reasoning replay (postinstall patch)
 	});
 
 	it("drops the reasoning item entirely for azure when it has no encrypted_content", () => {
-		const items = convertResponsesMessages(
-			model("azure-openai-responses", "azure"),
-			thinkingContext("azure-openai-responses", "azure"),
-			AZURE_TOOL_CALL_PROVIDERS,
-		);
+		const items = finalAzureInput(thinkingContext("azure-openai-responses", "azure"));
 		// A bare rs_ id under store:false would 400; the patch must not replay it.
 		expect(items.find((item) => item.type === "reasoning")).toBeUndefined();
 	});
@@ -192,10 +191,22 @@ describe("pi-ai azure responses store:false reasoning replay (postinstall patch)
 				},
 			],
 		};
-		const items = convertResponsesMessages(model("azure-openai-responses", "azure"), context, AZURE_TOOL_CALL_PROVIDERS);
+		const items = finalAzureInput(context);
 		const fnCall = items.find((item) => item.type === "function_call");
 		expect(fnCall).toBeDefined();
 		expect(fnCall?.call_id).toBe("call_abc");
 		expect(fnCall?.id).toBeUndefined();
+	});
+
+	it("rewrites only Azure store:false requests at the provider boundary", () => {
+		let handler: ((event: { payload: unknown }, context: { model?: { api?: string } }) => unknown) | undefined;
+		makeAzureResponsesStatelessExt()({ on: (_event, callback) => { handler = callback; } });
+		const input = [{ type: "reasoning", id: "rs_1", encrypted_content: "secret" }];
+		const payload = { store: false, input };
+		expect(handler?.({ payload }, { model: { api: "azure-openai-responses" } }))
+			.toEqual({ store: false, input: [{ type: "reasoning", encrypted_content: "secret" }] });
+		expect(handler?.({ payload }, { model: { api: "openai-responses" } })).toBeUndefined();
+		expect(handler?.({ payload: { ...payload, store: true } }, { model: { api: "azure-openai-responses" } }))
+			.toEqual({ ...payload, store: true });
 	});
 });

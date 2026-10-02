@@ -191,11 +191,17 @@ export class GraphOfTrace {
   /** True only after V1 was loaded; controls one-time backup on first mutation. */
   private loadedV1 = false;
   private wroteV2AfterV1 = false;
+  private readonly dirtyNodes = new Set<string>();
+  private readonly dirtyDependencies = new Set<string>();
+  private readonly dirtyEpisodes = new Set<string>();
+  private readonly dirtyArtifacts = new Set<string>();
+  private readonly removedEpisodes = new Set<string>();
+  private readonly removedDependencies = new Set<string>();
 
   /**
    * @param onChange legacy V1 projection event. Kept during the transition.
-   * @param onDelta canonical V2 snapshot event. The manager emits it as
-   * `CUSTOM:trace_delta`; snapshot events favor correctness during rollout.
+   * @param onDelta canonical V2 patch event. Snapshot remains available for
+   * bootstrap and recovery of historical event streams.
    */
   constructor(
     readonly sessionId: string,
@@ -694,7 +700,7 @@ export class GraphOfTrace {
     if (!node || !artifact) return false;
     node.artifactIds = unique([...node.artifactIds, artifactId]);
     node.updatedAt = now();
-    if (!artifact.role) artifact.role = role;
+    if (!artifact.role) { artifact.role = role; this.dirtyArtifacts.add(artifactId); }
     this.commit("updated", nodeId);
     return true;
   }
@@ -734,6 +740,7 @@ export class GraphOfTrace {
     }]);
     if (reason) dependency.reason = reason;
     dependency.updatedAt = now();
+    this.dirtyDependencies.add(id);
     const child = this.nodes.get(dependency.dependentId);
     const parentRef = child?.parents.find((parent) => parent.nodeId === dependency.prerequisiteId);
     if (parentRef) {
@@ -798,6 +805,7 @@ export class GraphOfTrace {
       updatedAt: stamp,
     };
     this.episodes.set(episode.id, episode);
+    this.dirtyEpisodes.add(episode.id);
     return episode;
   }
 
@@ -806,6 +814,7 @@ export class GraphOfTrace {
     const stamp = now();
     const episode: TraceEpisode = { id, title: input.title, ...(input.description ? { description: input.description } : {}), createdAt: stamp, updatedAt: stamp };
     this.episodes.set(id, episode);
+    this.dirtyEpisodes.add(id);
     this.commit("updated");
     return clone(episode);
   }
@@ -816,6 +825,7 @@ export class GraphOfTrace {
     episode.title = title;
     if (description !== undefined) episode.description = description;
     episode.updatedAt = now();
+    this.dirtyEpisodes.add(id);
     this.commit("updated");
     return clone(episode);
   }
@@ -835,11 +845,19 @@ export class GraphOfTrace {
     if (!target) return undefined;
     const sources = unique(sourceIds).filter((id) => id !== targetId && this.episodes.has(id));
     for (const node of this.nodes.values()) {
-      if (node.primaryEpisodeId && sources.includes(node.primaryEpisodeId)) node.primaryEpisodeId = targetId;
-      node.episodeTags = unique(node.episodeTags.map((tag) => sources.includes(tag) ? targetId : tag));
+      if (node.primaryEpisodeId && sources.includes(node.primaryEpisodeId)) {
+        node.primaryEpisodeId = targetId;
+        this.dirtyNodes.add(node.id);
+      }
+      const tags = unique(node.episodeTags.map((tag) => sources.includes(tag) ? targetId : tag));
+      if (tags.some((tag, index) => tag !== node.episodeTags[index]) || tags.length !== node.episodeTags.length) {
+        node.episodeTags = tags;
+        this.dirtyNodes.add(node.id);
+      }
     }
-    for (const id of sources) this.episodes.delete(id);
+    for (const id of sources) { this.episodes.delete(id); this.removedEpisodes.add(id); }
     target.updatedAt = now();
+    this.dirtyEpisodes.add(targetId);
     this.commit("updated");
     return clone(target);
   }
@@ -852,19 +870,24 @@ export class GraphOfTrace {
     for (let index = 0; index < splits.length; index++) {
       for (const nodeId of unique(splits[index]!.nodeIds)) {
         const node = this.nodes.get(nodeId);
-        if (node?.primaryEpisodeId === sourceId) node.primaryEpisodeId = created[index]!.id;
+        if (node?.primaryEpisodeId === sourceId) { node.primaryEpisodeId = created[index]!.id; this.dirtyNodes.add(node.id); }
         if (node) reassigned.set(nodeId, created[index]!.id);
       }
     }
     for (const node of this.nodes.values()) {
       const replacement = reassigned.get(node.id);
-      if (node.primaryEpisodeId === sourceId) node.primaryEpisodeId = replacement;
-      node.episodeTags = unique(node.episodeTags.flatMap((tag) => {
+      if (node.primaryEpisodeId === sourceId) { node.primaryEpisodeId = replacement; this.dirtyNodes.add(node.id); }
+      const tags = unique(node.episodeTags.flatMap((tag) => {
         if (tag !== sourceId) return [tag];
         return replacement ? [replacement] : [];
       }));
+      if (tags.some((tag, index) => tag !== node.episodeTags[index]) || tags.length !== node.episodeTags.length) {
+        node.episodeTags = tags;
+        this.dirtyNodes.add(node.id);
+      }
     }
     this.episodes.delete(sourceId);
+    this.removedEpisodes.add(sourceId);
     this.commit("updated");
     return created;
   }
@@ -1048,7 +1071,7 @@ export class GraphOfTrace {
     };
     this.changes.push(change);
     this.persist(change);
-    this.onDelta?.({ schemaVersion: "2.0", revision: this.revision, op: "snapshot", graph: this.getGraphV2() });
+    this.emitPatch();
     return clone(change);
   }
 
@@ -1110,6 +1133,7 @@ export class GraphOfTrace {
     }
     this.normalizeCausalGraph();
     this.refreshLastNode();
+    this.resetDirty();
   }
 
   async flush(): Promise<void> {
@@ -1117,6 +1141,7 @@ export class GraphOfTrace {
   }
 
   private clear(): void {
+    this.resetDirty();
     this.nodes.clear();
     this.dependencies.clear();
     this.episodes.clear();
@@ -1445,6 +1470,7 @@ export class GraphOfTrace {
       this.applyConfidencePolicy(existing, origin, evidence);
       this.syncParentFromDependency(existing);
       existing.updatedAt = now();
+      this.dirtyDependencies.add(id);
       return { ok: true, dependency: existing };
     }
     const stamp = now();
@@ -1462,6 +1488,7 @@ export class GraphOfTrace {
     };
     this.applyConfidencePolicy(dependency, origin, evidence);
     this.dependencies.set(id, dependency);
+    this.dirtyDependencies.add(id);
     this.syncParentFromDependency(dependency);
     return { ok: true, dependency };
   }
@@ -1538,6 +1565,7 @@ export class GraphOfTrace {
     }
     this.meta.rootNodeId = id;
     const existing = this.nodes.get(id);
+    if (!existing) this.dirtyNodes.add(id);
     const stamp = existing?.createdAt ?? this.meta.createdAt ?? now();
     const root: TraceNodeV2 = existing ?? {
       id,
@@ -1685,6 +1713,7 @@ export class GraphOfTrace {
   ): void {
     const id = stableId("dependency", prerequisiteId, dependentId);
     const existing = this.dependencies.get(id);
+    const before = existing ? JSON.stringify(existing) : undefined;
     const stamp = stampOverride ?? now();
     const state: TraceDependencyState = conclusion === "confirmed" ? "active" : conclusion === "rejected" ? "rejected" : "proposed";
     if (existing) {
@@ -1693,6 +1722,7 @@ export class GraphOfTrace {
       else if (conclusion === "uncertain") existing.confidence = "low";
       if (reason) existing.reason = reason;
       existing.updatedAt = stamp;
+      if (JSON.stringify(existing) !== before) this.dirtyDependencies.add(id);
       return;
     }
     this.dependencies.set(id, {
@@ -1707,6 +1737,7 @@ export class GraphOfTrace {
       createdAt: stamp,
       updatedAt: stamp,
     });
+    this.dirtyDependencies.add(id);
   }
 
   /** Rebuild the legacy read model exclusively from embedded node parents. */
@@ -1720,7 +1751,11 @@ export class GraphOfTrace {
       }
     }
     for (const id of this.dependencies.keys()) {
-      if (!retained.has(id)) this.dependencies.delete(id);
+      if (!retained.has(id)) {
+        this.dependencies.delete(id);
+        this.removedDependencies.add(id);
+        this.dirtyDependencies.delete(id);
+      }
     }
   }
 
@@ -1763,6 +1798,7 @@ export class GraphOfTrace {
       ...(updatedAt ? { updatedAt } : {}),
     };
     this.artifacts.set(id, artifact);
+    if (JSON.stringify(existing) !== JSON.stringify(artifact)) this.dirtyArtifacts.add(id);
     const node = this.nodes.get(nodeId);
     if (node) node.artifactIds = unique([...node.artifactIds, id]);
     return artifact;
@@ -1930,10 +1966,38 @@ export class GraphOfTrace {
     this.changes.push(change);
     this.persist(change);
     if (nodeId) {
+      this.dirtyNodes.add(nodeId);
       const node = this.getNode(nodeId);
       if (node) this.onChange?.(op, node);
     }
-    this.onDelta?.({ schemaVersion: "2.0", revision: this.revision, op: "snapshot", graph: this.getGraphV2() });
+    this.emitPatch();
+  }
+
+  private emitPatch(): void {
+    const values = <T>(ids: Set<string>, map: Map<string, T>): T[] =>
+      [...ids].flatMap((id) => { const item = map.get(id); return item ? [clone(item)] : []; });
+    const delta: TraceDeltaV2 = {
+      schemaVersion: "2.0", revision: this.revision, op: "patch", meta: clone(this.meta),
+      nodes: values(this.dirtyNodes, this.nodes),
+      dependencies: values(this.dirtyDependencies, this.dependencies),
+      episodes: values(this.dirtyEpisodes, this.episodes),
+      artifacts: values(this.dirtyArtifacts, this.artifacts),
+      removed: {
+        dependencies: [...this.removedDependencies],
+        episodes: [...this.removedEpisodes],
+      },
+    };
+    this.resetDirty();
+    this.onDelta?.(delta);
+  }
+
+  private resetDirty(): void {
+    this.dirtyNodes.clear();
+    this.dirtyDependencies.clear();
+    this.dirtyEpisodes.clear();
+    this.dirtyArtifacts.clear();
+    this.removedEpisodes.clear();
+    this.removedDependencies.clear();
   }
 
   private changeLogPath(): string | undefined {

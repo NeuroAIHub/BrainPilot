@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import { describe, expect, it, vi, beforeEach, afterEach, type Mock } from "vitest";
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 
 // No jsdom in this monorepo (see vitest.config.ts), so the panel is mounted with
@@ -75,8 +75,8 @@ const flush = async () => {
 };
 
 let renderer: ReactTestRenderer;
-let onSelectionLocationChange: ReturnType<typeof vi.fn>;
-let onUseInConversation: ReturnType<typeof vi.fn>;
+let onSelectionLocationChange: Mock<(target: { path: string; line?: number } | null) => void>;
+let onUseInConversation: Mock<(path: string) => void>;
 let confirmMock: ReturnType<typeof vi.fn>;
 
 const noop = () => {};
@@ -129,8 +129,8 @@ beforeEach(() => {
   mocks.readRawFile.mockReset().mockResolvedValue(new Blob());
   mocks.enabledPreviewers.mockReset().mockResolvedValue([]);
   mocks.getInfo.mockReset().mockResolvedValue({ localMode: true, workspacesRoot: "" });
-  onSelectionLocationChange = vi.fn();
-  onUseInConversation = vi.fn();
+  onSelectionLocationChange = vi.fn<(target: { path: string; line?: number } | null) => void>();
+  onUseInConversation = vi.fn<(path: string) => void>();
   confirmMock = vi.fn(() => true);
   // The node env has no `window`; the panel only needs the listener pair, the
   // discard prompt and a viewport width for its resize maths.

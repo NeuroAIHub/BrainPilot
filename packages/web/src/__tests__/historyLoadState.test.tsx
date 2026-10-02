@@ -1,6 +1,7 @@
 import { act, create, type ReactTestRenderer } from "react-test-renderer";
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Session } from "../contracts/backend";
+import type { ChatMessage, Session } from "../contracts/backend";
+import { HistoryPaginationUnavailableError } from "../utils/historyPages";
 
 // A transcript that cannot be read is a reportable failure, not an empty
 // conversation: SessionContext records a per-session history error, keeps the
@@ -46,7 +47,7 @@ vi.mock("../utils/api", async (importOriginal) => {
   };
 });
 
-import { SessionProvider, useSessions } from "../contexts/SessionContext";
+import { mergeRehydratedMessages, SessionProvider, useSessions } from "../contexts/SessionContext";
 
 type ContextValue = ReturnType<typeof useSessions>;
 
@@ -190,6 +191,76 @@ describe("session-list load failure is scoped to the list", () => {
 });
 
 describe("history load failure is scoped to the active session", () => {
+  it("scopes the update-required flag and clears it after a successful retry", async () => {
+    mocks.list.mockResolvedValueOnce([
+      session("s1", "2026-02-02T00:00:00.000Z"),
+      session("s2", "2026-02-01T00:00:00.000Z"),
+    ]);
+    mocks.getHistory.mockResolvedValueOnce({ events: [textEvent("m1", "cached")], total: null, truncated: true });
+    const renderer = await mount();
+    expect(value().historyUpdateRequired).toBe(true);
+    expect(value().historyLoadError).toMatch(/incomplete history/);
+    expect(value().messages).toEqual([]); // no partial tail was published
+
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m2", "other")]));
+    await act(async () => { value().selectSession("s2"); });
+    await flush();
+    expect(value().historyUpdateRequired).toBe(false);
+    expect(value().historyLoadError).toBeNull();
+
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m1", "complete")]));
+    await act(async () => { value().selectSession("s1"); });
+    await flush();
+    expect(value().historyUpdateRequired).toBe(false);
+    expect(value().historyLoadError).toBeNull();
+    expect(value().messages.map((message) => message.content)).toEqual(["complete"]);
+    await act(async () => renderer.unmount());
+  });
+
+  it("sets update-required on manual refresh and clears it for a later ordinary failure", async () => {
+    mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m1", "cached")]));
+    const renderer = await mount();
+    mocks.getHistory.mockRejectedValueOnce(new HistoryPaginationUnavailableError());
+    await act(async () => { await value().refreshMessages(); });
+    expect(value().historyUpdateRequired).toBe(true);
+    expect(value().messages.map((message) => message.content)).toEqual(["cached"]);
+
+    mocks.getHistory.mockRejectedValueOnce(new Error("offline"));
+    await act(async () => { await value().refreshMessages(); });
+    expect(value().historyLoadError).toBe("offline");
+    expect(value().historyUpdateRequired).toBe(false);
+    await act(async () => renderer.unmount());
+  });
+
+  it("keeps a fresher live message and live-only rows when history froze earlier", () => {
+    const persisted: ChatMessage = { id: "m1", role: "assistant", content: "Hello ", createdAt: "2026-01-02T00:00:00Z" };
+    const live = [{ ...persisted, content: "Hello world", streaming: true },
+      { id: "m2", role: "user" as const, content: "new turn", createdAt: "2026-01-02T00:01:00Z" }];
+    expect(mergeRehydratedMessages(live, [persisted]).map((message) => message.content))
+      .toEqual(["Hello world", "new turn"]);
+  });
+
+  it("folds a message across bounded history pages before publishing it", async () => {
+    mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
+    const wire = (type: string, delta?: string) => ({
+      type, session_id: "s1", message_id: "m1", role: "assistant", agent_name: "principal",
+      ...(delta ? { delta } : {}),
+    });
+    const pages = new Map([
+      ["start", { events: [wire("TEXT_MESSAGE_START")], total: null, truncated: true, nextCursor: "page-2" }],
+      ["page-2", { events: [wire("TEXT_MESSAGE_CONTENT", "Hello ")], total: null, truncated: true, nextCursor: "page-3" }],
+      ["page-3", { events: [wire("TEXT_MESSAGE_CONTENT", "world"), wire("TEXT_MESSAGE_END")], total: 4, truncated: false }],
+    ]);
+    mocks.getHistory.mockImplementation((_id: string, opts: { cursor: string }) => pages.get(opts.cursor));
+    const renderer = await mount();
+    expect(mocks.getHistory.mock.calls.map((call) => call[1].cursor)).toEqual(["start", "page-2", "page-3"]);
+    expect(mocks.getHistory.mock.calls.every((call) => call[1].limit === 1000)).toBe(true);
+    expect(value().messages).toMatchObject([{ id: "m1", content: "Hello world", streaming: false }]);
+    expect(value().isRefreshingMessages).toBe(false);
+    await act(async () => renderer.unmount());
+  });
+
   it("reports the failure instead of leaving a silently blank conversation", async () => {
     mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
     mocks.getHistory.mockRejectedValueOnce(new Error("history fetch failed: 500 Error"));
@@ -232,6 +303,29 @@ describe("history load failure is scoped to the active session", () => {
     await act(async () => renderer.unmount());
   });
 
+  it("does not publish a partial transcript when a later page fails", async () => {
+    mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m1", "saved")]));
+    const renderer = await mount();
+    mocks.getHistory.mockResolvedValueOnce({
+      events: [textEvent("m1", "saved"), textEvent("m2", "partial")],
+      total: null, truncated: true, nextCursor: "second-page",
+    });
+    mocks.getHistory.mockRejectedValueOnce(new Error("second page failed"));
+    await act(async () => { await value().refreshMessages(); });
+    await flush();
+    expect(mocks.getHistory.mock.lastCall?.[1]?.cursor).toBe("second-page");
+    expect(value().messages.map((message) => message.content)).toEqual(["saved"]);
+    expect(value().historyLoadError).toBe("second page failed");
+
+    mocks.getHistory.mockResolvedValueOnce(history([textEvent("m1", "saved"), textEvent("m2", "complete")]));
+    await act(async () => { await value().refreshMessages(); });
+    await flush();
+    expect(value().messages.map((message) => message.content)).toEqual(["saved", "complete"]);
+    expect(value().historyLoadError).toBeNull();
+    await act(async () => renderer.unmount());
+  });
+
   it("does not show one session's failure on another, even for a late reply", async () => {
     const pending = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
     mocks.list.mockResolvedValueOnce([
@@ -250,11 +344,12 @@ describe("history load failure is scoped to the active session", () => {
     await flush();
     expect(value().currentSession?.id).toBe("s2");
 
-    pending.reject(new Error("s1 history fetch failed"));
+    pending.reject(new HistoryPaginationUnavailableError());
     await flush();
 
     // s2 is healthy: no inherited error, and its own messages are intact.
     expect(value().historyLoadError).toBeNull();
+    expect(value().historyUpdateRequired).toBe(false);
     expect(value().messages.map((m) => m.content)).toEqual(["second"]);
     await act(async () => renderer.unmount());
   });
@@ -317,6 +412,7 @@ describe("history load failure is scoped to the active session", () => {
       await value().refreshMessages();
     });
     await flush();
+    expect(mocks.getHistory.mock.calls[0]?.[1]?.signal.aborted).toBe(true);
     expect(value().messages.map((m) => m.content)).toEqual(["fresh"]);
 
     stale.resolve(history([textEvent("m1", "stale")]));
@@ -416,7 +512,7 @@ describe("history loading is owned by the session that requested it", () => {
     },
   );
 
-  it("keeps a session busy while its own request is still pending after a round trip away", async () => {
+  it("cancels an abandoned request immediately and stays idle on return", async () => {
     mocks.list.mockResolvedValueOnce([
       session("s1", "2026-02-02T00:00:00.000Z"),
       session("s2", "2026-02-01T00:00:00.000Z"),
@@ -433,7 +529,7 @@ describe("history loading is owned by the session that requested it", () => {
       await flush();
       expect(value().isRefreshingMessages).toBe(false);
 
-      const pending = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+      const pending = deferred<{ events: unknown[]; total: number | null; truncated: boolean; nextCursor?: string }>();
       mocks.getHistory.mockImplementationOnce(() => pending.promise);
       act(() => {
         void value().refreshMessages();
@@ -441,56 +537,52 @@ describe("history loading is owned by the session that requested it", () => {
       await flush();
       expect(value().isRefreshingMessages).toBe(true);
 
-      // Away to s2 (idle there) and back to s1, whose read is still in flight.
+      // Away to s2 and back: the former request is cancelled immediately.
       await act(async () => {
         value().selectSession("s2");
       });
       await flush();
       expect(value().isRefreshingMessages).toBe(false);
+      expect(mocks.getHistory.mock.lastCall?.[1]?.signal.aborted).toBe(true);
       await act(async () => {
         value().selectSession("s1");
       });
       await flush();
-      expect(value().isRefreshingMessages).toBe(true);
-
-      pending.resolve(history([textEvent("m1", "first")]));
-      await flush();
       expect(value().isRefreshingMessages).toBe(false);
-      expect(value().messages.map((m) => m.content)).toEqual(["first"]);
+
+      const calls = mocks.getHistory.mock.calls.length;
+      pending.resolve({ events: [textEvent("m1", "first")], total: null, truncated: true, nextCursor: "next-page" });
+      await flush();
+      expect(mocks.getHistory).toHaveBeenCalledTimes(calls); // abort stops before the next page
+      expect(value().isRefreshingMessages).toBe(false);
+      expect(value().messages).toEqual([]);
     } finally {
       await act(async () => renderer.unmount());
     }
   });
 
-  it("stays busy until the newest of two overlapping refreshes finishes", async () => {
+  it("dedupes repeated manual refresh clicks into one in-flight read", async () => {
     mocks.list.mockResolvedValueOnce([session("s1", "2026-02-01T00:00:00.000Z")]);
     const renderer = await mount();
     try {
       expect(value().currentSession?.id).toBe("s1");
       expect(value().isRefreshingMessages).toBe(false);
 
-      const older = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
-      const newer = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
-      mocks.getHistory.mockImplementationOnce(() => older.promise);
+      const pending = deferred<{ events: unknown[]; total: number; truncated: boolean }>();
+      mocks.getHistory.mockImplementationOnce(() => pending.promise);
       act(() => {
         void value().refreshMessages();
       });
       await flush();
-      mocks.getHistory.mockImplementationOnce(() => newer.promise);
+      const calls = mocks.getHistory.mock.calls.length;
       act(() => {
         void value().refreshMessages();
       });
       await flush();
+      expect(mocks.getHistory).toHaveBeenCalledTimes(calls);
       expect(value().isRefreshingMessages).toBe(true);
 
-      // The superseded read answers first: it owns nothing anymore, so it may
-      // neither publish its transcript nor end the newer read's loading state.
-      older.resolve(history([textEvent("m1", "stale")]));
-      await flush();
-      expect(value().isRefreshingMessages).toBe(true);
-      expect(value().messages).toEqual([]);
-
-      newer.resolve(history([textEvent("m2", "fresh")]));
+      pending.resolve(history([textEvent("m2", "fresh")]));
       await flush();
       expect(value().isRefreshingMessages).toBe(false);
       expect(value().messages.map((m) => m.content)).toEqual(["fresh"]);
@@ -531,7 +623,7 @@ describe("history loading is owned by the session that requested it", () => {
       failing.reject(new Error("s1 refresh failed"));
       await flush();
 
-      // s2 is untouched, and s1 is neither busy nor silently stuck on return.
+      // The abandoned rejection has no owner and cannot leave an error behind.
       expect(value().isRefreshingMessages).toBe(false);
       expect(value().historyLoadError).toBeNull();
       await act(async () => {
@@ -539,7 +631,7 @@ describe("history loading is owned by the session that requested it", () => {
       });
       await flush();
       expect(value().isRefreshingMessages).toBe(false);
-      expect(value().historyLoadError).toBe("s1 refresh failed");
+      expect(value().historyLoadError).toBeNull();
     } finally {
       await act(async () => renderer.unmount());
     }

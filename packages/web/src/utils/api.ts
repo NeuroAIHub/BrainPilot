@@ -45,6 +45,7 @@ import {
 import { runtimeConfig } from "../config";
 import { mockBackend } from "../mocks/backend";
 import { RawAgUiEvent } from "../contracts/demoBundle";
+import { consumeHistoryPages, type EventHistoryPage } from "./historyPages";
 import type { EnabledPreviewer } from "@brainpilot/plugin-sdk/preview";
 import type {
   InstalledPlugin,
@@ -1046,25 +1047,26 @@ export const api = {
      * Persisted AG-UI event history from `events.jsonl` — used to rehydrate
      * the chat list (and trace/agents seed) when a session is activated after
      * a runtime restart. SSE only replays the in-memory ring buffer; this
-     * endpoint walks the on-disk log and returns the tail when long. Pass
-     * `limit: 0` to request the full log for lossless rehydrate.
+     * endpoint returns a bounded tail, including when limit is zero. Use
+     * consumeHistory for a lossless, bounded walk from the beginning.
      *
-     * A 404 (no transcript on disk yet) is the only "genuinely empty" case;
-     * every other failure — non-OK status, unparseable body, missing `events`
-     * array — rejects so the caller can show a scoped load error instead of a
-     * blank conversation. Unknown event types pass through untouched.
+     * A missing transcript is empty. Other failures and malformed pages must
+     * surface so callers do not mistake incomplete history for a full load.
      */
     async getHistory(
       sessionId: string,
-      opts: { limit?: number } = {},
-    ): Promise<{ events: RawAgUiEvent[]; total: number; truncated: boolean }> {
+      opts: { limit?: number; cursor?: string; signal?: AbortSignal } = {},
+    ): Promise<EventHistoryPage<RawAgUiEvent>> {
       if (runtimeConfig.useMockBackend) {
         return { events: [], total: 0, truncated: false };
       }
-      const qs = opts.limit !== undefined ? `?limit=${encodeURIComponent(opts.limit)}` : "";
+      const params = new URLSearchParams();
+      if (opts.limit !== undefined) params.set("limit", String(opts.limit));
+      if (opts.cursor !== undefined) params.set("cursor", opts.cursor);
+      const qs = params.size ? `?${params}` : "";
       const res = await apiFetch(
         `${API_BASE}/sessions/${sessionId}/history${qs}`,
-        { headers: authHeaders() },
+        { headers: authHeaders(), signal: opts.signal },
       );
       // A 404 means the session has no transcript on disk (genuinely empty) —
       // return an empty history. Any OTHER non-OK status is a real failure
@@ -1072,24 +1074,31 @@ export const api = {
       // empty transcript, which historically masked broken rehydrates (#223).
       if (res.status === 404) return { events: [], total: 0, truncated: false };
       if (!res.ok) {
-        throw new Error(`history fetch failed: ${res.status} ${res.statusText}`);
+        const detail = await res.json().catch(() => null) as { error?: string } | null;
+        throw new Error(`history fetch failed: ${res.status} ${detail?.error ?? res.statusText}`);
       }
       const raw = (await res.json().catch(() => null)) as
-        | { events?: unknown[]; total?: number; truncated?: boolean }
+        | { events?: unknown[]; total?: number | null; truncated?: boolean; nextCursor?: string }
         | null;
-      // A readable 200 that isn't `{ events: [...] }` is a broken response, not
-      // an empty transcript — silently returning [] left the conversation blank
-      // with no way to tell the difference (#223).
-      if (!raw || typeof raw !== "object" || !Array.isArray(raw.events)) {
-        throw new Error(
-          "The server returned an unexpected history payload (expected { events: [...] }).",
-        );
+      if (!raw || !Array.isArray(raw.events)) {
+        throw new Error("The server returned an unexpected history payload (malformed response; expected { events: [...] }).");
       }
       return {
         events: raw.events as RawAgUiEvent[],
-        total: typeof raw.total === "number" ? raw.total : 0,
+        total: raw.total === null ? null : typeof raw.total === "number" ? raw.total : 0,
         truncated: Boolean(raw.truncated),
+        ...(typeof raw.nextCursor === "string" ? { nextCursor: raw.nextCursor } : {}),
       };
+    },
+
+    async consumeHistory(
+      sessionId: string,
+      consume: (events: RawAgUiEvent[]) => void | Promise<void>,
+      signal?: AbortSignal,
+    ): Promise<void> {
+      await consumeHistoryPages(
+        (cursor) => api.sessions.getHistory(sessionId, { cursor, limit: 1000, signal }), consume, signal,
+      );
     },
 
     async state(sessionId: string): Promise<SessionStateSnapshot> {

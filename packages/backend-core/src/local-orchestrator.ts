@@ -83,7 +83,7 @@ export function resolveRuntimeServerPath(): string {
 
 async function defaultHealthProbe(baseUrl: string): Promise<boolean> {
   try {
-    const res = await fetch(`${baseUrl}/health`);
+    const res = await fetch(`${baseUrl}/health`, { signal: AbortSignal.timeout(1000) });
     return res.ok;
   } catch {
     return false;
@@ -126,6 +126,9 @@ export class LocalProcessOrchestrator implements Orchestrator {
    * losers with EADDRINUSE). Null when no startup is in progress.
    */
   private starting: Promise<RuntimeHandle> | null = null;
+  private stoppingPromise: Promise<void> | null = null;
+  /** Invalidates health waits and delayed restarts when an explicit stop begins. */
+  private generation = 0;
   /**
    * Set once the runtime has become healthy at least once (issue #58). The
    * crash-restart self-heal (§11A.5) is only meant for a runtime that was
@@ -188,94 +191,87 @@ export class LocalProcessOrchestrator implements Orchestrator {
   }
 
   async ensureRuntime(opts?: EnsureRuntimeOptions): Promise<RuntimeHandle> {
-    if (opts?.dataDir) this.opts.dataDir = opts.dataDir;
-    if (opts?.port) this.opts.port = opts.port;
+    if (this.stoppingPromise) {
+      await this.stoppingPromise;
+      return this.ensureRuntime(opts);
+    }
+    // The same gate covers first startup and automatic crash recovery. Check it
+    // before probing or changing options: callers during backoff join recovery.
+    if (this.starting) return this.starting;
+    if (this.child) {
+      const child = this.child;
+      const handle = this.handle;
+      if (handle && await this.health() && this.child === child && this.handle === handle && !this.stopping)
+        return handle;
+      if (this.starting) return this.starting;
+      throw new Error("owned runtime is still running but is not healthy; waiting for its exit");
+    }
+    const now = Date.now();
+    this.restartTimestamps = this.restartTimestamps.filter(
+      (ts) => now - ts < this.opts.restartWindowMs,
+    );
+    if (this.gaveUp && this.restartTimestamps.length >= this.opts.maxRestarts) {
+      throw new Error("runtime restart budget exhausted");
+    }
     this.gaveUp = false;
     this.stopping = false;
-
-    if (this.child && this.handle && (await this.health())) {
-      return this.handle;
-    }
-
-    // Single-flight (issue #58): if a startup is already in progress, every
-    // concurrent caller rides the same promise rather than spawning its own
-    // runtime child. This is what prevents the cold-start spawn storm where N
-    // simultaneous requests each spawned a runtime and N-1 crashed on
-    // EADDRINUSE. opts.dataDir/port from a piggybacking caller are ignored on
-    // purpose — a given backend/data-dir has exactly one runtime.
-    if (this.starting) {
-      return this.starting;
-    }
-
-    this.starting = (async () => {
-      this.lastEnv = this.buildEnv(opts?.env);
-      this.spawnChild(this.lastEnv);
-      await this.waitForHealth();
-      if (!this.runtimeInstanceId) throw new Error("runtime exited before becoming ready");
-      this.handle = { baseUrl: this.baseUrl, instanceId: this.runtimeInstanceId };
-      return this.handle;
-    })();
-
-    try {
-      return await this.starting;
-    } finally {
-      // Clear so a later call can retry (e.g. if waitForHealth threw).
-      this.starting = null;
-    }
+    if (opts?.dataDir) this.opts.dataDir = opts.dataDir;
+    if (opts?.port) this.opts.port = opts.port;
+    this.lastEnv = this.buildEnv(opts?.env);
+    const generation = this.generation;
+    return this.startOperation(async () => {
+      if (this.stopping || generation !== this.generation)
+        throw new Error("runtime startup cancelled");
+      const child = this.spawnChild(this.lastEnv);
+      try {
+        return await this.readyHandle(child, generation);
+      } catch (err) {
+        // A timed-out first child may still own the port. Do not replace it
+        // until our own child has actually exited.
+        if (this.child === child) await this.terminateChild(child);
+        throw err;
+      }
+    });
   }
 
   async health(): Promise<boolean> {
     if (!this.child) return false;
-    return this.opts.healthProbe(this.baseUrl);
+    return this.probeHealth(1000);
   }
 
   async stopRuntime(): Promise<void> {
+    if (this.stoppingPromise) return this.stoppingPromise;
     this.stopping = true;
+    this.generation++;
     this.everHealthy = false;
+    // Explicit stop starts a new lifecycle; failed request probes do not.
+    this.gaveUp = false;
+    this.restartTimestamps = [];
     const child = this.child;
-    this.child = null;
     this.handle = null;
     this.runtimeInstanceId = null;
-    this.removePidFile();
-    if (child) {
-      let exited = false;
-      const exitPromise = new Promise<void>((resolve) => {
-        child.on("exit", () => {
-          exited = true;
-          resolve();
-        });
-        child.on("error", () => {
-          exited = true;
-          resolve();
-        });
-      });
-      try {
-        // Cross-platform (#6): on Windows `child.kill("SIGTERM")` is translated
-        // to `TerminateProcess` (a forceful kill the child cannot intercept),
-        // so the SIGTERM/SIGKILL distinction is meaningless. We call the
-        // platform-appropriate signal explicitly so the intent reads correctly
-        // at the call-site and Windows logs don't show a phantom "graceful"
-        // shutdown that never actually ran the child's signal handlers.
-        child.kill(gracefulSignalsSupported ? "SIGTERM" : "SIGKILL");
-      } catch {
-        return; // already gone
-      }
-      if (!gracefulSignalsSupported) return;
-      await Promise.race([
-        exitPromise,
-        this.opts.sleep(this.opts.stopTimeoutMs),
-      ]);
-      if (!exited) {
-        try {
-          child.kill("SIGKILL");
-        } catch {
-          /* already gone */
-        }
-      }
+    const promise = (async () => {
+      if (child) await this.terminateChild(child);
+      // A cancelled startup/restart cannot publish a handle after this point.
+      if (this.starting) await this.starting.catch(() => {});
+    })();
+    this.stoppingPromise = promise;
+    try { await promise; } finally {
+      if (this.stoppingPromise === promise) this.stoppingPromise = null;
     }
   }
 
-  private spawnChild(env: NodeJS.ProcessEnv): void {
+  private startOperation(work: () => Promise<RuntimeHandle>): Promise<RuntimeHandle> {
+    const promise = Promise.resolve().then(work);
+    this.starting = promise;
+    void promise.finally(() => {
+      if (this.starting === promise) this.starting = null;
+    }).catch(() => {});
+    return promise;
+  }
+
+  private spawnChild(env: NodeJS.ProcessEnv): SpawnedProcess {
+    if (this.child) throw new Error("refusing to spawn while an owned runtime child exists");
     const { command, args } = this.buildArgv();
 
     let logFd: number | undefined;
@@ -306,14 +302,16 @@ export class LocalProcessOrchestrator implements Orchestrator {
     );
     this.child = child;
     this.runtimeInstanceId = randomUUID();
-    if (this.everHealthy) {
-      this.handle = { baseUrl: this.baseUrl, instanceId: this.runtimeInstanceId };
-    }
+    this.handle = null;
     this.writePidFile(child.pid);
 
-    child.on("error", (err) =>
-      this.handleExit(err instanceof Error ? err : new Error(String(err))),
-    );
+    let childError: Error | null = null;
+    child.on("error", (err) => {
+      childError = err instanceof Error ? err : new Error(String(err));
+      // A failed spawn has no pid and may never emit exit. An error on a live
+      // process does not prove it exited, so wait for its exit event instead.
+      if (child.pid === undefined) this.handleExit(child, childError, true);
+    });
     child.on("exit", (code, signal) => {
       if (logFd !== undefined) {
         try {
@@ -322,20 +320,12 @@ export class LocalProcessOrchestrator implements Orchestrator {
           /* already closed */
         }
       }
-      if (this.stopping) return;
-      // Clean exit (code 0, not killed) is treated as intentional shutdown.
-      if (code === 0 && signal === null) {
-        this.child = null;
-        this.handle = null;
-        this.runtimeInstanceId = null;
-        this.removePidFile();
-        return;
-      }
-      const err = new Error(
+      const err = childError ?? new Error(
         `runtime exited (code=${String(code)} signal=${String(signal)})`,
       );
-      void this.handleExit(err);
+      this.handleExit(child, err, code !== 0 || signal !== null);
     });
+    return child;
   }
 
   private writePidFile(pid: number | undefined): void {
@@ -361,54 +351,82 @@ export class LocalProcessOrchestrator implements Orchestrator {
     }
   }
 
-  private async handleExit(err: Error): Promise<void> {
-    if (this.stopping || this.gaveUp) return;
-    // Issue #58: a child that exits before the runtime ever became healthy is a
-    // failed *startup*, not a crash of a running service. The restart self-heal
-    // (§11A.5) is only for an already-healthy runtime that later died. A
-    // first-start exit (e.g. a duplicate spawn that lost the port race and got
-    // EADDRINUSE) must NOT enter the restart loop — that loop is what flooded
-    // runtime.log and clobbered this.child. Just drop the child and let
-    // ensureRuntime's waitForHealth surface the failure.
-    if (!this.everHealthy) {
-      this.child = null;
-      this.handle = null;
-      this.runtimeInstanceId = null;
-      return;
-    }
-    const now = Date.now();
-    this.restartTimestamps = this.restartTimestamps.filter(
-      (ts) => now - ts < this.opts.restartWindowMs,
-    );
-    if (this.restartTimestamps.length >= this.opts.maxRestarts) {
-      this.gaveUp = true;
-      this.child = null;
-      this.handle = null;
-      this.runtimeInstanceId = null;
-      const fatal = new Error(
-        `runtime crashed ${this.restartTimestamps.length + 1} times within ` +
-          `${this.opts.restartWindowMs}ms; giving up. Last error: ${err.message}`,
-      );
-      this.opts.onFatal?.(fatal);
-      return;
-    }
-    const attempt = this.restartTimestamps.length;
-    this.restartTimestamps.push(now);
-    const backoff = this.opts.backoffBaseMs * Math.pow(2, attempt);
-    await this.opts.sleep(backoff);
-    if (this.stopping || this.gaveUp) return;
-    this.spawnChild(this.lastEnv);
+  private handleExit(child: SpawnedProcess, err: Error, abnormal: boolean): void {
+    if (this.child !== child) return; // stale error/exit from a former child
+    this.child = null;
+    this.handle = null;
+    this.runtimeInstanceId = null;
+    this.removePidFile();
+    if (this.stopping || this.gaveUp || this.starting || !this.everHealthy || !abnormal) return;
+    // Automatic recovery shares the same gate as explicit ensureRuntime calls.
+    void this.startOperation(() => this.recover(err)).catch(() => {});
   }
 
-  private async waitForHealth(): Promise<void> {
+  private async recover(lastError: Error): Promise<RuntimeHandle> {
+    const generation = this.generation;
+    for (;;) {
+      if (this.stopping || generation !== this.generation) throw new Error("runtime recovery cancelled");
+      const now = Date.now();
+      this.restartTimestamps = this.restartTimestamps.filter(
+        (ts) => now - ts < this.opts.restartWindowMs,
+      );
+      if (this.restartTimestamps.length >= this.opts.maxRestarts) {
+        this.gaveUp = true;
+        const fatal = new Error(
+          `runtime crashed ${this.restartTimestamps.length + 1} times within ` +
+            `${this.opts.restartWindowMs}ms; giving up. Last error: ${lastError.message}`,
+        );
+        this.opts.onFatal?.(fatal);
+        throw fatal;
+      }
+      const attempt = this.restartTimestamps.length;
+      this.restartTimestamps.push(now);
+      await this.opts.sleep(this.opts.backoffBaseMs * Math.pow(2, attempt));
+      if (this.stopping || generation !== this.generation) throw new Error("runtime recovery cancelled");
+      const child = this.spawnChild(this.lastEnv);
+      try {
+        return await this.readyHandle(child, generation);
+      } catch (err) {
+        lastError = err instanceof Error ? err : new Error(String(err));
+        if (this.stopping || generation !== this.generation) throw lastError;
+        if (this.child === child) await this.terminateChild(child);
+      }
+    }
+  }
+
+  private async readyHandle(child: SpawnedProcess, generation: number): Promise<RuntimeHandle> {
+    await this.waitForHealth(child, generation);
+    if (this.child !== child || this.stopping || generation !== this.generation || !this.runtimeInstanceId) {
+      throw new Error("runtime exited before becoming ready");
+    }
+    this.everHealthy = true;
+    this.handle = { baseUrl: this.baseUrl, instanceId: this.runtimeInstanceId };
+    return this.handle;
+  }
+
+  private async probeHealth(timeoutMs: number): Promise<boolean> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    try {
+      return await Promise.race([
+        this.opts.healthProbe(this.baseUrl).catch(() => false),
+        new Promise<boolean>((resolve) => {
+          timer = setTimeout(() => resolve(false), Math.max(0, timeoutMs));
+          timer.unref?.();
+        }),
+      ]);
+    } finally {
+      if (timer) clearTimeout(timer);
+    }
+  }
+
+  private async waitForHealth(child: SpawnedProcess, generation: number): Promise<void> {
     const deadline = Date.now() + this.opts.healthTimeoutMs;
     // Poll until healthy or timeout. Spacing is small for local startup.
     for (;;) {
-      if (await this.opts.healthProbe(this.baseUrl)) {
-        // Mark healthy so a later abnormal exit is eligible for the restart
-        // self-heal (issue #58) — first-start exits before this are not.
-        this.everHealthy = true;
-        return;
+      if (this.child !== child || this.stopping || generation !== this.generation)
+        throw new Error("runtime exited before becoming ready");
+      if (await this.probeHealth(Math.min(1000, Math.max(0, deadline - Date.now())))) {
+        if (this.child === child && !this.stopping && generation === this.generation) return;
       }
       if (Date.now() >= deadline) {
         throw new Error(
@@ -417,6 +435,25 @@ export class LocalProcessOrchestrator implements Orchestrator {
         );
       }
       await this.opts.sleep(200);
+    }
+  }
+
+  private async terminateChild(child: SpawnedProcess): Promise<void> {
+    if (this.child !== child) return;
+    let exited = false;
+    const exit = new Promise<void>((resolve) => child.on("exit", () => {
+      exited = true;
+      resolve();
+    }));
+    const signal = gracefulSignalsSupported ? "SIGTERM" : "SIGKILL";
+    try { child.kill(signal); } catch { /* an exit may already be queued */ }
+    await Promise.race([exit, this.opts.sleep(this.opts.stopTimeoutMs)]);
+    if (!exited && gracefulSignalsSupported) {
+      try { child.kill("SIGKILL"); } catch { /* an exit may already be queued */ }
+    }
+    if (!exited) await Promise.race([exit, this.opts.sleep(this.opts.stopTimeoutMs)]);
+    if (!exited && this.child === child) {
+      throw new Error("owned runtime did not confirm exit after SIGKILL");
     }
   }
 }

@@ -2,7 +2,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { ModelRuntime } from "@earendil-works/pi-coding-agent";
+import { ModelRuntime } from "@brainpilot/pi-sdk";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { resolveSessionModel } from "../pi-provider.js";
 
@@ -10,7 +10,7 @@ import { resolveSessionModel } from "../pi-provider.js";
 function completionsPath(): string {
   let dir = dirname(fileURLToPath(import.meta.url));
   while (dirname(dir) !== dir) {
-    for (const prefix of ["@earendil-works/pi-coding-agent/node_modules", ""]) {
+    for (const prefix of ["@brainpilot/pi-sdk/node_modules", ""]) {
       const path = join(dir, "node_modules", prefix,
         "@earendil-works/pi-ai/dist/api/openai-completions.js");
       if (existsSync(path)) return path;

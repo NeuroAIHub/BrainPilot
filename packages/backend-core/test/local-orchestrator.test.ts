@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 /** A controllable fake child process for testing exit/restart logic. */
-function makeFakeProc(pid: number = 4242): SpawnedProcess & {
+function makeFakeProc(pid: number = 4242, opts: { ignoreTerm?: boolean; autoExit?: boolean } = {}): SpawnedProcess & {
   emitExit: (code: number | null, signal: NodeJS.Signals | null) => void;
   emitError: (err: Error) => void;
   killed: NodeJS.Signals[];
@@ -26,6 +26,9 @@ function makeFakeProc(pid: number = 4242): SpawnedProcess & {
     },
     kill(signal?: NodeJS.Signals) {
       killed.push(signal ?? "SIGTERM");
+      if (opts.autoExit !== false && (signal !== "SIGTERM" || !opts.ignoreTerm)) {
+        queueMicrotask(() => this.emitExit(null, signal ?? "SIGTERM"));
+      }
       return true;
     },
     emitExit(code, signal) {
@@ -139,12 +142,14 @@ describe("LocalProcessOrchestrator restart logic", () => {
     });
     await orch.ensureRuntime();
 
-    // Crash repeatedly. Budget=2 restarts; the 3rd crash exhausts it.
-    for (let i = 0; i < 5 && !onFatal.mock.calls.length; i++) {
-      procs[procs.length - 1]!.emitExit(1, null);
-      await Promise.resolve();
-      await Promise.resolve();
+    // Crash repeatedly. Wait for each replacement to become healthy before
+    // crashing it, so late events from the old child cannot skew the budget.
+    for (let i = 0; i < 2; i++) {
+      procs[i]!.emitExit(1, null);
+      await orch.ensureRuntime();
     }
+    procs[2]!.emitExit(1, null);
+    await expect(orch.ensureRuntime()).rejects.toThrow(/giving up/);
     expect(onFatal).toHaveBeenCalledTimes(1);
     expect(onFatal.mock.calls[0]![0]).toBeInstanceOf(Error);
   });
@@ -193,7 +198,7 @@ describe("LocalProcessOrchestrator restart logic", () => {
   });
 
   it("force-kills a runtime that does not exit within the grace period", async () => {
-    const proc = makeFakeProc();
+    const proc = makeFakeProc(4242, { ignoreTerm: true });
     const orch = new LocalProcessOrchestrator({
       runtimeServerPath: "/s.js",
       spawnFn: () => proc,
@@ -283,6 +288,142 @@ describe("LocalProcessOrchestrator single-flight + first-start failure (#58)", (
     const handle = await orch.ensureRuntime();
     expect(handle.baseUrl).toBe("http://127.0.0.1:8081");
     expect(spawnFn).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("LocalProcessOrchestrator owned-child lifecycle (#565)", () => {
+  it("keeps an unhealthy living child and its identity until health returns", async () => {
+    const child = makeFakeProc();
+    const spawnFn = vi.fn(() => child);
+    let healthy = true;
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js", spawnFn,
+      healthProbe: async () => healthy,
+    });
+    const first = await orch.ensureRuntime();
+    healthy = false;
+    await expect(orch.ensureRuntime()).rejects.toThrow(/owned runtime is still running/);
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    expect(child.killed).toEqual([]);
+    healthy = true;
+    expect(await orch.ensureRuntime()).toEqual(first);
+    await orch.stopRuntime();
+  });
+
+  it("joins crash recovery during backoff and ignores stale child events", async () => {
+    const children: ReturnType<typeof makeFakeProc>[] = [];
+    const spawnFn = vi.fn(() => {
+      const child = makeFakeProc();
+      children.push(child);
+      return child;
+    });
+    let releaseBackoff!: () => void;
+    const backoff = new Promise<void>((resolve) => { releaseBackoff = resolve; });
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js", spawnFn,
+      healthProbe: async () => true,
+      sleep: async () => backoff,
+    });
+    const first = await orch.ensureRuntime();
+    children[0]!.emitExit(1, null);
+    const callers = Array.from({ length: 5 }, () => orch.ensureRuntime());
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    releaseBackoff();
+    const handles = await Promise.all(callers);
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(handles.every((handle) => handle.instanceId === handles[0]!.instanceId)).toBe(true);
+    expect(handles[0]!.instanceId).not.toBe(first.instanceId);
+    children[0]!.emitError(new Error("late error"));
+    children[0]!.emitExit(1, null);
+    expect(await orch.ensureRuntime()).toEqual(handles[0]);
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    await orch.stopRuntime();
+  });
+
+  it("cancels delayed recovery on stop and starts once afterward", async () => {
+    const children: ReturnType<typeof makeFakeProc>[] = [];
+    const spawnFn = vi.fn(() => {
+      const child = makeFakeProc();
+      children.push(child);
+      return child;
+    });
+    let releaseBackoff!: () => void;
+    const backoff = new Promise<void>((resolve) => { releaseBackoff = resolve; });
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js", spawnFn,
+      healthProbe: async () => true,
+      sleep: async () => backoff,
+    });
+    await orch.ensureRuntime();
+    children[0]!.emitExit(1, null);
+    const stopped = orch.stopRuntime();
+    releaseBackoff();
+    await stopped;
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    await orch.ensureRuntime();
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    await orch.stopRuntime();
+  });
+
+  it("does not spawn when stop races the queued first startup", async () => {
+    const spawnFn = vi.fn(() => makeFakeProc());
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js", spawnFn,
+      healthProbe: async () => true,
+    });
+    const starting = orch.ensureRuntime();
+    const stopped = orch.stopRuntime();
+    await expect(starting).rejects.toThrow(/cancelled/);
+    await stopped;
+    expect(spawnFn).toHaveBeenCalledTimes(0);
+    await orch.ensureRuntime();
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    await orch.stopRuntime();
+  });
+
+  it("does not reset an exhausted restart budget on repeated ensure calls", async () => {
+    const children: ReturnType<typeof makeFakeProc>[] = [];
+    const spawnFn = vi.fn(() => {
+      const child = makeFakeProc();
+      children.push(child);
+      return child;
+    });
+    const onFatal = vi.fn();
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js", spawnFn,
+      healthProbe: async () => true,
+      sleep: async () => {}, maxRestarts: 1, onFatal,
+    });
+    await orch.ensureRuntime();
+    children[0]!.emitExit(1, null);
+    await orch.ensureRuntime();
+    children[1]!.emitExit(1, null);
+    await expect(orch.ensureRuntime()).rejects.toThrow(/giving up|budget exhausted/);
+    await expect(orch.ensureRuntime()).rejects.toThrow(/budget exhausted/);
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    expect(onFatal).toHaveBeenCalledTimes(1);
+  });
+
+  it("counts a child error followed by exit as one crash", async () => {
+    const children: ReturnType<typeof makeFakeProc>[] = [];
+    const spawnFn = vi.fn(() => {
+      const child = makeFakeProc();
+      children.push(child);
+      return child;
+    });
+    const orch = new LocalProcessOrchestrator({
+      runtimeServerPath: "/s.js", spawnFn,
+      healthProbe: async () => true,
+      sleep: async () => {}, maxRestarts: 1,
+    });
+    await orch.ensureRuntime();
+    children[0]!.emitError(new Error("process error"));
+    expect(spawnFn).toHaveBeenCalledTimes(1);
+    children[0]!.emitExit(1, null);
+    await orch.ensureRuntime();
+    children[0]!.emitExit(1, null);
+    expect(spawnFn).toHaveBeenCalledTimes(2);
+    await orch.stopRuntime();
   });
 });
 

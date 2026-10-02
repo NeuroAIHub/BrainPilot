@@ -637,6 +637,82 @@ describe("event mapping (Pi -> AG-UI via parseEvent)", () => {
     expect(captured.some((event) => event.type === "RUN_ERROR")).toBe(false);
   });
 
+  it("reports a rejected summary as the terminal cause without an output-limit retry", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+    let listener: ((event: unknown) => void) | undefined;
+    const prompts: string[] = [];
+    const session = {
+      subscribe(next: (event: unknown) => void) { listener = next; return () => {}; },
+      async prompt(text: string) {
+        prompts.push(text);
+        listener?.({ type: "message_end", message: { role: "assistant", stopReason: "length" } });
+        listener?.({ type: "compaction_end", reason: "overflow", aborted: false, willRetry: false,
+          errorMessage: 'Auto-compaction failed: 400 {"error":{"code":"data_inspection_failed"}}' });
+      },
+      async abort() {},
+      dispose() {},
+    };
+    const agent = new MasAgent({
+      sessionId: "summary-rejected", name: "Engineer", role: "expert", session: session as never, bus,
+    });
+
+    await agent.prompt("write the report");
+    expect(prompts).toEqual(["write the report"]);
+    const error = captured.find((event) => event.type === "RUN_ERROR") as
+      | { code?: string; message?: string }
+      | undefined;
+    expect(error).toMatchObject({ code: "CONTEXT_COMPACTION_FAILED" });
+    expect(error?.message).toContain("data_inspection_failed");
+    expect(agent.lastErrorKind).toBe("fatal");
+  });
+
+  it("keeps the compaction terminal code when the request guard fails before Pi emits a compaction event", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+    let listener: ((event: unknown) => void) | undefined;
+    const session = {
+      subscribe(next: (event: unknown) => void) { listener = next; return () => {}; },
+      async prompt() {
+        listener?.({ type: "message_end", message: {
+          role: "assistant", stopReason: "error",
+          errorMessage: "Context compaction failed: model context window must exceed output budget",
+        } });
+      },
+      async abort() {}, dispose() {},
+    };
+    const agent = new MasAgent({ sessionId: "budget-invalid", name: "Engineer", role: "expert",
+      session: session as never, bus });
+    await agent.prompt("write the report");
+    expect(captured.find((event) => event.type === "RUN_ERROR"))
+      .toMatchObject({ code: "CONTEXT_COMPACTION_FAILED" });
+  });
+
+  it("clears a held compaction failure if a later compaction succeeds in the same prompt", async () => {
+    const bus = new EventBus();
+    const captured: AgUiEvent[] = [];
+    bus.subscribe((event) => captured.push(event));
+    let listener: ((event: unknown) => void) | undefined;
+    const session = {
+      subscribe(next: (event: unknown) => void) { listener = next; return () => {}; },
+      async prompt() {
+        listener?.({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false,
+          errorMessage: "transient summary failure" });
+        listener?.({ type: "compaction_end", reason: "threshold", aborted: false, willRetry: false,
+          result: { summary: "recovered" } });
+        listener?.({ type: "message_end", message: { role: "assistant", stopReason: "stop" } });
+      },
+      async abort() {}, dispose() {},
+    };
+    const agent = new MasAgent({ sessionId: "summary-recovered", name: "Engineer", role: "expert",
+      session: session as never, bus });
+    await agent.prompt("continue");
+    expect(captured.some((event) => event.type === "RUN_ERROR")).toBe(false);
+    expect(captured.some((event) => event.type === "RUN_FINISHED")).toBe(true);
+  });
+
   it("reports OUTPUT_LIMIT_EXCEEDED when the bounded recovery also reaches length", async () => {
     const bus = new EventBus();
     const captured: AgUiEvent[] = [];

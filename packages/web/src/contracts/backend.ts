@@ -324,6 +324,7 @@ export interface ProviderCreate {
   apiKey: string;
   models?: string[];
   contextWindow?: ProviderContextWindow;
+  maxTokens?: number;
   reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
@@ -339,6 +340,8 @@ export interface ProviderUpdate {
   models?: string[];
   /** null clears an explicit preset and restores automatic resolution. */
   contextWindow?: ProviderContextWindow | null;
+  /** null clears the profile override. */
+  maxTokens?: number | null;
   reasoningModels?: string[];
   icon?: string;
   iconColor?: string;
@@ -550,6 +553,8 @@ interface RawProviderProfile {
   models?: string[];
   context_window?: number;
   contextWindow?: number;
+  max_tokens?: number;
+  maxTokens?: number;
   reasoning_models?: string[];
   reasoningModels?: string[];
   icon?: string;
@@ -860,6 +865,7 @@ export function normalizeProviderProfile(raw: RawProviderProfile): ProviderProfi
     isShared: Boolean(raw.isShared ?? raw.is_shared),
     models: Array.isArray(raw.models) ? raw.models : [],
     contextWindow: (raw.contextWindow ?? raw.context_window) as ProviderContextWindow | undefined,
+    maxTokens: optionalNumber(raw.maxTokens ?? raw.max_tokens),
     reasoningModels: Array.isArray(raw.reasoningModels)
       ? raw.reasoningModels
       : Array.isArray(raw.reasoning_models) ? raw.reasoning_models : (Array.isArray(raw.models) ? raw.models : []),
@@ -885,6 +891,7 @@ export function serializeProviderCreate(data: ProviderCreate): Record<string, un
     api_key: data.apiKey,
     models: data.models,
     context_window: data.contextWindow,
+    max_tokens: data.maxTokens,
     reasoning_models: data.reasoningModels,
     icon: data.icon,
     icon_color: data.iconColor,
@@ -901,6 +908,7 @@ export function serializeProviderUpdate(data: ProviderUpdate): Record<string, un
     ...(data.apiKey !== undefined ? { api_key: data.apiKey } : {}),
     ...(data.models !== undefined ? { models: data.models } : {}),
     ...(data.contextWindow !== undefined ? { context_window: data.contextWindow } : {}),
+    ...(data.maxTokens !== undefined ? { max_tokens: data.maxTokens } : {}),
     ...(data.reasoningModels !== undefined ? { reasoning_models: data.reasoningModels } : {}),
     ...(data.icon !== undefined ? { icon: data.icon } : {}),
     ...(data.iconColor !== undefined ? { icon_color: data.iconColor } : {}),

@@ -86,7 +86,30 @@ for (const pkgPath of pkgPaths) {
   }
 
   if (changed && !check) {
-    writeFileSync(pkgPath, JSON.stringify(json, null, 2) + "\n", "utf8");
+    writeFileSync(pkgPath, JSON.stringify(json, null, json.name === "@brainpilot/pi-sdk" ? "\t" : 2) + "\n", "utf8");
+  }
+
+  // The generated Pi SDK keeps its own published shrinkwrap. Its root identity
+  // must follow the workspace version before the next npm ci or package check.
+  if (json.name === "@brainpilot/pi-sdk") {
+    const shrinkwrapPath = join(dirname(pkgPath), "npm-shrinkwrap.json");
+    const shrinkwrap = readPkg(shrinkwrapPath);
+    const identities = [shrinkwrap.json, shrinkwrap.json.packages?.[""]];
+    if (!identities[1]) {
+      throw new Error("[sync-versions] Pi SDK shrinkwrap has no root package entry");
+    }
+    let shrinkwrapChanged = false;
+    for (const identity of identities) {
+      if (identity.name !== json.name || identity.version !== version) {
+        drift.push(`${json.name}: shrinkwrap ${identity.name}@${identity.version} -> ${json.name}@${version}`);
+        identity.name = json.name;
+        identity.version = version;
+        shrinkwrapChanged = true;
+      }
+    }
+    if (shrinkwrapChanged && !check) {
+      writeFileSync(shrinkwrapPath, JSON.stringify(shrinkwrap.json, null, "\t") + "\n", "utf8");
+    }
   }
 
   // Content-only system-plugin packages ship a manifest beside package.json.
