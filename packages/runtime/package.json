@@ -50,6 +50,6 @@
     "@modelcontextprotocol/sdk": "^1.30.0",
     "hono": "^4.13.7",
     "yaml": "^2.9.0",
-    "zod": "^3.24.0"
+    "zod": "^4.6.6"
   }
 }
